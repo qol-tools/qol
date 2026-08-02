@@ -1,5 +1,13 @@
 export const NEIGHBOR_HARD_CAP = 4;
 
+export function shouldUpdatePeripheralMiniature(current, next) {
+    return current.pageId !== next.pageId
+        || current.width !== next.width
+        || current.height !== next.height
+        || current.miniScale !== next.miniScale
+        || current.renderPage !== next.renderPage;
+}
+
 export function computePeripheralSlots(anchorId, siblings, maxNeighbors) {
     if (!anchorId || !Array.isArray(siblings)) return [];
     const idx = siblings.indexOf(anchorId);

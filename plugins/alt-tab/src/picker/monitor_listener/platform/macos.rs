@@ -3,7 +3,6 @@ use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
 pub(crate) fn data_refresh_listener_loop() {
     let client = qol_gpui::PlatformStateClient::from_env();
     let Some(mut subscription) = client.subscribe(vec![
-        RuntimeEventKind::WindowListChanged,
         RuntimeEventKind::FocusChanged,
         RuntimeEventKind::CursorMoved,
     ]) else {
@@ -17,8 +16,8 @@ pub(crate) fn data_refresh_listener_loop() {
             RuntimeEvent::CursorMoved { .. } => super::super::record_recent_hid_activity(),
             RuntimeEvent::ActiveMonitorChanged { .. }
             | RuntimeEvent::MonitorsChanged { .. }
-            | RuntimeEvent::LauncherAppsSynced { .. }
-            | RuntimeEvent::WindowListChanged => super::super::request_data_refresh(),
+            | RuntimeEvent::LauncherAppsSynced { .. } => super::super::request_data_refresh(),
+            RuntimeEvent::WindowListChanged => {}
         }
     }
 }

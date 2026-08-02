@@ -117,6 +117,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
             keysRef.current.add(e.key);
             if (isCtrlHeld() && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 e.stopPropagation();
+                ensureCtrlPanLoop();
             }
         }
 
@@ -132,20 +133,28 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
                 }
             }
             keysRef.current.delete(e.key);
+            if (!hasCtrlPanKey(keysRef.current)) {
+                cancelAnimationFrame(rafId);
+                rafId = 0;
+            }
         }
 
         let rafId = 0;
+        function ensureCtrlPanLoop() {
+            if (!rafId) rafId = requestAnimationFrame(ctrlPanLoop);
+        }
+
         function ctrlPanLoop() {
-            if (isCtrlHeld()) {
-                const keys = keysRef.current;
-                let dx = 0, dy = 0;
-                const speed = getWorldSettings().panSpeed / camera.zoom;
-                if (keys.has('ArrowLeft')) dx = -speed;
-                if (keys.has('ArrowRight')) dx = speed;
-                if (keys.has('ArrowUp')) dy = -speed;
-                if (keys.has('ArrowDown')) dy = speed;
-                if (dx || dy) { camera.nudge(dx, dy); ctrlPannedRef.current = true; }
-            }
+            rafId = 0;
+            if (!isCtrlHeld() || !hasCtrlPanKey(keysRef.current)) return;
+            const keys = keysRef.current;
+            let dx = 0, dy = 0;
+            const speed = getWorldSettings().panSpeed / camera.zoom;
+            if (keys.has('ArrowLeft')) dx = -speed;
+            if (keys.has('ArrowRight')) dx = speed;
+            if (keys.has('ArrowUp')) dy = -speed;
+            if (keys.has('ArrowDown')) dy = speed;
+            if (dx || dy) { camera.nudge(dx, dy); ctrlPannedRef.current = true; }
             rafId = requestAnimationFrame(ctrlPanLoop);
         }
 
@@ -211,8 +220,6 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
         document.addEventListener('keydown', onKeyDown, true);
         document.addEventListener('keyup', onKeyUp, true);
         document.addEventListener('focusin', onFocusIn, true);
-        rafId = requestAnimationFrame(ctrlPanLoop);
-
         return () => {
             vp.removeEventListener('scroll', onNativeScroll);
             vp.removeEventListener('pointerdown', onPointerDown);
@@ -237,6 +244,10 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
             <${PeripheralPreview} camera=${camera} navigation=${navigation} registry=${registry} renderPage=${renderPage} />
         </div>
     `;
+}
+
+function hasCtrlPanKey(keys) {
+    return keys.has('ArrowLeft') || keys.has('ArrowRight') || keys.has('ArrowUp') || keys.has('ArrowDown');
 }
 
 function snapToCenter(viewport, onViewChange, navigation, registry) {

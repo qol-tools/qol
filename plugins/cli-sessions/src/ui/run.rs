@@ -39,6 +39,12 @@ type PanelHandle = gpui::WindowHandle<SessionsView>;
 type SharedPanel = Rc<RefCell<Option<PanelHandle>>>;
 type AttentionCursor = Arc<Mutex<Option<u64>>>;
 
+struct ReconcileRuntime {
+    interpreter: Arc<CliSessionInterpreter>,
+    service_commands: Arc<[String]>,
+    caches: Arc<Mutex<reconcile::ReconcileCaches>>,
+}
+
 pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     anomaly::enable();
@@ -61,15 +67,19 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let corner = cfg.corner();
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
     let cli_interpreter = Arc::new(CliSessionInterpreter::system());
+    let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
 
     let probe = SystemServiceProbe::snapshot(service_commands.to_vec());
-    reconcile::tick(
-        &registry,
-        host.as_ref(),
-        cli_interpreter.as_ref(),
-        &probe,
-        now_secs(),
-    );
+    if let Ok(mut caches) = reconcile_caches.lock() {
+        reconcile::tick_with_caches(
+            &registry,
+            host.as_ref(),
+            cli_interpreter.as_ref(),
+            &probe,
+            now_secs(),
+            &mut caches,
+        );
+    }
 
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
@@ -85,8 +95,11 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
         spawn_reconcile_timer(
             reg_for_app.clone(),
             host_for_app.clone(),
-            cli_interpreter.clone(),
-            service_commands.clone(),
+            ReconcileRuntime {
+                interpreter: cli_interpreter.clone(),
+                service_commands: service_commands.clone(),
+                caches: reconcile_caches.clone(),
+            },
             panel.clone(),
             show_on_start,
             cx,
@@ -189,21 +202,19 @@ fn open_panel(
 fn spawn_reconcile_timer(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
-    cli_interpreter: Arc<CliSessionInterpreter>,
-    service_commands: Arc<[String]>,
+    runtime: ReconcileRuntime,
     panel: SharedPanel,
     show_on_start: bool,
     cx: &mut gpui::App,
 ) {
-    let caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
     let mut interval = reconcile_interval(show_on_start);
     cx.spawn(async move |cx: &mut AsyncApp| loop {
         cx.background_executor().timer(interval).await;
         let reg = registry.clone();
         let h = host.clone();
-        let interpreter = cli_interpreter.clone();
-        let commands = service_commands.clone();
-        let cache = caches.clone();
+        let interpreter = runtime.interpreter.clone();
+        let commands = runtime.service_commands.clone();
+        let cache = runtime.caches.clone();
         let now = now_secs();
         cx.background_spawn(async move {
             let probe = SystemServiceProbe::snapshot(commands.to_vec());

@@ -94,6 +94,7 @@ pub struct WindowGeometrySession {
     conn: Arc<x11rb::rust_connection::RustConnection>,
     root: u32,
     wid: u32,
+    target: u32,
 }
 
 pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
@@ -103,10 +104,12 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     let name_atom = intern(&conn, b"_NET_WM_NAME")?;
     let utf8_atom = intern(&conn, b"UTF8_STRING")?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    let target = top_level_frame(&conn, root, wid).unwrap_or(wid);
     Some(WindowGeometrySession {
         conn: Arc::new(conn),
         root,
         wid,
+        target,
     })
 }
 
@@ -125,6 +128,20 @@ impl WindowGeometrySession {
         let aux = ConfigureWindowAux::new().x(x).y(y);
         let _ = self.conn.configure_window(self.wid, &aux);
         let _ = self.conn.flush();
+    }
+
+    pub fn reposition(&self, x: i32, y: i32) -> bool {
+        let aux = ConfigureWindowAux::new().x(x).y(y);
+        let moved = self.conn.configure_window(self.target, &aux).is_ok();
+        let flushed = self.conn.flush().is_ok();
+        qol_runtime::probe!(
+            "X11_GEOMETRY_SESSION",
+            "operation=reposition client={} target={} root={} x={x} y={y} moved={moved} flushed={flushed}",
+            self.wid,
+            self.target,
+            self.root
+        );
+        moved && flushed
     }
 
     pub fn pointer_root(&self) -> Option<(i32, i32)> {

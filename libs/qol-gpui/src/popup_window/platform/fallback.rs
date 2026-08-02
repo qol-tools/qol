@@ -16,6 +16,10 @@ impl WindowGeometrySession {
 
     pub fn set_position(&self, _x: i32, _y: i32) {}
 
+    pub fn reposition(&self, _x: i32, _y: i32) -> bool {
+        false
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
     }

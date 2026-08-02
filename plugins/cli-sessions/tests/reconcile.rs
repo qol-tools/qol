@@ -1,13 +1,15 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use plugin_cli_sessions::daemon::reconcile::tick;
+use plugin_cli_sessions::daemon::reconcile::{tick, tick_with_caches, ReconcileCaches};
 use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use plugin_cli_sessions::registry::{Registry, SessionState};
 use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::{
-    codex_tool, CliSessionDescriptor, CliSessionInterpreter, CliSessionStrategy, CliTool,
+    codex_tool, CliSessionChangeHandler, CliSessionDescriptor, CliSessionInterpreter,
+    CliSessionStrategy, CliSessionSubscription, CliTool,
 };
 
 struct FakeHost {
@@ -32,6 +34,62 @@ struct YesService;
 impl ServiceProbe for YesService {
     fn is_service(&self, _pane: &Pane) -> bool {
         true
+    }
+}
+
+struct CountingHost {
+    panes: Vec<Pane>,
+    reads: AtomicUsize,
+}
+
+impl TerminalHost for CountingHost {
+    fn discover(&self) -> Vec<Pane> {
+        self.panes.clone()
+    }
+
+    fn get_text(&self, _window_id: u64, _root_pid: i32) -> Option<String> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        Some(SELECTION.to_owned())
+    }
+
+    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+struct SubscribedCodex {
+    tool: CliTool,
+    handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
+}
+
+impl CliSessionStrategy for SubscribedCodex {
+    fn tool(&self) -> &CliTool {
+        &self.tool
+    }
+
+    fn matches(&self, pane: &Pane) -> bool {
+        pane.foreground_basenames.iter().any(|name| name == "codex")
+    }
+
+    fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
+        CliSessionDescriptor {
+            tool: self.tool.clone(),
+            display_name: Some("Subscribed".to_owned()),
+            external_id: Some("subscribed-session".to_owned()),
+            has_activity: Some(true),
+        }
+    }
+
+    fn subscribe(
+        &self,
+        _pane: &Pane,
+        on_change: CliSessionChangeHandler,
+    ) -> Result<
+        Option<CliSessionSubscription>,
+        qol_terminal_sessions::cli::CliSessionSubscriptionError,
+    > {
+        self.handlers.lock().unwrap().push(on_change);
+        Ok(Some(CliSessionSubscription::from_guard(())))
     }
 }
 
@@ -77,6 +135,20 @@ fn fake_codex(name: &str, touched: bool) -> CliSessionInterpreter {
     .unwrap()
 }
 
+fn subscribed_codex() -> (
+    CliSessionInterpreter,
+    Arc<Mutex<Vec<CliSessionChangeHandler>>>,
+) {
+    let handlers = Arc::new(Mutex::new(Vec::new()));
+    let interpreter = CliSessionInterpreter::from_strategies([Arc::new(SubscribedCodex {
+        tool: codex_tool(),
+        handlers: handlers.clone(),
+    })
+        as Arc<dyn CliSessionStrategy>])
+    .unwrap();
+    (interpreter, handlers)
+}
+
 fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) -> Pane {
     Pane {
         id: kitty_session_id(window_id),
@@ -95,6 +167,62 @@ const SELECTION: &str = "\u{276F} 1. Yes\n  2. No\n  enter to confirm";
 const CLAUDE_PICKER: &str = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
 const CLAUDE_WORKING: &str = "\u{273B} Processing\u{2026} (5s \u{00B7} \u{2193} 1k tokens)";
 const CLAUDE_DONE: &str = "\u{273B} Brewed for 1m";
+
+#[test]
+fn subscribed_screens_use_signals_with_a_bounded_fallback() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let panes = (1..=6)
+        .map(|id| pane(id, "qol-monorepo", false, &["zsh", "codex"], "codex"))
+        .collect();
+    let host = CountingHost {
+        panes,
+        reads: AtomicUsize::new(0),
+    };
+    let (interpreter, handlers) = subscribed_codex();
+    let mut caches = ReconcileCaches::default();
+
+    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 100, &mut caches);
+    assert_eq!(host.reads.load(Ordering::Relaxed), 6);
+
+    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 110, &mut caches);
+    assert_eq!(
+        host.reads.load(Ordering::Relaxed),
+        6,
+        "unchanged subscribed panes reuse their cached screen"
+    );
+
+    handlers.lock().unwrap()[2]();
+    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 111, &mut caches);
+    assert_eq!(
+        host.reads.load(Ordering::Relaxed),
+        7,
+        "a metadata signal refreshes only its pane"
+    );
+
+    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 171, &mut caches);
+    assert_eq!(
+        host.reads.load(Ordering::Relaxed),
+        13,
+        "every subscribed pane still has a bounded full-screen fallback"
+    );
+}
+
+#[test]
+fn unsubscribed_screens_still_read_every_tick() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = CountingHost {
+        panes: vec![pane(1, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        reads: AtomicUsize::new(0),
+    };
+    let interpreter = fake_codex("Unsubscribed", true);
+    let mut caches = ReconcileCaches::default();
+
+    for now in [100, 101] {
+        tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, now, &mut caches);
+    }
+
+    assert_eq!(host.reads.load(Ordering::Relaxed), 2);
+}
 
 #[test]
 fn tick_classifies_codex_blocked_from_screen() {

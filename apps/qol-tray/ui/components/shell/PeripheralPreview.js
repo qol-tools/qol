@@ -1,4 +1,5 @@
 import { html } from '../../lib/html.js';
+import { Component } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import {
     computePeripheralSlots,
@@ -6,6 +7,7 @@ import {
     handleSlotClick,
     pickCenteredEntry,
     shouldHidePeripheralSide,
+    shouldUpdatePeripheralMiniature,
 } from '../../lib/peripheral-geometry.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
 import { useOverlayHide } from '../../lib/hooks/useIdleHide.js';
@@ -134,9 +136,6 @@ function PeripheralSlot({ slotKey, slot, entry, renderPage, miniScale, coverageO
     const ref = useRef(null);
     useOverlayHide({ targetRef: ref, camera, navigation });
     const isEmpty = !slot.id;
-    const contentStyle = entry
-        ? `width:${entry.width}px;height:${entry.height}px;--peripheral-mini-scale:${miniScale};`
-        : '';
     const slotStyle = isEmpty ? '' : `--coverage-opacity:${coverageOpacity};`;
     const setRef = (el) => {
         ref.current = el;
@@ -155,12 +154,29 @@ function PeripheralSlot({ slotKey, slot, entry, renderPage, miniScale, coverageO
             ref=${setRef}
         >
             ${slot.id && renderPage
-                ? html`<div class="peripheral-mini" inert>
-                    <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(slot.id)}</div>
-                </div>`
+                ? html`<${PeripheralMiniature}
+                    pageId=${slot.id}
+                    width=${entry?.width || 0}
+                    height=${entry?.height || 0}
+                    miniScale=${miniScale}
+                    renderPage=${renderPage}
+                />`
                 : html`<div class="peripheral-edge"></div>`}
         </button>
     `;
+}
+
+class PeripheralMiniature extends Component {
+    shouldComponentUpdate(nextProps) {
+        return shouldUpdatePeripheralMiniature(this.props, nextProps);
+    }
+
+    render({ pageId, width, height, miniScale, renderPage }) {
+        const contentStyle = `width:${width}px;height:${height}px;--peripheral-mini-scale:${miniScale};`;
+        return html`<div class="peripheral-mini" inert>
+            <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(pageId)}</div>
+        </div>`;
+    }
 }
 
 function captureRunningState(el) {

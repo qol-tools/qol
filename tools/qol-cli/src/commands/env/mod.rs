@@ -927,8 +927,21 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 finished_at_unix_ms,
             });
             let report_written = report_result.is_ok();
+            let payload_cleanup_error = if cleanup_complete && report_written {
+                let teardown_by_run = teardown
+                    .iter()
+                    .map(|result| (result.run_id.clone(), result.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                reconcile_batch_report_file(&batch_dir.join("report.json"), &teardown_by_run, true)
+                    .context("failed to clean the environment development payload")
+                    .err()
+            } else {
+                None
+            };
+            let report_complete = report_written && payload_cleanup_error.is_none();
             let recording_error = combine_recording_errors(timestamp_error, report_result.err());
-            let lease_error = if cleanup_complete && report_written {
+            let recording_error = combine_optional_errors(recording_error, payload_cleanup_error);
+            let lease_error = if cleanup_complete && report_complete {
                 resource_lease
                     .release()
                     .context("failed to release the environment resource lease")
@@ -2098,6 +2111,7 @@ fn reconcile_batch_report_file(
             && report.cleanup.is_complete()
     });
     if settled {
+        let mut normalized = report.clone();
         let latest_lane_finished_at_unix_ms = lane_states
             .values()
             .flatten()
@@ -2107,33 +2121,214 @@ fn reconcile_batch_report_file(
             if report.get("finished_at_unix_ms").and_then(Value::as_u64)
                 != Some(finished_at_unix_ms)
             {
-                let mut normalized = report.clone();
                 normalized["finished_at_unix_ms"] = Value::from(finished_at_unix_ms);
-                write_json(path, &normalized)?;
             }
         }
-        if require_cleanup_complete {
-            ensure_batch_cleanup_complete(&report)?;
+        let payload_cleanup = cleanup_environment_payload(run_dir, &mut normalized);
+        if normalized != report {
+            write_json(path, &normalized)?;
         }
+        if require_cleanup_complete {
+            ensure_batch_cleanup_complete(&normalized)?;
+        }
+        payload_cleanup?;
         return Ok(());
     }
-    let reconciled =
+    let mut reconciled =
         reconciled_batch_report(&report, &lane_states, teardown, qol_dev_env::unix_millis()?);
-    if reconciled == report {
-        if require_cleanup_complete {
-            ensure_batch_cleanup_complete(&reconciled)?;
-        }
-        return Ok(());
-    }
-    if let Some(run_dir) = path.parent() {
+    let payload_cleanup = cleanup_environment_payload(run_dir, &mut reconciled);
+    if reconciled != report {
         fs::create_dir_all(run_dir.join("steps"))
             .with_context(|| format!("failed to create steps for {}", run_dir.display()))?;
         write_json(&run_dir.join("steps/lifecycle.json"), &reconciled["steps"])?;
+        write_json(path, &reconciled)?;
     }
-    write_json(path, &reconciled)?;
     if require_cleanup_complete {
         ensure_batch_cleanup_complete(&reconciled)?;
     }
+    payload_cleanup?;
+    Ok(())
+}
+
+fn cleanup_environment_payload(run_dir: &Path, report: &mut Value) -> Result<()> {
+    let Some(payload) = report.get("payload").filter(|payload| !payload.is_null()) else {
+        return Ok(());
+    };
+    if payload
+        .get("cleanup")
+        .and_then(|cleanup| cleanup.get("complete"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(());
+    }
+    let mut removed = Vec::new();
+    let cleanup = cleanup_environment_payload_files(run_dir, report, &mut removed);
+    let error = cleanup.as_ref().err().map(|error| format!("{error:#}"));
+    report["payload"]["cleanup"] = json!({
+        "status": if cleanup.is_ok() { "complete" } else { "incomplete" },
+        "complete": cleanup.is_ok(),
+        "removed": removed,
+        "error": error,
+    });
+    cleanup
+}
+
+fn cleanup_environment_payload_files(
+    run_dir: &Path,
+    report: &Value,
+    removed: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let status = report
+        .get("status")
+        .and_then(Value::as_str)
+        .map(ReportStatus::parse)
+        .context("environment payload report has no status")?;
+    if !status.is_terminal() {
+        bail!("refusing to remove payload for a nonterminal environment batch");
+    }
+    if report
+        .get("teardown")
+        .and_then(|teardown| teardown.get("status"))
+        .and_then(Value::as_str)
+        != Some("complete")
+    {
+        bail!("refusing to remove payload before environment teardown is complete");
+    }
+    if report
+        .get("owner")
+        .and_then(|owner| owner.get("state"))
+        .and_then(Value::as_str)
+        != Some("released")
+    {
+        bail!("refusing to remove payload before the environment owner is released");
+    }
+    let canonical_run_dir = run_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize batch run {}", run_dir.display()))?;
+    let run_id = report
+        .get("run_id")
+        .and_then(Value::as_str)
+        .context("environment payload report has no run ID")?;
+    if canonical_run_dir.file_name().and_then(|name| name.to_str()) != Some(run_id) {
+        bail!("environment payload run ID does not own its canonical run directory");
+    }
+    let payload_dir = canonical_run_dir.join("payload");
+    let root = payload_dir.join("root");
+    let manifest = root.join("manifest.json");
+    let recorded_manifest = report
+        .get("payload")
+        .and_then(|payload| payload.get("manifest"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("environment payload has no manifest path")?;
+    let image = report
+        .get("payload")
+        .and_then(|payload| payload.get("image"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("environment payload has no image path")?;
+    if recorded_manifest != manifest {
+        bail!("environment payload manifest escapes its canonical run directory");
+    }
+    if image.parent() != Some(payload_dir.as_path())
+        || image.extension().and_then(|extension| extension.to_str()) != Some("iso")
+    {
+        bail!("environment payload image escapes its canonical run directory");
+    }
+    if let Some(bundle) = report.get("dev_bundle").filter(|bundle| !bundle.is_null()) {
+        if bundle.get("manifest").and_then(Value::as_str) != recorded_manifest.to_str()
+            || bundle.get("image").and_then(Value::as_str) != image.to_str()
+        {
+            bail!("development bundle paths do not match the owned payload");
+        }
+    }
+    if !payload_dir.exists() {
+        return Ok(());
+    }
+    let payload_metadata = fs::symlink_metadata(&payload_dir).with_context(|| {
+        format!(
+            "failed to inspect payload directory {}",
+            payload_dir.display()
+        )
+    })?;
+    if !payload_metadata.file_type().is_dir() || payload_metadata.file_type().is_symlink() {
+        bail!(
+            "refusing to remove non-directory payload path {}",
+            payload_dir.display()
+        );
+    }
+    let image_name = image
+        .file_name()
+        .context("environment payload image has no file name")?;
+    for entry in fs::read_dir(&payload_dir).with_context(|| {
+        format!(
+            "failed to inspect payload directory {}",
+            payload_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name != "root" && name != "bundle.json" && name != image_name {
+            bail!(
+                "refusing to remove unrecognized payload entry {}",
+                entry.path().display()
+            );
+        }
+    }
+    if image.exists() {
+        let metadata = fs::symlink_metadata(&image)
+            .with_context(|| format!("failed to inspect payload image {}", image.display()))?;
+        if !metadata.file_type().is_file() {
+            bail!(
+                "refusing to remove non-file payload image {}",
+                image.display()
+            );
+        }
+        fs::remove_file(&image)
+            .with_context(|| format!("failed to remove payload image {}", image.display()))?;
+        removed.push(image.clone());
+    }
+    if root.exists() {
+        let metadata = fs::symlink_metadata(&root)
+            .with_context(|| format!("failed to inspect payload root {}", root.display()))?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            bail!(
+                "refusing to remove non-directory payload root {}",
+                root.display()
+            );
+        }
+        removed.push(qol_dev_env::payload::remove_payload(&root)?);
+    }
+    let descriptor = payload_dir.join("bundle.json");
+    if descriptor.exists() {
+        let metadata = fs::symlink_metadata(&descriptor).with_context(|| {
+            format!(
+                "failed to inspect payload descriptor {}",
+                descriptor.display()
+            )
+        })?;
+        if !metadata.file_type().is_file() {
+            bail!(
+                "refusing to remove non-file payload descriptor {}",
+                descriptor.display()
+            );
+        }
+        fs::remove_file(&descriptor).with_context(|| {
+            format!(
+                "failed to remove payload descriptor {}",
+                descriptor.display()
+            )
+        })?;
+        removed.push(descriptor);
+    }
+    fs::remove_dir(&payload_dir).with_context(|| {
+        format!(
+            "failed to remove payload directory {}",
+            payload_dir.display()
+        )
+    })?;
+    removed.push(payload_dir);
     Ok(())
 }
 
@@ -2565,6 +2760,12 @@ fn batch_report(batch: &Batch<'_>) -> Value {
         "payload": batch.dev_bundle.map(|bundle| json!({
             "manifest": bundle.payload.manifest_path,
             "image": bundle.image.path,
+            "cleanup": {
+                "status": "pending",
+                "complete": false,
+                "removed": [],
+                "error": null,
+            },
         })),
         "admission": {
             "available_memory_mb": batch.admission.available_memory_mb,
@@ -2803,6 +3004,116 @@ mod tests {
             cleanup,
             finished_at_unix_ms,
         })
+    }
+
+    fn terminal_payload_report(run_dir: &Path, manifest: &Path, image: &Path) -> Value {
+        let run_id = run_dir.file_name().unwrap().to_str().unwrap();
+        json!({
+            "kind": "environment-batch",
+            "run_id": run_id,
+            "status": "stopped",
+            "owner": { "state": "released" },
+            "teardown": { "status": "complete", "lanes": [] },
+            "payload": {
+                "manifest": manifest,
+                "image": image,
+                "cleanup": {
+                    "status": "pending",
+                    "complete": false,
+                    "removed": [],
+                    "error": null,
+                },
+            },
+            "dev_bundle": {
+                "manifest": manifest,
+                "image": image,
+            },
+        })
+    }
+
+    #[test]
+    fn terminal_environment_payload_cleanup_removes_only_owned_bundle_files() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let run_dir = canonical.join("batch-1");
+        let payload_dir = run_dir.join("payload");
+        fs::create_dir_all(&run_dir).unwrap();
+        let source = canonical.join("qol-tray");
+        fs::write(&source, b"sandbox binary").unwrap();
+        let prepared = qol_dev_env::payload::stage_payload(
+            &payload_dir.join("root"),
+            dev_bundle::DEV_BUNDLE_ID,
+            &[qol_dev_env::payload::PayloadFileSpec {
+                source,
+                relative_path: PathBuf::from("bin/qol-tray"),
+                executable: true,
+            }],
+        )
+        .unwrap();
+        let image = payload_dir.join("digest.iso");
+        fs::write(&image, b"iso").unwrap();
+        fs::write(payload_dir.join("bundle.json"), b"{}").unwrap();
+        let mut report = terminal_payload_report(&run_dir, &prepared.manifest_path, &image);
+
+        cleanup_environment_payload(&run_dir, &mut report).unwrap();
+
+        assert!(!payload_dir.exists());
+        assert_eq!(report["payload"]["cleanup"]["status"], "complete");
+        assert_eq!(report["payload"]["cleanup"]["complete"], true);
+        assert_eq!(
+            report["payload"]["cleanup"]["removed"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn environment_payload_cleanup_rejects_paths_outside_the_owned_run() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let run_dir = canonical.join("batch-1");
+        let payload_dir = run_dir.join("payload");
+        fs::create_dir_all(&payload_dir).unwrap();
+        let manifest = payload_dir.join("root/manifest.json");
+        let outside_image = canonical.join("outside.iso");
+        fs::write(&outside_image, b"keep").unwrap();
+        let mut report = terminal_payload_report(&run_dir, &manifest, &outside_image);
+
+        let error = cleanup_environment_payload(&run_dir, &mut report).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("escapes its canonical run directory"));
+        assert!(outside_image.is_file());
+        assert_eq!(report["payload"]["cleanup"]["status"], "incomplete");
+        assert_eq!(report["payload"]["cleanup"]["complete"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn environment_payload_cleanup_rejects_a_symlinked_payload_directory() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let run_dir = canonical.join("batch-1");
+        let outside_payload = canonical.join("outside-payload");
+        fs::create_dir_all(outside_payload.join("root")).unwrap();
+        fs::create_dir_all(&run_dir).unwrap();
+        std::os::unix::fs::symlink(&outside_payload, run_dir.join("payload")).unwrap();
+        let manifest = run_dir.join("payload/root/manifest.json");
+        let image = run_dir.join("payload/digest.iso");
+        fs::write(&image, b"keep").unwrap();
+        let mut report = terminal_payload_report(&run_dir, &manifest, &image);
+
+        let error = cleanup_environment_payload(&run_dir, &mut report).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("refusing to remove non-directory payload path"));
+        assert!(outside_payload.join("digest.iso").is_file());
+        assert_eq!(report["payload"]["cleanup"]["status"], "incomplete");
+        assert_eq!(report["payload"]["cleanup"]["complete"], false);
     }
 
     fn resolved_environment(run_root: &Path) -> ResolvedEnvironment {

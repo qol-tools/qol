@@ -6,8 +6,29 @@ import {
     handleSlotClick,
     pickCenteredEntry,
     shouldHidePeripheralSide,
+    shouldUpdatePeripheralMiniature,
     NEIGHBOR_HARD_CAP,
 } from './peripheral-geometry.js';
+
+test('peripheral miniature ignores camera-only parent rerenders', () => {
+    const renderPage = () => null;
+    const current = { pageId: 'a', width: 800, height: 600, miniScale: 0.5, renderPage };
+    assert.equal(shouldUpdatePeripheralMiniature(current, { ...current }), false);
+});
+
+test('peripheral miniature updates when its rendered page inputs change', () => {
+    const renderPage = () => null;
+    const current = { pageId: 'a', width: 800, height: 600, miniScale: 0.5, renderPage };
+    for (const next of [
+        { ...current, pageId: 'b' },
+        { ...current, width: 801 },
+        { ...current, height: 601 },
+        { ...current, miniScale: 0.6 },
+        { ...current, renderPage: () => null },
+    ]) {
+        assert.equal(shouldUpdatePeripheralMiniature(current, next), true);
+    }
+});
 
 test('computePeripheralSlots returns empty when anchor is null', () => {
     assert.deepEqual(computePeripheralSlots(null, ['a', 'b', 'c'], 1), []);

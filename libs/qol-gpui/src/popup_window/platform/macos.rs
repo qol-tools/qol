@@ -28,12 +28,18 @@ impl PopupPresentation for Platform {
 }
 
 #[derive(Clone)]
-pub struct WindowGeometrySession;
+pub struct WindowGeometrySession {
+    title: String,
+}
 
 impl WindowGeometrySession {
     pub fn set_bounds(&self, _x: i32, _y: i32, _width: u32, _height: u32) {}
 
     pub fn set_position(&self, _x: i32, _y: i32) {}
+
+    pub fn reposition(&self, x: i32, y: i32) -> bool {
+        reposition_window_by_title(&self.title, f64::from(x), f64::from(y))
+    }
 
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
@@ -46,8 +52,10 @@ impl WindowGeometrySession {
     pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
 }
 
-pub fn window_geometry_session(_title: &str) -> Option<WindowGeometrySession> {
-    None
+pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
+    Some(WindowGeometrySession {
+        title: title.to_owned(),
+    })
 }
 
 pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {

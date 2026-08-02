@@ -714,7 +714,18 @@ fn batch_cleanup(document: &Value) -> CleanupState {
             "one or more environment lanes lack verified cleanup".to_string(),
         );
     }
-    CleanupState::Complete
+    let Some(payload) = document.get("payload").filter(|payload| !payload.is_null()) else {
+        return CleanupState::Complete;
+    };
+    if payload
+        .get("cleanup")
+        .and_then(|cleanup| cleanup.get("complete"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return CleanupState::Complete;
+    }
+    CleanupState::Incomplete("environment payload cleanup is incomplete".to_string())
 }
 
 fn fanout_cleanup(document: &Value) -> CleanupState {
@@ -1001,6 +1012,22 @@ mod tests {
             (
                 clean_environment_batch("env", "stopped"),
                 CleanupState::Complete,
+            ),
+            (
+                {
+                    let mut report = clean_environment_batch("env-payload-clean", "stopped");
+                    report["payload"] = json!({ "cleanup": { "complete": true } });
+                    report
+                },
+                CleanupState::Complete,
+            ),
+            (
+                {
+                    let mut report = clean_environment_batch("env-payload-dirty", "stopped");
+                    report["payload"] = json!({ "cleanup": { "complete": false } });
+                    report
+                },
+                CleanupState::Incomplete("environment payload cleanup is incomplete".to_string()),
             ),
             (
                 json!({

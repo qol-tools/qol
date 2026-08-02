@@ -478,10 +478,29 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         dismiss_state,
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let (readiness, attempts) =
-            await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
+        let reveal = await_reveal_readiness(
+            cx,
+            handle,
+            &title,
+            origin,
+            &fresh_frame,
+            &dismiss_state,
+            dismiss_generation,
+        )
+        .await;
+        let readiness = reveal.readiness;
+        let attempts = reveal.attempts;
         #[cfg(not(debug_assertions))]
         let _ = &attempts;
+        if reveal.cancelled {
+            reveal_pending.set(false);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=cancelled attempts={attempts} session={} reason=dismissed",
+                reveal.geometry_session.is_some()
+            );
+            return;
+        }
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -555,13 +574,19 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             focus_commit,
         );
         for _ in 0..3 {
+            if reveal_cancelled(&dismiss_state, dismiss_generation) {
+                break;
+            }
             cx.background_executor()
                 .timer(Duration::from_millis(50))
                 .await;
-            crate::popup_window::reposition_window_by_title(
+            if reveal_cancelled(&dismiss_state, dismiss_generation) {
+                break;
+            }
+            reposition_reveal_window(
+                reveal.geometry_session.as_ref(),
                 &title,
-                origin.x.to_f64(),
-                origin.y.to_f64(),
+                origin,
             );
         }
     })
@@ -575,6 +600,13 @@ struct RevealReadiness {
     viewport_ready: bool,
     fresh_frame: bool,
     content_rendered: bool,
+}
+
+struct RevealWait {
+    readiness: RevealReadiness,
+    attempts: usize,
+    geometry_session: Option<crate::popup_window::WindowGeometrySession>,
+    cancelled: bool,
 }
 
 impl RevealReadiness {
@@ -713,32 +745,96 @@ async fn await_reveal_readiness<V: Render + 'static>(
     title: &str,
     origin: Point<Pixels>,
     fresh_frame: &FreshFrame,
-) -> (RevealReadiness, usize) {
+    dismiss_state: &DismissState,
+    dismiss_generation: u64,
+) -> RevealWait {
     let mut readiness = RevealReadiness::default();
+    let mut geometry_session = None;
     for attempt in 1..=40 {
+        if reveal_cancelled(dismiss_state, dismiss_generation) {
+            return RevealWait {
+                readiness,
+                attempts: attempt - 1,
+                geometry_session,
+                cancelled: true,
+            };
+        }
         cx.background_executor()
             .timer(Duration::from_millis(15))
             .await;
-        readiness.moved |= crate::popup_window::reposition_window_by_title(
-            title,
-            origin.x.to_f64(),
-            origin.y.to_f64(),
-        );
+        if reveal_cancelled(dismiss_state, dismiss_generation) {
+            return RevealWait {
+                readiness,
+                attempts: attempt,
+                geometry_session,
+                cancelled: true,
+            };
+        }
+        if geometry_session.is_none() {
+            let session_title = title.to_owned();
+            geometry_session = cx
+                .background_spawn(async move {
+                    crate::popup_window::window_geometry_session(&session_title)
+                })
+                .await;
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=geometry-session attempt={attempt} connected={}",
+                geometry_session.is_some()
+            );
+        }
+        readiness.moved |= reposition_reveal_window(geometry_session.as_ref(), title, origin);
         readiness.layout_confirmed = fresh_frame.layout_confirmed();
         readiness.viewport_ready = fresh_frame.viewport_ready();
         readiness.fresh_frame = fresh_frame.presented();
         readiness.content_rendered = fresh_frame.content_rendered();
         if readiness.ready() {
-            return (readiness, attempt);
+            return RevealWait {
+                readiness,
+                attempts: attempt,
+                geometry_session,
+                cancelled: false,
+            };
         }
         let frame_requested = cx
             .update(|cx| request_pending_frame(handle, fresh_frame, cx))
             .unwrap_or(false);
         if !frame_requested {
-            return (readiness, attempt);
+            return RevealWait {
+                readiness,
+                attempts: attempt,
+                geometry_session,
+                cancelled: false,
+            };
         }
     }
-    (readiness, 40)
+    RevealWait {
+        readiness,
+        attempts: 40,
+        geometry_session,
+        cancelled: false,
+    }
+}
+
+fn reveal_cancelled(dismiss_state: &DismissState, dismiss_generation: u64) -> bool {
+    dismiss_state.generation.get() != dismiss_generation
+}
+
+fn reposition_reveal_window(
+    geometry_session: Option<&crate::popup_window::WindowGeometrySession>,
+    title: &str,
+    origin: Point<Pixels>,
+) -> bool {
+    geometry_session.map_or_else(
+        || {
+            crate::popup_window::reposition_window_by_title(
+                title,
+                origin.x.to_f64(),
+                origin.y.to_f64(),
+            )
+        },
+        |session| session.reposition(origin.x.to_f64() as i32, origin.y.to_f64() as i32),
+    )
 }
 
 impl<V: Render + Focusable + 'static> OpenedSurface<V> {
@@ -847,10 +943,29 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         dismiss_state,
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let (readiness, attempts) =
-            await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
+        let reveal = await_reveal_readiness(
+            cx,
+            handle,
+            &title,
+            origin,
+            &fresh_frame,
+            &dismiss_state,
+            dismiss_generation,
+        )
+        .await;
+        let readiness = reveal.readiness;
+        let attempts = reveal.attempts;
         #[cfg(not(debug_assertions))]
         let _ = &attempts;
+        if reveal.cancelled {
+            reveal_pending.set(false);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=cancelled attempts={attempts} reused=true session={} reason=dismissed",
+                reveal.geometry_session.is_some()
+            );
+            return;
+        }
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -988,9 +1103,13 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 
 #[cfg(test)]
 mod tests {
-    use super::{viewport_matches, RevealReadiness, Surface, SurfaceKind};
+    use super::{
+        reveal_cancelled, viewport_matches, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+    };
     use crate::placement::MonitorPlacement;
     use gpui::{px, size, WindowKind};
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn panel_surfaces_are_normal_focusable_windows() {
@@ -1028,6 +1147,24 @@ mod tests {
                 "moved={moved} layout_confirmed={layout_confirmed} viewport_ready={viewport_ready} fresh_frame={fresh_frame} content_rendered={content_rendered}"
             );
         }
+    }
+
+    #[test]
+    fn reveal_wait_is_cancelled_when_the_surface_generation_changes() {
+        let visible = Rc::new(Cell::new(false));
+        let pending = Rc::new(Cell::new(true));
+        let dismisser = SurfaceDismisser::new(
+            true,
+            "test".to_owned(),
+            size(px(10.0), px(10.0)),
+            true,
+            visible,
+            pending,
+        );
+        let generation = dismisser.state.generation.get();
+        assert!(!reveal_cancelled(&dismisser.state, generation));
+        dismisser.state.generation.set(generation.wrapping_add(1));
+        assert!(reveal_cancelled(&dismisser.state, generation));
     }
 
     #[test]
