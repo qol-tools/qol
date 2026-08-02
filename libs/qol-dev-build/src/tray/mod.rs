@@ -719,7 +719,7 @@ path = \"src/main.rs\"
     fn build_command_uses_isolated_target_requested_bins_dev_features_json_and_manifest_path() {
         let root = Path::new("/repo/qol");
         let manifest = root.join("Cargo.toml");
-        let target = root.join("target/qol-dev/build");
+        let target = root.join("target").join("qol-dev").join("build");
         let features = Platform.tray_dev_features();
         let cases: [(&[&str], Vec<&str>); 2] = [
             (
