@@ -284,6 +284,7 @@ command = "daemon"
 
     #[test]
     fn ensure_plugin_daemon_running_respawns_daemon_after_unexpected_exit() {
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
         let mut manager = manager_with_running_daemon(root.path());
@@ -325,6 +326,7 @@ command = "daemon"
 
     #[test]
     fn reload_plugin_restarts_only_the_target_daemon() {
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         const TARGET_ID: &str = "plugin-selective-reload-target";
         const OTHER_ID: &str = "plugin-selective-reload-other";
 

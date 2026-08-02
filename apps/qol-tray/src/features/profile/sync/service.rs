@@ -756,7 +756,10 @@ fn push_profile_changes(
 ) -> Result<PushTaskOutput> {
     let repo = GitRepo::open(repo_path)?;
     ensure_gitignore(repo_path)?;
-    repair_profile_uid_schema(repo_path)?;
+    {
+        let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
+        repair_profile_uid_schema(repo_path)?;
+    }
     let local_commit = repo.commit_all(reason, &SignatureSpec::default_for_app())?;
     let outcome = repo.pull(token)?;
     let mut committed = local_commit.is_some();
@@ -790,6 +793,7 @@ fn push_profile_changes(
 }
 
 fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> Result<()> {
+    let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
     for (rel, value) in merged {
         let path = repo_path.join(rel);
         if let Some(parent) = path.parent() {
@@ -809,7 +813,10 @@ fn commit_profile_schema_repair(
     repo: &GitRepo,
     token: Option<&str>,
 ) -> Result<()> {
-    repair_profile_uid_schema(repo_path)?;
+    {
+        let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
+        repair_profile_uid_schema(repo_path)?;
+    }
     let commit = repo.commit_all("repair profile schema", &SignatureSpec::default_for_app())?;
     if commit.is_some() {
         repo.push(token)?;

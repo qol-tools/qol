@@ -95,6 +95,9 @@ semver = "1"
 
 # Filesystem traversal
 walkdir = "2"
+notify = { version = "8", default-features = false, features = [
+  "macos_fsevent",
+] }
 
 # Archive extraction for self-update
 flate2 = "1"

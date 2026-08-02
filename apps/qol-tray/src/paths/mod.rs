@@ -156,7 +156,7 @@ pub fn current_os_subdir() -> &'static str {
     platform::os_bucket()
 }
 
-fn active_profile_marker_path() -> Result<PathBuf> {
+pub(crate) fn active_profile_marker_path() -> Result<PathBuf> {
     profile_dir().map(|p| p.join(ACTIVE_PROFILE_FILE))
 }
 

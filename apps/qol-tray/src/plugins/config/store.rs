@@ -89,8 +89,24 @@ pub(super) fn write_scoped_slices(
 }
 
 fn read_optional_object(path: &Path) -> Result<Value> {
-    if !path.exists() {
-        return Ok(Value::Object(serde_json::Map::new()));
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Value::Object(serde_json::Map::new()));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "profile config slice must not be a symlink: {}",
+            path.display()
+        );
+    }
+    if !metadata.is_file() {
+        anyhow::bail!(
+            "profile config slice is not a regular file: {}",
+            path.display()
+        );
     }
     file_io::read_json(path)
 }

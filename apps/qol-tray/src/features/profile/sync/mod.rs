@@ -7,6 +7,8 @@ mod service;
 mod state;
 mod types;
 
+#[cfg(test)]
+pub(crate) use promote::promote_allowlisted_clone;
 pub(crate) use scope::SCOPE_REQUIREMENTS;
 pub use service::SyncService;
 pub use types::{

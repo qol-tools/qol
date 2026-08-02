@@ -216,6 +216,7 @@ items = []
 
     #[test]
     fn materialize_runtime_config_uses_loaded_manifest_uid_before_spawn() {
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
         let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();

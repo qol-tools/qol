@@ -38,6 +38,7 @@ pub fn load_plugins_lock() -> Result<PluginsLock> {
 }
 
 pub fn save_plugins_lock(lock: &PluginsLock) -> Result<()> {
+    let _mutation = crate::plugins::config::begin_runtime_config_mutation_for_active_profile()?;
     ensure_profile_dirs()?;
     crate::file_io::write_pretty_json(&crate::paths::profile_plugins_lock_path()?, lock)
 }
@@ -52,6 +53,7 @@ pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
 }
 
 pub fn replace_plugin_configs(configs: &HashMap<String, Value>) -> Result<()> {
+    let _mutation = crate::plugins::config::begin_runtime_config_mutation_for_active_profile()?;
     ensure_profile_dirs()?;
     replace_plugin_configs_in_dir(&crate::paths::profile_plugin_configs_dir()?, configs)
 }

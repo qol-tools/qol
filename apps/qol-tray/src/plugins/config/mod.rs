@@ -1,9 +1,11 @@
 pub mod drain;
 mod resolver;
+mod runtime_cache;
 mod scope;
 mod store;
 
 pub use resolver::{classify_os_bucket, resolve_plugin_config, PluginConfigResolution};
+pub(crate) use runtime_cache::{ActionCacheStatus, ManifestIdentity};
 pub use scope::{merge_slices, split_by_declarations, split_by_scope, ConfigSlices};
 
 #[cfg(test)]
@@ -19,6 +21,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const RUNTIME_CONFIG_RETRY_TIMEOUT: Duration = Duration::from_millis(750);
+const RUNTIME_CONFIG_RETRY_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfigs {
@@ -30,9 +36,71 @@ pub struct PluginConfigManager {
     scope_store: ProfileScopeStore,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeConfigCacheResult {
+    Hit,
+    Materialized,
+}
+
+struct MaterializedRuntimeConfig {
+    value: Option<serde_json::Value>,
+}
+
+pub(crate) fn manifest_identity(
+    manifest: &crate::plugins::manifest::PluginManifest,
+) -> ManifestIdentity {
+    ManifestIdentity::from(manifest)
+}
+
+pub(crate) fn begin_runtime_config_mutation(
+    scope_store: &ProfileScopeStore,
+) -> runtime_cache::MutationGuard {
+    runtime_cache::begin_mutation(&scope_store.dir())
+}
+
+pub(crate) fn begin_runtime_config_global_mutation() -> runtime_cache::MutationGuard {
+    runtime_cache::begin_global_mutation()
+}
+
+pub(crate) fn begin_runtime_config_mutation_for_active_profile(
+) -> Result<runtime_cache::MutationGuard> {
+    let scope_dir = ProfileScopeStore::from_active()?.dir();
+    Ok(runtime_cache::begin_mutation(&scope_dir))
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_config_cache_hit(
+    manager: &PluginConfigManager,
+    plugin_id: &str,
+    identity: &ManifestIdentity,
+) -> bool {
+    !matches!(
+        runtime_config_cache_status(manager, plugin_id, identity),
+        ActionCacheStatus::Miss
+    )
+}
+
+pub(crate) fn runtime_config_cache_status(
+    manager: &PluginConfigManager,
+    plugin_id: &str,
+    identity: &ManifestIdentity,
+) -> ActionCacheStatus {
+    runtime_cache::action_cache_status(&manager.scope_store, plugin_id, identity)
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn runtime_config_generation() -> u64 {
+    runtime_cache::generation()
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn should_sample_runtime_cache_hit() -> bool {
+    runtime_cache::should_sample_cache_hit()
+}
+
 impl PluginConfigManager {
     pub fn new() -> Result<Self> {
-        Ok(Self::with_store(ProfileScopeStore::from_active()?))
+        Ok(Self::with_store(runtime_cache::active_scope_store()?))
     }
 
     pub fn with_store(scope_store: ProfileScopeStore) -> Self {
@@ -56,6 +124,7 @@ impl PluginConfigManager {
     }
 
     pub fn save_configs(&self, configs: &PluginConfigs) -> Result<()> {
+        let _mutation = begin_runtime_config_mutation(&self.scope_store);
         store::save_configs(
             &self.scope_store.core_plugin_configs_dir(),
             &configs.configs,
@@ -88,8 +157,40 @@ impl PluginConfigManager {
         plugin_id: &str,
         manifest: &crate::plugins::manifest::PluginManifest,
     ) -> Result<Option<serde_json::Value>> {
+        if let Some(value) = runtime_cache::lookup(&self.scope_store, plugin_id, manifest) {
+            return Ok(value);
+        }
         let lock = load_lock_entry_for(plugin_id);
         self.materialize_runtime_config_with(plugin_id, lock.as_ref(), Some(manifest))
+    }
+
+    pub(crate) fn ensure_runtime_config_for_manifest(
+        &self,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+    ) -> Result<RuntimeConfigCacheResult> {
+        let started = Instant::now();
+        let generation = runtime_cache::generation();
+        if runtime_cache::is_fresh(&self.scope_store, plugin_id, manifest) {
+            trace_runtime_cache_check(
+                plugin_id,
+                RuntimeConfigCacheResult::Hit,
+                generation,
+                started,
+            );
+            return Ok(RuntimeConfigCacheResult::Hit);
+        }
+        let lock = load_lock_entry_for(plugin_id);
+        self.materialize_runtime_config_with(plugin_id, lock.as_ref(), Some(manifest))
+            .map(|_| {
+                trace_runtime_cache_check(
+                    plugin_id,
+                    RuntimeConfigCacheResult::Materialized,
+                    generation,
+                    started,
+                );
+                RuntimeConfigCacheResult::Materialized
+            })
     }
 
     pub fn materialize_installed_runtime_configs(&self) -> Result<usize> {
@@ -118,6 +219,7 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
+        let _mutation = begin_runtime_config_mutation(&self.scope_store);
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         store::write_plugin_config(&runtime_path, &config)?;
@@ -132,16 +234,133 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<Option<serde_json::Value>> {
+        if let Some(manifest) = manifest {
+            if let Some(value) = runtime_cache::lookup(&self.scope_store, plugin_id, manifest) {
+                return Ok(value);
+            }
+            return self.materialize_cached_runtime_config(plugin_id, manifest);
+        }
+        Ok(self
+            .materialize_runtime_config_once(plugin_id, lock_entry, None)?
+            .value)
+    }
+
+    fn materialize_cached_runtime_config(
+        &self,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+    ) -> Result<Option<serde_json::Value>> {
+        let scope_dir = self.scope_store.dir();
+        if !runtime_cache::cache_available() && !runtime_cache::mutation_active(&scope_dir) {
+            let lock = load_lock_entry_for(plugin_id);
+            return Ok(self
+                .materialize_runtime_config_once(plugin_id, lock.as_ref(), Some(manifest))?
+                .value);
+        }
+        let deadline = Instant::now() + RUNTIME_CONFIG_RETRY_TIMEOUT;
+        let mut observed_epoch = runtime_cache::mutation_epoch();
+        let mut wait_duration = Duration::ZERO;
+        let mut wait_scope = "none";
+        loop {
+            if let Some(value) = runtime_cache::lookup(&self.scope_store, plugin_id, manifest) {
+                trace_runtime_cache_wait(plugin_id, wait_scope, wait_duration, false);
+                return Ok(value);
+            }
+            let Some(version) = runtime_cache::stable_cache_version(&scope_dir) else {
+                let wait_deadline =
+                    std::cmp::min(deadline, Instant::now() + RUNTIME_CONFIG_RETRY_INTERVAL);
+                if !wait_for_runtime_cache_change(
+                    &scope_dir,
+                    &mut observed_epoch,
+                    wait_deadline,
+                    &mut wait_duration,
+                    &mut wait_scope,
+                ) && Instant::now() >= deadline
+                {
+                    trace_runtime_cache_wait(plugin_id, wait_scope, wait_duration, true);
+                    anyhow::bail!(
+                        "profile mutation did not settle while materializing runtime config for {plugin_id}"
+                    );
+                }
+                continue;
+            };
+            let lock = load_lock_entry_for(plugin_id);
+            let uid = uid_from_lock_manifest_or_id(lock.as_ref(), Some(manifest), plugin_id);
+            let paths =
+                self.scope_store
+                    .plugin_config_slice_paths(&uid, lock.as_ref(), Some(manifest))?;
+            let source_before = runtime_cache::source_revision(&self.scope_store, &paths)?;
+            let materialized =
+                self.materialize_runtime_config_once(plugin_id, lock.as_ref(), Some(manifest))?;
+            let source_after = runtime_cache::source_revision(&self.scope_store, &paths)?;
+            #[cfg(test)]
+            runtime_cache::before_publish();
+            if runtime_cache::publish_if_unchanged(
+                &self.scope_store,
+                plugin_id,
+                manifest,
+                source_before,
+                source_after,
+                version,
+                materialized.value.clone(),
+            ) {
+                trace_runtime_cache_wait(plugin_id, wait_scope, wait_duration, false);
+                return Ok(materialized.value);
+            }
+            if !runtime_cache::cache_available() {
+                trace_runtime_cache_wait(plugin_id, wait_scope, wait_duration, false);
+                return Ok(materialized.value);
+            }
+            let wait_deadline =
+                std::cmp::min(deadline, Instant::now() + RUNTIME_CONFIG_RETRY_INTERVAL);
+            if !wait_for_runtime_cache_change(
+                &scope_dir,
+                &mut observed_epoch,
+                wait_deadline,
+                &mut wait_duration,
+                &mut wait_scope,
+            ) && Instant::now() >= deadline
+            {
+                trace_runtime_cache_wait(plugin_id, wait_scope, wait_duration, true);
+                anyhow::bail!("profile changed while materializing runtime config for {plugin_id}");
+            }
+        }
+    }
+
+    fn materialize_runtime_config_once(
+        &self,
+        plugin_id: &str,
+        lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+        manifest: Option<&crate::plugins::manifest::PluginManifest>,
+    ) -> Result<MaterializedRuntimeConfig> {
+        #[cfg(test)]
+        runtime_cache::record_materialization();
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         let outcome = materialize_runtime_cache(&runtime_path, &merged)?;
         trace_runtime_materialization(plugin_id, outcome);
-        if merged.as_object().is_some_and(|m| m.is_empty()) {
-            return Ok(None);
-        }
-        Ok(Some(merged))
+        Ok(MaterializedRuntimeConfig {
+            value: (!merged.as_object().is_some_and(|m| m.is_empty())).then_some(merged),
+        })
     }
+}
+
+fn wait_for_runtime_cache_change(
+    scope_dir: &Path,
+    observed_epoch: &mut u64,
+    deadline: Instant,
+    wait_duration: &mut Duration,
+    wait_scope: &mut &'static str,
+) -> bool {
+    let mutation_scope = runtime_cache::mutation_scope(scope_dir);
+    let started = Instant::now();
+    let changed = runtime_cache::wait_for_mutation_change(observed_epoch, deadline);
+    *wait_duration += started.elapsed();
+    if mutation_scope != "none" {
+        *wait_scope = mutation_scope;
+    }
+    changed
 }
 
 fn materialize_runtime_cache(path: &Path, merged: &serde_json::Value) -> Result<&'static str> {
@@ -168,7 +387,7 @@ fn trace_runtime_materialization(plugin_id: &str, outcome: &str) {
     {
         qol_runtime::probe!(
             "PROFILE_CONFIG_MATERIALIZE",
-            "plugin={:?} outcome={outcome}",
+            "plugin={:?} cache=miss outcome={outcome}",
             plugin_id
         );
     }
@@ -176,7 +395,65 @@ fn trace_runtime_materialization(plugin_id: &str, outcome: &str) {
     let _ = (plugin_id, outcome);
 }
 
+fn trace_runtime_cache_wait(
+    plugin_id: &str,
+    mutation_scope: &str,
+    wait_duration: Duration,
+    timed_out: bool,
+) {
+    if wait_duration.is_zero() && !timed_out {
+        return;
+    }
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PROFILE_CONFIG_MATERIALIZE",
+        "plugin={:?} cache=miss last_known_good=false mutation_scope={} wait_us={} timeout={}",
+        plugin_id,
+        mutation_scope,
+        wait_duration.as_micros(),
+        timed_out
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (plugin_id, mutation_scope, wait_duration, timed_out);
+}
+
+#[cfg(debug_assertions)]
+fn trace_runtime_cache_check(
+    plugin_id: &str,
+    result: RuntimeConfigCacheResult,
+    generation: u64,
+    started: Instant,
+) {
+    if result == RuntimeConfigCacheResult::Hit && !runtime_cache::should_sample_cache_hit() {
+        return;
+    }
+    let cache = match result {
+        RuntimeConfigCacheResult::Hit => "hit",
+        RuntimeConfigCacheResult::Materialized => "miss",
+    };
+    qol_runtime::probe!(
+        "PROFILE_CONFIG_MATERIALIZE",
+        "plugin={:?} cache={} last_known_good=false mutation_scope=none wait_us=0 timeout=false generation={} validation_us={}",
+        plugin_id,
+        cache,
+        generation,
+        started.elapsed().as_micros()
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_runtime_cache_check(
+    plugin_id: &str,
+    result: RuntimeConfigCacheResult,
+    generation: u64,
+    started: Instant,
+) {
+    let _ = (plugin_id, result, generation, started);
+}
+
 fn load_lock_entry_for(plugin_id: &str) -> Option<crate::features::profile::core::PluginLockEntry> {
+    #[cfg(test)]
+    runtime_cache::record_profile_read();
     let lock = crate::features::profile::core::load_plugins_lock().ok()?;
     lock.plugins.into_iter().find(|entry| entry.id == plugin_id)
 }
@@ -196,6 +473,8 @@ pub fn load_plugin_config_merged(
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
     manifest: Option<&crate::plugins::manifest::PluginManifest>,
 ) -> Result<serde_json::Value> {
+    #[cfg(test)]
+    runtime_cache::record_profile_read();
     let paths = scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let slices = store::read_scoped_slices(&paths)?;
     Ok(merge_slices(&slices))
@@ -208,6 +487,7 @@ pub fn save_plugin_config_split(
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
     manifest: Option<&crate::plugins::manifest::PluginManifest>,
 ) -> Result<()> {
+    let _mutation = begin_runtime_config_mutation(scope_store);
     let paths: PluginConfigSlicePaths =
         scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let default_decl = crate::plugins::manifest::ConfigDeclarations::default();

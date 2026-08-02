@@ -1,6 +1,6 @@
 use super::manager::PluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
-use crate::plugins::{Plugin, PluginId};
+use crate::plugins::PluginId;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -271,23 +271,29 @@ fn resolve_plugin_daemon_socket(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_id: &str,
 ) -> Result<std::path::PathBuf, ActionExecutionError> {
-    let plugins = plugin_manager
-        .lock()
-        .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
-    let plugin = plugins
-        .get(plugin_id)
-        .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
-    materialize_plugin_runtime_config(plugin)?;
-    let socket = plugin
-        .manifest
-        .daemon
-        .as_ref()
-        .and_then(|daemon| daemon.socket.as_ref())
-        .ok_or_else(|| ActionExecutionError::NoExecutionTarget {
-            plugin_id: PluginId::new(plugin_id),
-            action_id: "<query>".to_string(),
-        })?;
-    Ok(crate::dev_generation::daemon_socket_path(socket))
+    let (identity, socket) = {
+        let plugins = plugin_manager
+            .lock()
+            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let plugin = plugins
+            .get(plugin_id)
+            .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
+        let socket = plugin
+            .manifest
+            .daemon
+            .as_ref()
+            .and_then(|daemon| daemon.socket.as_ref())
+            .map(|socket| crate::dev_generation::daemon_socket_path(socket));
+        (
+            crate::plugins::config::manifest_identity(&plugin.manifest),
+            socket,
+        )
+    };
+    materialize_plugin_runtime_config(plugin_manager, plugin_id, &identity)?;
+    socket.ok_or_else(|| ActionExecutionError::NoExecutionTarget {
+        plugin_id: PluginId::new(plugin_id),
+        action_id: "<query>".to_string(),
+    })
 }
 
 fn resolve_plugin_action(
@@ -295,29 +301,106 @@ fn resolve_plugin_action(
     plugin_id: &str,
     action_id: &str,
 ) -> Result<resolution::ResolvedAction, ActionExecutionError> {
-    let plugins = plugin_manager
-        .lock()
-        .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
-    let plugin = plugins
-        .get(plugin_id)
-        .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
-    materialize_plugin_runtime_config(plugin)?;
-    resolution::resolve_action(plugin, action_id)
+    let (identity, resolved) = {
+        let plugins = plugin_manager
+            .lock()
+            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        let plugin = plugins
+            .get(plugin_id)
+            .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
+        let resolved = resolution::resolve_action(plugin, action_id)?;
+        (
+            crate::plugins::config::manifest_identity(&plugin.manifest),
+            resolved,
+        )
+    };
+    materialize_plugin_runtime_config(plugin_manager, resolved.plugin_id.as_str(), &identity)?;
+    Ok(resolved)
 }
 
-fn materialize_plugin_runtime_config(plugin: &Plugin) -> Result<(), ActionExecutionError> {
-    crate::plugins::PluginConfigManager::new()
-        .and_then(|manager| {
-            manager
-                .materialize_runtime_config_for_manifest(plugin.id.as_str(), &plugin.manifest)
-                .map(|_| ())
-        })
+fn materialize_plugin_runtime_config(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    identity: &crate::plugins::config::ManifestIdentity,
+) -> Result<(), ActionExecutionError> {
+    let manager = crate::plugins::PluginConfigManager::new().map_err(|error| {
+        ActionExecutionError::SpawnFailed(format!(
+            "failed to initialize runtime config for {}: {error:#}",
+            plugin_id
+        ))
+    })?;
+    #[cfg(debug_assertions)]
+    let started = Instant::now();
+    #[cfg(not(debug_assertions))]
+    let started = ();
+    let cache_status =
+        crate::plugins::config::runtime_config_cache_status(&manager, plugin_id, identity);
+    if !matches!(
+        cache_status,
+        crate::plugins::config::ActionCacheStatus::Miss
+    ) {
+        trace_runtime_cache_hit(plugin_id, started, cache_status);
+        return Ok(());
+    }
+    let manifest = {
+        let plugins = plugin_manager
+            .lock()
+            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        plugins
+            .get(plugin_id)
+            .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?
+            .manifest
+            .clone()
+    };
+    manager
+        .ensure_runtime_config_for_manifest(plugin_id, &manifest)
+        .map(drop)
         .map_err(|error| {
             ActionExecutionError::SpawnFailed(format!(
                 "failed to materialize runtime config for {}: {error:#}",
-                plugin.id
+                plugin_id
             ))
         })
+}
+
+fn trace_runtime_cache_hit(
+    plugin_id: &str,
+    #[cfg(debug_assertions)] started: Instant,
+    #[cfg(not(debug_assertions))] started: (),
+    cache_status: crate::plugins::config::ActionCacheStatus,
+) {
+    let fields = runtime_cache_hit_fields(cache_status);
+    #[cfg(debug_assertions)]
+    {
+        let (cache, last_known_good, mutation_scope) = fields;
+        if !crate::plugins::config::should_sample_runtime_cache_hit() {
+            return;
+        }
+        qol_runtime::probe!(
+            "PROFILE_CONFIG_MATERIALIZE",
+            "plugin={:?} cache={} last_known_good={} mutation_scope={} wait_us=0 timeout=false generation={} validation_us={}",
+            plugin_id,
+            cache,
+            last_known_good,
+            mutation_scope,
+            crate::plugins::config::runtime_config_generation(),
+            started.elapsed().as_micros()
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (plugin_id, started, fields);
+}
+
+fn runtime_cache_hit_fields(
+    cache_status: crate::plugins::config::ActionCacheStatus,
+) -> (&'static str, bool, &'static str) {
+    match cache_status {
+        crate::plugins::config::ActionCacheStatus::Fresh => ("hit", false, "none"),
+        crate::plugins::config::ActionCacheStatus::LastKnownGood { mutation_scope } => {
+            ("last_known_good", true, mutation_scope)
+        }
+        crate::plugins::config::ActionCacheStatus::Miss => ("miss", false, "none"),
+    }
 }
 
 fn ensure_daemon_ready_for_action(

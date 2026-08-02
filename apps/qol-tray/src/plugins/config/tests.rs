@@ -2,6 +2,10 @@ use super::*;
 use serde_json::json;
 use std::ffi::OsString;
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn setup_test_env() -> (PluginConfigManager, TempDir, TempDir) {
@@ -14,6 +18,23 @@ fn setup_test_env() -> (PluginConfigManager, TempDir, TempDir) {
     .unwrap();
     let manager = PluginConfigManager::with_store(scope_store);
     (manager, temp_base, temp_plugins)
+}
+
+fn cache_manifest() -> crate::plugins::PluginManifest {
+    toml::from_str(
+        r#"
+[plugin]
+id = "test-plugin"
+name = "Test Plugin"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Test Plugin"
+items = []
+"#,
+    )
+    .unwrap()
 }
 
 fn store_at(profile: &std::path::Path, os: &str) -> crate::features::profile::ProfileScopeStore {
@@ -30,11 +51,13 @@ struct ConfigEnvGuard {
     xdg_data_home: Option<OsString>,
     _path_root: crate::paths::TestPathRootGuard,
     _env_lock: tokio::sync::MutexGuard<'static, ()>,
+    _runtime_cache_lock: tokio::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigEnvGuard {
     fn new(root: &std::path::Path) -> Self {
         let env_lock = crate::test_support::env_lock().blocking_lock();
+        let runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let path_root = crate::paths::push_test_path_root(root);
         let home = std::env::var_os("HOME");
         let user_profile = std::env::var_os("USERPROFILE");
@@ -67,6 +90,7 @@ impl ConfigEnvGuard {
             xdg_data_home,
             _path_root: path_root,
             _env_lock: env_lock,
+            _runtime_cache_lock: runtime_cache_lock,
         }
     }
 }
@@ -477,6 +501,440 @@ fn plugin_config_path_cases() {
             id
         );
     }
+}
+
+#[test]
+fn materialization_cache_skips_profile_reads_until_external_edit() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let first = manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let reads_after_first = super::runtime_cache::profile_reads_for_tests();
+    let source_reads_after_first = super::runtime_cache::source_revision_reads_for_tests();
+    let materializations_after_first = super::runtime_cache::materializations_for_tests();
+    assert_eq!(first, Some(json!({"value": "old"})));
+    assert!(reads_after_first > 0);
+    assert!(source_reads_after_first > 0);
+    assert!(materializations_after_first > 0);
+
+    let second = manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    assert_eq!(second, first);
+    assert_eq!(
+        super::runtime_cache::profile_reads_for_tests(),
+        reads_after_first
+    );
+    assert_eq!(
+        super::runtime_cache::source_revision_reads_for_tests(),
+        source_reads_after_first
+    );
+    assert_eq!(
+        super::runtime_cache::materializations_for_tests(),
+        materializations_after_first
+    );
+
+    super::runtime_cache::invalidate();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let invalidated = manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let reads_after_invalidation = super::runtime_cache::profile_reads_for_tests();
+    assert_eq!(invalidated, first);
+    assert!(reads_after_invalidation > reads_after_first);
+    assert!(super::runtime_cache::materializations_for_tests() > materializations_after_first);
+    let materializations_after_invalidation = super::runtime_cache::materializations_for_tests();
+
+    fs::write(&profile_path, r#"{"value":"new"}"#).unwrap();
+    super::runtime_cache::invalidate();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let refreshed = manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    assert_eq!(refreshed, Some(json!({"value": "new"})));
+    assert!(super::runtime_cache::profile_reads_for_tests() > reads_after_invalidation);
+    assert!(
+        super::runtime_cache::materializations_for_tests() > materializations_after_invalidation
+    );
+}
+
+#[test]
+fn runtime_cache_hit_does_not_clone_cached_payload() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    let payload = "x".repeat(1024 * 1024);
+    fs::write(
+        &profile_path,
+        serde_json::to_vec(&json!({"payload": payload})).unwrap(),
+    )
+    .unwrap();
+
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let clones_before = super::runtime_cache::value_clones_for_tests();
+    let identity = super::manifest_identity(&manifest);
+    for _ in 0..32 {
+        assert!(super::runtime_config_cache_hit(
+            &manager,
+            "test-plugin",
+            &identity
+        ));
+    }
+    assert_eq!(
+        super::runtime_cache::value_clones_for_tests(),
+        clones_before,
+        "freshness-only cache hits must not clone the cached JSON payload"
+    );
+
+    manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    assert_eq!(
+        super::runtime_cache::value_clones_for_tests(),
+        clones_before + 1,
+        "payload cloning belongs only to value-returning cache lookup"
+    );
+}
+
+#[test]
+fn action_cache_hit_uses_last_known_good_value_during_profile_mutation() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let identity = super::manifest_identity(&manifest);
+
+    let mutation = super::begin_runtime_config_mutation(manager.store());
+    for _ in 0..12 {
+        assert!(super::runtime_config_cache_hit(
+            &manager,
+            "test-plugin",
+            &identity
+        ));
+    }
+    drop(mutation);
+
+    assert!(
+        !super::runtime_config_cache_hit(&manager, "test-plugin", &identity),
+        "the fallback must be retired at the mutation boundary"
+    );
+}
+
+fn assert_action_readiness_survives_watcher_invalidation(global: bool) {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let identity = super::manifest_identity(&manifest);
+    let mutation = if global {
+        super::begin_runtime_config_global_mutation()
+    } else {
+        super::begin_runtime_config_mutation(manager.store())
+    };
+
+    fs::write(&profile_path, r#"{"value":"new"}"#).unwrap();
+    super::runtime_cache::invalidate();
+    thread::sleep(Duration::from_millis(800));
+    assert!(matches!(
+        super::runtime_config_cache_status(&manager, "test-plugin", &identity),
+        super::ActionCacheStatus::LastKnownGood { .. }
+    ));
+    for _ in 0..12 {
+        assert!(super::runtime_config_cache_hit(
+            &manager,
+            "test-plugin",
+            &identity
+        ));
+    }
+
+    drop(mutation);
+    assert!(
+        !super::runtime_config_cache_hit(&manager, "test-plugin", &identity),
+        "the readiness token must be evicted after the final mutation guard drops"
+    );
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    assert_eq!(
+        manager
+            .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+            .unwrap(),
+        Some(json!({"value": "new"}))
+    );
+}
+
+#[test]
+fn action_readiness_survives_watcher_invalidation_during_long_mutations() {
+    assert_action_readiness_survives_watcher_invalidation(false);
+    assert_action_readiness_survives_watcher_invalidation(true);
+}
+
+fn assert_action_readiness_survives_overlapping_mutations(global_drops_first: bool) {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    let identity = super::manifest_identity(&manifest);
+    let mut global = Some(super::begin_runtime_config_global_mutation());
+    let mut profile = Some(super::begin_runtime_config_mutation(manager.store()));
+    super::runtime_cache::invalidate();
+
+    if global_drops_first {
+        drop(global.take());
+        assert!(matches!(
+            super::runtime_config_cache_status(&manager, "test-plugin", &identity),
+            super::ActionCacheStatus::LastKnownGood {
+                mutation_scope: "profile"
+            }
+        ));
+        drop(profile.take());
+        assert!(!super::runtime_config_cache_hit(
+            &manager,
+            "test-plugin",
+            &identity
+        ));
+        return;
+    }
+    if !global_drops_first {
+        drop(profile.take());
+        assert!(matches!(
+            super::runtime_config_cache_status(&manager, "test-plugin", &identity),
+            super::ActionCacheStatus::LastKnownGood {
+                mutation_scope: "global"
+            }
+        ));
+        drop(global.take());
+    }
+
+    assert!(!super::runtime_config_cache_hit(
+        &manager,
+        "test-plugin",
+        &identity
+    ));
+}
+
+#[test]
+fn action_readiness_survives_profile_drop_before_global_mutation() {
+    assert_action_readiness_survives_overlapping_mutations(false);
+}
+
+#[test]
+fn action_readiness_survives_global_drop_before_profile_mutation() {
+    assert_action_readiness_survives_overlapping_mutations(true);
+}
+
+#[test]
+fn materialization_waits_for_mutation_and_reads_post_mutation_value() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    manager
+        .ensure_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+
+    let mutation = super::begin_runtime_config_mutation(manager.store());
+    fs::write(&profile_path, r#"{"value":"new"}"#).unwrap();
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    super::runtime_cache::set_before_wait_hook(Some(Arc::new(move || {
+        let _ = waiting_tx.send(());
+    })));
+    let store = manager.store().clone();
+    let manifest_for_thread = manifest.clone();
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let manager = PluginConfigManager::with_store(store);
+        let result =
+            manager.materialize_runtime_config_for_manifest("test-plugin", &manifest_for_thread);
+        result_tx.send(result).unwrap();
+    });
+
+    waiting_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("materialization should wait for the active mutation");
+    assert!(
+        result_rx.try_recv().is_err(),
+        "materialization must not publish while the writer is active"
+    );
+    drop(mutation);
+    super::runtime_cache::set_before_wait_hook(None);
+
+    let result = result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("materialization should resume after the mutation")
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(result, Some(json!({"value": "new"})));
+}
+
+#[test]
+fn materialization_does_not_publish_old_value_across_profile_sync_promotion() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    super::runtime_cache::reset_for_tests();
+    let manager = PluginConfigManager::new().unwrap();
+    let manifest = cache_manifest();
+    let profile_path = manager
+        .store()
+        .core_plugin_configs_dir()
+        .join("test-plugin.json");
+    fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+    fs::write(&profile_path, r#"{"value":"old"}"#).unwrap();
+    let staging = TempDir::new().unwrap();
+    let staging_profile_path = staging
+        .path()
+        .join("default/core/plugin-configs/test-plugin.json");
+    fs::create_dir_all(staging_profile_path.parent().unwrap()).unwrap();
+    fs::write(&staging_profile_path, r#"{"value":"new"}"#).unwrap();
+
+    let changed = Arc::new(AtomicBool::new(false));
+    let changed_for_hook = Arc::clone(&changed);
+    let staging_path_for_hook = staging.path().to_path_buf();
+    let profile_root_for_hook = crate::paths::profile_dir().unwrap();
+    super::runtime_cache::set_before_publish_hook(Some(Arc::new(move || {
+        if changed_for_hook.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        crate::features::profile::sync::promote_allowlisted_clone(
+            &staging_path_for_hook,
+            &profile_root_for_hook,
+        )
+        .unwrap();
+    })));
+
+    let result = manager.materialize_runtime_config_for_manifest("test-plugin", &manifest);
+    super::runtime_cache::set_before_publish_hook(None);
+    let materialized = result.unwrap();
+
+    assert_eq!(materialized, Some(json!({"value": "new"})));
+    let cached = manager
+        .materialize_runtime_config_for_manifest("test-plugin", &manifest)
+        .unwrap();
+    assert_eq!(cached, materialized);
+}
+
+#[test]
+fn source_revision_detects_same_length_content_changes() {
+    let profile = TempDir::new().unwrap();
+    let store = store_at(profile.path(), crate::paths::current_os_subdir());
+    let manifest = cache_manifest();
+    let path = store
+        .core_plugin_config_path(&crate::plugins::PluginUid::new("test-plugin"))
+        .unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, r#"{"value":"old"}"#).unwrap();
+    let paths = store
+        .plugin_config_slice_paths(
+            &crate::plugins::PluginUid::new("test-plugin"),
+            None,
+            Some(&manifest),
+        )
+        .unwrap();
+    let before = super::runtime_cache::source_revision(&store, &paths).unwrap();
+    fs::write(&path, r#"{"value":"new"}"#).unwrap();
+    let after = super::runtime_cache::source_revision(&store, &paths).unwrap();
+    assert_ne!(before, after);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_config_symlinks_are_rejected_before_materialization() {
+    let profile = TempDir::new().unwrap();
+    let store = store_at(profile.path(), crate::paths::current_os_subdir());
+    let target = profile.path().join("target.json");
+    let link = store
+        .core_plugin_config_path(&crate::plugins::PluginUid::new("test-plugin"))
+        .unwrap();
+    fs::write(&target, r#"{"value":"target"}"#).unwrap();
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let error = load_plugin_config_merged(
+        &store,
+        &crate::plugins::PluginUid::new("test-plugin"),
+        None,
+        Some(&cache_manifest()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("must not be a symlink"));
+}
+
+#[test]
+fn active_profile_cache_refreshes_after_same_length_switch() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let profile_root = crate::paths::profile_dir().unwrap();
+    fs::create_dir_all(&profile_root).unwrap();
+    fs::write(profile_root.join("active"), "one\n").unwrap();
+    super::runtime_cache::reset_for_tests();
+    let first = super::runtime_cache::active_scope_store().unwrap();
+    assert_eq!(first.profile_name(), "one");
+    fs::write(profile_root.join("active"), "two\n").unwrap();
+    super::runtime_cache::invalidate_active_profile();
+    let second = super::runtime_cache::active_scope_store().unwrap();
+    assert_eq!(second.profile_name(), "two");
 }
 
 #[test]

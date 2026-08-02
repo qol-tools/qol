@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use crate::features::profile::ProfileScopeStore;
 
-pub(super) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Result<()> {
+pub(crate) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Result<()> {
     if !staging.is_dir() {
         anyhow::bail!("staging directory missing: {}", staging.display());
     }
+    let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
     let files = walk_files(staging)?;
     for absolute in files {
         let rel = absolute
