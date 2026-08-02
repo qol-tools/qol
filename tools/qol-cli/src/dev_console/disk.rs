@@ -158,7 +158,7 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
 pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
     let buckets = [
         ("debug", "live build cache"),
-        ("qol-dev", "staged runtime generations"),
+        ("qol-dev", "development builds and runtime generations"),
         ("qol-env", "sandbox guest payloads"),
     ];
     if !target.exists() {

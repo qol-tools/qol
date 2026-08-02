@@ -757,11 +757,13 @@ mod tests {
     }
 
     #[test]
-    fn dev_binary_paths_use_workspace_debug_artifacts() {
+    fn dev_binary_paths_use_isolated_development_artifacts() {
         let root = Path::new("/repo/qol");
         assert_eq!(
             dev_binary_path(root),
             root.join("target")
+                .join("qol-dev")
+                .join("build")
                 .join("debug")
                 .join(host_facade::exe_name("qol-tray"))
         );

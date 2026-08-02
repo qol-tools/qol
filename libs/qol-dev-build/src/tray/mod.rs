@@ -96,10 +96,16 @@ where
 }
 
 pub fn debug_binary_path(root: &Path, bin: &str) -> PathBuf {
-    artifact_root(root)
-        .join("target")
+    development_target_dir(root)
         .join("debug")
         .join(Platform.executable_name(bin))
+}
+
+fn development_target_dir(root: &Path) -> PathBuf {
+    artifact_root(root)
+        .join("target")
+        .join("qol-dev")
+        .join("build")
 }
 
 pub fn tray_manifest_path(root: &Path) -> PathBuf {
@@ -299,7 +305,10 @@ fn spawn_build(
 
 fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Command {
     let mut command = Command::new("cargo");
-    command.arg("build");
+    command
+        .arg("build")
+        .arg("--target-dir")
+        .arg(development_target_dir(root));
     for bin in bins {
         command.arg("--bin").arg(bin);
     }
@@ -707,15 +716,18 @@ path = \"src/main.rs\"
     }
 
     #[test]
-    fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
+    fn build_command_uses_isolated_target_requested_bins_dev_features_json_and_manifest_path() {
         let root = Path::new("/repo/qol");
         let manifest = root.join("Cargo.toml");
+        let target = root.join("target/qol-dev/build");
         let features = Platform.tray_dev_features();
         let cases: [(&[&str], Vec<&str>); 2] = [
             (
                 &["qol-tray"],
                 vec![
                     "build",
+                    "--target-dir",
+                    target.to_str().unwrap(),
                     "--bin",
                     "qol-tray",
                     "--features",
@@ -729,6 +741,8 @@ path = \"src/main.rs\"
                 &["qol-tray", "qol-tray-doctor"],
                 vec![
                     "build",
+                    "--target-dir",
+                    target.to_str().unwrap(),
                     "--bin",
                     "qol-tray",
                     "--bin",
@@ -783,18 +797,20 @@ path = \"src/main.rs\"
     }
 
     #[test]
-    fn debug_binary_path_uses_workspace_debug_artifacts() {
+    fn debug_binary_path_is_isolated_from_ordinary_workspace_builds() {
         let root = Path::new("/repo/qol");
         assert_eq!(
             debug_binary_path(root, "qol-tray"),
             root.join("target")
+                .join("qol-dev")
+                .join("build")
                 .join("debug")
                 .join(Platform.executable_name("qol-tray"))
         );
     }
 
     #[test]
-    fn debug_binary_path_uses_workspace_target_for_member_roots() {
+    fn debug_binary_path_uses_workspace_development_target_for_member_roots() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("mono");
         let tray_root = workspace.join("apps").join("qol-tray");
@@ -809,6 +825,8 @@ path = \"src/main.rs\"
             debug_binary_path(&tray_root, "qol-tray"),
             workspace
                 .join("target")
+                .join("qol-dev")
+                .join("build")
                 .join("debug")
                 .join(Platform.executable_name("qol-tray"))
         );

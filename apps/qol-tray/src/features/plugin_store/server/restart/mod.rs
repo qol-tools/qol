@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn binary_at_uses_workspace_target_for_member_roots() {
+    fn binary_at_uses_workspace_development_target_for_member_roots() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("mono");
         let tray_root = workspace.join("apps").join("qol-tray");
@@ -90,6 +90,8 @@ mod tests {
             TestRestartPort.binary_at(&tray_root),
             workspace
                 .join("target")
+                .join("qol-dev")
+                .join("build")
                 .join("debug")
                 .join(platform::binary_name())
         );
