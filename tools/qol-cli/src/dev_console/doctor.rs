@@ -197,12 +197,16 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Nav
     if dash.doctor_detail_open || selected_overflows {
         if let Some(detail) = doctor_detail_text(&dash.doctor, cursor) {
             let width = panel_width(area).saturating_sub(2) as usize;
+            let detail_color = lines
+                .get(cursor)
+                .and_then(|line| doctor_line_style(line).map(|(_, color)| color))
+                .unwrap_or(accent());
             render_bottom_panel(
                 frame,
                 area,
                 "details",
                 wrapped_rows(&detail, width),
-                accent(),
+                detail_color,
             );
         }
     }
