@@ -98,11 +98,13 @@ fn every_deployable_binary_embeds_its_typed_identity() {
         profile: expected_build_profile,
         dev_features: cfg!(feature = "dev"),
     };
-    let expected_features = if cfg!(feature = "dev") {
-        vec!["default".to_string(), "dev".to_string()]
-    } else {
-        vec!["default".to_string()]
-    };
+    let mut expected_features = vec!["default".to_string()];
+    if cfg!(feature = "dev") {
+        expected_features.push("dev".to_string());
+    }
+    if cfg!(feature = "linux_evdev") {
+        expected_features.push("linux_evdev".to_string());
+    }
     let expected_source = expected_source();
 
     for (path, binary, role) in deployable_binaries() {
