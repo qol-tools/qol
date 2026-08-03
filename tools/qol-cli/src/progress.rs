@@ -989,7 +989,8 @@ mod tests {
 
     #[test]
     fn indeterminate_progress_bar_keeps_the_head_visible_every_frame() {
-        for tick in 0..PROGRESS_BAR_WIDTH {
+        let cycles = PROGRESS_BAR_WIDTH + PROGRESS_PULSE_WIDTH;
+        for tick in 0..cycles * 2 {
             let bar = indeterminate_progress_bar(tick);
             assert!(
                 bar.contains('>'),
