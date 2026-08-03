@@ -318,15 +318,15 @@ fn start_shadow_generation(
         "[qol dev] booting successor generation {}",
         runtime.id()
     ));
-    let mut child =
-        shadow_generation_command(root, runtime.executable(), runtime.id(), &ready_file)
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "failed to start successor {}",
-                    runtime.executable().display()
-                )
-            })?;
+    let mut command =
+        shadow_generation_command(root, runtime.executable(), runtime.id(), &ready_file);
+    crate::dev_shutdown::configure_tray_child(&mut command)?;
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "failed to start successor {}",
+            runtime.executable().display()
+        )
+    })?;
     let rx = spawn_forwarders(&mut child);
     let ready = match wait_for_shadow_ready(&ready_file, &mut child, &rx, dash) {
         Ok(ready) => ready,

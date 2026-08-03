@@ -147,19 +147,6 @@ impl BindingMatcher {
         }
         CaptureDecision::suppress(event.into_iter().collect())
     }
-
-    pub(super) fn referenced_keycodes(&self) -> BTreeSet<u16> {
-        let mut codes = BTreeSet::new();
-        for (combo, _) in &self.bindings {
-            codes.insert(combo.key);
-            for modifier in &combo.mods {
-                for code in evdev::modifier_keycodes(*modifier) {
-                    codes.insert(code);
-                }
-            }
-        }
-        codes
-    }
 }
 
 fn linux_bindings(bindings: Vec<Binding>) -> Vec<(LinuxCombo, Binding)> {
@@ -276,26 +263,6 @@ mod matcher_tests {
         let mut right = BindingMatcher::new(vec![binding("Super+Space", false)]);
         right.observe(keycodes::KEY_RIGHTMETA, 1);
         assert!(!right.observe(keycodes::KEY_SPACE, 1).forward);
-    }
-
-    #[test]
-    fn modifier_state_and_referenced_keycodes_cover_binding_inputs() {
-        let matcher = BindingMatcher::new(vec![
-            binding("Super+Space", false),
-            binding("Shift+Super+R", false),
-        ]);
-        let codes = matcher.referenced_keycodes();
-
-        assert!(codes.contains(&keycodes::KEY_SPACE));
-        assert!(codes.contains(&keycodes::KEY_LEFTMETA));
-        assert!(codes.contains(&keycodes::KEY_RIGHTMETA));
-        assert!(codes.contains(&keycodes::KEY_LEFTSHIFT));
-        assert!(codes.contains(&keycodes::KEY_RIGHTSHIFT));
-        assert!(codes.contains(&19));
-        assert_eq!(
-            matcher.state.pressed_modifiers(),
-            BTreeSet::<Modifier>::new()
-        );
     }
 
     #[test]

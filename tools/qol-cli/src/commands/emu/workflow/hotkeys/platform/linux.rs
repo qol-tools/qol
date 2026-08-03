@@ -10,8 +10,8 @@ use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, install_payload,
-    launch_tray_and_wait_api, require_exec, start_tray_and_wait_plugin, wait_for_command,
-    wait_for_probe_fields,
+    launch_tray_and_wait_api, require_exec, spawn, start_tray_and_wait_plugin, wait_for_command,
+    wait_for_probe_fields, wait_for_window_id,
 };
 use super::Verdict;
 
@@ -23,6 +23,8 @@ const CYCLE_COUNT: usize = 40;
 const DISABLED_CYCLE_COUNT: usize = 5;
 const RELOAD_FLOOD_COUNT: usize = 40;
 const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
+const PASSTHROUGH_INPUT_PATH: &str = "/tmp/qol-hotkey-passthrough.txt";
+const PASSTHROUGH_WINDOW_TITLE: &str = "qol-hotkey-passthrough";
 const PORT_CLOSED_SCRIPT: &str = r#"
 import socket
 import sys
@@ -65,6 +67,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         200,
     )?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, Duration::from_secs(10), &vm.run_id)?;
+    require_passthrough_keys(&mut guest, &mut qmp)?;
 
     let storm = run_storm(&mut guest, &mut qmp, &mut auth, &backend);
     let restore = set_hotkeys(&mut guest, &auth, &baseline);
@@ -105,6 +108,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         "fds_before": evidence.fds_before,
         "fds_after": evidence.fds_after,
         "native_backend_exercised": backend == "native",
+        "passthrough_keys": ["caps-lock", "control", "iso-102nd"],
     });
     std::fs::write(&evidence_path, serde_json::to_vec_pretty(&evidence_json)?)
         .with_context(|| format!("failed to write {}", evidence_path.display()))?;
@@ -113,7 +117,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         "storm",
         StepKind::Success,
         &format!(
-            "{CYCLE_COUNT} physical cycles, disable/migrate/duplicate guards, {RELOAD_FLOOD_COUNT} reloads, restart persistence, and cleanup passed ({backend})"
+            "layout passthrough, {CYCLE_COUNT} physical cycles, disable/migrate/duplicate guards, {RELOAD_FLOOD_COUNT} reloads, restart persistence, and cleanup passed ({backend})"
         ),
     );
     Ok(Verdict {
@@ -121,6 +125,107 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         traces: trace.stdout.lines().map(str::to_string).collect(),
         artifacts: vec![final_path, trace_path, evidence_path],
     })
+}
+
+pub(super) fn require_passthrough_keys(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+) -> Result<()> {
+    require_caps_lock_passthrough(guest, qmp)?;
+    require_exec(
+        guest,
+        command("/usr/bin/rm", &["-f", PASSTHROUGH_INPUT_PATH]),
+        COMMAND_TIMEOUT,
+    )?;
+    let script = format!("IFS= read -e -r line; printf '%s' \"$line\" > {PASSTHROUGH_INPUT_PATH}");
+    spawn(
+        guest,
+        command(
+            "/usr/bin/xterm",
+            &[
+                "-T",
+                PASSTHROUGH_WINDOW_TITLE,
+                "-e",
+                "/bin/bash",
+                "-lc",
+                &script,
+            ],
+        ),
+    )?;
+    let window_id = wait_for_window_id(guest, PASSTHROUGH_WINDOW_TITLE, ACTION_TIMEOUT)?;
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/xdotool",
+            &["windowactivate", "--sync", &window_id],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    key(qmp, &["x"])?;
+    key(qmp, &["ctrl", "a"])?;
+    key(qmp, &["shift", "less"])?;
+    key(qmp, &["ret"])?;
+    let outcome = wait_for_command(
+        guest,
+        command("/usr/bin/cat", &[PASSTHROUGH_INPUT_PATH]),
+        ACTION_TIMEOUT,
+        |outcome| outcome.stdout == ">x",
+        "Control and the ISO 102nd key to pass through evdev",
+    )?;
+    if outcome.stdout != ">x" {
+        bail!(
+            "passthrough input mismatch: expected >x, got {:?}",
+            outcome.stdout
+        );
+    }
+    step_label(
+        "input",
+        StepKind::Success,
+        "Caps Lock, Control, and the ISO 102nd key reached X11",
+    );
+    Ok(())
+}
+
+fn require_caps_lock_passthrough(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+) -> Result<()> {
+    if caps_lock_enabled(guest)? {
+        key(qmp, &["caps_lock"])?;
+        wait_for_caps_lock(guest, false)?;
+    }
+    key(qmp, &["caps_lock"])?;
+    wait_for_caps_lock(guest, true)?;
+    key(qmp, &["caps_lock"])?;
+    wait_for_caps_lock(guest, false)
+}
+
+fn caps_lock_enabled(guest: &mut GuestControlClient) -> Result<bool> {
+    let outcome = require_exec(guest, command("/usr/bin/xset", &["q"]), COMMAND_TIMEOUT)?;
+    parse_caps_lock(&outcome.stdout).context("xset output did not report Caps Lock state")
+}
+
+fn wait_for_caps_lock(guest: &mut GuestControlClient, expected: bool) -> Result<()> {
+    wait_for_command(
+        guest,
+        command("/usr/bin/xset", &["q"]),
+        ACTION_TIMEOUT,
+        |outcome| parse_caps_lock(&outcome.stdout) == Some(expected),
+        &format!("Caps Lock to turn {}", if expected { "on" } else { "off" }),
+    )?;
+    Ok(())
+}
+
+fn parse_caps_lock(output: &str) -> Option<bool> {
+    output
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .windows(3)
+        .find_map(|fields| match fields {
+            ["Caps", "Lock:", "on"] => Some(true),
+            ["Caps", "Lock:", "off"] => Some(false),
+            _ => None,
+        })
 }
 
 fn run_storm(
@@ -596,4 +701,24 @@ fn tray_fd_count(guest: &mut GuestControlClient) -> Result<usize> {
         COMMAND_TIMEOUT,
     )?;
     Ok(outcome.stdout.lines().count())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_caps_lock;
+
+    #[test]
+    fn caps_lock_parser_handles_xset_spacing_and_missing_state() {
+        let cases = [
+            ("00: Caps Lock:   off    Num Lock: on", Some(false)),
+            ("Caps Lock: on", Some(true)),
+            ("Caps Lock:\t off", Some(false)),
+            ("Num Lock: on", None),
+            ("", None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(parse_caps_lock(input), expected, "input: {input:?}");
+        }
+    }
 }

@@ -87,10 +87,13 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         &runtime.executable().display().to_string(),
         verbose,
     );
-    let mut child = dev_runtime_command(&run_root, &runtime)
+    let mut command = dev_runtime_command(&run_root, &runtime);
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::dev_shutdown::configure_tray_child(&mut command)?;
+    let mut child = command
         .spawn()
         .context("failed to start qol-tray dev process")?;
     let lines = dev_console::spawn_forwarders(&mut child);
@@ -143,12 +146,15 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
         &binary.display().to_string(),
         verbose,
     );
-    let mut child = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .current_dir(&root)
         .arg("--write-mode=dev")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::dev_shutdown::configure_tray_child(&mut command)?;
+    let mut child = command
         .spawn()
         .context("failed to start artifact-backed qol-tray dev process")?;
     let lines = dev_console::spawn_forwarders(&mut child);

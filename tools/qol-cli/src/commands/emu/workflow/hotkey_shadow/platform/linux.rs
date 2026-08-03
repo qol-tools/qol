@@ -58,6 +58,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     require_taken_over(&mut guest)?;
 
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
+    super::super::super::hotkeys::require_passthrough(&mut guest, &mut qmp)?;
     require_chord_reaches_qol(&mut guest, &mut qmp)?;
 
     set_hotkeys(&mut guest, &auth, &baseline)?;

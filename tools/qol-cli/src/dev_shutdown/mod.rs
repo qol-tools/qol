@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 mod platform;
 
-use platform::{DaemonSupervision, Platform};
+use platform::{DevShutdownPlatform, Platform};
 
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(8);
 const FORCED_TIMEOUT: Duration = Duration::from_secs(3);
@@ -57,6 +57,12 @@ pub(crate) fn finish_daemon_shutdown(daemons: Vec<TrackedDaemonPid>) -> Vec<Trac
 
 pub(crate) fn snapshot_runtime_daemon_pids() -> Vec<TrackedDaemonPid> {
     Platform.snapshot_runtime_daemon_pids()
+}
+
+pub(crate) fn configure_tray_child(command: &mut std::process::Command) -> Result<()> {
+    Platform
+        .configure_tray_child(command)
+        .map_err(anyhow::Error::from)
 }
 
 fn daemon_group_is_owned(daemon: &TrackedDaemonPid) -> bool {

@@ -3,10 +3,13 @@ use super::super::super::{OnFire, RebuildBindings};
 use super::matcher::BindingMatcher;
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
-use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
-use qol_hotkeys::evdev as keycodes;
+use evdev::{
+    uinput::VirtualDevice, AttributeSet, AttributeSetRef, Device, EventSummary, InputEvent, KeyCode,
+};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
+
+const VIRTUAL_KEYBOARD_NAME: &str = "qol-tray-virtual-keyboard";
 
 /// Install a process-wide panic hook that aborts after logging. This ensures a
 /// panic in any thread terminates the process, closes every grabbed-device fd,
@@ -27,10 +30,6 @@ fn install_panic_safety_hook() {
     });
 }
 
-/// Open every keyboard device, grab it, build the shared virtual device,
-/// and spawn one reader thread per grabbed device. Reader threads are
-/// detached on spawn — they own their `Device` and live until the process
-/// dies (which closes the fd and releases EVIOCGRAB).
 pub(super) fn install(
     bindings: Vec<Binding>,
     on_fire: OnFire,
@@ -40,27 +39,36 @@ pub(super) fn install(
     install_panic_safety_hook();
 
     let matcher = Arc::new(Mutex::new(BindingMatcher::new(bindings)));
-    let key_caps = matcher_keycodes_as_attribute_set(&matcher.lock().unwrap());
-    let virtual_device = build_virtual_device(&key_caps)?;
-    let virtual_device = Arc::new(Mutex::new(virtual_device));
-
     let keyboards = open_keyboards()?;
     if keyboards.is_empty() {
         anyhow::bail!("no keyboard input devices found under /dev/input");
     }
     let keyboard_count = keyboards.len();
-
-    let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
-
-    let mut grabbed = 0usize;
+    let mut grabbed_keyboards = Vec::new();
     for (path, mut device) in keyboards {
         if let Err(error) = device.grab() {
             log::warn!("evdev: failed to grab {}: {error}", path.display());
             continue;
         }
-        grabbed += 1;
         log::info!("evdev: grabbed {}", path.display());
+        grabbed_keyboards.push((path, device));
+    }
 
+    if grabbed_keyboards.is_empty() {
+        anyhow::bail!(
+            "evdev: found {keyboard_count} keyboard(s) but grabbed none (EVIOCGRAB denied; check input-group / udev permissions)"
+        );
+    }
+
+    let key_caps = merged_key_capabilities(
+        grabbed_keyboards
+            .iter()
+            .filter_map(|(_, device)| device.supported_keys()),
+    );
+    let virtual_device = Arc::new(Mutex::new(build_virtual_device(&key_caps)?));
+    let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
+
+    for (path, device) in grabbed_keyboards {
         let matcher = matcher.clone();
         let virtual_device = virtual_device.clone();
         let on_fire = on_fire.clone();
@@ -68,12 +76,6 @@ pub(super) fn install(
         std::thread::spawn(move || {
             run_reader(path, device, matcher, virtual_device, on_fire);
         });
-    }
-
-    if grabbed == 0 {
-        anyhow::bail!(
-            "evdev: found {keyboard_count} keyboard(s) but grabbed none (EVIOCGRAB denied; check input-group / udev permissions)"
-        );
     }
 
     spawn_reload_thread(matcher, reload_rx, rebuild, on_fire);
@@ -202,46 +204,28 @@ fn open_keyboards() -> Result<Vec<(PathBuf, Device)>> {
 }
 
 fn is_keyboard(device: &Device) -> bool {
+    if device.name() == Some(VIRTUAL_KEYBOARD_NAME) {
+        return false;
+    }
     let Some(keys) = device.supported_keys() else {
         return false;
     };
-    // Heuristic: a keyboard supports the basic alpha and ESC keys. Mice and
-    // touchpads expose only BTN_* codes.
     keys.contains(KeyCode::KEY_ESC) && keys.contains(KeyCode::KEY_A)
 }
 
-fn matcher_keycodes_as_attribute_set(matcher: &BindingMatcher) -> AttributeSet<KeyCode> {
-    let mut set = AttributeSet::<KeyCode>::new();
-    // Always include common modifiers so the virtual device can re-emit them
-    // even if the configured bindings don't reference every modifier.
-    for code in keycodes::MODIFIER_KEYCODES {
-        set.insert(KeyCode(code));
-    }
-    for code in matcher.referenced_keycodes() {
-        set.insert(KeyCode(code));
-    }
-    // The forwarded stream needs all the keys the user types, not just the
-    // configured combos. Expose A-Z, 0-9, F1-F12, and the symbol keys so the
-    // virtual device can re-emit them.
-    for raw in PASSTHROUGH_KEYS {
-        set.insert(KeyCode(*raw));
-    }
-    set
+fn merged_key_capabilities<'a>(
+    sources: impl IntoIterator<Item = &'a AttributeSetRef<KeyCode>>,
+) -> AttributeSet<KeyCode> {
+    sources
+        .into_iter()
+        .flat_map(AttributeSetRef::iter)
+        .collect()
 }
-
-const PASSTHROUGH_KEYS: &[u16] = &[
-    1, 14, 15, 28, 57, 99, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 119,
-    // Letters a-z
-    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43,
-    44, 45, 46, 47, 48, 49, 50, 51, 52, 53, // Digits 1-9, 0
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, // F1-F12
-    59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88,
-];
 
 fn build_virtual_device(keys: &AttributeSet<KeyCode>) -> Result<VirtualDevice> {
     let mut device = VirtualDevice::builder()
         .context("creating uinput builder (is /dev/uinput accessible?)")?
-        .name("qol-tray-virtual-keyboard")
+        .name(VIRTUAL_KEYBOARD_NAME)
         .with_keys(keys)
         .context("declaring key capabilities on uinput device")?
         .build()
@@ -255,4 +239,36 @@ fn build_virtual_device(keys: &AttributeSet<KeyCode>) -> Result<VirtualDevice> {
         log::info!("evdev: virtual device created at {}", path.display());
     }
     Ok(device)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn virtual_keyboard_supports_non_us_and_lock_keys() {
+        let primary = AttributeSet::from_iter([
+            KeyCode::KEY_ESC,
+            KeyCode::KEY_A,
+            KeyCode::KEY_CAPSLOCK,
+            KeyCode::KEY_102ND,
+        ]);
+        let secondary = AttributeSet::from_iter([
+            KeyCode::KEY_LEFTCTRL,
+            KeyCode::KEY_RIGHTCTRL,
+            KeyCode::KEY_KATAKANAHIRAGANA,
+        ]);
+        let sources: [&AttributeSetRef<KeyCode>; 2] = [&primary, &secondary];
+        let keys = merged_key_capabilities(sources);
+
+        for key in [
+            KeyCode::KEY_CAPSLOCK,
+            KeyCode::KEY_102ND,
+            KeyCode::KEY_LEFTCTRL,
+            KeyCode::KEY_RIGHTCTRL,
+            KeyCode::KEY_KATAKANAHIRAGANA,
+        ] {
+            assert!(keys.contains(key), "missing virtual keyboard key {key:?}");
+        }
+    }
 }

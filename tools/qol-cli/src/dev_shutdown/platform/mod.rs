@@ -1,8 +1,10 @@
 use super::TrackedDaemonPid;
+use std::process::Command;
 
-pub(crate) trait DaemonSupervision {
+pub(crate) trait DevShutdownPlatform {
     fn snapshot_runtime_daemon_pids(&self) -> Vec<TrackedDaemonPid>;
     fn group_is_owned(&self, daemon: &TrackedDaemonPid) -> bool;
+    fn configure_tray_child(&self, command: &mut Command) -> std::io::Result<()>;
 }
 
 #[cfg(unix)]

@@ -1,6 +1,7 @@
 use anyhow::Result;
+use qol_dev_guest::GuestControlClient;
 
-use crate::commands::emu::BootedVm;
+use crate::commands::emu::{qmp, BootedVm};
 
 use super::super::DesktopGuestPlatform;
 
@@ -17,4 +18,11 @@ pub(super) fn run(vm: &BootedVm, guest: DesktopGuestPlatform) -> Result<Verdict>
         DesktopGuestPlatform::Macos => macos::run(vm),
         DesktopGuestPlatform::Windows => windows::run(vm),
     }
+}
+
+pub(super) fn require_passthrough(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+) -> Result<()> {
+    linux::require_passthrough_keys(guest, qmp)
 }
