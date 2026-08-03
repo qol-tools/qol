@@ -56,9 +56,8 @@ impl CliSessionStrategy for PiStrategy {
         let metadata = self.metadata.resolve(session);
         CliSessionDescriptor {
             tool: self.tool.clone(),
-            display_name: metadata
-                .session_name
-                .or_else(|| title_session_name(&session.title, &session.cwd))
+            display_name: title_session_name(&session.title, &session.cwd)
+                .or(metadata.session_name)
                 .or_else(|| project_name(&session.cwd)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,

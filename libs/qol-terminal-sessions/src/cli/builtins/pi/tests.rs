@@ -144,6 +144,31 @@ fn two_panes_in_one_directory_keep_their_own_session_names() {
 }
 
 #[test]
+fn a_resumed_pane_keeps_its_own_name_when_the_resolver_claims_a_neighbour_file() {
+    let root = TempDir::new().unwrap();
+    let neighbour = root
+        .path()
+        .join("2026-08-03T15-05-39-502Z_019fc828-b7ae-78b9-8d02-7a557cf1f504.jsonl");
+    std::fs::write(
+        &neighbour,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n{\"type\":\"session_info\",\"id\":\"k1\",\"parentId\":null,\"timestamp\":\"t\",\"name\":\"cli sessions improvements\"}\n",
+    )
+    .unwrap();
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment {
+        session_file: neighbour,
+    }));
+
+    let mut resumed = session();
+    resumed.title = "\u{03C0} - Bug Hunt - proj".to_owned();
+
+    assert_eq!(
+        strategy.describe(&resumed).display_name.as_deref(),
+        Some("Bug Hunt"),
+        "the pane's own title outranks a session file it does not own"
+    );
+}
+
+#[test]
 fn matches_only_pi_processes() {
     let root = TempDir::new().unwrap();
     let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment {
