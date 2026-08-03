@@ -2129,9 +2129,9 @@ fn reconcile_batch_report_file(
             write_json(path, &normalized)?;
         }
         if require_cleanup_complete {
+            payload_cleanup?;
             ensure_batch_cleanup_complete(&normalized)?;
         }
-        payload_cleanup?;
         return Ok(());
     }
     let mut reconciled =
@@ -2144,9 +2144,9 @@ fn reconcile_batch_report_file(
         write_json(path, &reconciled)?;
     }
     if require_cleanup_complete {
+        payload_cleanup?;
         ensure_batch_cleanup_complete(&reconciled)?;
     }
-    payload_cleanup?;
     Ok(())
 }
 
@@ -4222,6 +4222,104 @@ mod tests {
 
         let persisted: Value = serde_json::from_slice(&fs::read(batch_report).unwrap()).unwrap();
         assert_eq!(persisted, report);
+    }
+
+    #[test]
+    fn listing_reconciliation_tolerates_a_nonterminal_batch_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let run_root = canonical.join("qol-env");
+        let batch_dir = run_root.join("batch-1");
+        let payload_dir = batch_dir.join("payload");
+        fs::create_dir_all(payload_dir.join("root")).unwrap();
+        let manifest = payload_dir.join("root/manifest.json");
+        let image = payload_dir.join("digest.iso");
+        fs::write(&manifest, b"{}").unwrap();
+        fs::write(&image, b"iso").unwrap();
+        let lane_dir = run_root.join("lane-1");
+        fs::create_dir_all(&lane_dir).unwrap();
+        let batch_report = batch_dir.join("report.json");
+        write_json(
+            &batch_report,
+            &json!({
+                "kind": "environment-batch",
+                "run_id": "batch-1",
+                "status": "starting",
+                "owner": { "state": "released" },
+                "runs": [{
+                    "run_id": "lane-1",
+                    "phase": "running",
+                    "run_dir": lane_dir,
+                    "report": lane_dir.join("report.json"),
+                }],
+                "payload": {
+                    "manifest": manifest,
+                    "image": image,
+                    "cleanup": {
+                        "status": "pending",
+                        "complete": false,
+                        "removed": [],
+                        "error": null,
+                    },
+                },
+            }),
+        )
+        .unwrap();
+
+        reconcile_batch_report_file(&batch_report, &BTreeMap::new(), false).unwrap();
+
+        assert!(payload_dir.is_dir());
+    }
+
+    #[test]
+    fn listing_reconciliation_reclaims_a_settled_orphan_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let run_root = canonical.join("qol-env");
+        let batch_dir = run_root.join("batch-1");
+        let payload_dir = batch_dir.join("payload");
+        fs::create_dir_all(&batch_dir).unwrap();
+        let source = canonical.join("qol-tray");
+        fs::write(&source, b"sandbox binary").unwrap();
+        let prepared = qol_dev_env::payload::stage_payload(
+            &payload_dir.join("root"),
+            dev_bundle::DEV_BUNDLE_ID,
+            &[qol_dev_env::payload::PayloadFileSpec {
+                source,
+                relative_path: PathBuf::from("bin/qol-tray"),
+                executable: true,
+            }],
+        )
+        .unwrap();
+        let image = payload_dir.join("digest.iso");
+        fs::write(&image, b"iso").unwrap();
+        let batch_report = batch_dir.join("report.json");
+        write_json(
+            &batch_report,
+            &json!({
+                "kind": "environment-batch",
+                "run_id": "batch-1",
+                "status": "stopped",
+                "owner": { "state": "released" },
+                "runs": [],
+                "teardown": { "status": "complete", "lanes": [] },
+                "payload": {
+                    "manifest": prepared.manifest_path,
+                    "image": image,
+                    "cleanup": {
+                        "status": "pending",
+                        "complete": false,
+                        "removed": [],
+                        "error": null,
+                    },
+                },
+            }),
+        )
+        .unwrap();
+
+        reconcile_batch_report_file(&batch_report, &BTreeMap::new(), false).unwrap();
+
+        assert!(!payload_dir.exists(), "orphan payload was not reclaimed");
     }
 
     #[test]
