@@ -16,8 +16,8 @@ use super::filters::{draw_filter_panel, filter_scope, FilterState};
 use super::key_bindings::{context_action_bindings, global_action_bindings, unique_hints, KeyHint};
 use super::render_util;
 use super::render_util::{
-    accent, caret, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content,
-    NavigationOverflow, Sign, SignBox,
+    accent, caret, cursor_window_start, format_duration, list_capacity, now_unix_ms,
+    render_compact_bottom_panel, view_content, InputPrompt, NavigationOverflow, Sign, SignBox,
 };
 use super::stream_view::{draw_endpoints, draw_logs, draw_trace, trace_value};
 use super::worktrees_panel::{draw_worktrees_panel, target_label};
@@ -44,6 +44,8 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
     draw_activity(frame, dash, inner, accent);
+    draw_notice(frame, dash, inner, accent);
+    draw_copy_prompt(frame, dash, inner, accent);
     draw_quit_prompt(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
@@ -229,6 +231,47 @@ pub(super) fn quit_prompt_rows() -> Vec<Line<'static>> {
     ])]
 }
 
+fn copy_input_prompt(dash: &Dash) -> InputPrompt {
+    let count = dash.copy_count.clone();
+    let mut input = Vec::new();
+    if !count.is_empty() {
+        input.push(count.fg(Color::White).bold());
+    }
+    input.push("▍".fg(accent()));
+    InputPrompt {
+        title: "copy",
+        label: "copy last N lines",
+        input: Line::from(input),
+        actions: vec![("enter", "copy"), ("esc", "cancel")],
+    }
+}
+
+pub(super) fn draw_copy_prompt(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
+    if !dash.copying || dash.quit_prompt_active() {
+        return;
+    }
+    copy_input_prompt(dash).render(frame, area, accent);
+}
+
+pub(super) fn draw_notice(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
+    if dash.copying || dash.filter_state.is_editing() || dash.quit_prompt_active() {
+        return;
+    }
+    let Some((at, message)) = &dash.notice else {
+        return;
+    };
+    if at.elapsed() >= ACK_TTL {
+        return;
+    }
+    render_compact_bottom_panel(
+        frame,
+        area,
+        "status",
+        vec![Line::from(message.clone().fg(Color::White))],
+        accent,
+    );
+}
+
 pub(super) fn draw_quit_prompt(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
     if !dash.quit_prompt_active() {
         return;
@@ -371,7 +414,7 @@ pub(super) fn keys_rows(dash: &Dash) -> Vec<Line<'static>> {
 }
 
 pub(super) fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
-    if dash.keys_hidden || dash.is_reloading() {
+    if dash.keys_hidden || dash.is_reloading() || dash.copying || dash.filter_state.is_editing() {
         return;
     }
     let rows = keys_rows(dash);
@@ -681,7 +724,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::mpsc::channel;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -1131,17 +1174,32 @@ mod tests {
         assert_eq!(rows[1], " + trace ");
 
         dash.start_filter_add();
+        let FilterState::Editing { draft, .. } = &mut dash.filter_state else {
+            panic!("filter editor did not open");
+        };
+        draft.push_str("panic");
         let text = render_text(&mut dash);
         assert!(
-            text.contains("strategy + / -"),
-            "editing strategy key missing"
+            text.contains("add filter") && text.contains("include lines containing"),
+            "compact filter editor missing: {text}"
         );
-        assert!(text.contains("save"), "editing save key missing");
+        assert!(text.contains("+ panic▍"), "filter input missing: {text}");
+        assert!(
+            !text.contains("keys · ctrl+k"),
+            "keys HUD should yield to modal text entry: {text}"
+        );
         let rows: Vec<String> = filter_panel_rows(&dash)
             .into_iter()
             .map(|line| span_text(&line.spans))
             .collect();
-        assert_eq!(rows, vec![" add + _"]);
+        assert_eq!(
+            rows,
+            vec![
+                "include lines containing",
+                "+ panic▍",
+                "↑/↓ strategy · enter save · esc cancel",
+            ]
+        );
     }
 
     #[test]
@@ -1467,6 +1525,58 @@ mod tests {
                 "footer text leaked onto the bottom rows: {row}"
             );
         }
+    }
+
+    #[test]
+    fn copy_prompt_renders_input_with_count_and_guidance() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Trace;
+        dash.copying = true;
+        dash.copy_count = "42".to_string();
+        dash.notice = Some((Instant::now(), "older status".to_string()));
+        let rows = render_rows_at(&mut dash, 110, 14);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("copy last N lines"),
+            "label missing from copy prompt: {text}"
+        );
+        assert!(
+            text.contains("42▍"),
+            "typed digits with cursor missing from copy prompt: {text}"
+        );
+        assert!(
+            text.contains("enter") && text.contains("cancel"),
+            "guidance missing from copy prompt: {text}"
+        );
+        assert!(
+            !text.contains("keys · ctrl+k"),
+            "keys HUD should yield to modal text entry: {text}"
+        );
+        assert!(
+            !text.contains("older status"),
+            "copy prompt should take priority over status: {text}"
+        );
+    }
+
+    #[test]
+    fn recent_notice_renders_as_status_then_expires() {
+        let mut dash = Dash::new(Vec::new());
+        dash.notice = Some((Instant::now(), "copied 42 lines to clipboard".to_string()));
+        let text = render_text(&mut dash);
+        assert!(
+            text.contains("status") && text.contains("copied 42 lines to clipboard"),
+            "recent status missing: {text}"
+        );
+
+        dash.notice = Some((
+            Instant::now() - ACK_TTL - Duration::from_millis(1),
+            "expired status".to_string(),
+        ));
+        let text = render_text(&mut dash);
+        assert!(
+            !text.contains("expired status"),
+            "expired status still visible: {text}"
+        );
     }
 
     #[test]

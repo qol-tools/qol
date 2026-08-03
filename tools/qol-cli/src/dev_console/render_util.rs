@@ -103,6 +103,36 @@ pub(super) fn render_compact_bottom_panel(
     render_bottom_panel_with_width(frame, area, title, rows, accent, width);
 }
 
+pub(super) struct InputPrompt {
+    pub(super) title: &'static str,
+    pub(super) label: &'static str,
+    pub(super) input: Line<'static>,
+    pub(super) actions: Vec<(&'static str, &'static str)>,
+}
+
+impl InputPrompt {
+    pub(super) fn rows(self) -> Vec<Line<'static>> {
+        let mut guidance = Vec::new();
+        for (index, (key, description)) in self.actions.into_iter().enumerate() {
+            if index > 0 {
+                guidance.push(" · ".fg(Color::DarkGray));
+            }
+            guidance.push(key.fg(Color::White).bold());
+            guidance.push(format!(" {description}").fg(Color::DarkGray));
+        }
+        vec![
+            Line::from(self.label.fg(Color::DarkGray)),
+            self.input,
+            Line::from(guidance),
+        ]
+    }
+
+    pub(super) fn render(self, frame: &mut Frame, area: Rect, accent: Color) {
+        let title = self.title;
+        render_compact_bottom_panel(frame, area, title, self.rows(), accent);
+    }
+}
+
 fn render_bottom_panel_with_width(
     frame: &mut Frame,
     area: Rect,

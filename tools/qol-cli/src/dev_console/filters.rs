@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::picker::{
     filter_text, filter_text_width, picker_brick_layout, PickerBrick, FILTER_BRICK_CHROME,
 };
-use super::render_util::{accent, panel_width, render_bottom_panel};
+use super::render_util::{accent, panel_width, render_bottom_panel, InputPrompt};
 use super::{Dash, View};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -132,10 +132,20 @@ impl FilterState {
     pub(super) fn is_active(&self) -> bool {
         !matches!(self, Self::Closed)
     }
+
+    pub(super) fn is_editing(&self) -> bool {
+        matches!(self, Self::Editing { .. })
+    }
 }
 
 pub(super) fn draw_filter_panel(frame: &mut Frame, dash: &mut Dash, area: Rect, accent: Color) {
     if !dash.filter_state.is_active() {
+        return;
+    }
+    if dash.filter_state.is_editing() {
+        if let Some(prompt) = filter_input_prompt(dash) {
+            prompt.render(frame, area, accent);
+        }
         return;
     }
     dash.filter_layout_width = panel_width(area).saturating_sub(2) as usize;
@@ -155,21 +165,41 @@ pub(super) fn filter_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
             dash.filter_index,
             dash.filter_layout_width,
         ),
-        FilterState::Editing {
-            index,
-            draft,
-            strategy,
-        } => {
-            let label = if index.is_some() { " edit" } else { " add" };
-            vec![Line::from(vec![
-                label.fg(Color::DarkGray),
-                " ".into(),
-                strategy.symbol().fg(strategy.color()).bold(),
-                " ".into(),
-                format!("{draft}_").fg(Color::White),
-            ])]
-        }
+        FilterState::Editing { .. } => filter_input_prompt(dash)
+            .map(InputPrompt::rows)
+            .unwrap_or_default(),
     }
+}
+
+fn filter_input_prompt(dash: &Dash) -> Option<InputPrompt> {
+    let FilterState::Editing {
+        index,
+        draft,
+        strategy,
+    } = &dash.filter_state
+    else {
+        return None;
+    };
+    let title = if index.is_some() {
+        "edit filter"
+    } else {
+        "add filter"
+    };
+    let label = match strategy {
+        FilterStrategy::Include => "include lines containing",
+        FilterStrategy::Exclude => "exclude lines containing",
+    };
+    let mut input = vec![strategy.symbol().fg(strategy.color()).bold(), " ".into()];
+    if !draft.is_empty() {
+        input.push(draft.clone().fg(Color::White).bold());
+    }
+    input.push("▍".fg(accent()));
+    Some(InputPrompt {
+        title,
+        label,
+        input: Line::from(input),
+        actions: vec![("↑/↓", "strategy"), ("enter", "save"), ("esc", "cancel")],
+    })
 }
 
 pub(super) fn filter_brick_rows(
