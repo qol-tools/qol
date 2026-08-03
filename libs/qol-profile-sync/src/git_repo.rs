@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use git2::{
     build::RepoBuilder, BranchType, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository,
     Signature,
@@ -21,6 +21,11 @@ pub enum PullOutcome {
 pub struct CommitInfo {
     pub sha: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushOutcome {
+    pub transferred: bool,
 }
 
 pub struct GitRepo {
@@ -175,19 +180,34 @@ impl GitRepo {
         }))
     }
 
-    pub fn push(&self, token: Option<&str>) -> Result<()> {
+    pub fn push(&self, token: Option<&str>) -> Result<PushOutcome> {
         let repo = self.open_repo()?;
-        let mut remote = repo
-            .find_remote(DEFAULT_REMOTE)
-            .with_context(|| format!("find remote {DEFAULT_REMOTE}"))?;
-        let mut callbacks = RemoteCallbacks::new();
-        bind_credentials(&mut callbacks, token);
-        let mut opts = PushOptions::new();
-        opts.remote_callbacks(callbacks);
-        let refspec = format!("refs/heads/{DEFAULT_BRANCH}:refs/heads/{DEFAULT_BRANCH}");
-        remote
-            .push(&[refspec.as_str()], Some(&mut opts))
-            .context("push to remote")
+        let remote_before = remote_branch_oid(&repo).ok();
+        let rejected = std::cell::Cell::new(None);
+        {
+            let mut remote = repo
+                .find_remote(DEFAULT_REMOTE)
+                .with_context(|| format!("find remote {DEFAULT_REMOTE}"))?;
+            let mut callbacks = RemoteCallbacks::new();
+            bind_credentials(&mut callbacks, token);
+            callbacks.push_update_reference(|refname, status| {
+                if let Some(status) = status {
+                    rejected.set(Some((refname.to_string(), status.to_string())));
+                }
+                Ok(())
+            });
+            let mut opts = PushOptions::new();
+            opts.remote_callbacks(callbacks);
+            let refspec = format!("refs/heads/{DEFAULT_BRANCH}:refs/heads/{DEFAULT_BRANCH}");
+            remote
+                .push(&[refspec.as_str()], Some(&mut opts))
+                .context("push to remote")?;
+        }
+        if let Some((refname, status)) = rejected.into_inner() {
+            bail!("push rejected for {refname}: {status}");
+        }
+        let transferred = remote_branch_oid(&repo).ok() != remote_before;
+        Ok(PushOutcome { transferred })
     }
 
     pub fn reset_to_remote(&self) -> Result<()> {
@@ -455,6 +475,54 @@ mod tests {
 
         write_file(&repo_path.join("note.txt"), "changed");
         assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
+    }
+
+    #[test]
+    fn push_rejects_a_non_fast_forward_advance() {
+        let tmp = TempDir::new().unwrap();
+        let origin_dir = tmp.path().join("origin.git");
+        let url = init_bare_origin(&origin_dir);
+
+        let alice_path = tmp.path().join("alice");
+        let alice = GitRepo::init(&alice_path, &url).unwrap();
+        write_file(&alice_path.join("data.txt"), "alice");
+        alice.commit_all("alice initial", &signature()).unwrap();
+        alice.push(None).unwrap();
+
+        let bob_path = tmp.path().join("bob");
+        let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
+        write_file(&bob_path.join("data.txt"), "bob");
+        bob.commit_all("bob update", &signature()).unwrap();
+        bob.push(None).unwrap();
+
+        write_file(&alice_path.join("data.txt"), "alice diverged");
+        alice.commit_all("alice diverged", &signature()).unwrap();
+        let error = alice.push(None).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("rejected") || message.contains("cannot push"),
+            "stale local push must not succeed silently: {message}"
+        );
+    }
+
+    #[test]
+    fn push_reports_no_transfer_when_local_matches_remote() {
+        let tmp = TempDir::new().unwrap();
+        let origin_dir = tmp.path().join("origin.git");
+        let url = init_bare_origin(&origin_dir);
+
+        let local_path = tmp.path().join("local");
+        let local = GitRepo::init(&local_path, &url).unwrap();
+        write_file(&local_path.join("data.txt"), "hello");
+        local.commit_all("initial", &signature()).unwrap();
+
+        let first = local.push(None).unwrap();
+        assert!(first.transferred, "first push must transfer");
+        let second = local.push(None).unwrap();
+        assert!(
+            !second.transferred,
+            "up-to-date push must not report a transfer"
+        );
     }
 
     #[test]

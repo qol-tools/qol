@@ -199,26 +199,30 @@ fn sync_profile() -> Result<SyncOutcome> {
             .collect();
         state.last_error = None;
     }
-    let head = repo.head_sha()?;
-    state.head_sha = head;
-    state.last_sync_at = Some(qol_profile_sync::now_rfc3339());
-    save_state_file(&paths, &state)?;
-
     if !state.conflicts.is_empty() {
+        let head = repo.head_sha()?;
+        state.head_sha = head;
+        state.last_sync_at = Some(qol_profile_sync::now_rfc3339());
+        save_state_file(&paths, &state)?;
         let message = format!("{} setting(s) need review", state.conflicts.len());
         let status = build_status_for(&state, Some(&target));
         return Ok(SyncOutcome::Conflicts { message, status });
     }
 
-    let remote_before = repo.remote_oid().ok();
-    if let Err(error) = repo.push(Some(&token)) {
-        state.last_error = Some(format!("{error:#}"));
-        save_state_file(&paths, &state)?;
-        return Err(error).context("push to remote");
-    }
-    let pushed = remote_before != repo.remote_oid().ok();
+    let push_outcome = match repo.push(Some(&token)) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            state.last_error = Some(format!("{error:#}"));
+            save_state_file(&paths, &state)?;
+            return Err(error).context("push to remote");
+        }
+    };
+    let head = repo.head_sha()?;
+    state.head_sha = head;
+    state.last_sync_at = Some(qol_profile_sync::now_rfc3339());
+    save_state_file(&paths, &state)?;
 
-    let message = if pushed {
+    let message = if push_outcome.transferred {
         "Pushed changes to remote".to_string()
     } else if applied_remote {
         "Pulled changes from remote".to_string()

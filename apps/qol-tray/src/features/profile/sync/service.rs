@@ -849,9 +849,7 @@ fn push_profile_changes(
     }
 
     if conflicts.is_empty() {
-        let remote_before = repo.remote_oid().ok();
-        repo.push(token)?;
-        let pushed = remote_before != repo.remote_oid().ok();
+        let pushed = repo.push(token)?.transferred;
         let head = repo.head_sha()?;
         return Ok(PushTaskOutput {
             pushed,
