@@ -211,16 +211,37 @@ fn is_choice_affordance(line: &str) -> bool {
     let lower = t.to_lowercase();
     lower.contains("[y/n]")
         || lower.contains("(y/n)")
+        || lower.contains("\u{2191}\u{2193} select")
+        || lower.contains("\u{21B5} choose")
         || KEY_HINTS.iter().any(|h| lower.contains(h))
 }
 
 fn numbered_option(t: &str) -> bool {
+    let t = t.strip_prefix('\u{2192}').map(str::trim_start).unwrap_or(t);
+    if bracketed_numbered_option(t) {
+        return true;
+    }
     let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
     if digits == 0 {
         return false;
     }
     let mut rest = t[digits..].chars();
     if !matches!(rest.next(), Some('.') | Some(')')) {
+        return false;
+    }
+    matches!(rest.next(), None | Some(' ') | Some('\t'))
+}
+
+fn bracketed_numbered_option(t: &str) -> bool {
+    let Some(t) = t.strip_prefix('[') else {
+        return false;
+    };
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return false;
+    }
+    let mut rest = t[digits..].chars();
+    if rest.next() != Some(']') {
         return false;
     }
     matches!(rest.next(), None | Some(' ') | Some('\t'))

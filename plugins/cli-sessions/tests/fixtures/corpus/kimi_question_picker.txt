@@ -1,0 +1,14 @@
+? Choose a repair strategy
+
+→ [1] Subdivision repair (Recommended)
+    Change the contact region and preserve a shallow margin.
+  [2] Defer repair
+    Ship the independent fix and revisit this later.
+  [3] Judge by render first
+    Render the current result before choosing.
+  [4] Other
+
+↑↓ select 1-4 / ↵ choose ←/→/tab switch esc cancel
+
+yolo  DeepSeek V4 Flash thinking: max  …/project  main [±]
+context: 25% (240k/977k)

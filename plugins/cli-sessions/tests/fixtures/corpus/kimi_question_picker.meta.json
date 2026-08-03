@@ -1,0 +1,9 @@
+{
+  "title": "project",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "kimi"
+  ],
+  "expect": "NeedsYou",
+  "screen_changed": false
+}
