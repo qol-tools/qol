@@ -478,6 +478,23 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     reg.lock().unwrap().get_mut(10).unwrap().acknowledge();
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 300);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Acknowledged,);
+
+    let redrawn = FakeHost {
+        panes: vec![pane(
+            10,
+            "\u{2733} proj",
+            false,
+            &["zsh", "claude"],
+            "claude",
+        )],
+        screen: "\u{273B} Brewed for 1m\n(rename redraw line)".into(),
+    };
+    tick(&reg, &redrawn, &interpreter(), &NoServiceProbe, 400);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Acknowledged,
+        "a cosmetic redraw must not re-arm an acknowledged turn"
+    );
 }
 
 #[test]

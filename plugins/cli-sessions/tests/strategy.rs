@@ -155,9 +155,30 @@ fn running_since_tracks_busy_phase_only() {
     }
 }
 
+const EVERY_PREV: [Option<Status>; 6] = [
+    None,
+    Some(Status::Working),
+    Some(Status::Unknown),
+    Some(Status::YourTurn),
+    Some(Status::Acknowledged),
+    Some(Status::NeedsYou),
+];
+
+fn moving_prev_is_unsettled(prev: Option<Status>) -> bool {
+    matches!(prev, None | Some(Status::Working))
+}
+
 #[test]
-fn phase_for_never_reads_waiting_on_a_moving_screen() {
-    let cases = [
+fn phase_for_maps_all_evidence_combinations() {
+    let settled = [
+        (false, false, false, false, Phase::Idle),
+        (false, false, false, true, Phase::Busy),
+        (false, false, true, false, Phase::Done),
+        (false, false, true, true, Phase::Done),
+        (false, true, false, false, Phase::Blocked),
+        (false, true, false, true, Phase::Blocked),
+        (false, true, true, false, Phase::Blocked),
+        (false, true, true, true, Phase::Blocked),
         (true, false, false, false, Phase::Busy),
         (true, false, false, true, Phase::Busy),
         (true, false, true, false, Phase::Busy),
@@ -166,22 +187,69 @@ fn phase_for_never_reads_waiting_on_a_moving_screen() {
         (true, true, false, true, Phase::Busy),
         (true, true, true, false, Phase::Busy),
         (true, true, true, true, Phase::Busy),
-        (false, false, false, false, Phase::Idle),
-        (false, false, false, true, Phase::Busy),
-        (false, false, true, false, Phase::Done),
-        (false, false, true, true, Phase::Busy),
-        (false, true, false, false, Phase::Blocked),
-        (false, true, false, true, Phase::Busy),
-        (false, true, true, false, Phase::Blocked),
-        (false, true, true, true, Phase::Busy),
     ];
-    for (working, awaiting, turn_taken, changed, expected) in cases {
+    assert_eq!(settled.len(), 16);
+    for prev in EVERY_PREV {
+        for (working, awaiting, turn_taken, changed, settled_expected) in settled {
+            let expected = if changed && !working && moving_prev_is_unsettled(prev) {
+                Phase::Busy
+            } else {
+                settled_expected
+            };
+            assert_eq!(
+                phase_for(working, awaiting, turn_taken, changed, prev),
+                expected,
+                "working={working} awaiting={awaiting} turn_taken={turn_taken} screen_changed={changed} prev={prev:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_moving_screen_never_reads_done_before_the_session_has_settled() {
+    for prev in [None, Some(Status::Working)] {
         assert_eq!(
-            phase_for(working, awaiting, turn_taken, changed),
-            expected,
-            "working={working} awaiting={awaiting} turn_taken={turn_taken} screen_changed={changed}"
+            phase_for(false, false, true, true, prev),
+            Phase::Busy,
+            "historical turn evidence must not beat live movement for prev={prev:?}"
+        );
+        assert_eq!(
+            phase_for(false, true, false, true, prev),
+            Phase::Busy,
+            "a moving choice prompt must settle before it reads blocked for prev={prev:?}"
         );
     }
+}
+
+#[test]
+fn a_settled_session_keeps_its_waiting_phase_across_a_redraw() {
+    for prev in [
+        Some(Status::Unknown),
+        Some(Status::YourTurn),
+        Some(Status::Acknowledged),
+        Some(Status::NeedsYou),
+    ] {
+        assert_eq!(phase_for(false, false, true, true, prev), Phase::Done);
+        assert_eq!(phase_for(false, true, false, true, prev), Phase::Blocked);
+    }
+}
+
+#[test]
+fn a_redraw_without_waiting_evidence_still_reads_busy() {
+    for prev in EVERY_PREV {
+        assert_eq!(
+            phase_for(false, false, false, true, prev),
+            Phase::Busy,
+            "movement is the only working signal a hidden spinner leaves for prev={prev:?}"
+        );
+    }
+}
+
+#[test]
+fn first_observation_of_a_moving_session_never_arms_your_turn() {
+    let phase = phase_for(false, false, true, true, None);
+    assert_eq!(phase, Phase::Busy);
+    assert_eq!(status_for(Status::Unknown, phase), Status::Working);
 }
 
 #[test]
@@ -628,10 +696,11 @@ fn pi_streaming_collapsed_output_is_working_until_the_screen_settles() {
     let screen = "\"WorkingStatusIndicator|start|.stop()|workingMessage\" $PI/dist/modes/interactive/interactive-mode.js | head -25\n ... (15 earlier lines, ctrl+o to expand)\n 3019:            this.ui.start();\n 3024:            this.ui.stop();\n 5065:            this.ui.stop();";
     let mut moving = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
     moving.screen_changed = true;
+    moving.prev = ran_since(50);
     assert_eq!(
         Pi.read(&moving).phase,
         Phase::Busy,
-        "streaming output with the spinner hidden by the expander is still working"
+        "a session that was working, whose screen is still moving, has not settled"
     );
     let settled = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
     assert_eq!(
@@ -642,12 +711,13 @@ fn pi_streaming_collapsed_output_is_working_until_the_screen_settles() {
 }
 
 #[test]
-fn moving_screen_defers_your_turn_for_every_tool() {
+fn moving_screen_from_working_reads_busy_for_every_tool() {
     let pi_pane = pane(false, "pi", "\u{03C0} - proj");
     let pi_settled =
         "conversation output\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)";
     let mut pi_moving = pi_ctx(&pi_pane, Some(pi_settled), Some("proj"), Some(true));
     pi_moving.screen_changed = true;
+    pi_moving.prev = ran_since(50);
     assert_eq!(Pi.read(&pi_moving).phase, Phase::Busy);
     assert_eq!(
         Pi.read(&pi_ctx(
@@ -664,6 +734,7 @@ fn moving_screen_defers_your_turn_for_every_tool() {
     let kimi_settled = "\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{2191}5]";
     let mut kimi_moving = kimi_ctx(&kimi_pane, Some(kimi_settled), Some("proj"), Some(true));
     kimi_moving.screen_changed = true;
+    kimi_moving.prev = ran_since(50);
     assert_eq!(Kimi.read(&kimi_moving).phase, Phase::Busy);
     assert_eq!(
         Kimi.read(&kimi_ctx(
@@ -678,12 +749,9 @@ fn moving_screen_defers_your_turn_for_every_tool() {
 
     let claude_pane = pane(false, "claude", "\u{2733} Topic");
     let claude_settled = "\u{273B} Brewed for 2m 9s";
-    assert_eq!(
-        Claude
-            .read(&ctx(&claude_pane, Some(claude_settled), true, None, 0))
-            .phase,
-        Phase::Busy
-    );
+    let mut claude_moving = ctx(&claude_pane, Some(claude_settled), true, None, 0);
+    claude_moving.prev = ran_since(50);
+    assert_eq!(Claude.read(&claude_moving).phase, Phase::Busy);
     assert_eq!(
         Claude
             .read(&ctx(&claude_pane, Some(claude_settled), false, None, 0))
@@ -695,6 +763,7 @@ fn moving_screen_defers_your_turn_for_every_tool() {
     let codex_settled = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
     let mut codex_moving = codex_ctx(&codex_pane, Some(codex_settled), Some("Topic"), Some(true));
     codex_moving.screen_changed = true;
+    codex_moving.prev = ran_since(50);
     assert_eq!(Codex.read(&codex_moving).phase, Phase::Busy);
     assert_eq!(
         Codex
@@ -710,21 +779,56 @@ fn moving_screen_defers_your_turn_for_every_tool() {
 }
 
 #[test]
-fn choice_prompt_on_a_moving_screen_is_working_not_needs_you() {
+fn choice_prompt_on_a_moving_screen_from_working_is_busy_not_needs_you() {
     let p = pane(false, "pi", "\u{03C0} - proj");
     let screen = "Replace current session with /tmp/x.jsonl?\n\n\u{276F} Yes\n  No\n\n\u{2191}\u{2193} navigate  enter select  esc cancel";
     let mut moving = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
     moving.screen_changed = true;
+    moving.prev = ran_since(50);
     assert_eq!(
         Pi.read(&moving).phase,
         Phase::Busy,
-        "a prompt still rendering on a moving screen is not settled"
+        "a prompt still rendering while the session was working is not settled"
     );
     assert_eq!(
         Pi.read(&pi_ctx(&p, Some(screen), Some("proj"), Some(true)))
             .phase,
         Phase::Blocked,
         "the same prompt once settled needs the user"
+    );
+}
+
+#[test]
+fn idle_rename_keeps_your_turn_not_working() {
+    let p = pane(false, "codex", "qol-monorepo");
+    let screen = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
+    let mut renamed = codex_ctx(&p, Some(screen), Some("Topic"), Some(true));
+    renamed.screen_changed = true;
+    renamed.prev = Some(Prev {
+        status: Status::YourTurn,
+        running_since: None,
+    });
+    assert_eq!(
+        Codex.read(&renamed).phase,
+        Phase::Done,
+        "a /rename redraw on an idle session must not read as working"
+    );
+}
+
+#[test]
+fn acknowledged_turn_survives_a_cosmetic_redraw() {
+    let p = pane(false, "codex", "qol-monorepo");
+    let screen = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
+    let mut redrawn = codex_ctx(&p, Some(screen), Some("Topic"), Some(true));
+    redrawn.screen_changed = true;
+    redrawn.prev = Some(Prev {
+        status: Status::Acknowledged,
+        running_since: None,
+    });
+    assert_eq!(
+        status_for(Status::Acknowledged, Codex.read(&redrawn).phase),
+        Status::Acknowledged,
+        "acknowledging must not be re-armed by a cosmetic screen change"
     );
 }
 

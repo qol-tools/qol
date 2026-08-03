@@ -95,11 +95,18 @@ Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`,
 `Pi`, `Kimi`) supply evidence hooks (`working`, `awaiting`, `turn_taken`) and
 never consult `is_service`; the shared `read` composes the hooks through the
 pure `phase_for` skeleton (Busy > Blocked > Done > Idle) and enforces the
-moving-screen invariant in one place: a changing screen is a working session,
-so every waiting phase requires a settled screen, and a moving screen with no
-evidence still reads Busy. `Cli` alone overrides `read` because its shell
-model is busy-by-default (absence of a foreground process is the idle signal),
-which does not fit the evidence skeleton. Strategies also expose a
+moving-screen invariant in one place, keyed on the previous status. Movement in
+a session that was `Working`, or that this pass observes for the first time,
+always reads `Busy`: the debounce keeps a streaming session working, and the
+first reading of a moving screen stays conservative rather than arming "your
+turn" from historical evidence. Once a session has settled into a waiting
+status, a redraw no longer overrides the evidence hooks, so a rename or banner
+refresh in an acknowledged session reads `Done` and stays acknowledged rather
+than re-arming. A redraw with no waiting evidence at all still reads `Busy`,
+because movement is the only signal a tool with a hidden spinner leaves behind.
+`Cli` alone overrides `read` because its
+shell model is busy-by-default (absence of a foreground process is the idle
+signal), which does not fit the evidence skeleton. Strategies also expose a
 `stable_screen_hash` so the daemon compares only the region whose movement
 means something (the footer counters of `Pi`/`Kimi` are excluded); the
 decision that "the screen settled" therefore ignores cosmetic noise.

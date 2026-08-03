@@ -72,6 +72,7 @@ pub trait Strategy {
             self.awaiting(ctx),
             self.turn_taken(ctx),
             ctx.screen_changed,
+            ctx.prev.map(|p| p.status),
         );
         Reading {
             phase,
@@ -80,18 +81,33 @@ pub trait Strategy {
     }
 }
 
-pub fn phase_for(working: bool, awaiting: bool, turn_taken: bool, screen_changed: bool) -> Phase {
+pub fn phase_for(
+    working: bool,
+    awaiting: bool,
+    turn_taken: bool,
+    screen_changed: bool,
+    prev: Option<Status>,
+) -> Phase {
     if working {
-        Phase::Busy
-    } else if !screen_changed && awaiting {
-        Phase::Blocked
-    } else if !screen_changed && turn_taken {
-        Phase::Done
-    } else if screen_changed {
-        Phase::Busy
-    } else {
-        Phase::Idle
+        return Phase::Busy;
     }
+    if screen_changed && !settled_wait(prev) {
+        return Phase::Busy;
+    }
+    if awaiting {
+        return Phase::Blocked;
+    }
+    if turn_taken {
+        return Phase::Done;
+    }
+    if screen_changed {
+        return Phase::Busy;
+    }
+    Phase::Idle
+}
+
+fn settled_wait(prev: Option<Status>) -> bool {
+    !matches!(prev, None | Some(Status::Working))
 }
 
 pub fn running_since_for(prev_running: Option<u64>, phase: Phase, now: u64) -> Option<u64> {

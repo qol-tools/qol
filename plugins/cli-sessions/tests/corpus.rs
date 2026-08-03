@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::{for_tool, status_for, Ctx};
+use plugin_cli_sessions::strategy::{for_tool, status_for, Ctx, Prev};
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
@@ -16,6 +16,8 @@ struct Meta {
     at_prompt: bool,
     foreground_basenames: Vec<String>,
     screen_changed: bool,
+    #[serde(default)]
+    prev: Option<String>,
     expect: Option<String>,
 }
 
@@ -46,16 +48,25 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
     let cli_session = CliSessionInterpreter::system().describe(&pane);
     let tool = Tool::from_cli_session(&cli_session);
     let strategy = for_tool(tool);
+    let prev_status = meta
+        .prev
+        .as_deref()
+        .map(expected_status)
+        .unwrap_or(Status::Unknown);
+    let prev = meta.prev.as_ref().map(|_| Prev {
+        status: prev_status,
+        running_since: None,
+    });
     let reading = strategy.read(&Ctx {
         pane: &pane,
         cli_session,
         screen: Some(screen),
         screen_changed: meta.screen_changed,
-        prev: None,
+        prev,
         now: 0,
         is_service: false,
     });
-    status_for(Status::Unknown, reading.phase)
+    status_for(prev_status, reading.phase)
 }
 
 #[test]

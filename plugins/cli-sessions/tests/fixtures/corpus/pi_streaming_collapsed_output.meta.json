@@ -5,5 +5,6 @@
     "pi"
   ],
   "expect": "Working",
-  "screen_changed": true
+  "screen_changed": true,
+  "prev": "Working"
 }
