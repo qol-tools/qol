@@ -18,8 +18,8 @@ use super::dash::{
 };
 use super::disk::{apply_disk_outcome, open_disk, start_disk_scan};
 use super::doctor::{
-    apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, toggle_doctor_detail,
-    DoctorMode,
+    apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
+    toggle_doctor_detail, DoctorMode,
 };
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
@@ -417,7 +417,11 @@ pub(super) fn finish_copy(dash: &mut Dash) {
         return;
     };
     let text = newest_lines(dash, count);
-    let message = match host_facade::copy_to_clipboard(&text) {
+    copy_text_to_clipboard(dash, &text);
+}
+
+fn copy_text_to_clipboard(dash: &mut Dash, text: &str) {
+    let message = match host_facade::copy_to_clipboard(text) {
         Ok(()) => format!("copied {} lines to clipboard", text.lines().count()),
         Err(error) => format!("copy failed: {error}"),
     };
@@ -450,6 +454,21 @@ pub(super) fn newest_lines(dash: &Dash, count: usize) -> String {
         .map(|line| strip_ansi(line))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+enum CopyStrategy {
+    RingBuffer,
+    Instant(String),
+}
+
+fn copy_strategy(dash: &Dash) -> Option<CopyStrategy> {
+    match dash.view {
+        View::Doctor => {
+            doctor_detail_text(&dash.doctor, dash.doctor_cursor).map(CopyStrategy::Instant)
+        }
+        _ if filterable_view(dash.view) => Some(CopyStrategy::RingBuffer),
+        _ => None,
+    }
 }
 
 pub(super) fn strip_ansi(raw: &str) -> String {
@@ -571,13 +590,15 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 dash.open_filter_manager();
             }
         }
-        Action::Copy => {
-            if filterable_view(dash.view) {
+        Action::Copy => match copy_strategy(dash) {
+            Some(CopyStrategy::Instant(text)) => copy_text_to_clipboard(dash, &text),
+            Some(CopyStrategy::RingBuffer) => {
                 dash.copying = true;
                 dash.copy_count.clear();
                 dash.scroll_offset = 0;
             }
-        }
+            None => {}
+        },
         Action::OpenCurrentLogFolder => open_current_log_folder(dash),
         Action::OpenCurrentLogEditor => open_current_log_editor(dash, false),
         Action::OpenCurrentLogRaw => open_current_log_editor(dash, true),

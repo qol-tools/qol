@@ -280,6 +280,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                     Action::ToggleArm,
                     vec![KeyStroke::plain(KeyCode::Char(' '))],
                 ),
+                char_binding("c", "copy message", Action::Copy, 'c'),
             ];
             bindings.extend(arrow_view_bindings("move"));
             bindings
