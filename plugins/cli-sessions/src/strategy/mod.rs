@@ -91,7 +91,7 @@ pub fn phase_for(
     if working {
         return Phase::Busy;
     }
-    if screen_changed && !settled_wait(prev) {
+    if screen_changed && moving_screen_is_busy(prev, awaiting) {
         return Phase::Busy;
     }
     if awaiting {
@@ -106,8 +106,8 @@ pub fn phase_for(
     Phase::Idle
 }
 
-fn settled_wait(prev: Option<Status>) -> bool {
-    !matches!(prev, None | Some(Status::Working))
+fn moving_screen_is_busy(prev: Option<Status>, awaiting: bool) -> bool {
+    matches!(prev, None | Some(Status::Working)) || (prev == Some(Status::NeedsYou) && !awaiting)
 }
 
 pub fn running_since_for(prev_running: Option<u64>, phase: Phase, now: u64) -> Option<u64> {

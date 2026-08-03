@@ -32,6 +32,7 @@ const APP_ID: &str = paths::PLUGIN_ID;
 const WINDOW_WIDTH: f32 = 360.0;
 const WINDOW_HEIGHT: f32 = 400.0;
 const CORNER_MARGIN: f32 = 16.0;
+const ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const VISIBLE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
 const HIDDEN_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -207,8 +208,16 @@ fn spawn_reconcile_timer(
     show_on_start: bool,
     cx: &mut gpui::App,
 ) {
-    let mut interval = reconcile_interval(show_on_start);
+    let mut active = active_session_exists(&registry);
+    let mut panel_showing = show_on_start;
+    let mut interval = reconcile_interval(panel_showing, active);
     cx.spawn(async move |cx: &mut AsyncApp| loop {
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=schedule interval_ms={} active={active} panel_showing={panel_showing}",
+            interval.as_millis()
+        );
         cx.background_executor().timer(interval).await;
         let reg = registry.clone();
         let h = host.clone();
@@ -234,10 +243,11 @@ fn spawn_reconcile_timer(
             }
         })
         .await;
-        let panel_showing = cx
+        panel_showing = cx
             .update(|cx| notify_panel_if_showing(&panel, cx))
             .unwrap_or(false);
-        interval = reconcile_interval(panel_showing);
+        active = active_session_exists(&registry);
+        interval = reconcile_interval(panel_showing, active);
     })
     .detach();
 }
@@ -309,12 +319,23 @@ fn clear_panel(panel: &SharedPanel) {
     *panel.borrow_mut() = None;
 }
 
-fn reconcile_interval(panel_showing: bool) -> Duration {
-    if panel_showing {
-        VISIBLE_RECONCILE_INTERVAL
-    } else {
-        HIDDEN_RECONCILE_INTERVAL
+fn reconcile_interval(panel_showing: bool, active: bool) -> Duration {
+    if active {
+        return ACTIVE_RECONCILE_INTERVAL;
     }
+    if panel_showing {
+        return VISIBLE_RECONCILE_INTERVAL;
+    }
+    HIDDEN_RECONCILE_INTERVAL
+}
+
+fn active_session_exists(registry: &Arc<Mutex<Registry>>) -> bool {
+    registry.lock().ok().is_some_and(|registry| {
+        registry
+            .sorted()
+            .iter()
+            .any(|session| matches!(session.status, Status::Working | Status::NeedsYou))
+    })
 }
 
 fn notify_panel_if_showing(panel: &SharedPanel, cx: &mut gpui::App) -> bool {
@@ -422,6 +443,16 @@ mod tests {
 
     #[test]
     fn hidden_reconcile_interval_is_slower_than_visible() {
-        assert!(reconcile_interval(false) > reconcile_interval(true));
+        assert!(reconcile_interval(false, false) > reconcile_interval(true, false));
+    }
+
+    #[test]
+    fn active_reconcile_interval_is_faster_than_calm_intervals() {
+        for panel_showing in [false, true] {
+            assert!(
+                reconcile_interval(panel_showing, true) < reconcile_interval(panel_showing, false),
+                "panel_showing={panel_showing}"
+            );
+        }
     }
 }

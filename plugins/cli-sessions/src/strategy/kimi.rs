@@ -1,5 +1,5 @@
-use crate::signal::screen::{has_numbered_choice_prompt, kimi_working};
-use crate::strategy::{Ctx, Strategy};
+use crate::signal::screen::{has_numbered_choice_prompt, kimi_questionnaire, kimi_working};
+use crate::strategy::{phase_for, Ctx, Phase, Reading, Strategy};
 
 pub struct Kimi;
 
@@ -13,7 +13,8 @@ impl Strategy for Kimi {
     }
 
     fn awaiting(&self, ctx: &Ctx) -> bool {
-        ctx.screen.is_some_and(has_numbered_choice_prompt)
+        ctx.screen
+            .is_some_and(|screen| has_numbered_choice_prompt(screen) || kimi_questionnaire(screen))
     }
 
     fn turn_taken(&self, ctx: &Ctx) -> bool {
@@ -33,5 +34,26 @@ impl Strategy for Kimi {
         }
         let end = lines[..box_top].iter().map(|l| l.len() + 1).sum();
         text.get(..end).unwrap_or(text)
+    }
+
+    fn read(&self, ctx: &Ctx) -> Reading {
+        let working = self.working(ctx);
+        let awaiting = self.awaiting(ctx);
+        if awaiting && !working {
+            return Reading {
+                phase: Phase::Blocked,
+                label: self.label(ctx),
+            };
+        }
+        Reading {
+            phase: phase_for(
+                working,
+                awaiting,
+                self.turn_taken(ctx),
+                ctx.screen_changed,
+                ctx.prev.map(|prev| prev.status),
+            ),
+            label: self.label(ctx),
+        }
     }
 }

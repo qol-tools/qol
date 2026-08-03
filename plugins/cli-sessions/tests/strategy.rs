@@ -12,6 +12,9 @@ use qol_terminal_sessions::cli::{
     codex_tool, kimi_tool, pi_tool, CliSessionDescriptor, CliSessionInterpreter,
 };
 
+const KIMI_EDITING_QUESTIONNAIRE: &str =
+    include_str!("fixtures/kimi_real/questionnaire_editing.txt");
+
 fn pane(at_prompt: bool, cmd: &str, title: &str) -> Pane {
     Pane {
         id: kitty_session_id(1),
@@ -164,8 +167,8 @@ const EVERY_PREV: [Option<Status>; 6] = [
     Some(Status::NeedsYou),
 ];
 
-fn moving_prev_is_unsettled(prev: Option<Status>) -> bool {
-    matches!(prev, None | Some(Status::Working))
+fn moving_prev_is_unsettled(prev: Option<Status>, awaiting: bool) -> bool {
+    matches!(prev, None | Some(Status::Working)) || (prev == Some(Status::NeedsYou) && !awaiting)
 }
 
 #[test]
@@ -191,7 +194,7 @@ fn phase_for_maps_all_evidence_combinations() {
     assert_eq!(settled.len(), 16);
     for prev in EVERY_PREV {
         for (working, awaiting, turn_taken, changed, settled_expected) in settled {
-            let expected = if changed && !working && moving_prev_is_unsettled(prev) {
+            let expected = if changed && !working && moving_prev_is_unsettled(prev, awaiting) {
                 Phase::Busy
             } else {
                 settled_expected
@@ -227,11 +230,22 @@ fn a_settled_session_keeps_its_waiting_phase_across_a_redraw() {
         Some(Status::Unknown),
         Some(Status::YourTurn),
         Some(Status::Acknowledged),
-        Some(Status::NeedsYou),
     ] {
         assert_eq!(phase_for(false, false, true, true, prev), Phase::Done);
         assert_eq!(phase_for(false, true, false, true, prev), Phase::Blocked);
     }
+}
+
+#[test]
+fn answering_a_settled_prompt_reenters_busy_before_completion() {
+    assert_eq!(
+        phase_for(false, false, true, true, Some(Status::NeedsYou)),
+        Phase::Busy
+    );
+    assert_eq!(
+        phase_for(false, true, false, true, Some(Status::NeedsYou)),
+        Phase::Blocked
+    );
 }
 
 #[test]
@@ -584,6 +598,29 @@ fn kimi_choice_picker_is_blocked() {
         Phase::Blocked,
         "an on-screen choice picker is needs-you even when the caret glyph is absent"
     );
+}
+
+#[test]
+fn kimi_questionnaire_alerts_immediately_and_survives_edits() {
+    let p = pane(false, "kimi-code", "project");
+    for prev_status in [Status::Working, Status::NeedsYou] {
+        let mut question = kimi_ctx(
+            &p,
+            Some(KIMI_EDITING_QUESTIONNAIRE),
+            Some("project"),
+            Some(true),
+        );
+        question.screen_changed = true;
+        question.prev = Some(Prev {
+            status: prev_status,
+            running_since: None,
+        });
+        assert_eq!(
+            Kimi.read(&question).phase,
+            Phase::Blocked,
+            "questionnaire must remain blocking while its editor redraws from {prev_status:?}"
+        );
+    }
 }
 
 #[test]

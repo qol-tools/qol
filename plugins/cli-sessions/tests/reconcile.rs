@@ -8,7 +8,7 @@ use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::{
-    codex_tool, CliSessionChangeHandler, CliSessionDescriptor, CliSessionInterpreter,
+    codex_tool, kimi_tool, CliSessionChangeHandler, CliSessionDescriptor, CliSessionInterpreter,
     CliSessionStrategy, CliSessionSubscription, CliTool,
 };
 
@@ -39,6 +39,7 @@ impl ServiceProbe for YesService {
 
 struct CountingHost {
     panes: Vec<Pane>,
+    screen: Mutex<String>,
     reads: AtomicUsize,
 }
 
@@ -49,7 +50,7 @@ impl TerminalHost for CountingHost {
 
     fn get_text(&self, _window_id: u64, _root_pid: i32) -> Option<String> {
         self.reads.fetch_add(1, Ordering::Relaxed);
-        Some(SELECTION.to_owned())
+        Some(self.screen.lock().unwrap().clone())
     }
 
     fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
@@ -57,8 +58,9 @@ impl TerminalHost for CountingHost {
     }
 }
 
-struct SubscribedCodex {
+struct SubscribedAgent {
     tool: CliTool,
+    process: String,
     handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
     external_id: Arc<Mutex<String>>,
 }
@@ -69,13 +71,15 @@ struct SubscribedHarness {
     external_id: Arc<Mutex<String>>,
 }
 
-impl CliSessionStrategy for SubscribedCodex {
+impl CliSessionStrategy for SubscribedAgent {
     fn tool(&self) -> &CliTool {
         &self.tool
     }
 
     fn matches(&self, pane: &Pane) -> bool {
-        pane.foreground_basenames.iter().any(|name| name == "codex")
+        pane.foreground_basenames
+            .iter()
+            .any(|name| name == &self.process)
     }
 
     fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
@@ -142,11 +146,12 @@ fn fake_codex(name: &str, touched: bool) -> CliSessionInterpreter {
     .unwrap()
 }
 
-fn subscribed_codex() -> SubscribedHarness {
+fn subscribed_agent(tool: CliTool, process: &str) -> SubscribedHarness {
     let handlers = Arc::new(Mutex::new(Vec::new()));
     let external_id = Arc::new(Mutex::new("subscribed-session".to_owned()));
-    let interpreter = CliSessionInterpreter::from_strategies([Arc::new(SubscribedCodex {
-        tool: codex_tool(),
+    let interpreter = CliSessionInterpreter::from_strategies([Arc::new(SubscribedAgent {
+        tool,
+        process: process.to_owned(),
         handlers: handlers.clone(),
         external_id: external_id.clone(),
     })
@@ -174,21 +179,29 @@ fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) ->
 }
 
 const SELECTION: &str = "\u{276F} 1. Yes\n  2. No\n  enter to confirm";
+const CODEX_DONE: &str = "";
 const CLAUDE_PICKER: &str = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
 const CLAUDE_WORKING: &str = "\u{273B} Processing\u{2026} (5s \u{00B7} \u{2193} 1k tokens)";
 const CLAUDE_DONE: &str = "\u{273B} Brewed for 1m";
+const KIMI_PICKER: &str = "? Choose a repair strategy\n\n\u{2192} [1] Repair now\n  [2] Defer\n\n\u{2191}\u{2193} select 1-2 / \u{21B5} choose esc cancel";
+const KIMI_TRANSITION: &str = "Collected your answers\nQ  Which repair?\n\u{2192} Repair now";
+const KIMI_WORKING: &str =
+    "Collected your answers\nQ  Which repair?\n\u{2192} Repair now\n\n\u{280B} thinking...";
+const KIMI_EDITING_QUESTIONNAIRE: &str =
+    include_str!("fixtures/kimi_real/questionnaire_editing.txt");
 
 #[test]
-fn subscribed_screens_use_signals_with_a_bounded_fallback() {
+fn subscribed_screens_cache_after_active_sessions_settle() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let panes = (1..=6)
         .map(|id| pane(id, "qol-monorepo", false, &["zsh", "codex"], "codex"))
         .collect();
     let host = CountingHost {
         panes,
+        screen: Mutex::new(CODEX_DONE.to_owned()),
         reads: AtomicUsize::new(0),
     };
-    let harness = subscribed_codex();
+    let harness = subscribed_agent(codex_tool(), "codex");
     let mut caches = ReconcileCaches::default();
 
     tick_with_caches(
@@ -211,8 +224,8 @@ fn subscribed_screens_use_signals_with_a_bounded_fallback() {
     );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
-        6,
-        "unchanged subscribed panes reuse their cached screen"
+        12,
+        "active subscribed panes get a confirming screen read before settling"
     );
 
     harness.handlers.lock().unwrap()[2]();
@@ -226,8 +239,8 @@ fn subscribed_screens_use_signals_with_a_bounded_fallback() {
     );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
-        7,
-        "a metadata signal refreshes only its pane"
+        13,
+        "a metadata signal refreshes only one calm pane"
     );
 
     tick_with_caches(
@@ -240,7 +253,7 @@ fn subscribed_screens_use_signals_with_a_bounded_fallback() {
     );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
-        13,
+        19,
         "every subscribed pane still has a bounded full-screen fallback"
     );
 }
@@ -250,9 +263,10 @@ fn changed_external_session_replaces_the_metadata_subscription() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let host = CountingHost {
         panes: vec![pane(1, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: Mutex::new(SELECTION.to_owned()),
         reads: AtomicUsize::new(0),
     };
-    let harness = subscribed_codex();
+    let harness = subscribed_agent(codex_tool(), "codex");
     let mut caches = ReconcileCaches::default();
 
     tick_with_caches(
@@ -284,6 +298,7 @@ fn unsubscribed_screens_still_read_every_tick() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let host = CountingHost {
         panes: vec![pane(1, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: Mutex::new(SELECTION.to_owned()),
         reads: AtomicUsize::new(0),
     };
     let interpreter = fake_codex("Unsubscribed", true);
@@ -294,6 +309,114 @@ fn unsubscribed_screens_still_read_every_tick() {
     }
 
     assert_eq!(host.reads.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn answered_picker_stays_working_through_the_transition() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = CountingHost {
+        panes: vec![pane(1, "project", false, &["zsh", "kimi"], "kimi")],
+        screen: Mutex::new(KIMI_PICKER.to_owned()),
+        reads: AtomicUsize::new(0),
+    };
+    let harness = subscribed_agent(kimi_tool(), "kimi");
+    let mut caches = ReconcileCaches::default();
+
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        100,
+        &mut caches,
+    );
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        101,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+
+    *host.screen.lock().unwrap() = KIMI_TRANSITION.to_owned();
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        102,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+
+    *host.screen.lock().unwrap() = KIMI_WORKING.to_owned();
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        103,
+        &mut caches,
+    );
+
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Working,
+        "the first spinner frame must keep the answered session working"
+    );
+    assert_eq!(
+        host.reads.load(Ordering::Relaxed),
+        4,
+        "active transitions read fresh screen text without metadata signals"
+    );
+}
+
+#[test]
+fn kimi_questionnaire_enters_and_keeps_attention_while_editing() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = CountingHost {
+        panes: vec![pane(1, "project", false, &["zsh", "kimi"], "kimi")],
+        screen: Mutex::new(KIMI_WORKING.to_owned()),
+        reads: AtomicUsize::new(0),
+    };
+    let harness = subscribed_agent(kimi_tool(), "kimi");
+    let mut caches = ReconcileCaches::default();
+
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        100,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+
+    *host.screen.lock().unwrap() = KIMI_EDITING_QUESTIONNAIRE.to_owned();
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        101,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+
+    *host.screen.lock().unwrap() =
+        KIMI_EDITING_QUESTIONNAIRE.replace("custom answer", "changed answer");
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        102,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    assert_eq!(host.reads.load(Ordering::Relaxed), 3);
 }
 
 #[test]

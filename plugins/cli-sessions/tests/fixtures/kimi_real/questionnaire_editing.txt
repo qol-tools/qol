@@ -1,0 +1,18 @@
+question
+
+(✓) Scope   Test type   (○) Environment   (○) Platform   Submit
+
+? What kind of testing do you want?
+  Type your answer, then press Enter to save.
+
+   [1] Run existing tests (Recommended)
+       Run the relevant test and lint gates.
+   [2] Design new tests
+       Write tests for uncovered behavior.
+   [3] Runtime end-to-end
+       Launch the program and verify behavior live.
+   [4] Stress / adversarial
+       Exercise timing and lifecycle edges.
+→ [5] Other: custom answer
+
+type answer  ↵ save  tab switch  esc cancel

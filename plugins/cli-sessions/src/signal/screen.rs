@@ -88,19 +88,34 @@ pub fn pi_banner(text: &str) -> bool {
 const KIMI_STATUS_WINDOW: usize = 30;
 
 pub fn kimi_working(text: &str) -> bool {
-    let tail: Vec<&str> = text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
+    let tail = kimi_status_tail(text);
+    tail.iter().any(|l| is_kimi_spinner(l.trim_start()))
+        || tail
+            .windows(2)
+            .any(|w| is_bare_moon(w[0].trim_start()) && is_editor_box_top(w[1].trim_start()))
+}
+
+pub fn kimi_questionnaire(text: &str) -> bool {
+    let tail = kimi_status_tail(text);
+    let numbered = tail.iter().any(|line| numbered_option(line.trim()));
+    let footer = tail.iter().any(|line| {
+        let lower = line.to_lowercase();
+        lower.contains("tab switch")
+            && lower.contains("esc cancel")
+            && (lower.contains("↵ save") || lower.contains("↵ choose"))
+    });
+    numbered && footer
+}
+
+fn kimi_status_tail(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
         .rev()
         .take(KIMI_STATUS_WINDOW)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .collect();
-    tail.iter().any(|l| is_kimi_spinner(l.trim_start()))
-        || tail
-            .windows(2)
-            .any(|w| is_bare_moon(w[0].trim_start()) && is_editor_box_top(w[1].trim_start()))
+        .collect()
 }
 
 fn is_kimi_spinner(text: &str) -> bool {

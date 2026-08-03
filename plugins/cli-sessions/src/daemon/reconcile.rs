@@ -104,8 +104,19 @@ pub fn tick_with_caches(
         let tool = Tool::from_cli_session(&cli_session);
         let strategy = for_tool(tool);
         let wants_screen = strategy.wants_screen(pane);
+        let (prev, prev_hash) = snapshot(registry, window_id(pane));
+        let refresh_active =
+            prev.is_some_and(|state| matches!(state.status, Status::Working | Status::NeedsYou));
         let screen = if wants_screen {
-            cached_screen(host, cli_interpreter, pane, &cli_session, now, caches)
+            cached_screen(
+                host,
+                cli_interpreter,
+                pane,
+                &cli_session,
+                refresh_active,
+                now,
+                caches,
+            )
         } else {
             caches.screens.remove(&window_id(pane));
             None
@@ -114,7 +125,6 @@ pub fn tick_with_caches(
             .as_deref()
             .map(|s| screen_hash(strategy.stable_screen_hash(s)));
 
-        let (prev, prev_hash) = snapshot(registry, window_id(pane));
         let screen_changed = match (new_hash, prev_hash) {
             (Some(n), Some(p)) => n != p,
             (Some(_), None) => true,
@@ -209,6 +219,7 @@ fn cached_screen(
     cli_interpreter: &CliSessionInterpreter,
     pane: &Pane,
     cli_session: &CliSessionDescriptor,
+    refresh_active: bool,
     now: u64,
     caches: &mut ReconcileCaches,
 ) -> Option<String> {
@@ -249,17 +260,14 @@ fn cached_screen(
         entry.next_subscription_attempt = now.saturating_add(SUBSCRIPTION_RETRY_SECS);
     }
     let signaled = entry.dirty.swap(false, Ordering::AcqRel);
-    let reason = if entry.text.is_none() {
-        Some("initial")
-    } else if entry.subscription.is_none() {
-        Some("unsubscribed")
-    } else if signaled {
-        Some("signal")
-    } else if now.saturating_sub(entry.last_read) >= SCREEN_FALLBACK_SECS {
-        Some("fallback")
-    } else {
-        None
-    };
+    let reason = refresh_active
+        .then_some("active")
+        .or_else(|| entry.text.is_none().then_some("initial"))
+        .or_else(|| entry.subscription.is_none().then_some("unsubscribed"))
+        .or_else(|| signaled.then_some("signal"))
+        .or_else(|| {
+            (now.saturating_sub(entry.last_read) >= SCREEN_FALLBACK_SECS).then_some("fallback")
+        });
     let Some(reason) = reason else {
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
