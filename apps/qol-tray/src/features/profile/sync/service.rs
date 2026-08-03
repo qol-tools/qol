@@ -430,7 +430,7 @@ impl SyncService {
         };
         let message = if !output.conflicts.is_empty() {
             format!("{} setting(s) need review", output.conflicts.len())
-        } else if output.committed {
+        } else if output.pushed {
             "Pushed changes to remote".to_string()
         } else if output.applied_remote {
             "Pulled changes from remote".to_string()
@@ -813,7 +813,7 @@ struct PullTaskOutput {
 }
 
 struct PushTaskOutput {
-    committed: bool,
+    pushed: bool,
     head: Option<String>,
     conflicts: Vec<ResolvableConflict>,
     applied_remote: bool,
@@ -827,9 +827,8 @@ fn push_profile_changes(
     let repo = GitRepo::open(repo_path)?;
     ensure_gitignore(repo_path)?;
     repair_profile_schema_under_guard(repo_path)?;
-    let local_commit = repo.commit_all(reason, &SignatureSpec::default_for_app())?;
+    repo.commit_all(reason, &SignatureSpec::default_for_app())?;
     let outcome = repo.fetch(token)?;
-    let mut committed = local_commit.is_some();
     let mut conflicts = Vec::new();
     let mut applied_remote = false;
 
@@ -842,9 +841,7 @@ fn push_profile_changes(
         let merge = reconcile(&repo)?;
         if merge.conflicts.is_empty() {
             apply_merged_profile(&repo, repo_path, &merge.merged, "push")?;
-            let merge_commit =
-                repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
-            committed |= merge_commit.is_some();
+            repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
             applied_remote = true;
         } else {
             conflicts = decorate_conflicts(&repo, merge.conflicts)?;
@@ -852,11 +849,20 @@ fn push_profile_changes(
     }
 
     if conflicts.is_empty() {
+        let remote_before = repo.remote_oid().ok();
         repo.push(token)?;
+        let pushed = remote_before != repo.remote_oid().ok();
+        let head = repo.head_sha()?;
+        return Ok(PushTaskOutput {
+            pushed,
+            head,
+            conflicts,
+            applied_remote,
+        });
     }
     let head = repo.head_sha()?;
     Ok(PushTaskOutput {
-        committed,
+        pushed: false,
         head,
         conflicts,
         applied_remote,
@@ -1435,7 +1441,7 @@ items = []
         let output = push_profile_changes(&bob_path, None, "manual push").unwrap();
 
         assert!(output.conflicts.is_empty());
-        assert!(output.committed);
+        assert!(output.pushed);
         assert!(output.applied_remote);
         assert!(crate::plugins::config::current_profile_config_generation() > before);
 

@@ -12,7 +12,9 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use super::activity::Activity;
-use super::render_util::{now_unix_ms, relative_age, view_content, NavigationOverflow};
+use super::render_util::{
+    cursor_window_start, list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
+};
 use super::{Dash, View};
 
 pub(super) struct DiskPanel {
@@ -83,6 +85,7 @@ const TARGET_TOTAL_LABEL: &str = "target";
 pub(super) fn open_disk(dash: &mut Dash) {
     dash.view = View::Disk;
     dash.scroll_offset = 0;
+    dash.disk_cursor = 0;
     if dash.disk.last.is_none() {
         start_disk_scan(dash);
     }
@@ -275,13 +278,20 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
     (Color::DarkGray, value)
 }
 
-pub(super) fn draw_disk(frame: &mut Frame, dash: &Dash, area: Rect) -> NavigationOverflow {
+pub(super) fn draw_disk(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = disk_view_lines(&dash.disk);
-    view_content(frame, area, lines);
-    NavigationOverflow::default()
+    let total = lines.len();
+    let height = list_capacity(area.height);
+    let start = cursor_window_start(total, height, dash.disk_cursor);
+    view_content(
+        frame,
+        area,
+        lines.into_iter().skip(start).take(height).collect(),
+    );
+    NavigationOverflow::from_window(start, height, total)
 }
 
-fn disk_view_lines(panel: &DiskPanel) -> Vec<Line<'static>> {
+pub(super) fn disk_view_lines(panel: &DiskPanel) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(error) = &panel.error {
         lines.push(Line::from(vec![
@@ -424,6 +434,39 @@ mod tests {
         let rows = target_root_rows(&dir.path().join("does-not-exist"));
         assert!(rows.iter().all(|row| row.bytes.is_none()));
         assert_eq!(rows[0].label, "target");
+    }
+
+    #[test]
+    fn disk_scroll_reveals_rows_below_the_viewport() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Disk;
+        dash.keys_hidden = true;
+        dash.disk.last = Some(report(
+            (0..20)
+                .map(|index| row(&format!("bucket-{index}"), Some(index * 1024)))
+                .collect(),
+        ));
+
+        let top_rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
+        assert!(
+            top_rows.iter().any(|line| line.contains("bucket-0")),
+            "the first rows must render at the top"
+        );
+        assert!(
+            !top_rows.iter().any(|line| line.contains("bucket-19")),
+            "rows below the viewport must not render initially"
+        );
+
+        dash.disk_cursor = 19;
+        let scrolled_rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
+        assert!(
+            scrolled_rows.iter().any(|line| line.contains("bucket-19")),
+            "scrolling down must reveal the last row"
+        );
+        assert!(
+            !scrolled_rows.iter().any(|line| line.contains("bucket-0")),
+            "scrolling down must hide the first row"
+        );
     }
 
     #[test]

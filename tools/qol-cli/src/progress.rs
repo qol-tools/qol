@@ -931,7 +931,7 @@ fn format_elapsed(duration: Duration) -> String {
 }
 
 fn indeterminate_progress_bar(tick: usize) -> String {
-    let head = tick % (PROGRESS_BAR_WIDTH + PROGRESS_PULSE_WIDTH);
+    let head = tick % PROGRESS_BAR_WIDTH;
     let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH + 2);
     bar.push('[');
     for index in 0..PROGRESS_BAR_WIDTH {
@@ -985,6 +985,17 @@ mod tests {
     fn indeterminate_progress_bar_contains_visible_marker() {
         assert!(indeterminate_progress_bar(0).contains('>'));
         assert!(indeterminate_progress_bar(3).contains('='));
+    }
+
+    #[test]
+    fn indeterminate_progress_bar_keeps_the_head_visible_every_frame() {
+        for tick in 0..PROGRESS_BAR_WIDTH {
+            let bar = indeterminate_progress_bar(tick);
+            assert!(
+                bar.contains('>'),
+                "head must stay on screen at tick {tick}: {bar:?}"
+            );
+        }
     }
 
     #[test]

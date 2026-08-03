@@ -140,17 +140,10 @@ fn sync_profile() -> Result<SyncOutcome> {
     })?;
     ensure_gitignore(&repo_path)?;
 
-    let mut committed = false;
     if repair_profile_schema(&repo_path)? {
         repo.commit_all("repair profile schema", &SignatureSpec::default_for_cli())?;
-        committed = true;
     }
-    if repo
-        .commit_all("manual sync", &SignatureSpec::default_for_cli())?
-        .is_some()
-    {
-        committed = true;
-    }
+    repo.commit_all("manual sync", &SignatureSpec::default_for_cli())?;
 
     let outcome = repo.fetch(Some(&token))?;
     let mut applied_remote = false;
@@ -164,7 +157,6 @@ fn sync_profile() -> Result<SyncOutcome> {
         if merge.conflicts.is_empty() {
             apply_merged_profile(&repo, &repo_path, &merge.merged)?;
             repo.commit_all("merge remote changes", &SignatureSpec::default_for_cli())?;
-            committed = true;
             applied_remote = true;
         } else {
             conflicts = merge.conflicts;
@@ -218,13 +210,15 @@ fn sync_profile() -> Result<SyncOutcome> {
         return Ok(SyncOutcome::Conflicts { message, status });
     }
 
+    let remote_before = repo.remote_oid().ok();
     if let Err(error) = repo.push(Some(&token)) {
         state.last_error = Some(format!("{error:#}"));
         save_state_file(&paths, &state)?;
         return Err(error).context("push to remote");
     }
+    let pushed = remote_before != repo.remote_oid().ok();
 
-    let message = if committed {
+    let message = if pushed {
         "Pushed changes to remote".to_string()
     } else if applied_remote {
         "Pulled changes from remote".to_string()
@@ -616,6 +610,58 @@ mod tests {
             read_json(&verify.join("default/core/plugin-configs/plugin-a.json")),
             json!({"value": 2})
         );
+    }
+
+    #[test]
+    fn sync_reports_pushed_when_a_preexisting_local_commit_is_transferred() {
+        let tmp = TempDir::new().unwrap();
+        let _lock = scope::ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let _guard = seed_environment(tmp.path(), &url);
+
+        sync_profile().unwrap();
+
+        let local = GitRepo::open(&scope::profile_dir().unwrap()).unwrap();
+        write_file(
+            &scope::profile_dir()
+                .unwrap()
+                .join("default/core/plugin-configs/plugin-a.json"),
+            &serde_json::to_string_pretty(&json!({"value": 2})).unwrap(),
+        );
+        local.commit_all("pending local commit", &sig()).unwrap();
+
+        let outcome = sync_profile().unwrap();
+        let SyncOutcome::Synced { message, .. } = outcome else {
+            panic!("expected synced outcome, got {outcome:?}");
+        };
+        assert_eq!(
+            message, "Pushed changes to remote",
+            "a pending local commit must be reported as pushed"
+        );
+
+        let verify = tmp.path().join("verify/profile");
+        GitRepo::clone(&url, &verify, None).unwrap();
+        assert_eq!(
+            read_json(&verify.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2}),
+            "the pending commit must reach the origin"
+        );
+    }
+
+    #[test]
+    fn sync_reports_nothing_to_push_when_local_and_remote_are_in_sync() {
+        let tmp = TempDir::new().unwrap();
+        let _lock = scope::ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let _guard = seed_environment(tmp.path(), &url);
+
+        sync_profile().unwrap();
+
+        let outcome = sync_profile().unwrap();
+        let SyncOutcome::Synced { message, .. } = outcome else {
+            panic!("expected synced outcome, got {outcome:?}");
+        };
+        assert_eq!(message, "Nothing to push");
     }
 
     #[test]

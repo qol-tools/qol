@@ -16,7 +16,7 @@ use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
-use super::disk::{apply_disk_outcome, open_disk, start_disk_scan};
+use super::disk::{apply_disk_outcome, disk_view_lines, open_disk, start_disk_scan};
 use super::doctor::{
     apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
     toggle_doctor_detail, DoctorMode,
@@ -498,6 +498,17 @@ fn scroll_cursor_and_total(dash: &mut Dash) -> Option<(&mut usize, usize)> {
             let total = doctor_scroll_len(&dash.doctor);
             Some((&mut dash.doctor_cursor, total))
         }
+        View::Disk => {
+            let total = disk_view_lines(&dash.disk).len();
+            Some((&mut dash.disk_cursor, total))
+        }
+        View::Endpoints => {
+            let total = match &dash.endpoints {
+                EndpointsState::Done(items) => items.len(),
+                EndpointsState::Probing => 0,
+            };
+            Some((&mut dash.endpoints_cursor, total))
+        }
         _ => None,
     }
 }
@@ -717,6 +728,7 @@ pub(super) fn dive_row(dash: &mut Dash) {
 pub(super) fn open_endpoints(dash: &mut Dash) {
     dash.view = View::Endpoints;
     dash.scroll_offset = 0;
+    dash.endpoints_cursor = 0;
 }
 
 pub(super) fn health_state(up: bool) -> Health {

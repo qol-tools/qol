@@ -16,7 +16,8 @@ use crate::dev_server::EndpointStatus;
 use super::filters::{line_matches_filters, LogFilter};
 use super::log_pane::{clamp_offset, dev_log_dir, window_start, LogRing};
 use super::render_util::{
-    accent, list_status, styled_line, view_content, NavigationOverflow, SignBox,
+    accent, cursor_window_start, list_capacity, list_status, styled_line, view_content,
+    NavigationOverflow, SignBox,
 };
 use super::{copy_highlight, spawn_forwarders, Dash, TraceRenderer, View};
 
@@ -459,13 +460,20 @@ pub(super) fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-pub(super) fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) -> NavigationOverflow {
+pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
     };
-    view_content(frame, area, lines);
-    NavigationOverflow::default()
+    let total = lines.len();
+    let height = list_capacity(area.height);
+    let start = cursor_window_start(total, height, dash.endpoints_cursor);
+    view_content(
+        frame,
+        area,
+        lines.into_iter().skip(start).take(height).collect(),
+    );
+    NavigationOverflow::from_window(start, height, total)
 }
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
