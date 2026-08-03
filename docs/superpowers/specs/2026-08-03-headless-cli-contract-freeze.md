@@ -129,7 +129,7 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
 | Command | Owner | Transport | Kind |
 |---|---|---|---|
 | `updates check` | `src/updates` | direct one-shot host execution (network read; no tray needed) | read-only |
-| `updates apply` | `src/updates` | authenticated IPC to an already-running tray (POST `/api/self-update`); refuse when tray down (PROPOSED) | destructive (replaces the running host binary) |
+| `updates apply` | `src/updates` | authenticated IPC to an already-running tray (POST `/api/self-update`); refuse when tray down (PROPOSED); **async job, never awaited in-request** — the handler responds 202 with a job id and the CLI polls to a terminal state (B.6-updates completion protocol) | destructive (replaces the running host binary) |
 
 ## Transport rules
 - **Direct one-shot host execution** applies when the command reads a file the tray
@@ -272,18 +272,32 @@ NOT wrapped. PROPOSED schema for host commands:
 - `ok`: bool. `command`: echoed canonical command path. `result`: command-specific
   object, required when `ok`. `error.class` mirrors the exit code (usage=64, runtime=1,
   refusal=2); `details` optional, JSON-serializable. Parsers MUST tolerate unknown
-  fields: an unrecognized key never fails a parse, and a tool that rewrites a document
-  preserves unknown fields (round-trip) so forward-compatible additions survive
-  untouched. Validation rejects only shape violations of *known* fields — wrong type,
-  or a required key missing; unknown keys are not shape violations. Schema evolution
-  stays additive-only: new fields are optional additions, old clients ignore them,
-  and no existing field's meaning or type changes.
+  fields: an unrecognized key never fails a parse — serde ignores unknown keys
+  unless `#[serde(deny_unknown_fields)]` is set, and no contract type sets it —
+  and a tool that rewrites a document preserves unknown fields (round-trip)
+  wherever the type declares extension storage: `#[serde(default, flatten)]
+  extensions: BTreeMap<String, Value>` on `DoctorReport` and `DoctorCheckResult`
+  (libs/qol-headless/src/doctor/contract.rs:162-164,187-188), and on
+  `DoctorAggregateReport` and `PluginDoctorReport` once the C.2 extension-storage
+  fix lands (contract.rs:137,42). Every doctor contract type therefore both
+  tolerates and preserves unknown fields, so forward-compatible additions survive
+  untouched. Validation rejects only shape violations of *known* fields — wrong
+  type, or a required key missing; unknown keys are not shape violations. Schema
+  evolution stays additive-only: new fields are optional additions, old clients
+  ignore them, and no existing field's meaning or type changes.
 
 ## B.3 Timeout policy
 
-**Rule B3a.** Every command terminates within a defined deadline or exits 1 (runtime)
-with the timeout in `error.details`. Defaults PROPOSED: host commands 30s; doctor
-checks are two-tier:
+**Rule B3a (deadline).** Every command terminates within an absolute wall-clock
+deadline measured from CLI start, or exits 1 (runtime) with the timeout in
+`error.details`. The deadline is enforced at the CLI layer, not by the HTTP
+transport: `with_io_timeout` only sets per-socket read/write timeouts —
+`stream.set_read_timeout(Some(self.io_timeout))` / `set_write_timeout(...)`
+inside `connect()` (libs/qol-runtime/src/local_http.rs:45-57) — so it bounds a
+single TCP op, never a whole request; a stalled request with a slow-but-alive
+peer can outlive any io value. Defaults PROPOSED: one-shot host commands 30s;
+doctor checks are two-tier (both tiers are wall-clock deadlines on the
+executing process):
 - **In-host aggregate runner — `PLUGIN_DOCTOR_TIMEOUT = 5 s`** (existing constant,
   apps/qol-tray/src/doctor/aggregation/plugin_runner.rs:7). The tray invokes plugin
   doctor binaries whose daemons are already running and reachable over warm
@@ -299,6 +313,53 @@ finite timeout catches it. 10 s is sized for cold start and 2× the in-host boun
 is not sized against the observed >25 s (a 10 s deadline still fires on a hang that
 never returns).
 
+**Rule B3c (end-to-end deadline).** One-shot commands observe B3a as a wall-clock
+deadline regardless of transport, lock, or remote-op behavior.
+
+1. **CLI-level timer.** PROPOSED: the command layer (argv parse → exit) runs under
+   a 30s wall-clock timer; expiry exits 1 (runtime) with the timeout in
+   `error.details` (B.2 envelope). The HTTP io bound stays a transport bound:
+   mutating IPC keeps the decision-(a) 30s io at `post_to_daemon`
+   (apps/qol-tray/src/commands/local_http.rs:16-17), read-only GETs keep 5s
+   (`get_from_daemon`, :5-11) — neither is the command deadline.
+
+2. **Bounded lock acquisition.** Lock acquisition is explicitly unbounded today:
+   the cross-process lock blocks on `file.lock()` (flock) with no try-lock, no
+   timeout (libs/qol-profile-sync/src/lock.rs:6-8, 27-29), and the in-process
+   guard blocks until readers drain (apps/qol-tray/src/plugins/config/mod.rs:187-192)
+   — a held lock could silently consume the whole 30s. PROPOSED: `ConfigWriteLock`
+   acquire and the B.4 guard take a 10s acquire timeout; on expiry the command
+   exits 1 (runtime) with `error.class: "runtime"`, `details.reason: "lock busy"`,
+   and performs no write. Hold time stays short (never across network waits,
+   daemon IPC, or UI, B.4).
+
+3. **Async semantics for ops that exceed 30s.**
+   - `task run <action>`: the action's own timeout defaults to 60s
+     (`DEFAULT_ACTION_TIMEOUT_SECONDS`, apps/qol-tray/src/features/task_runner/config.rs:7,
+     15-16, 21-23) — by contract >30s. PROPOSED: POST `/api/task-runner/execute`
+     (features/task_runner/handlers.rs:51) returns a job id; the CLI polls until
+     the action's configured timeout, then B3a failure; each HTTP request stays
+     short, so the io bound never trips on a long action.
+   - `auth login`: exempt from the 30s command deadline — user-driven, with the
+     device-flow session TTL at 900s (`SESSION_TTL`,
+     apps/qol-tray/src/features/github_auth/service.rs:14; evicted in
+     `retain_live_sessions`, service.rs:242-244). The CLI prints
+     `verification_uri` + `user_code` from the tray's session response (PROPOSED
+     new tray route, A.6), then polls `/github-auth/poll/{id}`
+     (features/github_auth/http.rs:24) on its own budget tied to the session TTL,
+     reporting "waiting for user" progress; `Pending`/`Failed` states surface
+     from `poll_session` (service.rs:124-179).
+
+4. **The 30s io bound covers PUT and DELETE.** No PUT/DELETE client helper exists:
+   `apps/qol-tray/src/commands/local_http.rs` has only `get_from_daemon` (GET,
+   :5-11) and `post_to_daemon` (POST, :13-20); the runtime `Method` enum is
+   Get/Post/Put with no Delete (libs/qol-runtime/src/local_http.rs:7-11).
+   PROPOSED: add `put_to_daemon` / `delete_to_daemon` mirroring `post_to_daemon`
+   at the same 30s io timeout (`Method::Delete` added to the runtime enum). First
+   consumers: `theme set` PUT `/theme` | `/theme/accent`
+   (features/plugin_store/server/settings/mod.rs:53-59; theme_handlers.rs:78-79)
+   and `auth logout` DELETE `/api/github-auth` (features/github_auth/http.rs:25).
+
 **Rule B3b.** Doctor checks probing hardware/environment report absence as a
 structured `warn`/`fail` `DoctorCheckResult`, never block. Guest-VM evidence:
 `plugin-bluetooth doctor` hung when BlueZ was absent — the `bluez_available`/
@@ -311,19 +372,44 @@ absence to `warn` ("service unavailable") or `fail` per check semantics.
 Config writes are host-owned; binaries expose `config show/get` only (spec V4
 decision). The host's existing guard is `ProfileConfigWriteGuard`
 (apps/qol-tray/src/plugins/config/mod.rs:146-151), backed by a process-wide
-`static OnceLock<RwLock<()>>` (mod.rs:126-128).
+`static OnceLock<RwLock<()>>` (mod.rs:104).
 
-**Rule B4.** Any command mutating host config takes the write guard for the full
-mutation and marks its invalidation scope (`profile_config_write_guard()` = All,
-`_for_plugin` = Plugins(vec) — mod.rs:169-171, 173-182, 194-201; callers
-mod.rs:448, 562, 936).
+**Rule B4 (layered lock contract).** Config writes take one of two lock layers
+depending on the writing process:
 
-- Scope: whole tray process — the lock is process-local, and standalone binaries
-  never write config, so no cross-process lock exists. Blocking semantics:
-  `RwLock::write()` blocks until readers drain (mod.rs:187-192); no try-lock, no
-  timeout on the guard; never hold it across network waits, daemon IPC, or UI.
-- Non-config host state (plugin store, updates, auth tokens) gets named locks
-  (PROPOSED: one per service, same blocking semantics), never the config guard.
+1. **Tray in-process writes take both layers.** Every mutation inside the tray
+   process takes the process-local `ProfileConfigWriteGuard` for the full
+   mutation and marks its invalidation scope (`profile_config_write_guard()` =
+   All, `_for_plugin` = Plugins(vec) — mod.rs:169-171, 173-182, 194-201;
+   callers mod.rs:448, 562, 936) — AND the cross-process `ConfigWriteLock`
+   (PROPOSED) around the config-store write, so the in-process guard and
+   cross-process lock compose and a one-shot writer can never race the tray.
+2. **Standalone one-shot writes take only the cross-process layer.** When the
+   tray is down, one-shot writers (`theme set`, `mode set` — A transport rules,
+   per-command chosen mechanisms) take the `ConfigWriteLock` around their full
+   read-modify-write and never take the process-local guard, which exists only
+   in the tray process. So: standalone binaries never write config without the
+   cross-process lock, and never while a tray holds the process-local guard.
+
+- **Cross-process lock (PROPOSED).** `ConfigWriteLock` reuses the qol sync
+  `SyncLock` pattern: `SyncLock::acquire` blocks on `file.lock()` (flock), the
+  OS releases it on process exit (libs/qol-profile-sync/src/lock.rs:6-8, 27-29),
+  and both `qol sync` and the tray's sync service already serialize on the same
+  lockfile (tools/qol-cli/src/commands/sync/mod.rs:134;
+  apps/qol-tray/src/features/profile/sync/service.rs:78). Lockfile keyed on the
+  config dir (`<config>/<namespace>/`, apps/qol-tray/src/paths/mod.rs:95-98).
+- **Blocking semantics (kept).** The process-local guard blocks until readers
+  drain — `RwLock::write()` (mod.rs:187-192); no try-lock on the guard; never
+  hold either lock across network waits, daemon IPC, or UI. Hold time stays
+  short.
+- **Bounded acquisition (PROPOSED; ties B.4 to the B.3 deadline).** Lock
+  acquisition is bounded by the B3 end-to-end deadline, not left open-ended:
+  `ConfigWriteLock` acquire and the B.4 guard take a 10 s acquire timeout; on
+  expiry the command exits 1 (runtime) with `error.class: "runtime"`,
+  `details.reason: "lock busy"`, and performs no write (B.3c.2).
+- **Non-config host state** (plugin store, updates, auth tokens) gets named
+  locks (PROPOSED: one per service, same blocking semantics), never the config
+  guard.
 
 ## B.5 Reload behavior
 
@@ -356,19 +442,69 @@ Per class (PROPOSED details):
 | auth logout | `--yes`/TTY | n/a | n/a (token revocation) | n/a — idempotent by design | token revoked before exit 0 |
 | task execution | explicit command | `--dry-run` where task schema allows | n/a | task-defined | completion or B3a failure |
 
+**Rule B6-updates (completion protocol; PROPOSED).** `updates apply` is the one
+destructive command that cannot await in-request. The handler clones the daemon
+EventBus, `tokio::spawn`s `download_and_install`, and returns 202 `ACCEPTED`
+immediately (apps/qol-tray/src/features/plugin_store/server/meta_handlers.rs:105-115);
+on success the flow sends `DaemonEvent::UpdateComplete`
+(apps/qol-tray/src/updates/platform/linux.rs:129), sleeps 500 ms, then **replaces
+its own process** via `Command::new(&current_exe).args(&args).exec()`
+(linux.rs:130-135) — the HTTP server serving the request dies at exec, so an
+awaited response can never be delivered. The tray restarts itself by in-process
+exec (argv preserved); no external supervisor respawns it (linux.rs:134).
+Download is also unbounded network time vs the B.3a 30 s bound. Job protocol
+(PROPOSED), superseding the "completion before exit 0" Wait cell for the updates
+apply row above:
+
+- **Response shape.** POST `/api/self-update` → 202 `{ "job": { "id":
+  "<uuid>", "state": "running|complete|failed", "progress": <0-100|null>,
+  "message": <string|null> } }`. Terminal states mirror the daemon events:
+  `complete` = binary atomically replaced, exec restart imminent
+  (`UpdateComplete`, apps/qol-tray/src/daemon/mod.rs:108; linux.rs:129);
+  `failed` = tray stays running with the error message
+  (`UpdateFailed{message}`, daemon/mod.rs:109; meta_handlers.rs:110). `progress`
+  maps `UpdateProgress{percent}` (daemon/mod.rs:105;
+  apps/qol-tray/src/updates/platform/unix.rs:38). At most one in-flight job: a
+  second POST while `running` returns the existing job (idempotent re-run per
+  B6b) or 409 refusal.
+- **State source.** The EventBus is an in-memory broadcast, capacity 64, with no
+  replay (apps/qol-tray/src/daemon/events.rs:9; late-subscriber test
+  events.rs:60-68) — a poll route cannot replay events. The spawned task must
+  also write terminal state into a server-side per-job status cell that the poll
+  route reads (PROPOSED).
+- **Poll endpoint.** PROPOSED new `GET /api/self-update/status` (alongside
+  `/self-update`, meta_handlers.rs:21), returning the same job shape; every poll
+  request uses the 30 s mutating-IPC io timeout (A transport rules).
+- **CLI poll budget.** PROPOSED 5 min wall clock: B.3a's 30 s applies per poll
+  request, not to job duration. On budget exhaustion exit 1 with the timeout in
+  `error.details` (B3a); the update continues in the tray. Connection errors
+  while `running` are retried (the old server dies at exec); once `complete` was
+  observed, subsequent socket death is the expected restart — exit 0.
+- **B.5 reload, self-replacing binary.** No old process survives to reload plugin
+  state; reload = atomic in-place replacement (`atomic_replace`, linux.rs:38-60,
+  applied at 118-126) + exec restart (linux.rs:134). "Reload before exit 0"
+  therefore means: terminal `complete` observed. The new process re-boots plugin
+  state itself; PROPOSED optional follow-up: the CLI polls `/version`
+  (meta_handlers.rs:31) within the same budget so exit 0 can additionally mean
+  "new tray serving" — the completion contract remains `complete`.
+
 ## B.7 Decisions
 
 1. **B1** — Usage errors exit 64 on every binary; qol-tray `Invocation::Invalid`
    migrates 2 → 64 in Phase 1; 0/1/2 retain success/runtime/failure-refusal.
 2. **B2** — All `--json` host output uses `{ok, command, result|error{class,message,details}}`;
    doctor reports stay unwrapped.
-3. **B3** — Every command has a deadline (30s host / 5s doctor, PROPOSED); doctor
-   probes report absent hardware/environment as structured warn/fail, never hang.
+3. **B3** — Every command has an absolute wall-clock deadline (host 30s, CLI-layer
+   enforced); doctor deadlines are two-tier (in-host 5s, gate 10s); bounded lock
+   acquisition (10s); async semantics for task run and auth login; PUT/DELETE
+   share the 30s io bound. Doctor probes report absent hardware/environment as
+   structured warn/fail, never hang.
 4. **B4** — Config mutations take `profile_config_write_guard` for the whole
    mutation; blocking RwLock; never held across long I/O; named locks for other state.
 5. **B5** — Mutating commands reload (and notify) before reporting success.
 6. **B6** — Destructive commands are confirm-gated, idempotent, preview-able, backup +
-   rollback where the class table says so, and always wait for completion.## C. Executable audit (contract gate)
+   rollback where the class table says so, and always wait for completion — except
+   updates apply, which is async by design (B.6-updates job protocol).## C. Executable audit (contract gate)
 
 Status: section C of the contract-freeze spec. Everything in C.2–C.6 beyond the existing
 `audit.sh` and the in-tree bluetooth action test is **PROPOSED**: roadmap Phase 3 ("Grow
@@ -443,10 +579,26 @@ Gate mapping — validator per layer-1 audit.sh row:
 | `app` — `check_bin` (audit.sh:86-87) | `qol-tray` → (c); `qol-tray-doctor` → (c); `qol-tray-install` → (a); `qol-tray-migrate` → (a) | (b) |
 
 PROPOSED (open, fixed in `tools/qol-contract-gate`): strictness follows serde
-semantics — `DoctorReport` flattens unknown fields into `extensions`
-(contract.rs:163-164), so validator (a) tolerates unknown fields;
-`DoctorAggregateReport` / `PluginDoctorReport` have no flatten (contract.rs:137,42),
-so validator (c) rejects unknown fields — schema evolution stays additive-only (B.2).
+semantics, with unknown-field handling made uniform via extension storage.
+serde's default for a struct without `flatten` is to *ignore* unknown fields on
+read — rejecting them would require `#[serde(deny_unknown_fields)]`, which no
+doctor contract type sets (verified in libs/qol-headless/src/doctor/contract.rs) —
+but ignored fields are dropped on re-serialize, which breaks B.2's round-trip
+preservation. Fix: give the aggregate types the extension storage they currently
+lack, matching the existing `DoctorReport` / `DoctorCheckResult` pattern
+(`#[serde(default, flatten)] pub extensions: BTreeMap<String, Value>`,
+contract.rs:162-164 and 187-188):
+- `DoctorAggregateReport` — add `#[serde(default, flatten)] pub extensions:
+  BTreeMap<String, Value>` after `plugins` (contract.rs:137-141);
+- `PluginDoctorReport` — add `#[serde(default, flatten)] pub extensions:
+  BTreeMap<String, Value>` after `report` (contract.rs:42-48).
+
+With that, validator (c) matches validator (a): unknown top-level keys are
+collected into `extensions` on read and re-emitted on write — tolerate *and*
+preserve, per B.2. `#[serde(default)]` keeps documents that omit `extensions`
+valid, so the shapes in the validator table are unchanged for existing
+producers; the gate's aggregate validator no longer rejects unknown fields, and
+schema evolution stays additive-only (B.2).
 A validator mismatch (right shape family, wrong shape; or unparseable JSON) is
 classified `PRODUCT_REGRESSION` under C.4 — a wrong-shape report is a product
 defect, not an environment issue.
@@ -494,10 +646,66 @@ defect, not an environment issue.
   2. read-only commands execute successfully: exit 0 and, run with `--json`, print exactly
      one valid B.2 envelope with `ok: true` (schema `{ok, command, result|error{class,
      message, details}}`; `error.class` mirrors the exit code, B.2);
-  3. mutating commands pass the confirmation gate: in non-TTY, without `--yes`, they refuse
-     with rc=2 and a structured refusal (B.1 reserves rc=2 for failure/refusal; the `--json`
-     refusal is the B.2 envelope with `error.class: "refusal"`); with `--yes`, they execute
-     to completion (B.5 reload before exit 0) or return the B.6 preview instead of executing.
+  3. mutating commands pass the confirmation gate without ever mutating a real host:
+     - non-TTY without `--yes` → rc=2 structured refusal (B.1; `--json` refusal =
+       B.2 envelope, `error.class: "refusal"`) — the only mutating probe ordinary
+       CI runs.
+     - with `--yes --dry-run` → the B.6 preview (plugin remove `plugins list` +
+       `--dry-run`; profile import: import diff; updates apply: `updates list`
+       staging; task run: `--dry-run`) — never execution; classes with no B.6
+       preview (auth logout) execute only in the guest.
+     - with `--yes` (no `--dry-run`) → execute to completion (B.5 reload before
+       exit 0) ONLY in a disposable guest under the Mutation gate fixtures rule.
+
+### Mutation gate fixtures (PROPOSED)
+
+**Rule.** Full `--yes` execution of a mutating command runs only inside a
+disposable guest (qol-dev-environments) with isolated fixtures; the gate never
+runs mutating `--yes` against a real host — on host and ordinary CI the only
+mutating probes are refusal and `--dry-run` preview. Required fixtures:
+
+1. **Config-root override.** `QOL_TRAY_TEST_PATH_ROOT` redirects the config,
+   data, and runtime dirs under `<root>/config|data/<namespace>` (paths/mod.rs:
+   87-90, 100-103, 254-259) but is compiled out of release builds
+   (paths/mod.rs:11-12, 65-83). PROPOSED: promote it to release builds so guest
+   binaries honor it.
+2. **Fake update server.** `QOL_TRAY_DEV_UPDATE_URL` (dev feature only,
+   updates/platform/unix.rs:7-14) replaces the asset download URL and skips
+   the release-integrity fetch (platform/linux.rs:71-72, 92-100, 104);
+   `check_for_updates` still hardcodes the GitHub releases URL
+   (updates/mod.rs:25-27; PROPOSED override) and the extracted binary still
+   passes `verify_host_update` with `<dev-override>` (updates/mod.rs:68, 84) —
+   the fake artifact must be a real bundle (tar.gz + valid build identity).
+3. **Disposable plugin store staging dir.** Staging/backup dirs derive from
+   the plugins dir (`install_staging_dir`/`update_staging_dir`/
+   `update_backup_dir`, installer/operations.rs:6-7, 116, 146, 155); uninstall
+   removes `plugins_dir/<id>` (operations.rs:91-92) — a disposable plugins dir
+   (paths/mod.rs:147-149, under the config root) isolates remove/install/
+   update. Sources default to `qol-tools/qol` (source.rs:68-76) with only a
+   `#[cfg(test)]` override seam (source.rs:84-117); PROPOSED release override,
+   else install/update stay preview-only.
+4. **Safe task fixture.** `task run` executes `ActionConfig{command, timeout,
+   cwd}` (features/task_runner/config.rs:8-27) via `CommandTask`
+   (execution/mod.rs:66); config at `task_runner_config_path()`
+   (paths/mod.rs:200-202, under the config root). Fixture: an action whose
+   command is `true` — never an arbitrary configured command.
+
+Per destructive class, the guest fixture must isolate:
+
+| Class | Isolated by |
+|---|---|
+| plugin-store remove | disposable plugins dir (config-root override) |
+| profile import | disposable config root (import replaces plugin configs + lock, core/import.rs:8, 18-20, 37) |
+| updates apply | fake artifact over `QOL_TRAY_DEV_UPDATE_URL`; `atomic_replace` swaps only the guest binary (platform/linux.rs:38, 60-63) |
+| auth logout | fake token store — `.github-auth.json` under the config root (paths/mod.rs:212-214; storage.rs:44, 53); delete-only, no network |
+
+Destructive commands route through authenticated IPC to a running tray (A) —
+the guest fixture runs a tray against the disposable root; PROPOSED: route the
+HTTP token through the override too (paths/mod.rs:216-218 → libs/qol-config/
+src/lib.rs:45, not root-overridden). State-mutating commands without a B.6
+preview (theme set, mode set, auth login, profile backup, launcher-apps sync)
+execute in the guest under the same fixtures; auth login needs a mock OAuth
+endpoint (PROPOSED; only the client-id env exists, github_auth/service.rs:41).
 - **A command that appears in help but fails condition 2 or 3 is a regression**, not
   coverage — the failure mode the help-only rule masked. The gate fails on: a `COVERED`
   command that disappears from help, errors at runtime, or skips its gate; or a command in
@@ -527,17 +735,65 @@ today only forwards to qol-tray-doctor (tools/qol-cli/src/commands/doctor.rs:8-2
 
 ## C.4 Environment classification
 
-On failure, classify by stderr signature before assigning the verdict. Classification only
-changes *how* a failure is reported — the timeout rule has no exception:
+Doctor failures are encoded in the JSON report on stdout — one `DoctorCheckResult`
+per check (`id, status, message, fix?, details?`,
+libs/qol-headless/src/doctor/contract.rs:179-186) — not on stderr; the exit code
+is the aggregate status (Ok→0, Warn→1, Fail→2, render.rs:48-54).
+Stderr-signature classification is unreliable: a well-formed run can emit
+D-Bus/BlueZ text on stderr while the report's `status`/`message` carry the real
+outcome, and a crashing probe is already a structured `DoctorCheckResult::fail`
+(check.rs:34-38), never a stderr blob.
 
-| Signature | Class | Gate verdict |
+**Rule C4a (machine-readable env reporting; PROPOSED).** Env/hardware absence is
+reported *inside the check result* — a probe that cannot reach its environment
+returns `status: warn|fail` plus a machine-readable marker — and the gate
+classifies from the parsed report. Conventions (PROPOSED; either suffices, both
+recommended):
+- **check-id convention** — env-absence probes are named `{env}_available`:
+  `bluez_available` (plugins/bluetooth/src/cli.rs:284), and `pkexec_available`,
+  which already warns on absence (plugins/controllers/src/cli.rs:80,128-130).
+- **`details.env` key** — absence token when `status != ok` (`details` is
+  free-form `Option<Value>`, contract.rs:186; no schema change). Example
+  (PROPOSED): `{"id":"bluez_available","status":"fail","details":{"env":"no-bluez"}}`.
+
+Required markers per probe class (PROPOSED): no D-Bus → `no-dbus` (bluetooth
+probes reach BlueZ over D-Bus with no deadline,
+plugins/bluetooth/src/platform/linux.rs:369-378); no BlueZ → `no-bluez` on
+`bluez_available` (cli.rs:284,319); no display → `no-display` (GPUI checks; no
+in-tree `*_available` display probe — PROPOSED new). Stderr is demoted to a
+fallback *hint*: it may annotate a recorded failure but never changes a verdict —
+a stderr line about `org.bluez` neither classifies nor excuses a hang.
+
+**Rule C4b (valid reports never block).** A VALID report — schema-conformant
+against its C.2 validator, produced within `DOCTOR_TIMEOUT` — passes regardless
+of status: `warn`/`fail` are healthy doctor outcomes and exit 0/1/2 are all
+valid (0 healthy, 1 warnings, 2 failures — tools/qol-cli/src/commands/doctor.rs:25;
+render.rs:48-54). Only three conditions block: shape violation / unparseable JSON
+/ validator mismatch — `PRODUCT_REGRESSION` (C.2); timeout or hang — no output
+within `DOCTOR_TIMEOUT` — FAIL, no env exception; exit code outside 0/1/2 —
+`PRODUCT_REGRESSION`. Env-absence markers in a valid report are recorded
+(`ENV_MISSING`) for CI annotations — never a block.
+
+**Rule C4c (GUEST_RESTRICTION unchanged).** The cgroup signature "current process
+is outside the configured cgroup delegation" (libs/qol-process/src/platform/linux/containment/mod.rs:1227)
+stays `GUEST_RESTRICTION` — SKIP, recorded, accepted only with `--guest`. It is a
+host-level failure of the runner invocation, not a check: the signature MUST be
+asserted on the stderr of the gate's spawned invocation only; a check whose
+`message` happens to contain that text is a report-level outcome, never a guest
+restriction.
+
+### Verdicts
+
+| Condition | Class | Gate verdict |
 |---|---|---|
-| "current process is outside the configured cgroup delegation" (libs/qol-process/src/platform/linux/containment/mod.rs:1227) | `GUEST_RESTRICTION` | SKIP, recorded; accepted only with `--guest` |
-| `org.bluez` / D-Bus absent (bluetooth case) | `ENV_MISSING` | FAIL with structured detail `env: no BlueZ` — but only if the binary *produced output*; a silent hang is still FAIL |
-| any other non-zero exit / bad JSON / timeout with output | `PRODUCT_REGRESSION` | FAIL (blocks) |
+| valid report, any status mix (exit 0/1/2) | healthy doctor outcome | PASS; `details.env` markers recorded as `ENV_MISSING` |
+| GUEST_RESTRICTION signature on the spawned invocation's stderr | `GUEST_RESTRICTION` | SKIP, recorded; only with `--guest` |
+| timeout / hang (no output within `DOCTOR_TIMEOUT`) | `TIMEOUT` | FAIL (blocks); no env exception |
+| shape violation / unparseable JSON / exit outside 0/1/2 | `PRODUCT_REGRESSION` | FAIL (blocks) |
 
-Contract: a doctor command must terminate and report its environment as a structured
-warning or failure; "no output within `DOCTOR_TIMEOUT`" has no env exception.
+Contract (unchanged): a doctor command must terminate and report its environment
+as a structured warning or failure; "no output within `DOCTOR_TIMEOUT`" has no
+env exception.
 
 ## C.5 Gate exit codes
 
@@ -545,7 +801,7 @@ warning or failure; "no output within `DOCTOR_TIMEOUT`" has no env exception.
 |---|---|
 | 0 | all layers pass (SKIPs recorded) |
 | 1 | ≥1 `PRODUCT_REGRESSION` or unclassified failure |
-| 2 | ≥1 failure, all classified `ENV_MISSING` / `GUEST_RESTRICTION` — never silent; CI policy decides (guest runs may treat 2 as pass-with-annotations, host runs may not) |
+| 2 | ≥1 `GUEST_RESTRICTION` skip recorded (env-absence in valid reports never blocks, C.4b) — never silent; CI policy decides (guest runs may treat 2 as pass-with-annotations, host runs may not) |
 | 64 | gate usage error (mirrors `EXIT_USAGE`, libs/qol-headless/src/lib.rs:16) |
 
 ## C.6 CI wiring (PROPOSED)
@@ -688,7 +944,9 @@ Per-feature verdicts (PROPOSED, Phase 1):
   command `record` (cli.rs:25) → `recording::toggle_recording` (cli.rs:69) — "When
   idle, opens region selection and starts capture" (cli.rs:60), exit 0. Side-effecting
   but non-blocking; the record detail already states the side effect (cli.rs:60), so
-  only the matrix declaration is missing (D.2).
+  only the matrix declaration is missing (D.2). **Bare invocation is NOT
+  automation-safe for qol-shot** — it starts a capture; scripts must invoke an
+  explicit verb (`record` with explicit arguments, or `screenshot`).
 - **removeapp — change bare to `help`.** Bare → default command `open` (cli/mod.rs:30)
   → `open_command` (cli/mod.rs:65): forwards to a running daemon (`send_action`,
   cli/mod.rs:74), else `daemon::run()` (cli/mod.rs:77) → `ui::run::run()`
@@ -704,7 +962,8 @@ Per-feature verdicts (PROPOSED, Phase 1):
   `daemon::run_from_env()` (:15), else `platform::open_settings()` (:18), which opens
   the settings URL (platform/mod.rs:55-58). Side-effecting (opens a settings page) but
   non-blocking; the `launch` about text already documents it (cli.rs:53); only the
-  matrix declaration is missing (D.2).
+  matrix declaration is missing (D.2). **Bare invocation is NOT automation-safe for
+  lights** — it opens the settings page; scripts must invoke an explicit verb.
 
 **Known gap.** plugin-ide-checkout violates D4a/D4b: `task-runner` with no args starts the
 daemon unconditionally (daemon/mod.rs:14-22) and blocks the session. **PROPOSED fix
@@ -898,30 +1157,51 @@ mislabeled path is a false repro (qol-dev-environments rule). Decision lines
    parsers tolerate unknown fields (ignore on read, preserve on rewrite),
    validation rejects only known-field shape violations; evolution stays
    additive-only.
-4. **B3** — Every command has a deadline (host 30 s); doctor deadlines are
-   two-tier: in-host aggregate `PLUGIN_DOCTOR_TIMEOUT=5 s` (warm daemons),
-   standalone gate `DOCTOR_TIMEOUT=10 s` (cold binaries); a doctor command
-   with no output within the timeout is a FAILURE with no env exception;
-   unavailable hardware/environment is a structured warn/fail, never a hang.
-5. **B4** — Config mutations take `profile_config_write_guard` for the whole
-   mutation (blocking RwLock, never across long I/O); named locks for
-   non-config state.
+4. **B3** — Every command has an absolute wall-clock deadline enforced at the
+   CLI layer (host 30 s; HTTP io timeouts are transport bounds, not command
+   deadlines); doctor deadlines are two-tier: in-host aggregate
+   `PLUGIN_DOCTOR_TIMEOUT=5 s` (warm daemons), standalone gate
+   `DOCTOR_TIMEOUT=10 s` (cold binaries); a doctor command with no output
+   within the timeout is a FAILURE with no env exception; unavailable
+   hardware/environment is a structured warn/fail, never a hang. Lock
+   acquisition is bounded (10 s → `details.reason: "lock busy"`). Ops that
+   exceed 30 s are async: task run returns a job id the CLI polls (60 s
+   action timeout); auth login is exempt (900 s session TTL, "waiting for
+   user" polling). The 30 s mutating-IPC io bound extends to PUT/DELETE via
+   new `put_to_daemon`/`delete_to_daemon` helpers.
+5. **B4** — Layered lock contract: tray in-process writes take BOTH the
+   process-local `profile_config_write_guard` AND the cross-process
+   `ConfigWriteLock`; standalone one-shot writes take only the cross-process
+   lock and never while a tray holds the process-local guard; blocking
+   semantics with bounded acquisition (10 s); named locks for non-config
+   state.
 6. **B5** — Mutating commands reload and notify before exit 0; `config
-   show/get` never reloads.
+   show/get` never reloads. For a self-replacing binary (updates apply),
+   reload means the job reached terminal `complete` (B.6-updates).
 7. **B6** — Destructive commands: `--yes`/TTY confirm, idempotent,
    preview-able, backup + rollback per the class table, wait for completion.
+   `updates apply` is async by design (202 + job id + `GET
+   /api/self-update/status` poll; 5 min CLI budget; the tray execs over
+   itself, so no awaited response is possible).
 8. **C** — Three-layer gate (structural audit → executable smoke → manifest
    action→argv) + per-command host-feature ledger; `tools/qol-contract-gate`
    (Rust); doctor reports validated per unit kind — plugin report (a),
    consumer report (b), aggregate report (c) — never the aggregate shape for
-   plugins; env classification with the timeout rule having no exception;
-   host-feature `COVERED` requires help + read-only execution probes +
-   mutating confirmation gate, never help alone.
+   plugins; aggregate types gain `#[serde(default, flatten)] extensions` so
+   validator (c) tolerates and preserves unknown fields like validator (a);
+   env classification is machine-readable inside the report
+   (`{env}_available` check ids / `details.env` markers) and valid reports
+   never block regardless of status — only shape violations, timeouts, and
+   exit codes outside 0/1/2 block; host-feature `COVERED` requires help +
+   read-only execution probes + mutating confirmation gate (refusal and
+   `--dry-run` preview in ordinary CI; full `--yes` execution only in
+   disposable guests with isolated fixtures), never help alone.
 9. **D** — Every daemon honors one of the two env-gate mechanisms; bare
    invocation never daemonizes or blocks (action-only exemption D4b-1
-   declared per feature); task-runner gap fixed in Phase 0.5 and the gate
-   reports it as FAIL until then; silent exit-0 rows converge on rc=1 +
-   structured stderr.
+   declared per feature — qol-shot `record` and lights `open_settings` are
+   exempt but explicitly NOT automation-safe bare; removeapp bare → help);
+   task-runner gap fixed in Phase 0.5 and the gate reports it as FAIL until
+   then; silent exit-0 rows converge on rc=1 + structured stderr.
 10. **E** — Inventory is the single source of truth; every count names its
     category and verification method; guest-verification statements name the
     13-unit subset on Linux.
