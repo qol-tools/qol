@@ -190,42 +190,6 @@ mod tests {
 
     const PLUGIN_ID: &str = "plugin-foo";
 
-    fn manager_with_running_daemon(root: &std::path::Path) -> PluginManager {
-        use std::os::unix::fs::PermissionsExt;
-        let plugin_dir = root.join(PLUGIN_ID);
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        let script = plugin_dir.join("daemon.sh");
-        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let manifest: PluginManifest = toml::from_str(
-            r#"
-[plugin]
-id = "plugin-foo"
-name = "Foo"
-description = ""
-version = "1.0.0"
-
-[menu]
-label = "Foo"
-items = []
-
-[daemon]
-enabled = true
-command = "daemon.sh"
-"#,
-        )
-        .unwrap();
-
-        let mut manager = PluginManager::new();
-        manager.plugins.insert(
-            PluginId::new(PLUGIN_ID),
-            Plugin::new(PluginId::new(PLUGIN_ID), manifest, plugin_dir),
-        );
-        manager.ensure_plugin_daemon_running(PLUGIN_ID).unwrap();
-        manager
-    }
-
     fn write_daemon_plugin(
         plugins_dir: &std::path::Path,
         plugin_id: &str,
@@ -274,7 +238,13 @@ command = "daemon"
         let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        let mut manager = manager_with_running_daemon(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let plugin_dir = write_daemon_plugin(&plugins_dir, PLUGIN_ID, "1.0.0");
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        crate::plugins::registry::record_release_install(&config_dir, PLUGIN_ID, plugin_dir)
+            .unwrap();
+        let mut manager = PluginManager::new();
+        insert_loaded_plugin(&mut manager, PLUGIN_ID, &plugins_dir.join(PLUGIN_ID));
         let old_pid = manager
             .get(PLUGIN_ID)
             .unwrap()

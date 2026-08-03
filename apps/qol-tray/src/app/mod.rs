@@ -453,12 +453,6 @@ async fn async_init_inner(
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
-    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
-        tokio::spawn(run_post_auth_migration(
-            Arc::clone(&plugin_manager),
-            config_dir,
-        ));
-    }
     {
         let startup_info = build_startup_info(&plugin_manager);
         qol_tray::logging::file_logger::log_startup(&startup_info);
@@ -495,7 +489,17 @@ async fn async_init_inner(
     let generation_restart = shadow_generation || rolling_restart;
     let launch_pull_factory = if !shadow_generation && !rolling_restart {
         let sync_for_pull = Arc::clone(&sync_service);
-        Some(move || tokio::spawn(async move { sync_for_pull.pull_on_launch().await }))
+        let config_dir = qol_tray::paths::shared_config_dir().ok();
+        Some(move || {
+            let sync = Arc::clone(&sync_for_pull);
+            let cd = config_dir.clone();
+            tokio::spawn(async move {
+                if let Some(dir) = cd {
+                    run_post_auth_migration_step(&dir).await;
+                }
+                sync.pull_on_launch().await
+            })
+        })
     } else {
         None
     };
@@ -659,13 +663,10 @@ async fn reconcile_after_launch_pull(
     }
 }
 
-async fn run_post_auth_migration(
-    plugin_manager: Arc<Mutex<PluginManager>>,
-    config_dir: std::path::PathBuf,
-) {
+async fn run_post_auth_migration_step(config_dir: &std::path::Path) {
     let started = std::time::Instant::now();
     trace_post_auth_migration("start", "running", 0, "");
-    match qol_tray::migrations_startup::run_post_auth_if_authed(&config_dir).await {
+    match qol_tray::migrations_startup::run_post_auth_if_authed(config_dir).await {
         Ok(true) => {
             trace_post_auth_migration(
                 "finish",
@@ -673,19 +674,8 @@ async fn run_post_auth_migration(
                 started.elapsed().as_millis() as u64,
                 "",
             );
-            materialize_installed_runtime_configs();
-            let _guard = qol_tray::plugins::config::profile_config_write_guard();
-            match plugin_manager.lock() {
-                Ok(mut manager) => {
-                    if let Err(error) = manager.reconcile_profile_generation() {
-                        log::error!(
-                            "Failed to reconcile plugin state after post-auth migration: {error:#}"
-                        );
-                    }
-                }
-                Err(error) => {
-                    log::error!("Plugin manager mutex poisoned after post-auth migration: {error}");
-                }
+            {
+                let _guard = qol_tray::plugins::config::profile_config_write_guard();
             }
         }
         Ok(false) => {
@@ -702,7 +692,7 @@ async fn run_post_auth_migration(
                 "finish",
                 "failed",
                 started.elapsed().as_millis() as u64,
-                &format!("{error:#}"),
+                "network error",
             );
         }
     }

@@ -81,6 +81,7 @@ fn promotion_scope_from_files(staging: &Path, files: &[PathBuf]) -> PromotionSco
         }
     }
     plugin_ids.sort();
+    plugin_ids.dedup();
     PromotionScope::Plugins(plugin_ids)
 }
 

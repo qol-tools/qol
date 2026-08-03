@@ -7,11 +7,10 @@ pub async fn run_post_auth_if_authed(config_dir: &Path) -> anyhow::Result<bool> 
         log::info!("qol-migrations[post-auth]: skipped (no github token stored)");
         return Ok(false);
     };
-    let http = reqwest::Client::new();
     let ctx = qol_migrations::MigrationContext {
         config_dir,
         github_token: Some(&token),
-        http: Some(&http),
+        http: None,
         host_version: env!("CARGO_PKG_VERSION"),
     };
     let reports = qol_migrations::run_post_auth(&ctx).await?;

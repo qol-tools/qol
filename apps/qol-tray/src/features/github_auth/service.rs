@@ -303,8 +303,19 @@ async fn run_post_auth_migrations() {
             return;
         }
     };
-    if let Err(error) = crate::migrations_startup::run_post_auth_if_authed(&config_dir).await {
-        log::error!("post-auth migrations failed after credential store: {error:#}");
+    match crate::migrations_startup::run_post_auth_if_authed(&config_dir).await {
+        Ok(true) => {
+            log::info!(
+                "post-auth migrations applied, bumping profile generation for supervisor reconcile"
+            );
+            {
+                let _guard = crate::plugins::config::profile_config_write_guard();
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            log::error!("post-auth migrations failed after credential store: {error:#}");
+        }
     }
 }
 
