@@ -471,6 +471,51 @@ fn copy_strategy(dash: &Dash) -> Option<CopyStrategy> {
     }
 }
 
+enum ScrollDirection {
+    Up,
+    Down,
+}
+
+fn apply_scroll(dash: &mut Dash, dir: ScrollDirection) {
+    match scroll_cursor_and_total(dash) {
+        Some((cursor, total)) => move_cursor(cursor, total, dir),
+        None => move_stream(&mut dash.scroll_offset, dir),
+    }
+}
+
+fn scroll_cursor_and_total(dash: &mut Dash) -> Option<(&mut usize, usize)> {
+    match dash.view {
+        View::Dashboard => Some((&mut dash.cursor, ROWS.len())),
+        View::Emu => {
+            let total = emu_env_count(dash) + dash.emu_candidates.len();
+            Some((&mut dash.emu_cursor, total))
+        }
+        View::Plugins => {
+            let total = plugin_row_count(dash);
+            Some((&mut dash.plugin_cursor, total))
+        }
+        View::Doctor => {
+            let total = doctor_scroll_len(&dash.doctor);
+            Some((&mut dash.doctor_cursor, total))
+        }
+        _ => None,
+    }
+}
+
+fn move_cursor(cursor: &mut usize, total: usize, dir: ScrollDirection) {
+    match dir {
+        ScrollDirection::Up => *cursor = cursor.saturating_sub(1),
+        ScrollDirection::Down => *cursor = (*cursor + 1).min(total.saturating_sub(1)),
+    }
+}
+
+fn move_stream(offset: &mut usize, dir: ScrollDirection) {
+    match dir {
+        ScrollDirection::Up => *offset = offset.saturating_add(1),
+        ScrollDirection::Down => *offset = offset.saturating_sub(1),
+    }
+}
+
 pub(super) fn strip_ansi(raw: &str) -> String {
     use ansi_to_tui::IntoText;
     let Ok(text) = raw.into_text() else {
@@ -555,33 +600,8 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             dash.scroll_offset = 0;
             dash.close_filters();
         }
-        Action::ScrollUp => match dash.view {
-            View::Dashboard => dash.cursor = dash.cursor.saturating_sub(1),
-            View::Emu => dash.emu_cursor = dash.emu_cursor.saturating_sub(1),
-            View::Plugins => dash.plugin_cursor = dash.plugin_cursor.saturating_sub(1),
-            View::Doctor => dash.doctor_cursor = dash.doctor_cursor.saturating_sub(1),
-            View::Logs | View::Trace | View::Endpoints | View::EmuDetail | View::Disk => {
-                dash.scroll_offset = dash.scroll_offset.saturating_add(1)
-            }
-        },
-        Action::ScrollDown => match dash.view {
-            View::Dashboard => dash.cursor = (dash.cursor + 1).min(ROWS.len() - 1),
-            View::Emu => {
-                let total = emu_env_count(dash) + dash.emu_candidates.len();
-                dash.emu_cursor = (dash.emu_cursor + 1).min(total.saturating_sub(1));
-            }
-            View::Plugins => {
-                let total = plugin_row_count(dash);
-                dash.plugin_cursor = (dash.plugin_cursor + 1).min(total.saturating_sub(1));
-            }
-            View::Doctor => {
-                let total = doctor_scroll_len(&dash.doctor);
-                dash.doctor_cursor = (dash.doctor_cursor + 1).min(total.saturating_sub(1));
-            }
-            View::Logs | View::Trace | View::Endpoints | View::EmuDetail | View::Disk => {
-                dash.scroll_offset = dash.scroll_offset.saturating_sub(1)
-            }
-        },
+        Action::ScrollUp => apply_scroll(dash, ScrollDirection::Up),
+        Action::ScrollDown => apply_scroll(dash, ScrollDirection::Down),
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
         Action::PageDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(page),
         Action::Follow => dash.scroll_offset = 0,
