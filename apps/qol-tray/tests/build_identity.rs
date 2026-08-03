@@ -102,6 +102,9 @@ fn every_deployable_binary_embeds_its_typed_identity() {
     if cfg!(feature = "dev") {
         expected_features.push("dev".to_string());
     }
+    if cfg!(feature = "embedded-ui") {
+        expected_features.push("embedded-ui".to_string());
+    }
     if cfg!(feature = "linux_evdev") {
         expected_features.push("linux_evdev".to_string());
     }
