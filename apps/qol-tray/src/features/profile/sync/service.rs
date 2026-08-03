@@ -426,7 +426,10 @@ impl SyncService {
         .context("join sync push task")?;
         let output = match pushed {
             Ok(value) => value,
-            Err(error) => return self.persisted_error(error, Some(&target)),
+            Err(error) => {
+                trace_profile_sync_push("rejected", false, false, None);
+                return self.persisted_error(error, Some(&target));
+            }
         };
         let message = if !output.conflicts.is_empty() {
             format!("{} setting(s) need review", output.conflicts.len())
@@ -452,9 +455,11 @@ impl SyncService {
             state.conflicts = output.conflicts;
             state.last_error = None;
         }
+        let head = output.head.clone();
         state.head_sha = output.head;
         state.last_sync_at = Some(now_rfc3339());
         save_state_file(&sync_paths()?, &state)?;
+        trace_profile_sync_push("accepted", output.pushed, true, head.as_deref());
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -766,6 +771,22 @@ fn trace_profile_sync_apply(operation: &str, outcome: &str, generation: u64) {
     );
     #[cfg(not(debug_assertions))]
     let _ = (operation, outcome, generation);
+}
+
+fn trace_profile_sync_push(
+    outcome: &str,
+    transferred: bool,
+    head_persisted: bool,
+    head: Option<&str>,
+) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PROFILE_SYNC_PUSH",
+        "outcome={outcome} transferred={transferred} head_persisted={head_persisted} head={}",
+        head.unwrap_or("-")
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (outcome, transferred, head_persisted, head);
 }
 
 fn create_staging_dir(profile_dir: &Path) -> Result<PathBuf> {
