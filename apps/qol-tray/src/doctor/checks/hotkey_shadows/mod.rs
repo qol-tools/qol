@@ -3,7 +3,7 @@ use super::super::diagnosis::FixAction;
 use super::super::framework::{
     CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext, DoctorIssue, Severity,
 };
-use crate::hotkeys::{HotkeyBinding, HotkeyManager};
+use crate::hotkeys::{HotkeyBinding, HotkeyManager, RegistrationError};
 use std::collections::BTreeMap;
 
 mod platform;
@@ -29,7 +29,11 @@ impl DoctorCheck for HotkeyShadowsCheck {
         }
 
         let qol_index = build_qol_index(&bindings);
-        let shadows = platform::collect_shadows(&qol_index);
+        let mut shadows = platform::collect_shadows(&qol_index);
+        shadows.extend(registration_failure_shadows(
+            &qol_index,
+            &crate::hotkeys::get_registration_errors(),
+        ));
         let report = diagnose(shadows);
         match crate::hotkeys::takeover::restart_advice() {
             None => report,
@@ -64,25 +68,36 @@ pub(crate) struct DetectedShadow {
 pub(crate) enum ShadowKind {
     Fixable(FixAction),
     Reserved { hint: String },
+    RegistrationFailure { hint: String },
 }
 
 fn diagnose(shadows: Vec<DetectedShadow>) -> CheckReport {
     if shadows.is_empty() {
         return CheckReport::ok("no DE keybinding conflicts detected".to_string());
     }
-    let (fixable, reserved): (Vec<_>, Vec<_>) = shadows
+    let (fixable, others): (Vec<_>, Vec<_>) = shadows
         .into_iter()
         .partition(|shadow| matches!(shadow.kind, ShadowKind::Fixable(_)));
+    let (reserved, registration_failures): (Vec<_>, Vec<_>) = others
+        .into_iter()
+        .partition(|shadow| matches!(shadow.kind, ShadowKind::Reserved { .. }));
 
+    if fixable.is_empty() && reserved.is_empty() {
+        return registration_failure_report(&registration_failures);
+    }
     if fixable.is_empty() {
-        return CheckReport::error(format_reserved_message(&reserved), ID);
+        let mut report = CheckReport::error(format_reserved_message(&reserved), ID);
+        if !registration_failures.is_empty() {
+            report = append_registration_failures(report, &registration_failures);
+        }
+        return report;
     }
 
     let fixes: Vec<FixAction> = fixable
         .iter()
         .filter_map(|shadow| match &shadow.kind {
             ShadowKind::Fixable(action) => Some(action.clone()),
-            ShadowKind::Reserved { .. } => None,
+            ShadowKind::Reserved { .. } | ShadowKind::RegistrationFailure { .. } => None,
         })
         .collect();
     let mut message = format_fixable_message(&fixable);
@@ -90,7 +105,89 @@ fn diagnose(shadows: Vec<DetectedShadow>) -> CheckReport {
         message.push_str(" | reserved (manual remap required): ");
         message.push_str(&format_reserved_message(&reserved));
     }
-    CheckReport::warn(message, ID, fixes)
+    let mut report = CheckReport::warn(message, ID, fixes);
+    if !registration_failures.is_empty() {
+        report = append_registration_failures(report, &registration_failures);
+    }
+    report
+}
+
+fn registration_failure_report(shadows: &[DetectedShadow]) -> CheckReport {
+    let message = format_registration_failure_message(shadows);
+    let advice = format_registration_failure_advice(shadows);
+    CheckReport {
+        summary: message.clone(),
+        issues: vec![DoctorIssue::new(ID, Severity::Warn, message)],
+        advice,
+        fixes: Vec::new(),
+    }
+}
+
+fn append_registration_failures(
+    mut report: CheckReport,
+    shadows: &[DetectedShadow],
+) -> CheckReport {
+    if !report.summary.is_empty() {
+        report.summary.push_str(" | ");
+    }
+    report
+        .summary
+        .push_str(&format_registration_failure_message(shadows));
+    report.issues.push(DoctorIssue::new(
+        ID,
+        Severity::Warn,
+        format_registration_failure_message(shadows),
+    ));
+    report
+        .advice
+        .extend(format_registration_failure_advice(shadows));
+    report
+}
+
+fn format_registration_failure_message(shadows: &[DetectedShadow]) -> String {
+    let mut combos: Vec<&str> = shadows.iter().map(|s| s.qol_combo.as_str()).collect();
+    combos.sort_unstable();
+    combos.dedup();
+    format!(
+        "hotkey registration failed: {} could not be grabbed by the active backend",
+        combos.join(", ")
+    )
+}
+
+fn format_registration_failure_advice(shadows: &[DetectedShadow]) -> Vec<String> {
+    let mut hints: Vec<String> = shadows
+        .iter()
+        .filter_map(|shadow| match &shadow.kind {
+            ShadowKind::RegistrationFailure { hint } => Some(hint.clone()),
+            _ => None,
+        })
+        .collect();
+    hints.sort_unstable();
+    hints.dedup();
+    hints
+}
+
+fn registration_failure_shadows(
+    qol_index: &BTreeMap<String, String>,
+    errors: &[RegistrationError],
+) -> Vec<DetectedShadow> {
+    errors
+        .iter()
+        .filter_map(|error| {
+            let normalized = normalize_combo(&error.key)?;
+            let combo = qol_index.get(&normalized)?;
+            Some(DetectedShadow {
+                qol_combo: combo.clone(),
+                source_label: "active hotkey backend".to_string(),
+                kind: ShadowKind::RegistrationFailure {
+                    hint: format!(
+                        "{combo} could not be registered ({error}); stop or reconfigure another application that owns it, or restart the desktop compositor if the grab is stale",
+                        error = error.error
+                    ),
+                },
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn build_qol_index(bindings: &[HotkeyBinding]) -> BTreeMap<String, String> {
@@ -135,7 +232,9 @@ fn format_reserved_message(shadows: &[DetectedShadow]) -> String {
                     shadow.qol_combo, shadow.source_label
                 )
             }
-            ShadowKind::Fixable(_) => shadow.qol_combo.clone(),
+            ShadowKind::Fixable(_) | ShadowKind::RegistrationFailure { .. } => {
+                shadow.qol_combo.clone()
+            }
         })
         .collect();
     parts.join("; ")
@@ -198,6 +297,54 @@ mod tests {
         assert!(report.fixes.is_empty());
         assert!(report.summary.contains("Cmd+Tab"));
         assert!(report.summary.contains("App Switcher"));
+    }
+
+    #[test]
+    fn diagnose_returns_warn_with_advice_when_only_registration_failures_remain() {
+        let shadows = vec![DetectedShadow {
+            qol_combo: "Shift+Super+S".into(),
+            source_label: "active hotkey backend".into(),
+            kind: ShadowKind::RegistrationFailure {
+                hint: "stop the application that owns the key".into(),
+            },
+        }];
+        let report = diagnose(shadows);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].severity, Severity::Warn);
+        assert!(
+            report.fixes.is_empty(),
+            "a registration failure has no dconf fix"
+        );
+        assert!(
+            report.summary.contains("Shift+Super+S")
+                && report.advice == ["stop the application that owns the key"],
+            "report must name the combo and preserve the backend advice: {:?}",
+            report.summary
+        );
+    }
+
+    #[test]
+    fn registration_failures_include_only_enabled_configured_hotkeys() {
+        let index = build_qol_index(&[binding("Shift+Super+S"), binding("Ctrl+Alt+T")]);
+        let errors = vec![
+            RegistrationError {
+                key: "<Shift><Super>s".into(),
+                error: "already registered".into(),
+            },
+            RegistrationError {
+                key: "Super+Unconfigured".into(),
+                error: "unsupported".into(),
+            },
+        ];
+
+        let shadows = registration_failure_shadows(&index, &errors);
+
+        assert_eq!(shadows.len(), 1, "only configured failures are actionable");
+        assert_eq!(shadows[0].qol_combo, "Shift+Super+S");
+        assert!(matches!(
+            shadows[0].kind,
+            ShadowKind::RegistrationFailure { .. }
+        ));
     }
 
     #[test]
