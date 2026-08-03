@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# pointz — legacy-forwarding flavour: server + action{...} + fallback.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "pointzerver" "pointzerver" "Run and control the PointZ remote-input server." "server"
+
+mock_command "server" \
+  --about "Run the PointZ services when selected by the no-argument default." \
+  --usage "pointzerver" --detail "Running the binary without arguments starts the server." \
+  --output "Lifecycle or daemon-delivery diagnostics are written to stderr." \
+  --exit "Runs until stopped when selected by the no-argument default." --handler server_cmd
+mock_command "action" --alias "--action" \
+  --about "Send a named action to the running PointZ daemon." \
+  --usage "pointzerver --action <name>" --detail "Legacy routing ignores tokens after the selected action." \
+  --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+mock_subcommand "action" "kill"
+mock_subcommand "action" "settings"
+mock_subcommand "action" "begin_pairing"
+mock_subcommand "action" "ping"
+mock_subcommand "action" "connection_status"
+mock_subcommand "action" "connection_info"
+mock_command "kill" \
+  --about "Ask the running PointZ daemon to stop." \
+  --usage "pointzerver kill" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler kill_cmd
+mock_command "settings" \
+  --about "Open the PointZ settings surface." \
+  --usage "pointzerver settings" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+mock_command "begin_pairing" \
+  --about "Allow the next compatible discovery request to pair." \
+  --usage "pointzerver begin_pairing" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+mock_command "ping" \
+  --about "Send a liveness request to the running daemon." \
+  --usage "pointzerver ping" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+mock_command "connection_status" \
+  --about "Request current daemon connection status." \
+  --usage "pointzerver connection_status" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+mock_command "connection_info" \
+  --about "Request hostname, IP address, and port metadata." \
+  --usage "pointzerver connection_info" --output "The selected legacy route writes its result to stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler action_cmd
+
+server_cmd() { mock_start_daemon pointzerver; }
+action_cmd() { echo "[pointz] action '$1' sent" >&2; }
+kill_cmd() { mock_stop_daemon pointzerver; }
+
+legacy_fallback() { echo "[pointz] action '$1' sent (legacy forward)" >&2; }
+mock_fallback legacy_fallback
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check secret_loaded ok "pairing secret loaded or created"
+  mock_check input_initialized ok "input injection initialized"
+  mock_check udp_bound ok "discovery and command sockets bound"
+}
+mock_doctor doctor_checks
+
+pointz_status() { mock_daemon_status pointzerver; }
+pointz_kill() { mock_stop_daemon pointzerver; }
+mock_lifecycle "pointzerver" "server" "pointz_kill" "pointz_status"
+pointz_config() { echo '{}'; }
+mock_config pointz_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

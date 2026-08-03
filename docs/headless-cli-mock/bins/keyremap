@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# keyremap — run/reload/kill flavour: dashed aliases for legacy action args.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "keyremap" "keyremap" "Run and control native key, mouse, and scroll remapping." "run"
+
+mock_command "run" \
+  --about "Run the key-remap daemon and native event tap." \
+  --usage "keyremap run" --detail "Loads and resolves config before enabling interception." \
+  --output "Lifecycle diagnostics on stderr." \
+  --exit "Runs until killed; exits non-zero on unsupported platforms." --handler run_cmd
+mock_command "reload" --alias "--reload" \
+  --about "Ask the running daemon to reload config atomically." \
+  --usage "keyremap reload" --output "The daemon delivery result on stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler reload_cmd
+mock_command "kill" --alias "--kill" \
+  --about "Ask the running daemon to shut down." \
+  --usage "keyremap kill" --output "The daemon delivery result on stderr." \
+  --exit "Exits zero whether or not a daemon is currently running." --handler kill_cmd
+
+run_cmd() { mock_start_daemon keyremap; }
+reload_cmd() { echo "keyremap: config reload delivered (daemon)"; }
+kill_cmd() { mock_stop_daemon keyremap; }
+
+doctor_checks() {
+  mock_check platform_supported ok "macos is declared and has a native key-remap adapter"
+  mock_check config_readable ok "Typed config loaded from stored config"
+  mock_check rules_valid ok "All configured remapping rules resolve to implemented semantics"
+  mock_check accessibility_trust ok "Accessibility trust is granted"
+}
+mock_doctor doctor_checks
+
+keyremap_status() { mock_daemon_status keyremap; }
+keyremap_kill() { mock_stop_daemon keyremap; }
+mock_lifecycle "keyremap" "run" "keyremap_kill" "keyremap_status"
+keyremap_config() { echo '{}'; }
+mock_config keyremap_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

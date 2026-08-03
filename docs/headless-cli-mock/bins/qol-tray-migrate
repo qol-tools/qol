@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# qol-tray-migrate — migration flavour: mutating default, legacy fallback.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol-tray-migrate" "qol-tray-migrate" "Run QoL Tray config and cloud-data migrations." "run"
+
+PENDING="$MOCK_STATE/qol-tray-migrate.pending"
+[ -f "$PENDING" ] || echo 2 > "$PENDING"
+
+mock_command "run" \
+  --about "Run pending migrations." \
+  --usage "qol-tray-migrate run [--config-dir <PATH>] [--post-auth]" \
+  --detail "--config-dir <PATH> selects a specific config directory." \
+  --detail "--post-auth also runs cloud migrations when signed in." \
+  --output "Applied migrations are written to stdout." \
+  --exit "Exits non-zero when migration setup or execution fails." --handler run_cmd
+
+run_cmd() {
+  local pending
+  pending="$(cat "$PENDING")"
+  if [ "$pending" -gt 0 ]; then
+    echo "qol-tray-migrate: applied ${pending} pending migration(s)"
+    echo 0 > "$PENDING"
+  else
+    echo "qol-tray-migrate: no pending migrations"
+  fi
+}
+legacy_fallback() { echo "qol-tray-migrate: legacy adapter handled: $*"; }
+mock_fallback legacy_fallback
+
+doctor_checks() {
+  mock_check config_dir ok "migration config path resolved"
+}
+mock_doctor doctor_checks
+
+qol-tray-migrate_status() { echo "qol-tray-migrate: ready (mock)"; }
+mock_lifecycle "qol-tray-migrate" "" "" "qol-tray-migrate_status"
+mock_dispatch "$@"

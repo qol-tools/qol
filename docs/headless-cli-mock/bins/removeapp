@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# removeapp — destructive flavour: guarded removal, confirmation, refusal exit 2.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "removeapp" "removeapp" "Inspect installed applications and remove an app with its owned leftovers." "open"
+
+INSTALLED="$MOCK_STATE/removeapp.installed"
+[ -f "$INSTALLED" ] || cat > "$INSTALLED" <<'EOF'
+Foo  /Applications/Foo.app  bundle_id=com.acme.foo
+Bar  /Applications/Bar.app  bundle_id=com.acme.bar
+EOF
+
+mock_command "open" \
+  --about "Open the Remove App picker." \
+  --usage "removeapp open" --output "No stdout on success." \
+  --exit "Exits non-zero if the picker cannot be opened." --handler open_cmd
+mock_command "scan" \
+  --about "Print the read-only removal plan for one installed app." \
+  --usage "removeapp scan <app>" \
+  --detail "The app query must resolve to one installed application." \
+  --detail "Prints the plan without moving, deleting, or quitting anything." \
+  --output "Pretty-printed removal-plan JSON on stdout." \
+  --exit "Exits non-zero if inventory or plan inspection fails." --handler scan_cmd
+mock_command "remove" \
+  --about "Remove one installed app and its owned leftovers." \
+  --usage "removeapp remove <app> [flags]" \
+  --detail "--dry-run prints the guarded plan without removing anything." \
+  --detail "--yes skips confirmation; --force permanently deletes." \
+  --detail "--quit asks a running app to exit before removal." \
+  --output "Removal outcome JSON on stdout; prompts and diagnostics on stderr." \
+  --exit "Exits non-zero on refusal, cancellation, or a failed removal." --handler remove_cmd
+
+open_cmd() { echo "removeapp: picker opened"; }
+scan_cmd() {
+  local app="${1:-}"
+  [ -z "$app" ] && { echo "removeapp: missing <app> argument" >&2; return 64; }
+  echo "{\"app\":\"$app\",\"items\":[{\"path\":\"/Applications/$app.app\",\"kind\":\"app_bundle\",\"size_bytes\":1234}],\"total_bytes\":1234}"
+}
+remove_cmd() {
+  local app="" dry=0 yes=0 force=0 quit=0
+  for a in "$@"; do
+    case "$a" in
+      --dry-run) dry=1 ;; --yes|-y) yes=1 ;; --force) force=1 ;; --quit) quit=1 ;;
+      -*) echo "removeapp: unknown flag $a" >&2; return 64 ;;
+      *) [ -z "$app" ] && app="$a" ;;
+    esac
+  done
+  [ -z "$app" ] && { echo "removeapp: missing <app> argument" >&2; return 64; }
+  if ! grep -q "^$app " "$INSTALLED" 2>/dev/null; then
+    echo "removeapp: $app is running; pass --quit or --trash-anyway" >&2
+    return 2
+  fi
+  if [ "$dry" = 1 ]; then
+    echo "{\"app\":\"$app\",\"dry_run\":true,\"removed\":[]}"
+    return 0
+  fi
+  if [ "$yes" != 1 ]; then
+    echo "removeapp: confirmation skipped in mock (--yes absent) — refusing" >&2
+    return 2
+  fi
+  sed -i "/^$app /d" "$INSTALLED"
+  echo "{\"app\":\"$app\",\"removed\":[\"/Applications/$app.app\"],\"freed_bytes\":1234}"
+}
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check inventory_readable ok "installed-app inventory resolves"
+  mock_check removal_prerequisites ok "trash and package-manager guards available"
+}
+mock_doctor doctor_checks
+
+removeapp_status() { echo "removeapp: ready (mock)"; }
+mock_lifecycle "removeapp" "" "" "removeapp_status"
+removeapp_config() { echo '{}'; }
+mock_config removeapp_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# lights — action-heavy flavour: launch/daemon + 22 flat actions, no status/kill.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "plugin-lights" "plugin-lights" "Control Zigbee lights through a serial coordinator and daemon-backed live transport." "launch"
+
+mock_command "launch" \
+  --about "Run the host daemon when a daemon socket is injected, otherwise open settings." \
+  --usage "plugin-lights launch" --detail "This is the no-argument compatibility route used by qol-tray." \
+  --output "Daemon and settings diagnostics are written to stderr." \
+  --exit "Exits non-zero if daemon startup or settings activation fails." --handler launch_cmd
+mock_command "daemon" --alias "run" \
+  --about "Run the long-lived coordinator, action socket, device monitor, and live websocket." \
+  --usage "plugin-lights daemon" --detail "Requires the daemon socket environment supplied by qol-tray." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Runs until stopped; exits non-zero if coordinator or socket startup fails." --handler daemon_cmd
+
+for a in toggle_main on_main off_main brighter_main dimmer_main warmer_main cooler_main \
+         preset_1 preset_2 preset_3 preset_4 preset_5 preset_6 preset_7 preset_8 \
+         pair stop_pair set_color_main set_brightness_main set_colortemp_main reload settings; do
+  mock_command "$a" \
+    --about "Lights action: $a." \
+    --usage "plugin-lights $a" --output "No stdout on success; operational diagnostics are written to stderr." \
+    --exit "Exits non-zero if settings, coordinator startup, or light control fails."
+done
+
+launch_cmd() {
+  if [ -n "${QOL_MOCK_DAEMON_SOCKET:-}" ]; then mock_start_daemon plugin-lights; else echo "plugin-lights: no daemon socket; opening settings"; fi
+}
+daemon_cmd() { mock_start_daemon plugin-lights; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check coordinator ok "serial coordinator present on /dev/ttyUSB0"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check required_binaries ok "ZNP stack available"
+  mock_check zigbee_network ok "network formed, 1 device joined"
+}
+mock_doctor doctor_checks
+
+plugin-lights_status() { mock_daemon_status plugin-lights "coordinator"; }
+plugin-lights_kill() { mock_stop_daemon plugin-lights; }
+mock_lifecycle "plugin-lights" "daemon" "plugin-lights_kill" "plugin-lights_status"
+lights_config() { echo '{}'; }
+mock_config lights_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

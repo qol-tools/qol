@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# ide-checkout — daemon+status flavour: minimal lifecycle pair, no kill.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "task-runner" "task-runner" "Run the Task Runner checkout daemon and inspect its local runtime contract." "daemon"
+
+mock_command "daemon" \
+  --about "Run the loopback Task Runner checkout daemon." \
+  --usage "task-runner daemon" \
+  --detail "Loads the typed plugin config and serves checkout requests until stopped." \
+  --output "Runtime diagnostics are written to stderr." \
+  --exit "Exits non-zero if the daemon cannot bind or serve requests." --handler daemon_cmd
+mock_command "status" \
+  --about "Probe the daemon health endpoint and show a desktop notification." \
+  --usage "task-runner status" \
+  --output "No stdout; the result is delivered as a desktop notification." \
+  --exit "Exits zero after reporting whether the daemon answered." --handler status_cmd
+
+daemon_cmd() { mock_start_daemon task-runner; }
+status_cmd() {
+  if [ -f "$MOCK_STATE/task-runner.state" ]; then echo "task-runner: daemon is running (notification sent)"
+  else echo "task-runner: daemon is NOT running (notification sent)"; fi
+}
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check required_binaries ok "git available"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check runtime_assets ok "runner assets present"
+  mock_check configured_apps ok "IDE integrations configured"
+  mock_check temp_root ok "temp workspace writable"
+  mock_check daemon_endpoint ok "loopback health endpoint answers"
+}
+mock_doctor doctor_checks
+
+ide-checkout_status() { mock_daemon_status task-runner; }
+ide-checkout_kill() { mock_stop_daemon task-runner; }
+mock_lifecycle "task-runner" "daemon" "ide-checkout_kill" "ide-checkout_status"
+mock_dispatch "$@"

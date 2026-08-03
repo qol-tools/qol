@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# launcher — retained-GPUI flavour: dashed commands --show/--settings/--kill.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "launcher" "launcher" "Search installed applications and files from a retained native launcher." "run"
+
+mock_command "run" \
+  --about "Run the retained launcher daemon with its window initially hidden." \
+  --usage "launcher run" --detail "Legacy trailing arguments are ignored." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Preserves the legacy best-effort zero exit behavior." --handler run_cmd
+mock_command "--show" \
+  --about "Show the retained launcher, starting its daemon visibly when needed." \
+  --usage "launcher --show" --output "No stdout; lifecycle diagnostics are written to stderr." \
+  --exit "Preserves the legacy best-effort zero exit behavior." --handler show_cmd
+mock_command "--settings" \
+  --about "Open the Launcher settings surface." \
+  --usage "launcher --settings" --output "No stdout; launch failures are written to stderr." \
+  --exit "Preserves the legacy best-effort zero exit behavior." --handler settings_cmd
+mock_command "--kill" \
+  --about "Ask the retained launcher daemon to stop." \
+  --usage "launcher --kill" --output "No output on success." \
+  --exit "Preserves the legacy best-effort zero exit behavior." --handler kill_cmd
+
+run_cmd() { mock_start_daemon launcher; }
+show_cmd() {
+  if [ -f "$MOCK_STATE/launcher.state" ]; then echo "launcher: shown (daemon)"; else mock_start_daemon launcher; fi
+}
+settings_cmd() { echo "launcher: opened settings page"; }
+kill_cmd() { mock_stop_daemon launcher; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check required_binaries ok "app inventory sources present"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check frecency_db ok "frecency database writable"
+  mock_check discovery ok "application discovery completed"
+}
+mock_doctor doctor_checks
+
+launcher_status() { mock_daemon_status launcher; }
+launcher_kill() { mock_stop_daemon launcher; }
+mock_lifecycle "launcher" "run" "launcher_kill" "launcher_status"
+mock_dispatch "$@"

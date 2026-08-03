@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# alt-tab — UI-host flavour: retained picker needs a window-manager host (cinnamon/muffin).
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "alt-tab" "alt-tab" "Switch desktop windows through a retained native picker." "daemon"
+
+mock_command "daemon" \
+  --about "Run the retained Alt Tab picker daemon." \
+  --usage "alt-tab daemon" \
+  --detail "Requires a compatible UI host (cinnamon/muffin); falls back to a GPUI overlay elsewhere." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Runs until stopped; exits non-zero when no UI host is available." \
+  --handler daemon_cmd
+
+mock_command "--show" \
+  --about "Show or advance the retained Alt Tab picker." \
+  --usage "alt-tab --show" \
+  --output "No stdout on success." \
+  --exit "Exits after signaling the daemon, or runs the daemon when none is available." \
+  --handler show_cmd
+
+mock_command "--show-reverse" \
+  --about "Show or move backward through the retained Alt Tab picker." \
+  --usage "alt-tab --show-reverse" \
+  --output "No stdout on success." \
+  --exit "Exits after signaling the daemon, or starts the hidden daemon when none is available." \
+  --handler show_cmd
+
+mock_command "--settings" \
+  --about "Open the Alt Tab settings surface." \
+  --usage "alt-tab --settings" \
+  --output "No stdout on success; launch failures are written to stderr." \
+  --exit "Exits after the settings launcher returns." \
+  --handler settings_cmd
+
+mock_command "--kill" \
+  --about "Ask the running Alt Tab daemon to stop." \
+  --usage "alt-tab --kill" \
+  --output "No output on success." \
+  --exit "Exits zero whether or not a daemon is currently running." \
+  --handler kill_cmd
+
+daemon_cmd() { mock_start_daemon alt-tab "cinnamon/muffin" || return $?; }
+show_cmd() {
+  if [ -f "$MOCK_STATE/alt-tab.state" ]; then
+    echo "alt-tab: picker signaled (host: cinnamon)"
+  else
+    echo "alt-tab: no daemon; starting retained picker via GPUI overlay"
+  fi
+}
+settings_cmd() { echo "alt-tab: opened settings surface (host-owned URL)"; }
+kill_cmd() { mock_stop_daemon alt-tab; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux (cinnamon) is declared"
+  mock_check ui_host ok "muffin compositor reachable"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check daemon_socket ok "daemon socket present"
+  mock_check permissions ok "window listing permission granted"
+}
+mock_doctor doctor_checks
+
+alt-tab_status() { mock_daemon_status alt-tab "host: cinnamon"; }
+alt-tab_kill() { mock_stop_daemon alt-tab; }
+mock_lifecycle "alt-tab" "daemon" "alt-tab_kill" "alt-tab_status"
+alt-tab_config() { echo '{}'; }
+mock_config alt-tab_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

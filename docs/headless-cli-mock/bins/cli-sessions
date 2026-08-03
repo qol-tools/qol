@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# cli-sessions — daemon-signal flavour: run/open/next/snapshot, best-effort exit 0.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "cli-sessions" "cli-sessions" "Track live terminal sessions and summon the retained CLI Sessions panel." "run"
+
+mock_command "run" --alias "daemon" \
+  --about "Run the resident session monitor and retained GPUI panel host." \
+  --usage "cli-sessions run" --detail "The legacy 'daemon' command is an alias." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Runs until stopped; exits non-zero if daemon startup fails." --handler run_cmd
+mock_command "open" \
+  --about "Show the retained CLI Sessions panel." \
+  --usage "cli-sessions open" --detail "Signals the resident daemon, or starts it with the panel visible." \
+  --output "No stdout on success." \
+  --exit "Exits non-zero only if fallback daemon startup fails." --handler open_cmd
+mock_command "next" \
+  --about "Focus the next terminal session that needs attention." \
+  --usage "cli-sessions next" --detail "Sends the request to the resident daemon without starting a new one." \
+  --output "No stdout; daemon availability is intentionally best-effort." \
+  --exit "Exits zero after attempting delivery." --handler next_cmd
+mock_command "snapshot" \
+  --about "Ask the resident daemon to snapshot all observed sessions." \
+  --usage "cli-sessions snapshot" --output "No stdout; snapshot diagnostics are emitted by the daemon." \
+  --exit "Exits zero after attempting delivery." --handler snapshot_cmd
+
+run_cmd() { mock_start_daemon cli-sessions; }
+open_cmd() {
+  if [ -f "$MOCK_STATE/cli-sessions.state" ]; then echo "cli-sessions: panel shown (daemon)"; else mock_start_daemon cli-sessions; fi
+}
+next_cmd() { echo "cli-sessions: next request delivered (best-effort)"; }
+snapshot_cmd() { echo "cli-sessions: snapshot request delivered (best-effort)"; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check required_binaries ok "session discovery tools present"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check runtime_dirs ok "session storage writable"
+  mock_check terminal_services ok "terminal integration available"
+  mock_check daemon_socket ok "daemon socket present"
+  mock_check kitty_remote ok "kitty remote-control available"
+}
+mock_doctor doctor_checks
+
+cli-sessions_status() { mock_daemon_status cli-sessions; }
+cli-sessions_kill() { mock_stop_daemon cli-sessions; }
+mock_lifecycle "cli-sessions" "run" "cli-sessions_kill" "cli-sessions_status"
+cli-sessions_config() { echo '{}'; }
+mock_config cli-sessions_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

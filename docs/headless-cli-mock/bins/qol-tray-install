@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# qol-tray-install — installer flavour: mutating default, legacy fallback.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol-tray-install" "qol-tray-install" "Install or uninstall the QoL Tray binary, autostart entry, and shell hook." "install"
+
+INSTALLED_MARK="$MOCK_STATE/qol-tray-install.done"
+
+mock_command "install" \
+  --about "Install QoL Tray." \
+  --usage "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--skip-shell-hook] [--dev]" \
+  --detail "--source <PATH> selects an existing install source." \
+  --detail "--skip-shell-hook leaves shell rc files unchanged." \
+  --output "Progress is written to stdout; diagnostics are written to stderr." \
+  --exit "Exits non-zero when validation or an install operation fails." --handler install_cmd
+mock_command "uninstall" \
+  --about "Remove the qol-tools shell hook from shell rc files." \
+  --usage "qol-tray-install uninstall [--skip-shell-hook]" \
+  --output "Progress is written to stdout; diagnostics are written to stderr." \
+  --exit "Exits non-zero when validation or an install operation fails." --handler uninstall_cmd
+
+install_cmd() {
+  echo "qol-tray-install: installing QoL Tray (mock)..."
+  echo "qol-tray-install: wrote ~/.local/bin/qol-tray"
+  echo "qol-tray-install: wrote autostart entry"
+  echo "qol-tray-install: wrote shell hook to ~/.bashrc"
+  touch "$INSTALLED_MARK"
+}
+uninstall_cmd() {
+  echo "qol-tray-install: removing shell hook"
+  rm -f "$INSTALLED_MARK"
+}
+legacy_fallback() { echo "qol-tray-install: legacy adapter handled: $*"; }
+mock_fallback legacy_fallback
+
+doctor_checks() {
+  mock_check platform_paths ok "installer target paths resolved"
+}
+mock_doctor doctor_checks
+
+qol-tray-install_status() { echo "qol-tray-install: ready (mock)"; }
+mock_lifecycle "qol-tray-install" "" "" "qol-tray-install_status"
+mock_dispatch "$@"

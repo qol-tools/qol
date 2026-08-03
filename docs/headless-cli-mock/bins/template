@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# template — scaffold flavour: minimal run/settings, no daemon.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "plugin-template" "plugin-template" "Run the canonical qol-tray plugin scaffold." "run"
+
+mock_command "run" \
+  --about "Run the plugin example action." \
+  --usage "plugin-template run" --output "Prints the example greeting." \
+  --exit "Exits non-zero if the action cannot run." --handler run_cmd
+mock_command "settings" \
+  --about "Open the plugin settings." \
+  --usage "plugin-template settings" --output "No stdout on success." \
+  --exit "Exits non-zero if the settings URL cannot be opened." --handler settings_cmd
+
+run_cmd() { echo "Hello from My Plugin"; }
+settings_cmd() { echo "plugin-template: opened settings"; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is supported"
+  mock_check config_readable ok "No persistent config is required"
+}
+mock_doctor doctor_checks
+
+mock_dispatch "$@"

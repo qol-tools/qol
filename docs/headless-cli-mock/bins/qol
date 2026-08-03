@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# qol — the tool: 13 flat commands, sync is the only JSON command.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol" "qol" "Build, inspect, diagnose, and run the qol-tools workspace."
+
+declare -A TOOL_CMDS=(
+  [setup]="Build and install local qol development tooling."
+  [dev]="Run the development dashboard and tray."
+  [env]="Manage disposable development environments."
+  [flow]="Run and inspect disposable environment workflows."
+  [emu]="Discover, prepare, run, and control local emulators."
+  [cat]="Render a source file or stdin with deterministic line numbers."
+  [build]="Build the workspace or a named target."
+  [check]="Run affected workspace checks."
+  [clean]="Clean workspace or named build artifacts."
+  [install]="Install built qol applications and plugins."
+  [trace]="Inspect a named runtime trace target."
+  [trace-rs]="Inspect the Rust runtime trace stream."
+)
+
+for name in "${!TOOL_CMDS[@]}"; do
+  mock_command "$name" \
+    --about "${TOOL_CMDS[$name]}" \
+    --usage "qol $name [args]" \
+    --output "Human-readable output on stdout; diagnostics on stderr." \
+    --exit "Exits non-zero when the operation fails."
+done
+
+mock_command "sync" \
+  --about "Sync the active profile with its configured cloud repository." \
+  --usage "qol sync" \
+  --detail "Pulls the latest profile, merges field-level, pushes local changes back." \
+  --output "Human summary on stdout." \
+  --exit "Exits non-zero when sync cannot complete or conflicts need review." \
+  --json --handler sync_cmd
+
+sync_cmd() {
+  if [ -n "${MOCK_JSON_FLAG:-}" ]; then
+    echo '{"pushed":1,"pulled":1,"conflicts":0,"backup":null}'
+  else
+    echo "qol: synced profile with cloud repository (1 push, 1 pull)"
+  fi
+}
+
+doctor_checks() {
+  mock_check host_reachable ok "qol-tray host reachable"
+}
+mock_doctor doctor_checks
+
+mock_dispatch "$@"

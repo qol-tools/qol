@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# qol-voice — hierarchical flavour: session{start,stop,status,events}, audio{devices,probe}, stt{providers}, assistant{request}.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol-voice" "qol-voice" "Run provider-neutral speech recognition and conversational turn coordination." "session" "status"
+
+mock_command "session" --about "Control the voice session lifecycle." --usage "qol-voice session <start|stop|status|events>"
+mock_subcommand "session" "start"
+mock_subcommand "session" "stop"
+mock_subcommand "session" "status"
+mock_subcommand "session" "events"
+mock_command "session start" \
+  --about "Start a voice session." --usage "qol-voice session start" --output "Session state JSON." \
+  --exit "Exits non-zero when the session cannot start." --json --handler session_start_cmd
+mock_command "session stop" \
+  --about "Stop the active voice session." --usage "qol-voice session stop" --output "Session state JSON." \
+  --exit "Exits non-zero when the session cannot stop." --json --handler session_stop_cmd
+mock_command "session status" \
+  --about "Report the active voice session state." --usage "qol-voice session status" --output "Session state JSON." \
+  --exit "Exits zero whether or not a session is active." --json --handler session_status_cmd
+mock_command "session events" \
+  --about "Stream session events until stopped." --usage "qol-voice session events" --output "Event stream." \
+  --exit "Exits zero when the stream ends." --handler session_events_cmd
+
+mock_command "listen" \
+  --about "Listen for speech and emit transcribed turns." --usage "qol-voice listen" \
+  --output "Turn JSON per utterance." --exit "Exits non-zero when listening cannot start." --json --handler listen_cmd
+
+mock_command "audio" --about "Inspect audio devices." --usage "qol-voice audio <devices|probe>"
+mock_subcommand "audio" "devices"
+mock_subcommand "audio" "probe"
+mock_command "audio devices" \
+  --about "List capture devices." --usage "qol-voice audio devices" --output "Device list JSON." \
+  --exit "Exits zero when listing completes." --json --handler audio_devices_cmd
+mock_command "audio probe" \
+  --about "Probe the selected capture device." --usage "qol-voice audio probe" --output "Probe result JSON." \
+  --exit "Exits non-zero when the probe fails." --json --handler audio_probe_cmd
+
+mock_command "stt" --about "Inspect speech-to-text providers." --usage "qol-voice stt <providers>"
+mock_subcommand "stt" "providers"
+mock_command "stt providers" \
+  --about "List available speech-to-text providers." --usage "qol-voice stt providers" --output "Provider list JSON." \
+  --exit "Exits zero when listing completes." --json --handler stt_providers_cmd
+
+mock_command "assistant" --about "Request conversational turns." --usage "qol-voice assistant <request>"
+mock_subcommand "assistant" "request"
+mock_command "assistant request" \
+  --about "Send a request to the assistant." --usage "qol-voice assistant request <text>" --output "Reply JSON." \
+  --exit "Exits non-zero when the request fails." --json --handler assistant_request_cmd
+
+mock_command "settings" \
+  --about "Open the plugin settings page." --usage "qol-voice settings" --output "No stdout on success." \
+  --exit "Exits non-zero when settings cannot be opened." --handler settings_cmd
+
+SESSION="$MOCK_STATE/qol-voice.session"
+session_start_cmd() { echo '{"session":"active","engine":"local-whisper"}'; echo active > "$SESSION"; }
+session_stop_cmd() { echo '{"session":"idle"}'; rm -f "$SESSION"; }
+session_status_cmd() {
+  if [ -f "$SESSION" ]; then echo '{"session":"active","engine":"local-whisper"}'; else echo '{"session":"idle"}'; fi
+}
+session_events_cmd() { echo '{"event":"utterance_end","text":"hello"}'; echo '{"event":"turn_complete"}'; }
+listen_cmd() { echo '{"text":"hello","speaker":"me","confidence":0.97}'; }
+audio_devices_cmd() { echo '{"devices":[{"id":"default","name":"Built-in Microphone","capture":true}]}'; }
+audio_probe_cmd() { echo '{"device":"default","sample_rate":48000,"channels":1,"level_db":-18.5}'; }
+stt_providers_cmd() { echo '{"providers":[{"id":"local-whisper","status":"ready"},{"id":"remote","status":"unconfigured"}]}'; }
+assistant_request_cmd() { echo '{"reply":"hello from the assistant"}'; }
+settings_cmd() { echo "qol-voice: opened settings"; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check audio_engine ok "pulse audio capture available"
+  mock_check stt_local ok "local whisper model present"
+  mock_check stt_remote warn "remote provider unconfigured" --fix "configure a remote provider in settings"
+  mock_check runtime_dirs ok "session output dirs writable"
+  mock_check provider_registry ok "provider registry initialized"
+  mock_check turn_coordinator ok "turn coordinator policy loaded"
+}
+mock_doctor doctor_checks
+
+qol-voice_config() { echo '{}'; }
+mock_config qol-voice_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

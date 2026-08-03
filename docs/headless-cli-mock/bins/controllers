@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# controllers — status+fix flavour: read-only status, privileged apply_fixes.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "plugin-controllers" "plugin-controllers" "Inspect connected game controllers and apply relevant driver-specific fixes." "status"
+
+mock_command "apply_fixes" \
+  --about "Apply fixes that match each controller's currently bound driver." \
+  --usage "plugin-controllers apply_fixes" \
+  --detail "The current compatibility fix applies only when xpadneo is active." \
+  --detail "Runs one pkexec authorization prompt." \
+  --output "No stdout on success." \
+  --exit "Exits non-zero if no driver-specific fix applies or pkexec fails." --handler apply_fixes_cmd
+mock_command "status" \
+  --about "Print connected controllers and their verdicts." \
+  --usage "plugin-controllers status" \
+  --output "One line per connected controller." \
+  --exit "Exits zero even when no controller is connected." --json --handler status_cmd
+mock_command "settings" \
+  --about "Open the plugin settings page." \
+  --usage "plugin-controllers settings" --output "No stdout on success." \
+  --exit "Exits non-zero if the settings URL cannot be opened." --handler settings_cmd
+
+FIXES_APPLIED="$MOCK_STATE/controllers.fixed"
+
+apply_fixes_cmd() {
+  echo "plugin-controllers: requesting pkexec authorization..."
+  echo "plugin-controllers: wrote /etc/modprobe.d/qol-controllers.conf"
+  echo applied > "$FIXES_APPLIED"
+}
+status_cmd() {
+  if [ -f "$FIXES_APPLIED" ]; then
+    echo "Gamepad  [USB; xpadneo]: xpadneo fix applied"
+  else
+    echo "Gamepad  [USB; xpadneo]: fix pending (xpadneo active)"
+  fi
+}
+settings_cmd() { echo "plugin-controllers: opened settings"; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared and has native backends"
+  mock_check pkexec_available ok "pkexec found"
+  if [ -f "$FIXES_APPLIED" ]; then
+    mock_check controller_fixes ok "connected known controllers have their fixes applied"
+  else
+    mock_check controller_fixes warn "xpadneo fix pending for Gamepad" --fix "run: plugin-controllers apply_fixes"
+  fi
+}
+mock_doctor doctor_checks
+
+controllers_config() { echo '{}'; }
+mock_config controllers_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"
+# V5: doctor --fix support
+controllers_doctor_checks() {
+  local fixed=""
+  if [ -f "$MOCK_STATE/controllers.fixed" ]; then
+    mock_check controller_fixes ok "connected known controllers have their fixes applied" --fixed
+  else
+    if [ "${MOCK_FIX:-0}" = 1 ]; then
+      apply_fixes_cmd; mock_check controller_fixes ok "xpadneo fix applied (auto-repair)" --fixed
+    else
+      mock_check controller_fixes warn "xpadneo fix pending for Gamepad" --fix "run: plugin-controllers apply_fixes"
+    fi
+  fi
+  mock_check platform_supported ok "linux is declared"
+  mock_check pkexec_available ok "pkexec found"
+}
+# override doctor
+mock_doctor controllers_doctor_checks

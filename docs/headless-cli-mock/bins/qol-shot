@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# qol-shot — side-effect flavour: bare invocation opens region selection (record).
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol-shot" "qol-shot" "Capture screenshots and record screen regions." "record"
+
+LATEST="$MOCK_STATE/qol-shot.latest"
+[ -f "$LATEST" ] || echo "/home/user/Pictures/qol-shot-2026-08-03-101500.png" > "$LATEST"
+RECORDING="$MOCK_STATE/qol-shot.recording"
+
+mock_command "record" \
+  --about "Toggle screen region recording." \
+  --usage "qol-shot record" \
+  --detail "When idle, opens region selection and starts capture." \
+  --detail "When capture is active, stops the recorder and finalizes the output file." \
+  --output "No stdout on success; user-facing progress is delivered through platform UI." \
+  --exit "Exits 0 when recording starts, stops, or selection is cancelled." --handler record_cmd
+mock_command "screenshot" \
+  --about "Capture a selected screenshot." \
+  --usage "qol-shot screenshot" --detail "Opens region selection, captures the selected area, and saves a PNG." \
+  --output "Prints the saved image path on success; prints nothing if selection is cancelled." \
+  --exit "Exits 0 when the screenshot is saved or selection is cancelled." --handler screenshot_cmd
+mock_command "copy" \
+  --about "Copy the latest screenshot image to the clipboard." \
+  --usage "qol-shot copy" --detail "Resolves the most recent screenshot and copies the image." \
+  --output "Prints the copied image path on success." \
+  --exit "Exits non-zero if no screenshot exists or the clipboard copy fails." --handler copy_cmd
+mock_command "copy-path" \
+  --about "Copy the latest screenshot's file path to the clipboard." \
+  --usage "qol-shot copy-path" --detail "Resolves the most recent screenshot and copies its path." \
+  --output "Prints the copied path on success." \
+  --exit "Exits non-zero if no screenshot exists or the clipboard copy fails." --handler copy_cmd
+mock_command "preview" \
+  --about "Open the screenshot preview window." \
+  --usage "qol-shot preview [png-path]" \
+  --detail "Opens the floating preview with copy / copy-path action circles." \
+  --output "No stdout on success." \
+  --exit "Exits non-zero if no screenshot exists or the image cannot be read." --handler preview_cmd
+mock_command "settings" \
+  --about "Open the plugin settings page in qol-tray." \
+  --usage "qol-shot settings" --output "No stdout on success." \
+  --exit "Exits non-zero if the platform cannot open the settings URL." --handler settings_cmd
+
+record_cmd() {
+  if [ -f "$RECORDING" ]; then
+    rm -f "$RECORDING"
+    echo "/home/user/Videos/qol-shot-2026-08-03-101530.mp4" > "$LATEST"
+    echo "qol-shot: recording stopped, output finalized"
+  else
+    touch "$RECORDING"
+    echo "qol-shot: opening region selection UI and starting capture"
+  fi
+}
+screenshot_cmd() { echo "$(cat "$LATEST")"; }
+copy_cmd() { echo "$(cat "$LATEST")"; }
+preview_cmd() { echo "qol-shot: preview window opened"; }
+settings_cmd() { echo "qol-shot: opened settings"; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check required_binaries ok "capture tools available (ffmpeg, xdg-open)"
+  mock_check permissions ok "screen capture permission granted"
+  mock_check external_services ok "active display service: X11"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check runtime_dirs warn "Videos output directory does not exist; it will be created on first use" --fix "Create Videos and Pictures directories"
+}
+mock_doctor doctor_checks
+
+qol-shot_status() { echo "qol-shot: ready (mock)"; }
+mock_lifecycle "qol-shot" "" "" "qol-shot_status"
+qol-shot_config() { echo '{}'; }
+mock_config qol-shot_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# window-actions — daemon+13-actions flavour: no status, no kill.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "window-actions" "window-actions" "Move, resize, minimize, restore, and continuously glide desktop windows." "daemon"
+
+mock_command "daemon" --alias "run" \
+  --about "Run the daemon that owns continuous glide sessions." \
+  --usage "window-actions daemon" --detail "The legacy 'run' command is an alias." \
+  --output "Runtime diagnostics are written to stderr." \
+  --exit "Exits non-zero if the daemon listener cannot start." --handler daemon_cmd
+
+for a in snap-left snap-right snap-bottom maximize minimize restore center \
+         move-monitor-left move-monitor-right \
+         glide-left glide-right glide-up glide-down; do
+  mock_command "$a" \
+    --about "Window action: $a." \
+    --usage "window-actions $a" --output "No stdout on success; diagnostics are written to stderr." \
+    --exit "Exits non-zero if the platform cannot perform the action."
+done
+
+daemon_cmd() { mock_start_daemon window-actions; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check required_binaries ok "wmctrl and xdotool present"
+  mock_check permissions ok "window control permission granted"
+  mock_check restore_state ok "minimized-window state store is readable"
+}
+mock_doctor doctor_checks
+
+window-actions_status() { mock_daemon_status window-actions; }
+window-actions_kill() { mock_stop_daemon window-actions; }
+mock_lifecycle "window-actions" "daemon" "window-actions_kill" "window-actions_status"
+window-actions_config() { echo '{}'; }
+mock_config window-actions_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# os-themes — run/toggle/settings/kill flavour: theme state machine.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "plugin-os-themes" "plugin-os-themes" "Run cursor effects and control OS-wide light and dark themes." "run"
+
+THEME="$MOCK_STATE/os-themes.theme"
+[ -f "$THEME" ] || echo light > "$THEME"
+
+mock_command "run" \
+  --about "Run the cursor-effects daemon." \
+  --usage "plugin-os-themes run" --detail "Running the binary without arguments selects this command." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Runs until stopped; exits non-zero if the daemon cannot start." --handler run_cmd
+mock_command "toggle_theme" \
+  --about "Toggle the desktop between light and dark themes." \
+  --usage "plugin-os-themes toggle_theme" --output "No stdout on success; the applied theme is written to stderr." \
+  --exit "Exits non-zero if the requested operation fails." --handler toggle_cmd
+mock_command "settings" \
+  --about "Open the OS Themes settings surface." \
+  --usage "plugin-os-themes settings" --output "No stdout on success; launch failures are written to stderr." \
+  --exit "Exits non-zero if the requested operation fails." --handler settings_cmd
+mock_command "kill" \
+  --about "Ask the running cursor-effects daemon to stop." \
+  --usage "plugin-os-themes kill" --output "No output on success." \
+  --exit "Exits non-zero if the requested operation fails." --handler kill_cmd
+
+run_cmd() { mock_start_daemon plugin-os-themes; }
+toggle_cmd() {
+  local cur new
+  cur="$(cat "$THEME")"
+  [ "$cur" = light ] && new=dark || new=light
+  echo "$new" > "$THEME"
+  echo "[os-themes] applied ${new} theme" >&2
+}
+settings_cmd() { echo "plugin-os-themes: opened settings"; }
+kill_cmd() { mock_stop_daemon plugin-os-themes; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux is declared"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check theme_backend ok "gsettings backend active (cinnamon)"
+  mock_check cursor_effects ok "cursor effects daemon healthy"
+}
+mock_doctor doctor_checks
+
+os-themes_status() { mock_daemon_status os-themes; }
+os-themes_kill() { mock_stop_daemon os-themes; }
+mock_lifecycle "os-themes" "run" "os-themes_kill" "os-themes_status"
+os-themes_config() { echo '{}'; }
+mock_config os-themes_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

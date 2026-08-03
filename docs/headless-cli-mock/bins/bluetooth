@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# bluetooth — data flavour: list/search/pair with --json on most commands.
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "plugin-bluetooth" "plugin-bluetooth" "Inspect and reliably reconnect Bluetooth devices through the platform backend." "list"
+
+DEVICES="$MOCK_STATE/bluetooth.devices"
+[ -f "$DEVICES" ] || cat > "$DEVICES" <<'EOF'
+AA:BB:CC:DD:EE:01  Headphones  paired=true trusted=true connected=false ready=true
+AA:BB:CC:DD:EE:02  Keyboard    paired=true trusted=true connected=true ready=true
+EOF
+
+mock_command "list" --about "List Bluetooth devices known to the default adapter." \
+  --usage "plugin-bluetooth list" --output "One line per known device, or a JSON array with --json." \
+  --exit "Exits non-zero when BlueZ or the default adapter is unavailable." --json --handler list_cmd
+mock_command "enable_adapter" --about "Power on the default Bluetooth adapter." \
+  --usage "plugin-bluetooth enable_adapter" --output "The resulting adapter state." \
+  --exit "Exits non-zero when BlueZ is unavailable." --json --handler adapter_cmd
+mock_command "disable_adapter" --about "Power off the default Bluetooth adapter." \
+  --usage "plugin-bluetooth disable_adapter" --output "The resulting adapter state." \
+  --exit "Exits non-zero when BlueZ is unavailable." --json --handler adapter_cmd
+mock_command "search" --about "Search for Bluetooth devices for up to 60 seconds." \
+  --usage "plugin-bluetooth search" --detail "Press Ctrl+C to stop discovery early." \
+  --output "Paired and discovered devices." --exit "Exits non-zero when BlueZ discovery cannot run." \
+  --json --handler list_cmd
+mock_command "stop_search" --about "Stop discovery in the running Bluetooth daemon." \
+  --usage "plugin-bluetooth stop_search" --output "No stdout on success." \
+  --exit "Exits non-zero when the daemon is not reachable." --handler stop_search_cmd
+mock_command "pair" --about "Pair one Bluetooth device using its appropriate transport." \
+  --usage "plugin-bluetooth pair AA:BB:CC:DD:EE:FF" --output "The resulting device state." \
+  --exit "Exits non-zero when pairing fails." --json --handler device_cmd
+mock_command "trust" --about "Trust one paired Bluetooth device." \
+  --usage "plugin-bluetooth trust AA:BB:CC:DD:EE:FF" --output "The resulting device state." \
+  --exit "Exits non-zero when BlueZ cannot update trust." --json --handler device_cmd
+mock_command "untrust" --about "Remove trust from one paired Bluetooth device." \
+  --usage "plugin-bluetooth untrust AA:BB:CC:DD:EE:FF" --output "The resulting device state." \
+  --exit "Exits non-zero when BlueZ cannot update trust." --json --handler device_cmd
+mock_command "connect" --about "Pair, trust, and connect one Bluetooth device." \
+  --usage "plugin-bluetooth connect AA:BB:CC:DD:EE:FF" --output "The resulting device state." \
+  --exit "Exits non-zero when the connection fails." --json --handler device_cmd
+mock_command "disconnect" --about "Disconnect every active profile for one device." \
+  --usage "plugin-bluetooth disconnect AA:BB:CC:DD:EE:FF" --output "The resulting device state." \
+  --exit "Exits non-zero when BlueZ cannot disconnect." --json --handler device_cmd
+mock_command "remove" --about "Remove one Bluetooth device and its pairing information." \
+  --usage "plugin-bluetooth remove AA:BB:CC:DD:EE:FF" --output "No stdout on success." \
+  --exit "Exits non-zero when BlueZ cannot remove the device." --handler device_cmd
+mock_command "reconnect" --about "Reconnect every device in the managed-device allowlist." \
+  --usage "plugin-bluetooth reconnect" --output "A connection result for each managed device." \
+  --exit "Exits non-zero only when BlueZ itself is unavailable." --json --handler reconnect_cmd
+mock_command "reconnect_trusted" --about "Reconnect every paired, trusted, disconnected device." \
+  --usage "plugin-bluetooth reconnect_trusted" --output "A connection result for each eligible device." \
+  --exit "Exits non-zero only when BlueZ itself is unavailable." --json --handler reconnect_cmd
+mock_command "host_fixes" --about "Report contextual findings about this computer's Bluetooth stack." \
+  --usage "plugin-bluetooth host_fixes" --output "One line per finding, or the full payload with --json." \
+  --exit "Exits non-zero only when the findings cannot be encoded." --json --handler host_fixes_cmd
+mock_command "apply_host_fix" --about "Apply one contextual fix to this computer's Bluetooth stack." \
+  --usage "plugin-bluetooth apply_host_fix <fix-id>" --output "The applied fix summary." \
+  --exit "Exits non-zero when the fix id is unknown or the fix fails." --handler apply_host_fix_cmd
+mock_command "settings" --about "Open the plugin settings." \
+  --usage "plugin-bluetooth settings" --output "No stdout on success." \
+  --exit "Exits non-zero if settings cannot be opened." --handler settings_cmd
+
+list_cmd() { cat "$DEVICES"; }
+adapter_cmd() { echo "hci0  AA:BB:CC:DD:EE:00  powered=true"; }
+stop_search_cmd() { echo "plugin-bluetooth: discovery stopped (daemon)"; }
+device_cmd() {
+  local addr="${1:-}"
+  [ -z "$addr" ] && { echo "plugin-bluetooth: missing address argument" >&2; return 64; }
+  echo "$addr  Device  paired=true trusted=true connected=true ready=true"
+}
+reconnect_cmd() { echo "connected: Headphones (AA:BB:CC:DD:EE:01)"; }
+host_fixes_cmd() { echo "blueman_autostart  hidden override  orphaned qol ownership override"; }
+apply_host_fix_cmd() {
+  local id="${1:-}"
+  [ -z "$id" ] && { echo "plugin-bluetooth: apply_host_fix requires exactly one fix id" >&2; return 64; }
+  echo "applied fix $id: blueman autostart override removed"
+}
+settings_cmd() { echo "plugin-bluetooth: opened settings"; }
+
+doctor_checks() {
+  mock_check bluez_available ok "BlueZ adapter hci0 is available"
+  mock_check adapter_powered ok "adapter hci0 is powered"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check required_binaries ok "required platform helpers present"
+  mock_check managed_devices warn "automatic reconnect has no managed devices" \
+    --fix "add paired device addresses in Bluetooth settings"
+  mock_check host_takeover ok "Bluetooth host ownership has no orphaned override"
+}
+mock_doctor doctor_checks
+
+bluetooth_config() { echo '{}'; }
+mock_config bluetooth_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"
