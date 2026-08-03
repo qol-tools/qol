@@ -1,6 +1,6 @@
 use crate::protocol::{
-    ArmedLifelinesResponse, PluginConfigResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest,
-    SubscribeAck,
+    ArmedLifelinesResponse, NotificationLevel, PluginConfigResponse, PushAck, RuntimeEvent,
+    RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 use crate::PlatformState;
 use serde::Serialize;
@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET};
 
-mod platform;
+/// Connection abstraction shared with `broker::client` (the event bus
+/// client connects to the broker socket the same way).
+pub(crate) mod platform;
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 
@@ -82,7 +84,7 @@ impl PlatformStateClient {
         let request = RuntimeRequest::GetPluginConfig {
             plugin_id: plugin_id.to_string(),
         };
-        match self.request_plugin_config(&request)? {
+        match self.request_json(&request)? {
             PluginConfigResponse::Ok { config } => Some(config),
             PluginConfigResponse::Error { message } => {
                 eprintln!("[runtime/client] get_plugin_config({plugin_id}) failed: {message}");
@@ -96,7 +98,7 @@ impl PlatformStateClient {
             plugin_id: plugin_id.to_string(),
             config: config.clone(),
         };
-        match self.request_plugin_config(&request) {
+        match self.request_json(&request) {
             Some(PluginConfigResponse::Ok { .. }) => true,
             Some(PluginConfigResponse::Error { message }) => {
                 eprintln!("[runtime/client] set_plugin_config({plugin_id}) failed: {message}");
@@ -106,7 +108,54 @@ impl PlatformStateClient {
         }
     }
 
-    fn request_plugin_config(&self, request: &RuntimeRequest) -> Option<PluginConfigResponse> {
+    /// Pushes a notification (toast) to the tray. One call, no async setup;
+    /// the plugin id is read from the [`ENV_PLUGIN_ID`] env var. Returns
+    /// `true` when the host accepted the push.
+    pub fn send_notification(&self, title: &str, body: &str, level: NotificationLevel) -> bool {
+        self.send_notification_with_action(title, body, level, None)
+    }
+
+    /// Pushes a notification with an optional clickable action to the tray.
+    /// `action` is `(label, payload)`: the label is the button text the host
+    /// renders, the payload is host-interpreted (V1: a path the host opens
+    /// with the default app when the action is invoked). When `None`, the
+    /// notification is plain. Returns `true` when the host accepted the push.
+    pub fn send_notification_with_action(
+        &self,
+        title: &str,
+        body: &str,
+        level: NotificationLevel,
+        action: Option<(&str, &str)>,
+    ) -> bool {
+        let plugin_id = self.plugin_id_from_env();
+        let request = RuntimeRequest::PushNotification {
+            plugin_id,
+            title: title.to_string(),
+            body: body.to_string(),
+            level,
+            action_label: action.map(|(label, _)| label.to_string()),
+            action_payload: action.map(|(_, payload)| payload.to_string()),
+        };
+        matches!(self.request_json(&request), Some(PushAck::Handled))
+    }
+
+    /// Pushes a free-form status update to the tray. One call, no async setup;
+    /// the plugin id is read from the [`ENV_PLUGIN_ID`] env var. Returns
+    /// `true` when the host accepted the push.
+    pub fn send_status(&self, status: &serde_json::Value) -> bool {
+        let plugin_id = self.plugin_id_from_env();
+        let request = RuntimeRequest::PushStatus {
+            plugin_id,
+            status: status.clone(),
+        };
+        matches!(self.request_json(&request), Some(PushAck::Handled))
+    }
+
+    fn plugin_id_from_env(&self) -> String {
+        std::env::var(ENV_PLUGIN_ID).unwrap_or_default()
+    }
+
+    fn request_json<T: serde::de::DeserializeOwned>(&self, request: &RuntimeRequest) -> Option<T> {
         let mut reader = self.send(request, Some(TIMEOUT))?;
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;

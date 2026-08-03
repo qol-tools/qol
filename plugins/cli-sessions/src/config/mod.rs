@@ -43,5 +43,9 @@ mod tests {
 
         let defaults = contract_defaults();
         assert_eq!(defaults.corner.as_deref(), Some("top-right"));
+        assert!(
+            defaults.service_commands.is_empty(),
+            "service_commands defaults to an empty editable list"
+        );
     }
 }

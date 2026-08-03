@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { samePluginList, markPluginUpdated } from './plugins.js';
+import { samePluginList, markPluginUpdated, formatPushStatus } from './plugins.js';
 
 test('samePluginList is true for identical reference and identical content', () => {
     const list = [{ id: 'a', version: '1.0.0', update_available: false }];
@@ -76,4 +76,22 @@ test('markPluginUpdated falls back to the current version when available_version
 test('markPluginUpdated is a no-op that preserves identity for an unknown id', () => {
     const before = [{ id: 'a', update_available: true }];
     assert.equal(markPluginUpdated(before, 'zzz'), before);
+});
+
+test('formatPushStatus prefers the plugin-supplied text', () => {
+    assert.equal(formatPushStatus({ text: '  Recording 0:12  ', state: 'recording' }), 'Recording 0:12');
+    assert.equal(formatPushStatus('Idle'), 'Idle');
+    assert.equal(formatPushStatus(3), '3');
+});
+
+test('formatPushStatus renders scalar fields as readable pairs without JSON punctuation', () => {
+    const label = formatPushStatus({ state: 'recording', elapsed_s: 12, sink: { id: 1 }, note: null });
+    assert.equal(label, 'state: recording · elapsed s: 12');
+    assert.ok(!label.includes('{'), 'no JSON punctuation reaches the card');
+});
+
+test('formatPushStatus yields an empty label for shapes with nothing to show', () => {
+    for (const status of [null, undefined, {}, [], [1, 2], { nested: { a: 1 } }]) {
+        assert.equal(formatPushStatus(status), '', JSON.stringify(status ?? null));
+    }
 });

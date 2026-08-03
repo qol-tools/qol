@@ -29,6 +29,14 @@ pub(super) fn subscribed(clean_id: &str, events: &[RuntimeEventKind], replayed_i
     let _ = (clean_id, events, replayed_idx);
 }
 
+pub(super) fn push(clean_id: &str, kind: &str, accepted: bool) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!("PUSH", "plugin={clean_id} kind={kind} accepted={accepted}");
+
+    #[cfg(not(debug_assertions))]
+    let _ = (clean_id, kind, accepted);
+}
+
 pub(super) fn publish_summary(
     events: &[RuntimeEvent],
     subscriber_results: &[(String, bool, bool)],

@@ -49,7 +49,7 @@ fn classify_session_desktop(desktop: Option<&str>) -> (Option<&'static str>, boo
     match classify_desktop(desktop) {
         DesktopEnvironment::Gnome => (Some("GNOME"), true),
         DesktopEnvironment::Cinnamon => (Some("Cinnamon"), true),
-        DesktopEnvironment::Kde => (Some("KDE"), false),
+        DesktopEnvironment::Kde => (Some("KDE"), true),
         DesktopEnvironment::Unknown => (None, false),
     }
 }
@@ -125,7 +125,11 @@ mod tests {
             classify_session_desktop(Some("X-Cinnamon")),
             (Some("Cinnamon"), true)
         );
-        assert_eq!(classify_session_desktop(Some("KDE")), (Some("KDE"), false));
+        assert_eq!(classify_session_desktop(Some("KDE")), (Some("KDE"), true));
+        assert_eq!(
+            classify_session_desktop(Some("plasma")),
+            (Some("KDE"), true)
+        );
         assert_eq!(classify_session_desktop(Some("Hyprland")), (None, false));
         assert_eq!(classify_session_desktop(None), (None, false));
     }

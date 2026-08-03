@@ -1,15 +1,8 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
-use crate::file_io;
 use crate::paths;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SyncTarget {
-    pub repo_url: String,
-    #[serde(default)]
-    pub auto_created: bool,
-}
+pub use qol_profile_sync::SyncTarget;
 
 pub fn ensure_profile_dirs_for(name: &str) -> Result<()> {
     let store = super::ProfileScopeStore::new(
@@ -21,26 +14,15 @@ pub fn ensure_profile_dirs_for(name: &str) -> Result<()> {
 }
 
 pub fn load_sync_target() -> Result<Option<SyncTarget>> {
-    let path = paths::profile_sync_config_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(&path)?;
-    Ok(Some(serde_json::from_slice(&bytes)?))
+    qol_profile_sync::load_sync_target(&paths::profile_dir()?)
 }
 
 pub fn save_sync_target(target: &SyncTarget) -> Result<()> {
-    let path = paths::profile_sync_config_path()?;
-    file_io::ensure_parent_dir(&path)?;
-    file_io::write_pretty_json(&path, target)
+    qol_profile_sync::save_sync_target(&paths::profile_dir()?, target)
 }
 
 pub fn clear_sync_target() -> Result<()> {
-    let path = paths::profile_sync_config_path()?;
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-    }
-    Ok(())
+    qol_profile_sync::clear_sync_target(&paths::profile_dir()?)
 }
 
 #[cfg(test)]

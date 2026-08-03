@@ -371,3 +371,51 @@ fn title_case(value: &str) -> String {
     result.push_str(chars.as_str());
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::parse_spec_str;
+
+    const FREE_FORM_SPEC: &str = r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = []
+"#;
+
+    #[test]
+    fn free_form_string_array_normalizes_overrides_and_defaults() {
+        let spec = parse_spec_str(FREE_FORM_SPEC).unwrap();
+        let resolved = resolve_config(
+            &spec,
+            &serde_json::json!({ "service_commands": ["cargo watch", "tail -f"] }),
+        )
+        .unwrap();
+        let field = &resolved.fields[0];
+        assert_eq!(field.kind, FieldKind::StringArray);
+        assert_eq!(
+            field.value,
+            FieldDefault::StringArray(vec!["cargo watch".to_string(), "tail -f".to_string()])
+        );
+        assert_eq!(field.default, FieldDefault::StringArray(Vec::new()));
+    }
+
+    #[test]
+    fn free_form_string_array_invalid_override_falls_back_to_default() {
+        let spec = parse_spec_str(FREE_FORM_SPEC).unwrap();
+        let resolved = resolve_config(
+            &spec,
+            &serde_json::json!({ "service_commands": "cargo watch" }),
+        )
+        .unwrap();
+        let field = &resolved.fields[0];
+        assert_eq!(
+            field.value,
+            FieldDefault::StringArray(Vec::new()),
+            "an override that is not an array falls back to the contract default"
+        );
+    }
+}

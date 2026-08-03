@@ -8,12 +8,15 @@ mod trace;
 use std::path::PathBuf;
 use std::process::Command;
 
+use qol_windowing::{WindowId, WindowOps, WindowRect};
+
 use crate::config::WindowActionsConfig;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::WindowSystem;
 
 use geometry::{
-    center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
+    ax_set, center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left,
+    snap_right,
 };
 
 pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
@@ -83,53 +86,77 @@ pub(crate) fn state_file_path() -> PathBuf {
 
 pub(crate) struct MacWindowSystem;
 
-impl WindowSystem for MacWindowSystem {
-    fn active_window_id(&self) -> Result<Option<String>, String> {
-        let Some(pid) = ax::find_normal_window_pid().filter(|p| *p > 0) else {
-            return Ok(None);
-        };
-        Ok(Some(format!("pid:{pid}")))
-    }
-
-    fn minimize_window(&self, window_id: &str) -> Result<bool, String> {
-        let pid = parse_pid(window_id).ok_or_else(|| format!("Invalid window ID: {window_id}"))?;
-        Ok(ax::instant_minimize(pid as i32))
-    }
-
-    fn window_rect(&self, window_id: &str) -> Option<[f64; 4]> {
-        let pid = parse_pid(window_id)? as i32;
-        let r = ax::front_window_rect(pid)?;
-        Some([r.x, r.y, r.w, r.h])
-    }
-
-    fn stacking_window_ids(&self) -> Result<Vec<String>, String> {
+impl WindowOps for MacWindowSystem {
+    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
         Ok(vec![])
     }
 
-    fn is_window_id(&self, id: &str) -> bool {
-        id.starts_with("pid:")
+    fn window_geometry(&self, window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+        let pid = parse_pid(window_id.as_str())
+            .ok_or_else(|| format!("Invalid window ID: {}", window_id.as_str()))?
+            as i32;
+        let Some(r) = ax::front_window_rect(pid) else {
+            return Ok(None);
+        };
+        Ok(Some(WindowRect {
+            x: r.x,
+            y: r.y,
+            width: r.w,
+            height: r.h,
+        }))
     }
 
-    fn normalize_window_id(&self, window_id: &str) -> Option<String> {
-        if !self.is_window_id(window_id) {
-            return None;
-        }
-        Some(window_id.to_string())
+    fn move_resize(&self, window_id: &WindowId, rect: WindowRect) -> Result<(), String> {
+        let pid = parse_pid(window_id.as_str())
+            .ok_or_else(|| format!("Invalid window ID: {}", window_id.as_str()))?
+            as i32;
+        let rect = screen::Rect {
+            x: rect.x,
+            y: rect.y,
+            w: rect.width,
+            h: rect.height,
+        };
+        ax_set(pid, rect)
     }
 
-    fn is_excluded_window_type(&self, window_id: &str) -> Result<bool, String> {
-        let Some(pid) = parse_pid(window_id) else {
+    fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let pid = parse_pid(window_id.as_str())
+            .ok_or_else(|| format!("Invalid window ID: {}", window_id.as_str()))?;
+        Ok(ax::unminimize_and_raise(pid as i32))
+    }
+
+    fn minimize_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let pid = parse_pid(window_id.as_str())
+            .ok_or_else(|| format!("Invalid window ID: {}", window_id.as_str()))?;
+        Ok(ax::instant_minimize(pid as i32))
+    }
+
+    fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        self.focus_window(window_id)
+    }
+}
+
+impl WindowSystem for MacWindowSystem {
+    fn active_window_id(&self) -> Result<Option<WindowId>, String> {
+        let Some(pid) = ax::find_normal_window_pid().filter(|p| *p > 0) else {
+            return Ok(None);
+        };
+        Ok(WindowId::parse(&format!("pid:{pid}")))
+    }
+
+    fn is_excluded_window_type(&self, window_id: &WindowId) -> Result<bool, String> {
+        let Some(pid) = parse_pid(window_id.as_str()) else {
             return Ok(true);
         };
         Ok(!ax::is_normal_window(pid as i32))
     }
 
-    fn is_hidden_window(&self, _window_id: &str) -> Result<bool, String> {
+    fn is_hidden_window(&self, _window_id: &WindowId) -> Result<bool, String> {
         Ok(true)
     }
 
-    fn is_launcher_window(&self, window_id: &str) -> bool {
-        let Some(pid) = parse_pid(window_id) else {
+    fn is_launcher_window(&self, window_id: &WindowId) -> bool {
+        let Some(pid) = parse_pid(window_id.as_str()) else {
             return false;
         };
         process_name(pid as u32)
@@ -142,19 +169,8 @@ impl WindowSystem for MacWindowSystem {
             .unwrap_or(false)
     }
 
-    fn activate_window(&self, window_id: &str) -> Result<bool, String> {
-        let pid = parse_pid(window_id).ok_or_else(|| format!("Invalid window ID: {window_id}"))?;
-        Ok(ax::unminimize_and_raise(pid as i32))
-    }
-
-    fn restore_rect(&self, window_id: &str, rect: [f64; 4]) -> Result<(), String> {
-        let pid = parse_pid(window_id).ok_or_else(|| format!("Invalid window ID: {window_id}"))?;
-        let _ = (pid, rect);
-        Ok(())
-    }
-
-    fn window_pid(&self, window_id: &str) -> Result<Option<u32>, String> {
-        Ok(parse_pid(window_id).map(|p| p as u32))
+    fn window_pid(&self, window_id: &WindowId) -> Result<Option<u32>, String> {
+        Ok(parse_pid(window_id.as_str()).map(|p| p as u32))
     }
 
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
+use qol_runtime::protocol::NotificationLevel;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,10 @@ pub fn process_alive(pid: u32) -> bool {
 }
 
 pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
+    let client = qol_runtime::PlatformStateClient::from_env();
+    if client.send_notification(title, message, NotificationLevel::Info) {
+        return;
+    }
     let script = format!(
         "display notification \"{}\" with title \"{}\"",
         escape_applescript(message),

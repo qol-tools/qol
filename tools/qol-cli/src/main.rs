@@ -70,7 +70,15 @@ fn run(args: Vec<OsString>) -> Result<()> {
                 qol_headless::OutputFormat::PlainText
             },
         ),
-        "sync" => bail!("`qol sync` is not implemented yet - use `make sync` for now"),
+        "sync" => {
+            if args.json {
+                let value = commands::sync::run_json()?;
+                println!("{value}");
+            } else {
+                commands::sync::run(rest)?;
+            }
+            Ok(())
+        }
         "help" | "-h" | "--help" => Ok(()),
         other => bail!("unknown command `{other}`\n\n{}", help_text()),
     }

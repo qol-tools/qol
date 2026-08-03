@@ -6,8 +6,8 @@ mod linux;
 mod macos;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) use fallback::{show_already_running, show_first_run};
+pub use fallback::{show_already_running, show_first_run, show_plugin_notification};
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{show_already_running, show_first_run};
+pub use linux::{show_already_running, show_first_run, show_plugin_notification};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{show_already_running, show_first_run};
+pub use macos::{show_already_running, show_first_run, show_plugin_notification};

@@ -1,17 +1,10 @@
 use anyhow::{anyhow, Result};
-use std::path::Path;
 
 use super::git_repo::GitRepo;
 use super::merge::{merge_profile, ProfileMerge, ProfileSnapshot};
-use crate::features::profile::ProfileScopeStore;
+use crate::scope::mergeable_path;
 
-pub(crate) fn mergeable_path(rel: &Path) -> bool {
-    ProfileScopeStore::is_sync_allowlisted(rel)
-        && rel.extension().map(|ext| ext == "json").unwrap_or(false)
-        && !rel.components().any(|c| c.as_os_str() == "sync")
-}
-
-pub(crate) fn reconcile(repo: &GitRepo) -> Result<ProfileMerge> {
+pub fn reconcile(repo: &GitRepo) -> Result<ProfileMerge> {
     let local_oid = repo
         .local_oid()?
         .ok_or_else(|| anyhow!("local branch has no commit"))?;
@@ -31,8 +24,8 @@ pub(crate) fn reconcile(repo: &GitRepo) -> Result<ProfileMerge> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::git_repo::{GitRepo, SignatureSpec};
     use super::*;
+    use crate::git_repo::{GitRepo, SignatureSpec};
     use git2::Repository;
     use std::path::Path;
     use tempfile::TempDir;

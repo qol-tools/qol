@@ -386,6 +386,14 @@ fn classify_link_status(status: u16) -> Result<DevLinkOutcome> {
     }
 }
 
+pub(crate) fn post_api_json(route: &str, body: &str) -> Result<String> {
+    let (status, response) = http_exchange("POST", &api_url(route), Some(body))?;
+    if !(200..=299).contains(&status) {
+        bail!("POST {route} failed with HTTP {status}");
+    }
+    Ok(response)
+}
+
 fn http_get_ok(url: &str) -> Result<bool> {
     let status = http_request("GET", url, None)?;
     Ok(status == 200)

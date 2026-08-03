@@ -19,7 +19,6 @@ use crate::plugins::manifest::PluginUid;
 use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -271,13 +270,6 @@ pub(crate) fn profile_config_read_count() -> u64 {
     PROFILE_CONFIG_READS.with(Cell::get)
 }
 
-pub(crate) fn redacted_profile_fingerprint(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-        .chars()
-        .take(12)
-        .collect()
-}
-
 struct RuntimeConfigTrace<'a> {
     scope: &'a str,
     generation: u64,
@@ -417,13 +409,13 @@ fn load_runtime_config_lock_snapshot(manager: &PluginConfigManager) -> RuntimeCo
 
 fn fingerprint_lock(lock: &crate::features::profile::core::PluginsLock) -> String {
     serde_json::to_vec(lock)
-        .map(|bytes| redacted_profile_fingerprint(&bytes))
+        .map(|bytes| qol_profile_sync::promote::redacted_fingerprint(&bytes))
         .unwrap_or_else(|_| "unavailable".to_string())
 }
 
 fn fingerprint_path(path: &Path) -> String {
     std::fs::read(path)
-        .map(|bytes| redacted_profile_fingerprint(&bytes))
+        .map(|bytes| qol_profile_sync::promote::redacted_fingerprint(&bytes))
         .unwrap_or_else(|_| "unavailable".to_string())
 }
 

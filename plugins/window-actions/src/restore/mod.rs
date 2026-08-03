@@ -1,3 +1,4 @@
+use qol_windowing::{WindowId, WindowOps, WindowRect};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) mod state_store;
@@ -6,11 +7,11 @@ pub(crate) const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
 
 #[derive(Clone)]
 pub(crate) struct MinimizedWindowRecord {
-    pub window_id: String,
+    pub window_id: WindowId,
     pub pid: u32,
     pub process_start_ticks: u64,
     pub saved_at_unix_secs: u64,
-    pub saved_rect: Option<[f64; 4]>,
+    pub saved_rect: Option<WindowRect>,
 }
 
 /// Stack of minimized window records. Minimize pushes, restore pops.
@@ -23,19 +24,15 @@ pub(crate) trait MinimizedStateStore {
     fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String>;
 }
 
-pub(crate) trait WindowSystem {
-    fn active_window_id(&self) -> Result<Option<String>, String>;
-    fn minimize_window(&self, window_id: &str) -> Result<bool, String>;
-    fn window_rect(&self, window_id: &str) -> Option<[f64; 4]>;
-    fn stacking_window_ids(&self) -> Result<Vec<String>, String>;
-    fn is_window_id(&self, id: &str) -> bool;
-    fn normalize_window_id(&self, window_id: &str) -> Option<String>;
-    fn is_excluded_window_type(&self, window_id: &str) -> Result<bool, String>;
-    fn is_hidden_window(&self, window_id: &str) -> Result<bool, String>;
-    fn is_launcher_window(&self, window_id: &str) -> bool;
-    fn activate_window(&self, window_id: &str) -> Result<bool, String>;
-    fn restore_rect(&self, window_id: &str, rect: [f64; 4]) -> Result<(), String>;
-    fn window_pid(&self, window_id: &str) -> Result<Option<u32>, String>;
+/// Plugin-specific window queries layered over the shared [`WindowOps`]
+/// contract. Window identity and the common operations (geometry, focus,
+/// minimize) come from the shared trait; restore-only policy lives here.
+pub(crate) trait WindowSystem: WindowOps {
+    fn active_window_id(&self) -> Result<Option<WindowId>, String>;
+    fn is_excluded_window_type(&self, window_id: &WindowId) -> Result<bool, String>;
+    fn is_hidden_window(&self, window_id: &WindowId) -> Result<bool, String>;
+    fn is_launcher_window(&self, window_id: &WindowId) -> bool;
+    fn window_pid(&self, window_id: &WindowId) -> Result<Option<u32>, String>;
     fn process_start_ticks(&self, pid: u32) -> Option<u64>;
 }
 
@@ -49,11 +46,11 @@ pub(crate) fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
     };
 
     if query_or(system.is_excluded_window_type(&window_id), false) {
-        trace_restore("minimize", &window_id, "excluded");
+        trace_restore("minimize", window_id.as_str(), "excluded");
         return Ok(());
     }
 
-    let saved_rect = system.window_rect(&window_id);
+    let saved_rect = system.window_geometry(&window_id).ok().flatten();
 
     if !system.minimize_window(&window_id)? {
         return Err("Failed to minimize window".to_string());
@@ -62,7 +59,7 @@ pub(crate) fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
     let recorded = push_minimized_window(system, store, &window_id, saved_rect);
     trace_restore(
         "minimize",
-        &window_id,
+        window_id.as_str(),
         if recorded { "recorded" } else { "unrecorded" },
     );
     Ok(())
@@ -95,13 +92,13 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     };
 
     if is_record_expired(&record) {
-        trace_restore("restore", &record.window_id, "expired");
+        trace_restore("restore", record.window_id.as_str(), "expired");
         store.pop().ok();
         return Ok(false);
     }
 
     if !is_record_current(system, &record)? {
-        trace_restore("restore", &record.window_id, "stale");
+        trace_restore("restore", record.window_id.as_str(), "stale");
         store.pop().ok();
         return Ok(false);
     }
@@ -109,14 +106,14 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     match try_restore_window(system, &record.window_id)? {
         RestoreAttempt::Restored => {
             if let Some(rect) = record.saved_rect {
-                let _ = system.restore_rect(&record.window_id, rect);
+                let _ = system.move_resize(&record.window_id, rect);
             }
             store.pop().ok();
-            trace_restore("restore", &record.window_id, "restored");
+            trace_restore("restore", record.window_id.as_str(), "restored");
             return Ok(true);
         }
         RestoreAttempt::Skipped => {
-            trace_restore("restore", &record.window_id, "skipped");
+            trace_restore("restore", record.window_id.as_str(), "skipped");
         }
     }
 
@@ -125,7 +122,7 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
 }
 
 fn restore_hidden_window_from_stacking<S: WindowSystem>(system: &S) -> Result<(), String> {
-    let window_ids = system.stacking_window_ids()?;
+    let window_ids = system.enumerate_windows()?;
 
     for window_id in window_ids {
         match try_restore_window(system, &window_id)? {
@@ -139,11 +136,8 @@ fn restore_hidden_window_from_stacking<S: WindowSystem>(system: &S) -> Result<()
 
 fn try_restore_window<S: WindowSystem>(
     system: &S,
-    window_id: &str,
+    window_id: &WindowId,
 ) -> Result<RestoreAttempt, String> {
-    if !system.is_window_id(window_id) {
-        return Ok(RestoreAttempt::Skipped);
-    }
     if query_or(system.is_excluded_window_type(window_id), false) {
         return Ok(RestoreAttempt::Skipped);
     }
@@ -153,7 +147,7 @@ fn try_restore_window<S: WindowSystem>(
     if !query_or(system.is_hidden_window(window_id), false) {
         return Ok(RestoreAttempt::Skipped);
     }
-    if system.activate_window(window_id)? {
+    if system.focus_window(window_id)? {
         Ok(RestoreAttempt::Restored)
     } else {
         Ok(RestoreAttempt::Skipped)
@@ -167,14 +161,10 @@ fn query_or(value: Result<bool, String>, fallback: bool) -> bool {
 fn push_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
-    window_id: &str,
-    saved_rect: Option<[f64; 4]>,
+    window_id: &WindowId,
+    saved_rect: Option<WindowRect>,
 ) -> bool {
-    let Some(window_id) = system.normalize_window_id(window_id) else {
-        return false;
-    };
-
-    let Some(pid) = system.window_pid(&window_id).ok().flatten() else {
+    let Some(pid) = system.window_pid(window_id).ok().flatten() else {
         return false;
     };
 
@@ -183,7 +173,7 @@ fn push_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     };
 
     let record = MinimizedWindowRecord {
-        window_id,
+        window_id: window_id.clone(),
         pid,
         process_start_ticks,
         saved_at_unix_secs: current_unix_secs(),
@@ -230,4 +220,180 @@ fn current_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    const WINDOW_ID: &str = "0x1";
+
+    fn window_id() -> WindowId {
+        WindowId::parse(WINDOW_ID).unwrap()
+    }
+
+    /// The tri-state a `window_geometry` backend may report under the
+    /// WindowOps contract.
+    enum Geometry {
+        /// Backend queried and found the window.
+        Rect(WindowRect),
+        /// Backend queried and the window is gone.
+        Gone,
+        /// Backend cannot report geometry (unsupported).
+        Unsupported,
+    }
+
+    struct FakeWindowSystem {
+        geometry: Geometry,
+        move_resize_ok: bool,
+        move_resize_calls: RefCell<Vec<(WindowId, WindowRect)>>,
+    }
+
+    impl FakeWindowSystem {
+        fn new(geometry: Geometry) -> Self {
+            Self {
+                geometry,
+                move_resize_ok: true,
+                move_resize_calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl WindowOps for FakeWindowSystem {
+        fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
+            Ok(vec![])
+        }
+
+        fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+            match &self.geometry {
+                Geometry::Rect(rect) => Ok(Some(*rect)),
+                Geometry::Gone => Ok(None),
+                Geometry::Unsupported => Err("not implemented".to_string()),
+            }
+        }
+
+        fn move_resize(&self, window_id: &WindowId, rect: WindowRect) -> Result<(), String> {
+            self.move_resize_calls
+                .borrow_mut()
+                .push((window_id.clone(), rect));
+            if self.move_resize_ok {
+                Ok(())
+            } else {
+                Err("not implemented".to_string())
+            }
+        }
+
+        fn focus_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn minimize_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
+            self.focus_window(window_id)
+        }
+    }
+
+    impl WindowSystem for FakeWindowSystem {
+        fn active_window_id(&self) -> Result<Option<WindowId>, String> {
+            Ok(Some(window_id()))
+        }
+
+        fn is_excluded_window_type(&self, _window_id: &WindowId) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn is_hidden_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn is_launcher_window(&self, _window_id: &WindowId) -> bool {
+            false
+        }
+
+        fn window_pid(&self, _window_id: &WindowId) -> Result<Option<u32>, String> {
+            Ok(Some(1))
+        }
+
+        fn process_start_ticks(&self, _pid: u32) -> Option<u64> {
+            Some(1)
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeStore {
+        records: RefCell<Vec<MinimizedWindowRecord>>,
+    }
+
+    impl MinimizedStateStore for FakeStore {
+        fn peek(&self) -> Result<Option<MinimizedWindowRecord>, String> {
+            Ok(self.records.borrow().last().cloned())
+        }
+
+        fn push(&self, record: &MinimizedWindowRecord) {
+            self.records.borrow_mut().push(record.clone());
+        }
+
+        fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String> {
+            Ok(self.records.borrow_mut().pop())
+        }
+    }
+
+    #[test]
+    fn minimize_saves_rect_only_for_ok_some_geometry() {
+        let saved = WindowRect::from_array([10.0, 20.0, 800.0, 600.0]);
+        let cases = [
+            ("window found", Geometry::Rect(saved), Some(saved)),
+            ("window gone", Geometry::Gone, None),
+            ("unsupported", Geometry::Unsupported, None),
+        ];
+        for (name, geometry, expected_rect) in cases {
+            let system = FakeWindowSystem::new(geometry);
+            let store = FakeStore::default();
+            assert!(
+                minimize_window(&system, &store).is_ok(),
+                "{name}: minimize must not fail on a non-readable geometry"
+            );
+            let record = store
+                .peek()
+                .unwrap()
+                .unwrap_or_else(|| panic!("{name}: minimize must push a record"));
+            assert_eq!(record.saved_rect, expected_rect, "{name}");
+        }
+    }
+
+    #[test]
+    fn restore_round_trips_saved_rect_and_tolerates_move_resize_errors() {
+        let saved = WindowRect::from_array([10.0, 20.0, 800.0, 600.0]);
+        for move_resize_ok in [true, false] {
+            let mut system = FakeWindowSystem::new(Geometry::Rect(saved));
+            system.move_resize_ok = move_resize_ok;
+            let store = FakeStore::default();
+            minimize_window(&system, &store).unwrap();
+            assert!(restore_window(&system, &store).is_ok());
+            let calls = system.move_resize_calls.borrow();
+            assert_eq!(calls.len(), 1, "move_resize_ok={move_resize_ok}");
+            assert_eq!(calls[0].0.as_str(), WINDOW_ID);
+            assert_eq!(calls[0].1, saved);
+            assert!(
+                store.peek().unwrap().is_none(),
+                "restore must pop the record, move_resize_ok={move_resize_ok}"
+            );
+        }
+    }
+
+    #[test]
+    fn restore_without_saved_rect_skips_move_resize() {
+        let system = FakeWindowSystem::new(Geometry::Gone);
+        let store = FakeStore::default();
+        minimize_window(&system, &store).unwrap();
+        assert!(restore_window(&system, &store).is_ok());
+        assert!(
+            system.move_resize_calls.borrow().is_empty(),
+            "no saved rect means no move_resize"
+        );
+    }
 }

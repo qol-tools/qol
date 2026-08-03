@@ -6,6 +6,10 @@ description = "Always-on-top overview of live Claude Code sessions."
 label = "Panel"
 description = "Where the always-on-top panel sits and how it refreshes."
 
+[section.detection]
+label = "Service detection"
+description = "Which commands count as long-running services."
+
 [field.corner]
 type = "string"
 section = "panel"
@@ -13,3 +17,12 @@ config_key = "corner"
 label = "Screen corner"
 description = "Which corner the panel parks in: top-left, top-right, bottom-left, bottom-right."
 default = "top-right"
+
+[field.service_commands]
+type = "string_array"
+section = "detection"
+config_key = "service_commands"
+label = "Service commands"
+description = "Command names treated as long-running services even when they hold no listening socket. One command per row."
+default = []
+placeholder = "e.g. cargo watch"

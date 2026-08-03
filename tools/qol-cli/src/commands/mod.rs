@@ -10,5 +10,6 @@ pub(crate) mod emu;
 pub(crate) mod env;
 pub(crate) mod flow;
 pub(crate) mod install;
+pub(crate) mod sync;
 pub(crate) mod trace;
 pub(crate) mod trace_rs;

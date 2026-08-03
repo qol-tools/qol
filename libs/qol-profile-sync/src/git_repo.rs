@@ -324,10 +324,19 @@ pub struct SignatureSpec {
 }
 
 impl SignatureSpec {
+    /// Commit identity used by the tray's SyncService.
     pub fn default_for_app() -> Self {
         Self {
             name: "qol-tray".to_string(),
             email: "qol-tray@localhost".to_string(),
+        }
+    }
+
+    /// Commit identity used by `qol sync`.
+    pub fn default_for_cli() -> Self {
+        Self {
+            name: "qol".to_string(),
+            email: "qol@localhost".to_string(),
         }
     }
 

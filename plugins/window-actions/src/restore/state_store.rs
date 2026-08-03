@@ -2,6 +2,8 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
+use qol_windowing::{WindowId, WindowRect};
+
 use super::{MinimizedStateStore, MinimizedWindowRecord};
 
 pub(crate) const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
@@ -74,11 +76,11 @@ fn write_lines(path: &PathBuf, lines: &[String]) {
 
 fn serialize_record(record: &MinimizedWindowRecord) -> String {
     let rect_str = record.saved_rect.map_or_else(String::new, |r| {
-        format!("|{},{},{},{}", r[0], r[1], r[2], r[3])
+        format!("|{},{},{},{}", r.x, r.y, r.width, r.height)
     });
     format!(
         "{}|{}|{}|{}{}",
-        record.window_id,
+        record.window_id.as_str(),
         record.pid,
         record.process_start_ticks,
         record.saved_at_unix_secs,
@@ -93,7 +95,7 @@ fn parse_record(raw: &str) -> Option<MinimizedWindowRecord> {
     }
 
     let mut parts = trimmed.split('|');
-    let window_id = normalize_window_id(parts.next()?.trim())?;
+    let window_id = WindowId::parse(parts.next()?.trim())?;
     let pid = parts.next()?.trim().parse::<u32>().ok()?;
     let process_start_ticks = parts.next()?.trim().parse::<u64>().ok()?;
     let saved_at_unix_secs = parts.next()?.trim().parse::<u64>().ok()?;
@@ -104,7 +106,7 @@ fn parse_record(raw: &str) -> Option<MinimizedWindowRecord> {
         let y = r.next()?.parse::<f64>().ok()?;
         let w = r.next()?.parse::<f64>().ok()?;
         let h = r.next()?.parse::<f64>().ok()?;
-        Some([x, y, w, h])
+        Some(WindowRect::from_array([x, y, w, h]))
     });
 
     Some(MinimizedWindowRecord {
@@ -114,19 +116,4 @@ fn parse_record(raw: &str) -> Option<MinimizedWindowRecord> {
         saved_at_unix_secs,
         saved_rect,
     })
-}
-
-fn normalize_window_id(window_id: &str) -> Option<String> {
-    if window_id.starts_with("pid:") {
-        return Some(window_id.to_string());
-    }
-    if is_x11_window_id(window_id) {
-        return Some(window_id.to_ascii_lowercase());
-    }
-    let numeric = window_id.trim().parse::<u64>().ok()?;
-    Some(format!("0x{numeric:x}"))
-}
-
-fn is_x11_window_id(id: &str) -> bool {
-    id.starts_with("0x") && id.len() > 2 && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
 }

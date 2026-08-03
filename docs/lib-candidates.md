@@ -22,17 +22,17 @@ Tray hotkeys and keyremap both parse user-facing key strings into backend-specif
 
 Target: `libs/qol-windowing`
 
-Status: candidate.
+Status: shared.
 
-Alt-tab and window-actions both model window identity, activation, geometry, minimize, restore, and platform backends. The first safe extraction is shared window identity/geometry plus pure restore logic, before moving X11 or macOS backend code.
+Alt-tab and window-actions both model window identity, activation, geometry, minimize, restore, and platform backends. The shared crate owns the normalized window identity (`WindowId`), geometry (`WindowRect`), and the `WindowOps` platform trait (enumerate, geometry, move/resize, focus, minimize, restore). Both plugins implement the trait on their platform backends; X11 backend code stays plugin-local behind the trait. Pure restore state logic and preview capture remain in the plugins.
 
 ## Zigbee and ZNP protocol stack
 
-Target: `libs/qol-znp` or `libs/qol-zigbee`
+Target: `libs/qol-zigbee`
 
-Status: conditional.
+Status: shared.
 
-The lights plugin has a mostly self-contained protocol stack for ZNP frames, transport, controller events, and ZCL payloads. Lift it if another device integration needs Zigbee primitives; otherwise keep it plugin-local.
+The ZNP protocol stack (frame/coordinator/device/zcl layers, coordinator serial transport, request engine, controller events, and port probing) lives in the shared crate. Lifted from the lights plugin without a second consumer yet, per explicit user request; lights consumes the lib while its daemon action dispatch, domain types (color/brightness/colortemp), presets, pair flow, and config stay plugin-local. Serial-port enumeration and coordinator-vendor detection stay in the plugin's platform layer.
 
 ## Dev workspace and plugin discovery
 
@@ -57,6 +57,14 @@ Target: `libs/qol-terminal-sessions`
 Status: shared.
 
 CLI Sessions and Voice independently consume backend-neutral terminal identity, live discovery, screen reading, focus, validated text input, and an extensible CLI-session interpreter. The interpreter provides a generic fallback plus registered tool-specific enrichment for Codex, Claude, and future tools; consumers do not reproduce process detection or semantic session naming. Backend adapters, typed transport errors, and CLI interpretation belong in the library. Attention state, screen-state policy, notifications, and persistence remain in CLI Sessions; recognition, target selection, delivery policy, and conversational routing remain in Voice. Neither plugin brokers the other.
+
+## Profile sync engine
+
+Target: `libs/qol-profile-sync`
+
+Status: shared.
+
+The tray's `SyncService` and `qol sync` drive one profile store and one GitHub-backed repo; the shared crate owns the conflict model and field-level merge, the state-file and toggles formats, conflict backup naming, the sync allowlist, the git repo shape, and the cross-process sync lock (flock-style lockfile in the per-device sync state dir). Consumers stay thin adapters that resolve the config directory and pass the profile root in; tray-specific runtime-config guards and GitHub HTTP connect logic remain in the tray, CLI token loading stays in the CLI.
 
 ## Doctor report shape
 

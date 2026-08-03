@@ -11,7 +11,7 @@ pub(crate) fn classify_desktop(raw: &str) -> DesktopEnvironment {
         match part.trim().to_ascii_lowercase().as_str() {
             "gnome" => return DesktopEnvironment::Gnome,
             "x-cinnamon" | "cinnamon" => return DesktopEnvironment::Cinnamon,
-            "kde" => return DesktopEnvironment::Kde,
+            "kde" | "plasma" => return DesktopEnvironment::Kde,
             _ => {}
         }
     }
@@ -27,6 +27,7 @@ mod tests {
         assert_eq!(classify_desktop("ubuntu:GNOME"), DesktopEnvironment::Gnome);
         assert_eq!(classify_desktop("X-Cinnamon"), DesktopEnvironment::Cinnamon);
         assert_eq!(classify_desktop("KDE"), DesktopEnvironment::Kde);
+        assert_eq!(classify_desktop("plasma"), DesktopEnvironment::Kde);
         assert_eq!(classify_desktop("Hyprland"), DesktopEnvironment::Unknown);
     }
 }

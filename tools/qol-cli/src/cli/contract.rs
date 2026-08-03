@@ -161,14 +161,22 @@ fn app() -> HeadlessApp {
             "Installation progress on stdout; diagnostics on stderr.",
             "Exits non-zero when installation fails.",
         ))
-        .command(command(
-            "sync",
-            "Report the current source synchronization route.",
-            "qol sync",
-            "This command currently directs callers to make sync.",
-            "Guidance on stderr.",
-            "Exits non-zero because direct qol sync is not implemented.",
-        ))
+        .command(
+            command(
+                "sync",
+                "Sync the active profile with its configured cloud repository.",
+                "qol sync",
+                "Pulls the latest profile from the configured git repository, merges changes field-level, and pushes local changes back. Conflicts keep local data and write a backup.",
+                "Human summary on stdout; diagnostics on stderr.",
+                "Exits non-zero when sync cannot complete or conflicts need review.",
+            )
+            .run_json(|context| {
+                if !context.args().is_empty() {
+                    return Err(anyhow!("usage: qol sync"));
+                }
+                crate::commands::sync::run_json()
+            }),
+        )
         .command(command(
             "trace",
             "Inspect a named runtime trace target.",

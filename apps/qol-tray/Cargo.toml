@@ -114,6 +114,7 @@ png = "0.17"
 qol-config.workspace = true
 qol-migrations.workspace = true
 qol-plugin-api.workspace = true
+qol-profile-sync.workspace = true
 qol-theme.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -1,22 +1,18 @@
 use anyhow::{Context, Result};
-use qol_migrations::FileMigration;
+use qol_profile_sync::{
+    backup_file_path, build_status, ensure_sync_dirs, filename_string, list_backup_entries,
+    load_state_file, load_toggles, merge_profile_with, mergeable_path, now_rfc3339,
+    promote::{promote_clone_git_dir, promotion_scope, promotion_scope_label, PromotionScope},
+    reconcile, repair_profile_schema, save_state_file, save_toggles, ConflictChoice, FieldConflict,
+    GitRepo, ProfileSnapshot, PullOutcome, ResolvableConflict, Side, SignatureSpec,
+    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncIncident,
+    SyncIncidentKind, SyncLock, SyncPaths, SyncStateFile, SyncStatus, SyncToggles,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::git_repo::{GitRepo, PullOutcome, SignatureSpec};
-use super::merge::{merge_profile_with, FieldConflict, ProfileSnapshot};
-use super::reconcile::{mergeable_path, reconcile};
-use super::state::{
-    backup_file_path, build_status, ensure_sync_dirs, filename_string, list_backup_entries,
-    load_state_file, load_toggles, now_rfc3339, save_state_file, save_toggles, SyncStateFile,
-    SyncToggles,
-};
-use super::types::{
-    ConflictChoice, ResolvableConflict, Side, SyncActionResult, SyncBackupEntry, SyncBackupPreview,
-    SyncConnectRequest, SyncIncident, SyncIncidentKind, SyncStatus,
-};
 use crate::features::profile::registry::{
     clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
 };
@@ -25,7 +21,10 @@ use std::collections::BTreeMap;
 
 const AUTO_PUSH_INTERVAL_SECS: u64 = 10;
 const DEFAULT_REPO_NAME: &str = "qol-tray-profiles";
-const GITIGNORE_CONTENTS: &str = "/active\n/sync.json\n*/device/\n";
+
+fn sync_paths() -> Result<SyncPaths> {
+    Ok(SyncPaths::new(crate::paths::profile_dir()?))
+}
 
 pub struct SyncService {
     state: Mutex<SyncStateFile>,
@@ -36,9 +35,15 @@ pub struct SyncService {
 
 impl SyncService {
     pub fn new(_plugins_dir: PathBuf) -> Result<Self> {
-        ensure_sync_dirs().ok();
-        let state = load_state_file().unwrap_or_default();
-        let toggles = load_toggles().unwrap_or_default();
+        ensure_sync_dirs(&sync_paths()?).ok();
+        let state = sync_paths()
+            .ok()
+            .and_then(|paths| load_state_file(&paths).ok())
+            .unwrap_or_default();
+        let toggles = sync_paths()
+            .ok()
+            .and_then(|paths| load_toggles(&paths).ok())
+            .unwrap_or_default();
         Ok(Self {
             state: Mutex::new(state),
             toggles: Mutex::new(toggles),
@@ -66,27 +71,35 @@ impl SyncService {
         };
         let repo_path = crate::paths::profile_dir()?;
         std::fs::create_dir_all(&repo_path)?;
+        let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
+        let has_content = existing_remote_has_content(&self.http, &target, &token).await?;
+        let clone_target = target.clone();
+        let repo = tokio::task::spawn_blocking(move || -> Result<GitRepo> {
+            let _sync_lock = SyncLock::acquire(&lock_path)?;
+            let repo = if has_content {
+                clone_remote_via_staging(&clone_target, &repo_path, &token)?
+            } else {
+                let repo = GitRepo::init(&repo_path, &clone_target.repo_url)?;
+                ensure_gitignore(&repo_path)?;
+                repo.commit_all(
+                    "qol-tray: initial commit",
+                    &SignatureSpec::default_for_app(),
+                )?;
+                repo.push(Some(&token))?;
+                repo
+            };
+            commit_profile_schema_repair(&repo_path, &repo, Some(&token))?;
+            Ok(repo)
+        })
+        .await
+        .context("join sync connect task")??;
 
-        let repo = if existing_remote_has_content(&self.http, &target, &token).await? {
-            clone_remote_via_staging(&target, &repo_path, &token)?
-        } else {
-            let repo = GitRepo::init(&repo_path, &target.repo_url)?;
-            ensure_gitignore(&repo_path)?;
-            repo.commit_all(
-                "qol-tray: initial commit",
-                &SignatureSpec::default_for_app(),
-            )?;
-            repo.push(Some(&token))?;
-            repo
-        };
-
-        commit_profile_schema_repair(&repo_path, &repo, Some(&token))?;
         save_sync_target(&target)?;
         let new_toggles = SyncToggles {
             pull_on_launch: request.pull_on_launch,
             push_on_change: request.push_on_change,
         };
-        save_toggles(new_toggles)?;
+        save_toggles(&sync_paths()?, new_toggles)?;
         *self.toggles_mut() = new_toggles;
 
         let head = repo.head_sha()?;
@@ -95,7 +108,7 @@ impl SyncService {
         state.last_sync_at = Some(now_rfc3339());
         state.last_error = None;
         state.incident = None;
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
 
@@ -120,13 +133,20 @@ impl SyncService {
         let _operation = self.operation_lock.lock().await;
         clear_sync_target()?;
         let repo_path = crate::paths::profile_dir()?;
-        let git_dir = repo_path.join(".git");
-        if git_dir.exists() {
-            std::fs::remove_dir_all(&git_dir).ok();
-        }
+        let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let _sync_lock = SyncLock::acquire(&lock_path)?;
+            let git_dir = repo_path.join(".git");
+            if git_dir.exists() {
+                std::fs::remove_dir_all(&git_dir).ok();
+            }
+            Ok(())
+        })
+        .await
+        .context("join sync disconnect task")??;
         let mut state = self.state_mut();
         *state = SyncStateFile::default();
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let cleared = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -188,13 +208,13 @@ impl SyncService {
     }
 
     pub fn open_backups_dir(&self) -> Result<()> {
-        ensure_sync_dirs()?;
-        let dir = crate::paths::sync_backups_dir()?;
+        ensure_sync_dirs(&sync_paths()?)?;
+        let dir = sync_paths()?.backups_dir();
         super::open_dir(&dir)
     }
 
     pub fn open_backup_file(&self, file_name: &str) -> Result<()> {
-        let path = backup_file_path(file_name)?;
+        let path = backup_file_path(&sync_paths()?, file_name)?;
         trace_backup_file("PROFILE_BACKUP_OPEN", file_name, &path);
         if !path.exists() {
             anyhow::bail!("backup not found");
@@ -203,12 +223,12 @@ impl SyncService {
     }
 
     pub fn list_backups(&self) -> Result<Vec<SyncBackupEntry>> {
-        let dir = crate::paths::sync_backups_dir().ok();
+        let dir = sync_paths().ok().map(|paths| paths.backups_dir());
         Ok(list_backup_entries(dir.as_deref()))
     }
 
     pub fn preview_backup(&self, file_name: &str) -> Result<SyncBackupPreview> {
-        let path = backup_file_path(file_name)?;
+        let path = backup_file_path(&sync_paths()?, file_name)?;
         trace_backup_file("PROFILE_BACKUP_PREVIEW", file_name, &path);
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("read backup {}", path.display()))?;
@@ -225,8 +245,10 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
+        let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
         let clone_target = target.clone();
         let pulled = tokio::task::spawn_blocking(move || -> Result<PullTaskOutput> {
+            let _sync_lock = SyncLock::acquire(&lock_path)?;
             let (repo, cloned) = match GitRepo::open(&repo_path) {
                 Ok(repo) => (repo, false),
                 Err(_) => (
@@ -313,7 +335,7 @@ impl SyncService {
         }
         state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -333,7 +355,9 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
+        let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
         let resolved = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+            let _sync_lock = SyncLock::acquire(&lock_path)?;
             let repo = GitRepo::open(&repo_path)?;
             let local_oid = repo
                 .local_oid()?
@@ -375,7 +399,7 @@ impl SyncService {
         state.last_error = None;
         state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -392,8 +416,10 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
+        let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
         let reason_owned = reason.to_string();
         let pushed = tokio::task::spawn_blocking(move || -> Result<PushTaskOutput> {
+            let _sync_lock = SyncLock::acquire(&lock_path)?;
             push_profile_changes(&repo_path, Some(&token), &reason_owned)
         })
         .await
@@ -428,7 +454,7 @@ impl SyncService {
         }
         state.head_sha = output.head;
         state.last_sync_at = Some(now_rfc3339());
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -465,7 +491,7 @@ impl SyncService {
     ) -> Result<SyncActionResult> {
         let mut state = self.state_mut();
         state.last_error = Some(format!("{error:#}"));
-        save_state_file(&state)?;
+        save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
@@ -477,12 +503,13 @@ impl SyncService {
 
     fn build_status_with(&self, state: &SyncStateFile, target: Option<&SyncTarget>) -> SyncStatus {
         let toggles = self.snapshot_toggles();
-        let backups_dir = crate::paths::sync_backups_dir().ok();
+        let backups_dir = sync_paths().ok().map(|paths| paths.backups_dir());
         let backup_files = list_backup_entries(backups_dir.as_deref());
         build_status(
             state,
             target,
             toggles,
+            crate::credentials::github_bearer_token().is_some(),
             backups_dir.as_deref(),
             &backup_files,
         )
@@ -706,9 +733,39 @@ fn clone_into_staging_then_promote(
     token: &str,
 ) -> Result<GitRepo> {
     GitRepo::clone(&target.repo_url, staging, Some(token))?;
-    super::promote::promote_allowlisted_clone(staging, profile_dir)?;
-    super::promote::promote_clone_git_dir(staging, profile_dir)?;
+    promote_allowlisted_clone(staging, profile_dir)?;
+    promote_clone_git_dir(staging, profile_dir)?;
     GitRepo::open(profile_dir).context("open promoted profile repo")
+}
+
+/// Promotes an allowlisted clone while holding the runtime-config guards:
+/// classifies the touched plugin scope from the staging tree, acquires the
+/// matching profile-config write guard, then delegates the copy to the
+/// shared engine. The generation-bearing trace summary stays tray-side.
+pub(crate) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Result<()> {
+    let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
+    let scope = promotion_scope(staging)?;
+    let scope_label = promotion_scope_label(&scope);
+    let _profile_guard = match scope {
+        PromotionScope::All => crate::plugins::config::profile_config_write_guard(),
+        PromotionScope::Plugins(plugin_ids) => {
+            crate::plugins::config::profile_config_write_guard_for_plugins(plugin_ids)
+        }
+    };
+    let generation = crate::plugins::config::current_profile_config_generation();
+    qol_profile_sync::promote_allowlisted_clone(staging, profile)?;
+    trace_profile_sync_apply("promote", &scope_label, generation);
+    Ok(())
+}
+
+fn trace_profile_sync_apply(operation: &str, outcome: &str, generation: u64) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PROFILE_SYNC_APPLY",
+        "operation={operation} outcome={outcome} scope=all profile_generation={generation} consumed_generation={generation} acknowledged_generation=none"
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (operation, outcome, generation);
 }
 
 fn create_staging_dir(profile_dir: &Path) -> Result<PathBuf> {
@@ -739,7 +796,8 @@ fn ensure_gitignore(repo_path: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    std::fs::write(&path, GITIGNORE_CONTENTS).with_context(|| format!("write {}", path.display()))
+    std::fs::write(&path, qol_profile_sync::GITIGNORE_CONTENTS)
+        .with_context(|| format!("write {}", path.display()))
 }
 
 fn short_sha(sha: &str) -> String {
@@ -817,7 +875,7 @@ fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> R
         std::fs::write(&path, format!("{text}\n"))
             .with_context(|| format!("write merged {}", path.display()))?;
     }
-    repair_profile_uid_schema(repo_path)?;
+    repair_profile_schema(repo_path)?;
     Ok(())
 }
 
@@ -845,16 +903,6 @@ fn apply_merged_profile(
     Ok(generation)
 }
 
-fn trace_profile_sync_apply(operation: &str, outcome: &str, generation: u64) {
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "PROFILE_SYNC_APPLY",
-        "operation={operation} outcome={outcome} scope=all profile_generation={generation} consumed_generation={generation} acknowledged_generation=none"
-    );
-    #[cfg(not(debug_assertions))]
-    let _ = (operation, outcome, generation);
-}
-
 fn commit_profile_schema_repair(
     repo_path: &Path,
     repo: &GitRepo,
@@ -873,7 +921,7 @@ fn commit_profile_schema_repair(
 fn repair_profile_schema_under_guard(repo_path: &Path) -> Result<bool> {
     let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
     let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
-    let changed = repair_profile_uid_schema(repo_path)?;
+    let changed = repair_profile_schema(repo_path)?;
     if !changed {
         return Ok(false);
     }
@@ -883,24 +931,8 @@ fn repair_profile_schema_under_guard(repo_path: &Path) -> Result<bool> {
     Ok(true)
 }
 
-fn repair_profile_uid_schema(repo_path: &Path) -> Result<bool> {
-    let config_dir = repo_path.parent().ok_or_else(|| {
-        anyhow::anyhow!("profile repo {} has no config parent", repo_path.display())
-    })?;
-    let migration = qol_migrations::V3_19ToV3_20PluginUid::default_for_production();
-    if !migration.applies(config_dir)? {
-        return Ok(false);
-    }
-    migration.migrate(config_dir, config_dir)?;
-    Ok(true)
-}
-
 fn write_conflict_backup(value: &Value) -> Result<String> {
-    ensure_sync_dirs()?;
-    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let name = format!("{stamp}-conflict.json");
-    crate::file_io::write_pretty_json(&crate::paths::sync_backups_dir()?.join(&name), value)?;
-    Ok(name)
+    qol_profile_sync::write_conflict_backup(&sync_paths()?, value)
 }
 
 fn decorate_conflicts(
@@ -1007,6 +1039,58 @@ mod tests {
         repo.commit_all("seed", &sig()).unwrap();
         repo.push(None).unwrap();
         repo
+    }
+
+    #[test]
+    fn promotion_advances_profile_generation() {
+        let tmp = TempDir::new().unwrap();
+        let staging = tmp.path().join("staging");
+        let profile = tmp.path().join("profile");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        write_file(
+            &staging.join("default/core/plugins.lock.json"),
+            &json!({"plugins": []}),
+        );
+        let before = crate::plugins::config::current_profile_config_generation();
+
+        promote_allowlisted_clone(&staging, &profile).unwrap();
+
+        let after = crate::plugins::config::current_profile_config_generation();
+        assert!(after > before);
+    }
+
+    #[test]
+    fn promotion_waits_for_autostart_profile_read() {
+        let tmp = TempDir::new().unwrap();
+        let staging = tmp.path().join("staging");
+        let profile = tmp.path().join("profile");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        write_file(
+            &staging.join("default/core/plugins.lock.json"),
+            &json!({"plugins": []}),
+        );
+        let read_guard = crate::plugins::config::profile_config_read_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let staging_for_thread = staging.clone();
+        let profile_for_thread = profile.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = promote_allowlisted_clone(&staging_for_thread, &profile_for_thread);
+            done_tx.send(result.is_ok()).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.try_recv().is_err());
+        drop(read_guard);
+        assert!(done_rx.recv().unwrap());
+        worker.join().unwrap();
+        assert_eq!(
+            read_json(&profile.join("default/core/plugins.lock.json")),
+            json!({"plugins": []})
+        );
     }
 
     #[test]

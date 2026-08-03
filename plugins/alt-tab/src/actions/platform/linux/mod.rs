@@ -2,6 +2,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use qol_windowing::{WindowId, WindowOps, WindowRect};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
@@ -14,11 +15,60 @@ const REASSERT_STEPS_MS: [u64; 5] = [16, 24, 40, 60, 100];
 
 static ACTIVATOR: OnceLock<Sender<u32>> = OnceLock::new();
 
-pub fn activate_window(window_id: u32) {
-    if window_id == 0 {
-        return;
+pub struct Platform;
+
+impl WindowOps for Platform {
+    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
+        Ok(crate::discovery::platform::linux::get_open_windows()
+            .into_iter()
+            .map(|window| WindowId::from_u32(window.id))
+            .collect())
     }
-    let _ = ACTIVATOR.get_or_init(start_activator).send(window_id);
+
+    fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+        Err("alt-tab: window geometry is not implemented on Linux".to_string())
+    }
+
+    fn move_resize(&self, _window_id: &WindowId, _rect: WindowRect) -> Result<(), String> {
+        Err("alt-tab: window move/resize is not implemented on Linux".to_string())
+    }
+
+    fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let id = x11_window_id(window_id)?;
+        Ok(activate_window(id))
+    }
+
+    fn minimize_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let id = x11_window_id(window_id)?;
+        Ok(minimize_window_by_id(id))
+    }
+
+    fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let id = x11_window_id(window_id)?;
+        let Some((conn, root)) = connect() else {
+            return Ok(false);
+        };
+        let Some(atom) = intern(&conn, b"WM_CHANGE_STATE") else {
+            return Ok(false);
+        };
+        Ok(send_to_root(&conn, root, id, atom, [1, 0, 0, 0, 0]))
+    }
+}
+
+fn x11_window_id(window_id: &WindowId) -> Result<u32, String> {
+    window_id
+        .as_u32()
+        .ok_or_else(|| format!("alt-tab: not an X11 window id: {}", window_id.as_str()))
+}
+
+pub fn activate_window(window_id: u32) -> bool {
+    if window_id == 0 {
+        return false;
+    }
+    ACTIVATOR
+        .get_or_init(start_activator)
+        .send(window_id)
+        .is_ok()
 }
 
 pub fn cancel_pending_activation() {}
@@ -224,14 +274,14 @@ pub fn quit_app(window_id: u32) {
     );
 }
 
-pub fn minimize_window_by_id(window_id: u32) {
+pub fn minimize_window_by_id(window_id: u32) -> bool {
     let Some((conn, root)) = connect() else {
-        return;
+        return false;
     };
     let Some(atom) = intern(&conn, b"WM_CHANGE_STATE") else {
-        return;
+        return false;
     };
-    let _ = send_to_root(&conn, root, window_id, atom, [3, 0, 0, 0, 0]);
+    send_to_root(&conn, root, window_id, atom, [3, 0, 0, 0, 0])
 }
 
 fn connect() -> Option<(RustConnection, u32)> {

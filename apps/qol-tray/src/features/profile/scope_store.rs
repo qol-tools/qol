@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
@@ -254,27 +254,7 @@ impl ProfileScopeStore {
     }
 
     pub fn is_sync_allowlisted(rel: &Path) -> bool {
-        if rel
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return false;
-        }
-        let parts: Vec<&str> = rel
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(s) => s.to_str(),
-                _ => None,
-            })
-            .collect();
-        match parts.as_slice() {
-            [".gitignore"] => true,
-            [_, file] if *file == MANIFEST_FILE => true,
-            [_, scope, _, ..] if *scope == CORE_SUBDIR => true,
-            [_, scope, _bucket, _, ..] if *scope == OS_SUBDIR => true,
-            [_, top, sub, _, ..] if *top == SYNC_SUBDIR && *sub == BACKUPS_SUBDIR => true,
-            _ => false,
-        }
+        qol_profile_sync::is_sync_allowlisted(rel)
     }
 }
 

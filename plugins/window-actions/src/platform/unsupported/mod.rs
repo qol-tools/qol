@@ -2,6 +2,8 @@ mod doctor;
 
 use std::path::PathBuf;
 
+use qol_windowing::{WindowId, WindowOps, WindowRect};
+
 use crate::config::WindowActionsConfig;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
@@ -60,52 +62,50 @@ pub(crate) fn state_file_path() -> PathBuf {
 
 struct UnsupportedWindowSystem;
 
-impl WindowSystem for UnsupportedWindowSystem {
-    fn active_window_id(&self) -> Result<Option<String>, String> {
-        Err(unsupported("active window lookup"))
-    }
-
-    fn minimize_window(&self, _window_id: &str) -> Result<bool, String> {
-        Err(unsupported("minimize"))
-    }
-
-    fn window_rect(&self, _window_id: &str) -> Option<[f64; 4]> {
-        None
-    }
-
-    fn stacking_window_ids(&self) -> Result<Vec<String>, String> {
+impl WindowOps for UnsupportedWindowSystem {
+    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
         Err(unsupported("window stacking lookup"))
     }
 
-    fn is_window_id(&self, _id: &str) -> bool {
-        false
+    fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+        Err(unsupported("window geometry lookup"))
     }
 
-    fn normalize_window_id(&self, _window_id: &str) -> Option<String> {
-        None
-    }
-
-    fn is_excluded_window_type(&self, _window_id: &str) -> Result<bool, String> {
-        Err(unsupported("window type lookup"))
-    }
-
-    fn is_hidden_window(&self, _window_id: &str) -> Result<bool, String> {
-        Err(unsupported("hidden window lookup"))
-    }
-
-    fn is_launcher_window(&self, _window_id: &str) -> bool {
-        false
-    }
-
-    fn activate_window(&self, _window_id: &str) -> Result<bool, String> {
-        Err(unsupported("window activation"))
-    }
-
-    fn restore_rect(&self, _window_id: &str, _rect: [f64; 4]) -> Result<(), String> {
+    fn move_resize(&self, _window_id: &WindowId, _rect: WindowRect) -> Result<(), String> {
         Err(unsupported("window geometry restore"))
     }
 
-    fn window_pid(&self, _window_id: &str) -> Result<Option<u32>, String> {
+    fn focus_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+        Err(unsupported("window activation"))
+    }
+
+    fn minimize_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+        Err(unsupported("minimize"))
+    }
+
+    fn restore_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+        Err(unsupported("window restore"))
+    }
+}
+
+impl WindowSystem for UnsupportedWindowSystem {
+    fn active_window_id(&self) -> Result<Option<WindowId>, String> {
+        Err(unsupported("active window lookup"))
+    }
+
+    fn is_excluded_window_type(&self, _window_id: &WindowId) -> Result<bool, String> {
+        Err(unsupported("window type lookup"))
+    }
+
+    fn is_hidden_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+        Err(unsupported("hidden window lookup"))
+    }
+
+    fn is_launcher_window(&self, _window_id: &WindowId) -> bool {
+        false
+    }
+
+    fn window_pid(&self, _window_id: &WindowId) -> Result<Option<u32>, String> {
         Err(unsupported("window process lookup"))
     }
 

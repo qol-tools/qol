@@ -4,6 +4,7 @@ import { Card, CardGrid } from '../../lib/components/Card.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { useModifierState } from '../../lib/hooks/use-modifier-state.js';
 import { PluginVersion } from '../../components/PluginVersion.js';
+import { formatPushStatus } from '../../utils/plugins.js';
 
 const brokenCovers = new Set();
 
@@ -14,7 +15,7 @@ function pluginMonogram(name) {
     return '?';
 }
 
-export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, loaded, onCardClick, onSelect, onToggleMenu }) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, loaded, pushStatuses, onCardClick, onSelect, onToggleMenu }) {
     return html`
         <${CardGrid} id="plugins-grid" className="plugin-grid-media grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && (loaded
@@ -29,16 +30,17 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, lo
             ${plugins.map((plugin, index) => html`
                 <${PluginCard} key=${plugin.id} plugin=${plugin} index=${index}
                     selected=${index === selectedIndex}
-                    updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect}
+                    updating=${updating} pushStatuses=${pushStatuses} onCardClick=${onCardClick} onSelect=${onSelect}
                     onToggleMenu=${onToggleMenu} />
             `)}
         <//>
     `;
 }
 
-function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, onToggleMenu }) {
+function PluginCard({ plugin, index, selected, updating, pushStatuses, onCardClick, onSelect, onToggleMenu }) {
     const cls = cardClassName(plugin);
     const chip = pluginStatusChip(plugin);
+    const pushStatus = pluginPushStatus(plugin, pushStatuses);
     const { shiftHeld } = useModifierState();
     const [, markBroken] = useState(0);
     const showCover = plugin.has_cover && !brokenCovers.has(plugin.id);
@@ -64,11 +66,20 @@ function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, 
                 ${chip && html`<span class="plugin-status-chip ${chip.className}" title=${chip.tooltip}>${chip.label}</span>`}
             </div>
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
+            ${pushStatus && html`<div class="plugin-push-status" title=${pushStatus.tooltip} data-selected-text="">${pushStatus.label}</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} onClick=${handleCogClick} />
             ${showShiftHint && html`<div class="plugin-shift-overlay">Menu</div>`}
         <//>
     `;
+}
+
+function pluginPushStatus(plugin, pushStatuses) {
+    const status = pushStatuses?.[plugin.id];
+    if (status == null) return null;
+    const label = formatPushStatus(status);
+    if (!label) return null;
+    return { label, tooltip: `Status: ${label}` };
 }
 
 function pluginStatusChip(plugin) {

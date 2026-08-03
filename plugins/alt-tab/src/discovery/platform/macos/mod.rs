@@ -203,7 +203,7 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
     })
 }
 
-fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
+pub(crate) fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
 
     let on_screen_opts =

@@ -23,11 +23,12 @@ Source ownership and the `ui/` versus `src/ui/` distinction are defined in
 4. Action dispatch (hotkey / dashboard / launcher to effect)
 5. Process lifecycle and ownership (daemon protocol + the host-death watchdog)
 6. The platform-state socket
-7. The `gpui` capability
-8. Other channels (config reload, logging, notifications)
-9. Environment variables qol-tray injects
-10. Footgun index
-11. Recipe: add a hotkey-triggered action
+7. The broker event bus (plugin to plugin)
+8. The `gpui` capability
+9. Other channels (config reload, logging, notifications)
+10. Environment variables qol-tray injects
+11. Footgun index
+12. Recipe: add a hotkey-triggered action
 
 ---
 
@@ -57,9 +58,11 @@ watchdog + wire protocol), `libs/qol-gpui` (gpui plugin building blocks), and
 | Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/qol-tray/src/plugins/action_executor/` |
 | Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/qol-runtime/src/client.rs`, `.../protocol.rs` |
 | `set_focus` | plugin to host | state socket, fire-and-forget | `runtime/server/socket/requests.rs` |
+| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/qol-runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
 | Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/qol-runtime/src/watchdog.rs` + `requests.rs` |
 | Logging | plugin to host | piped stderr/stdout relay | `apps/qol-tray/src/logging/relay.rs` |
-| OS notification | plugin to OS (NOT the tray) | `osascript` / `notify-send` | each plugin (e.g. `plugin-cli-sessions/src/notify.rs`) |
+| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `plugin-cli-sessions/src/notify.rs`) |
+| Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/qol-runtime/src/broker/{bus,client,protocol,topic}.rs` |
 
 ---
 
@@ -279,9 +282,9 @@ Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
   errors are logged, not raised), so a schema/struct mismatch degrades to defaults
   rather than erroring. Define `T: Deserialize + Default`.
 - The host writes that file from the editor form (`PUT /api/plugins/{id}/config`),
-  merging on write to preserve daemon-owned fields, then signals reload (section 8.1).
+  merging on write to preserve daemon-owned fields, then signals reload (section 9.1).
 - `list`/`status`/`qr_code`/`action` fields are never serialized into `config.json`;
-  they are driven live over the daemon socket (sections 4 and 8.1).
+  they are driven live over the daemon socket (sections 4 and 9.1).
 
 ---
 
@@ -450,20 +453,105 @@ Requests (newline JSON, `cmd`-tagged): `get_state` (monitors etc.),
 stream of `RuntimeEvent`; kinds include `active_monitor_changed`, `cursor_moved`,
 `focus_changed`, `monitors_changed`, `window_list_changed`, `launcher_apps_synced`),
 `lifeline {plugin_id}`
-(the watchdog), `armed_lifelines` (host-internal audit).
+(the watchdog), `armed_lifelines` (host-internal audit),
+`get_plugin_config`/`set_plugin_config {plugin_id, config}` (host-side config store),
+and the push requests `push_notification` / `push_status` (section 9.3).
 
-**Direction invariant**: this is host-to-plugin for data. Plugins read state and
-consume events; the only plugin-to-host writes are `set_focus`, opening a
-`subscribe`/`lifeline` stream, and the `armed_lifelines` query. **A plugin cannot
-push status or notifications to the tray over this socket** - the event publisher is
-qol-tray-internal. Unknown verbs get no response and the connection is dropped.
+**Direction invariant**: the socket is host-authoritative for *state* - plugins
+read state and consume events, and no plugin request mutates host state. The
+plugin-to-host writes are `set_focus`, opening a `subscribe`/`lifeline` stream,
+the `armed_lifelines` query, the config get/set requests, and the
+`push_notification`/`push_status` display requests (section 9.3), which are
+one-shot request/ack and change nothing on the host except what the user sees.
+The event publisher is qol-tray-internal. Unknown verbs get no response and the
+connection is dropped.
 
 gpui plugins consume this via `qol_gpui::MonitorTracker` (placement) and
 `qol_gpui::event_router` (reacting to monitor/focus changes).
 
 ---
 
-## 7. The `gpui` capability
+## 7. The broker event bus (plugin to plugin)
+
+> Status: not yet served. The bus state machine, the capability gate, the wire
+> protocol and the plugin client all exist, but nothing binds the broker socket
+> in qol-tray yet, so `EventBusClient::publish` returns `false` and
+> `subscribe` returns `None` on a real system (both log a warning saying so).
+> The same is true of the pane-field pull API this bus sits beside. Treat this
+> section as the contract a host implementation must satisfy, not as a channel
+> plugins can use today.
+
+The per-uid broker socket hosts a publish/subscribe bus beside the pane-field
+pull API (design: `libs/qol-runtime/docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md`).
+Same transport, same identity model as the pull API: the socket file is mode
+`0600` inside a `0700` parent (`libs/qol-runtime/src/broker/path.rs`), and
+peer credentials are verified at accept (`peer_cred.rs`), so only same-uid
+processes connect. A plugin can therefore only publish to, and only receive
+events from, peers on its own uid - there is no cross-uid delivery.
+
+Source of truth: `libs/qol-runtime/src/broker/` - `bus.rs` (core), `topic.rs`
+(gate), `protocol.rs` (wire types), `client.rs` (plugin API).
+
+### 7.1 Topics and the naming convention
+
+A topic is an open-set string, matched exactly (no wildcards, no prefix
+grants). Convention: dotted `producer.event` in snake_case, ASCII lowercase -
+the producer namespaces its events, e.g. `kitty.session_opened`,
+`kitty.session_closed`. A subscriber must declare and name the full topic;
+declaring `kitty` grants nothing.
+
+### 7.2 Capability gating (default-deny)
+
+`check_topic_access` (`topic.rs`) runs against the plugin's declared topic set,
+mirroring `check_field_access` for pane fields, with one difference: pane
+fields have an always-allowed subset (`foreground.exe`, `foreground.pid`), the
+bus has none. Nothing on the bus is implicitly public. Both directions are
+gated: a plugin may neither publish to nor subscribe to a topic outside its
+declared set, and a refused subscribe registers nothing. The socket layer
+resolves the declared set from the plugin manifest, following the
+`pane-fields` declaration pattern; the manifest key is not wired yet, and the
+gate plus the wire protocol are the V1 scope.
+
+### 7.3 Delivery guarantees
+
+- **Fire-and-forget.** `publish` never blocks and never acks. A full
+  subscriber queue silently drops the event (bounded, `BUS_QUEUE_CAPACITY`).
+  The client `publish` returns `true` when the request was written to the
+  socket, not when it was delivered.
+- **Subscribers only.** Events reach exactly the current subscribers, with no
+  history: a subscription sees only events published after it was made.
+  Unsubscribe (connection close) stops delivery and closes the subscription
+  queue, so the drainer sees the channel end.
+- **Same-uid only.** The socket identity model above bounds the whole bus to
+  one uid.
+
+### 7.4 Wire protocol and client API
+
+Newline-delimited JSON on the broker socket, additive beside the pane-field
+pull API, which keeps its own request shape and is untouched (`protocol.rs`).
+Messages: `Subscribe {topic}` and `Publish {topic, payload}` requests, one
+`SubscribeAck` line per subscribe, and `BrokerEvent {topic, payload}` lines
+to each subscriber.
+
+Plugin API (`client.rs`), one call each, no async setup:
+
+```rust
+let bus = qol_runtime::broker::EventBusClient::from_env(); // None where the platform has no broker socket
+bus.publish("kitty.session_opened", &serde_json::json!({ "pane_id": "p1" }));
+let sub = bus.subscribe("kitty.session_opened", |topic, payload| {
+    // runs on the subscription's reader thread; keep it cheap
+});
+// dropping `sub` shuts the subscription down
+```
+
+`subscribe` returns `None` when the broker is unreachable or the topic is not
+in the plugin's declared set. Composition with the pull API: a connection is
+authenticated once and may both pull pane fields and take part in the bus; the
+two gates are separate checks over separate declarations (fields vs topics).
+
+---
+
+## 8. The `gpui` capability
 
 `capabilities.gpui = true` opts a plugin into GPUI lifecycle behavior. The host
 broadcasts ghost-debug runtime-config reloads to these plugins and restarts their
@@ -501,7 +589,7 @@ a live session.
 
 ---
 
-## 8. Other channels
+## 9. Other channels
 
 ### 8.1 Config reload (host to plugin)
 
@@ -520,11 +608,61 @@ errors surface in the host. `RUST_LOG` is injected per profile. `qol_runtime::pr
 debug-only per-process trace to `/tmp/qol-altmon.log` (not collected by the host);
 see `qol-project:qol-trace`.
 
-### 8.3 OS notifications (plugin to OS, NOT the tray)
+### 8.3 Plugin-to-tray notification and status push (plugin to host)
 
-There is no plugin-to-tray notification/status channel. A plugin that notifies the
-user shells out directly (`osascript display notification` on macOS, `notify-send`
-on Linux), as in `plugins/cli-sessions/src/notify.rs`.
+A plugin that wants to notify the user pushes a display request to the tray
+instead of shelling out, so the notification is tray-owned. This is an
+**extension of the platform-state socket's plugin-to-host request envelope**
+(section 6) - the same `RuntimeRequest` JSON-line framing, peer-credential
+authorization, and worker pool. Per `qol-arch-channels` it is not a new
+channel; the daemon socket stays host-to-plugin (Action) and the state socket
+stays host-authoritative for state.
+
+- `push_notification {plugin_id, title, body, level, action_label, action_payload}` -
+  shows a toast through the tray's own notification surface
+  (`apps/qol-tray/src/surfaces/native_notifications/`): `notify-send` on Linux
+  with urgency mapped from `level` (`info`=low, `warn`=normal, `error`=critical),
+  `osascript display notification` on macOS. `body` and `level` default to `""`
+  and `info`. `action_label` and `action_payload` are optional (default `null`):
+  when **both** are present, the host renders the label as a clickable action
+  button on the notification (notify-send `-A` on Linux) and, on invocation,
+  opens the payload with the default app (V1 semantics: payload is a file path,
+  e.g. a saved screenshot). macOS renders the plain notification and ignores
+  the action. A half-specified action (one field missing) renders as plain.
+  Old senders without the fields stay wire-compatible (`#[serde(default)]`),
+  and old hosts ignore the extra fields.
+- `push_status {plugin_id, status}` - the tray logs the free-form `status` JSON
+  and shows a low-urgency toast. There is no per-plugin status badge in the
+  tray UI yet; V1 is log + toast.
+
+Both are one-shot request/ack: the host replies one JSON line
+`{"status":"handled"}` or `{"status":"error","message":...}`. The `plugin_id`
+is validated against the manifest id rules **and** the installed plugin set;
+an unknown id is rejected with `error` and nothing is displayed.
+
+Plugin API - one call, no async setup; the id comes from `QOL_TRAY_PLUGIN_ID`
+(`libs/qol-runtime/src/client.rs`, protocol types in `libs/qol-runtime/src/protocol.rs`):
+
+```rust
+let client = qol_runtime::PlatformStateClient::from_env();
+client.send_notification(
+    "Backup done",
+    "3 files synced",
+    qol_runtime::protocol::NotificationLevel::Info,
+);
+client.send_notification_with_action(
+    "Recording saved",
+    "video file",
+    qol_runtime::protocol::NotificationLevel::Info,
+    Some(("Open Folder", "/home/u/Videos/qol-shot.mp4")),
+);
+client.send_status(&serde_json::json!({ "state": "recording" }));
+```
+
+Both return `true` when the host accepted the push, so a plugin can fall back
+to its own `notify-send`/`osascript` when the tray is unreachable (standalone
+run, or host rejection). Host receiver:
+`apps/qol-tray/src/runtime/server/socket/platform/unix/requests.rs`.
 
 ### 8.4 Adding a new channel
 
@@ -534,7 +672,7 @@ inventing a socket.
 
 ---
 
-## 9. Environment variables qol-tray injects
+## 10. Environment variables qol-tray injects
 
 Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 `action_executor/execution.rs`):
@@ -550,7 +688,7 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 
 ---
 
-## 10. Footgun index
+## 11. Footgun index
 
 - Config is JSON on disk (`config.json`); the editor schema is TOML
   (`qol-config.toml`). Two different files.
@@ -570,8 +708,13 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 - A plugin leaks unless the watchdog is armed, which requires `QOL_TRAY_STATE_SOCKET`
   in env AND `spawn_host_death_watchdog` being called (free if you use
   `qol_plugin_daemon::start_listener`).
-- The state socket is host-to-plugin; plugins cannot push notifications/status to
-  the tray. Shell out for OS notifications.
+- The state socket stays host-authoritative for state; plugins push display
+  requests (`push_notification`/`push_status`) but cannot mutate host state.
+  Prefer the push channel over shelling out to `notify-send`/`osascript`; keep
+  the shell-out fallback for standalone runs when the tray is unreachable.
+- The broker bus is default-deny and fire-and-forget: a plugin without declared
+  topics can neither publish nor subscribe, and a slow subscriber silently
+  loses events (bounded queue, section 7.3).
 - `ActionType::Run`/`Settings` are executable; `ToggleConfig` is not a direct
   dispatch target.
 - The native tray menu does not surface plugin actions; the dashboard does.
@@ -584,7 +727,7 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 
 ---
 
-## 11. Recipe: add a hotkey-triggered action to a plugin
+## 12. Recipe: add a hotkey-triggered action to a plugin
 
 The exact "basics" that get re-learned. To add an action `foo` that a user can bind
 a global hotkey to:

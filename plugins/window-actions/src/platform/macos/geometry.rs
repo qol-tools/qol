@@ -10,7 +10,7 @@ fn frontmost_screen() -> Result<(i32, Rect), String> {
     Ok((pid, scr))
 }
 
-fn ax_set(pid: i32, rect: Rect) -> Result<(), String> {
+pub(super) fn ax_set(pid: i32, rect: Rect) -> Result<(), String> {
     if ax::set_position_and_size(pid, rect) {
         Ok(())
     } else {

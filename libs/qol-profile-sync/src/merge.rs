@@ -2,16 +2,16 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct FieldConflict {
-    pub(crate) file: String,
-    pub(crate) plugin: Option<String>,
-    pub(crate) key_path: String,
-    pub(crate) local: Value,
-    pub(crate) remote: Value,
+pub struct FieldConflict {
+    pub file: String,
+    pub plugin: Option<String>,
+    pub key_path: String,
+    pub local: Value,
+    pub remote: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum FileMerge {
+pub enum FileMerge {
     Clean(Value),
     Conflicted {
         merged: Value,
@@ -19,10 +19,9 @@ pub(crate) enum FileMerge {
     },
 }
 
-pub(crate) type ConflictResolver<'a> = dyn Fn(&str, &str) -> Option<bool> + 'a;
+pub type ConflictResolver<'a> = dyn Fn(&str, &str) -> Option<bool> + 'a;
 
-#[cfg(test)]
-pub(crate) fn merge_json(
+pub fn merge_json(
     file: &str,
     plugin: Option<&str>,
     base: &Value,
@@ -32,7 +31,7 @@ pub(crate) fn merge_json(
     merge_json_resolved(file, plugin, base, local, remote, &|_, _| None)
 }
 
-pub(crate) fn merge_json_resolved(
+pub fn merge_json_resolved(
     file: &str,
     plugin: Option<&str>,
     base: &Value,
@@ -150,16 +149,16 @@ fn union_keys(base: Option<&Value>, local: Option<&Value>, remote: Option<&Value
     keys
 }
 
-pub(crate) struct ProfileSnapshot {
-    pub(crate) files: BTreeMap<String, Value>,
+pub struct ProfileSnapshot {
+    pub files: BTreeMap<String, Value>,
 }
 
-pub(crate) struct ProfileMerge {
-    pub(crate) merged: BTreeMap<String, Value>,
-    pub(crate) conflicts: Vec<FieldConflict>,
+pub struct ProfileMerge {
+    pub merged: BTreeMap<String, Value>,
+    pub conflicts: Vec<FieldConflict>,
 }
 
-pub(crate) fn merge_profile(
+pub fn merge_profile(
     base: &ProfileSnapshot,
     local: &ProfileSnapshot,
     remote: &ProfileSnapshot,
@@ -167,7 +166,7 @@ pub(crate) fn merge_profile(
     merge_profile_with(base, local, remote, &|_, _| None)
 }
 
-pub(crate) fn merge_profile_with(
+pub fn merge_profile_with(
     base: &ProfileSnapshot,
     local: &ProfileSnapshot,
     remote: &ProfileSnapshot,

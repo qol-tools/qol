@@ -20,6 +20,7 @@ qol-app-icon.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
 qol-runtime.workspace = true
+qol-windowing.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

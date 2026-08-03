@@ -6,8 +6,50 @@ use crate::discovery::platform::macos::ffi::{
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
     K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
+use qol_windowing::{WindowId, WindowOps, WindowRect};
 use std::ffi::c_void;
 use std::sync::OnceLock;
+
+pub struct Platform;
+
+impl WindowOps for Platform {
+    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
+        Ok(
+            crate::discovery::platform::macos::discover_live_windows(true)
+                .into_iter()
+                .map(|window| WindowId::from_u32(window.id))
+                .collect(),
+        )
+    }
+
+    fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+        Err("alt-tab: window geometry is not implemented on macOS".to_string())
+    }
+
+    fn move_resize(&self, _window_id: &WindowId, _rect: WindowRect) -> Result<(), String> {
+        Err("alt-tab: window move/resize is not implemented on macOS".to_string())
+    }
+
+    fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let id = cg_window_id(window_id)?;
+        Ok(activate_window(id))
+    }
+
+    fn minimize_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        let id = cg_window_id(window_id)?;
+        Ok(minimize_window_by_id(id))
+    }
+
+    fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        self.focus_window(window_id)
+    }
+}
+
+fn cg_window_id(window_id: &WindowId) -> Result<u32, String> {
+    window_id
+        .as_u32()
+        .ok_or_else(|| format!("alt-tab: not a CGWindow id: {}", window_id.as_str()))
+}
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -48,14 +90,14 @@ pub fn cancel_pending_activation() {
     ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-pub fn activate_window(window_id: u32) {
+pub fn activate_window(window_id: u32) -> bool {
     let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
     #[cfg(not(debug_assertions))]
     let started = ProbeInstant;
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
-        return;
+        return false;
     };
     #[cfg(debug_assertions)]
     let lookup_ms = started.elapsed().as_millis();
@@ -194,6 +236,7 @@ pub fn activate_window(window_id: u32) {
             }
         },
     );
+    true
 }
 
 fn stack_snapshot() -> String {
@@ -388,16 +431,17 @@ pub fn quit_app(window_id: u32) {
     let _ = ns_terminate_app(pid);
 }
 
-pub fn minimize_window_by_id(window_id: u32) {
+pub fn minimize_window_by_id(window_id: u32) -> bool {
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
-        return;
+        return false;
     };
     let win = unsafe { ax_find_window(pid, window_id, &title) };
     if win.is_null() {
-        return;
+        return false;
     }
     unsafe { ax_set_bool_attr(win, b"AXMinimized", kCFBooleanTrue) };
     unsafe { CFRelease(win) };
+    true
 }
 
 fn ns_activate_app(pid: i32) -> bool {

@@ -189,9 +189,11 @@ A transition *into* an attention status (`NeedsYou`/`YourTurn`) is an event the
 panel cannot convey when you are not looking at it. `tick` returns the `Notice`s
 those transitions produced (`notify::announces_attention` decides; edge-triggered,
 so a status that merely persists never re-fires), and the *caller* fires them via
-`notify::send` (a best-effort `osascript`/`notify-send` shellout). Keeping the I/O
-in the caller leaves `tick` pure-ish and lets the startup populate pass drop its
-batch, so launching the panel is quiet rather than a notification storm.
+`notify::send` (push-first through the runtime push channel, falling back to a
+best-effort `osascript`/`notify-send` shellout when the host is unreachable).
+Keeping the I/O in the caller leaves `tick` pure-ish and lets the startup
+populate pass drop its batch, so launching the panel is quiet rather than a
+notification storm.
 
 Jumping to the next session that wants you must work when the panel is *not*
 focused (you are in an editor or another terminal), so it is not an in-view key -
@@ -253,9 +255,9 @@ the dev-build recorder gating.
 
 ## Known gaps
 
-The `host` and `poll_secs` config fields are declared in `qol-config.toml` but
-not yet consumed - the host is always kitty and the poll interval is a constant.
-The `corner` field is honored (the panel parks in the configured screen corner).
 `service_commands` (the explicit-declaration arm of service detection) is read
-from the plugin config, but it has no `qol-config.toml` editor field yet - it is
-a config-file-only knob, since the UI has no editable string-list type.
+from the plugin config and exposed in `qol-config.toml` as a `string_array`
+field - the contract's editable string-list kind, rendered as add/remove rows of
+one command each in the settings UI. The terminal host is always kitty and the
+reconcile interval is a fixed constant; no `host` or `poll_secs` config fields
+are declared for either.

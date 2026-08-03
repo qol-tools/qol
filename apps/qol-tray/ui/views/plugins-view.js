@@ -54,6 +54,7 @@ export function PluginsView({ onOpenPluginConfig }) {
         <${PluginsGrid}
             plugins=${filtered} ghostPlugins=${list.ghostPlugins}
             selectedIndex=${list.selectedIndex} loaded=${list.loaded}
+            pushStatuses=${list.pushStatuses}
             updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex}
             onToggleMenu=${handleToggleMenu} />
     <//>`;

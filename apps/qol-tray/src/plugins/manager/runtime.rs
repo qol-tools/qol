@@ -133,6 +133,7 @@ fn stop_plugin_daemon(plugin: &mut Plugin) {
     if let Err(error) = plugin.stop_daemon() {
         log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, error);
     }
+    crate::runtime::PluginStatusRegistry::shared().clear(plugin.id.as_str());
 }
 
 fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {

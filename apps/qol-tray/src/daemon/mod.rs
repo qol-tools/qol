@@ -45,6 +45,10 @@ pub enum DaemonEvent {
     PluginsChanged {
         revision: u64,
     },
+    StatusChanged {
+        plugin_id: String,
+        status: serde_json::Value,
+    },
     PluginManifestInvalid {
         plugin_id: String,
         path: std::path::PathBuf,
@@ -131,6 +135,21 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "plugins_changed");
         assert_eq!(json["revision"], 7);
+    }
+
+    #[test]
+    fn status_changed_serializes_plugin_id_and_status() {
+        let event = DaemonEvent::StatusChanged {
+            plugin_id: "plugin-qol-shot".to_string(),
+            status: serde_json::json!({ "state": "recording", "elapsed_s": 12 }),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "status_changed");
+        assert_eq!(json["plugin_id"], "plugin-qol-shot");
+        assert_eq!(
+            json["status"],
+            serde_json::json!({ "state": "recording", "elapsed_s": 12 })
+        );
     }
 
     #[test]

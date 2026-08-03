@@ -1,0 +1,6 @@
+[package]
+name = "qol-windowing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared window identity, geometry, and window operation contract for qol-tools"

@@ -1,0 +1,21 @@
+[package]
+name = "qol-profile-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared profile sync engine for qol-tray and the qol CLI"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+qol-fs.workspace = true
+qol-migrations.workspace = true
+qol-plugin-api.workspace = true
+qol-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

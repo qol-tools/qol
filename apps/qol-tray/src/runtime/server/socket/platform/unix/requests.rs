@@ -3,12 +3,14 @@ use std::os::unix::net::UnixStream;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
+use qol_plugin_api::manifest::is_valid_plugin_id;
 use qol_runtime::protocol::{
-    ArmedLifelinesResponse, PluginConfigResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest,
-    SubscribeAck,
+    ArmedLifelinesResponse, NotificationLevel, PluginConfigResponse, PushAck, RuntimeEvent,
+    RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 
 use super::io::{write_flushed_json_line, write_state};
+use crate::plugins::config::drain::installed_ids;
 use crate::runtime::server::state_store::SharedState;
 
 const SUBSCRIBER_WRITE_TIMEOUT_SECS: u64 = 5;
@@ -62,9 +64,105 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
         RuntimeRequest::SetPluginConfig { plugin_id, config } => {
             let _ = write_flushed_json_line(writer, &store_plugin_config(&plugin_id, config));
         }
+        RuntimeRequest::PushNotification {
+            plugin_id,
+            title,
+            body,
+            level,
+            action_label,
+            action_payload,
+        } => handle_push_notification(
+            writer,
+            &plugin_id,
+            &title,
+            &body,
+            level,
+            action_label.as_deref(),
+            action_payload.as_deref(),
+        ),
+        RuntimeRequest::PushStatus { plugin_id, status } => {
+            handle_push_status(writer, &plugin_id, &status)
+        }
     }
 
     true
+}
+
+fn handle_push_notification(
+    writer: &mut UnixStream,
+    plugin_id: &str,
+    title: &str,
+    body: &str,
+    level: NotificationLevel,
+    action_label: Option<&str>,
+    action_payload: Option<&str>,
+) {
+    let accepted = push_plugin_known(plugin_id);
+    respond_to_push(writer, plugin_id, "notification", accepted);
+    if !accepted {
+        return;
+    }
+    log::info!(
+        "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
+        action_label.unwrap_or("-")
+    );
+    let action = resolve_action(action_label, action_payload);
+    crate::surfaces::show_plugin_notification(title, body, level, action);
+}
+
+fn resolve_action<'a>(
+    label: Option<&'a str>,
+    payload: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let (label, payload) = (label?, payload?);
+    if label.trim().is_empty() {
+        return None;
+    }
+    let path = std::path::Path::new(payload);
+    if !path.is_absolute() || !path.exists() {
+        log::warn!(
+            "[runtime/socket] PUSH notification action dropped: payload {payload:?} is not an existing absolute path"
+        );
+        return None;
+    }
+    Some((label, payload))
+}
+
+fn handle_push_status(writer: &mut UnixStream, plugin_id: &str, status: &serde_json::Value) {
+    let accepted = push_plugin_known(plugin_id);
+    if accepted {
+        log::info!("[runtime/socket] PUSH status from {plugin_id}: {status}");
+        crate::runtime::PluginStatusRegistry::shared().set(plugin_id, status.clone());
+    }
+    respond_to_push(writer, plugin_id, "status", accepted);
+}
+
+/// The push channel only accepts ids of plugins the host actually knows:
+/// well-formed (`plugin.toml` id rules) and installed under `plugins_dir`.
+fn push_plugin_known(plugin_id: &str) -> bool {
+    if !is_valid_plugin_id(plugin_id) {
+        return false;
+    }
+    let Ok(plugins_dir) = crate::paths::plugins_dir() else {
+        return false;
+    };
+    installed_ids(&plugins_dir).iter().any(|id| id == plugin_id)
+}
+
+fn respond_to_push(writer: &mut UnixStream, plugin_id: &str, kind: &str, accepted: bool) {
+    let clean_id = plugin_id.strip_prefix("plugin-").unwrap_or(plugin_id);
+    if !accepted {
+        log::warn!("[runtime/socket] PUSH {kind} rejected: unknown plugin id {plugin_id:?}");
+    }
+    crate::runtime::server::trace::push(clean_id, kind, accepted);
+    let ack = if accepted {
+        PushAck::Handled
+    } else {
+        PushAck::Error {
+            message: format!("unknown plugin id: {plugin_id}"),
+        }
+    };
+    let _ = write_flushed_json_line(writer, &ack);
 }
 
 fn load_plugin_config(plugin_id: &str) -> PluginConfigResponse {
@@ -364,6 +462,148 @@ mod tests {
         assert!(
             get_response.contains("\"hello\":\"world\""),
             "get must return the config stored over the socket: {get_response:?}",
+        );
+    }
+
+    fn push_ack(payload: &str, shared: &SharedState) -> String {
+        let (mut writer, mut reader) = pair();
+        handle_request(payload, &mut writer, shared);
+        drop(writer);
+        read_to_string(&mut reader)
+    }
+
+    /// Sets up a test path root containing a `plugin-test` plugin dir and runs
+    /// `body` while the root guard is alive (it is thread-local and must not
+    /// outlive this call).
+    fn with_known_plugin(body: impl FnOnce()) {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let plugins_dir = crate::paths::plugins_dir().expect("plugins dir under test root");
+        std::fs::create_dir_all(plugins_dir.join("plugin-test")).expect("create plugin dir");
+        body();
+    }
+
+    #[test]
+    fn push_notification_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_notification","plugin_id":"plugin-test","title":"Done","body":"Synced","level":"warn"}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "known plugin push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn push_notification_with_action_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_notification","plugin_id":"plugin-test","title":"Saved","body":"clip","action_label":"Open Folder","action_payload":"/home/u/Videos/qol-shot.mp4"}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "action-carrying push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn action_resolves_only_for_an_existing_absolute_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let file = tmp.path().join("clip.mp4");
+        std::fs::write(&file, b"x").expect("write payload file");
+        let existing = file.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_action(Some("Open Folder"), Some(&existing)),
+            Some(("Open Folder", existing.as_str())),
+            "an existing absolute path must carry the action"
+        );
+
+        let missing = tmp.path().join("gone.mp4").to_string_lossy().into_owned();
+        let cases = [
+            ("missing path", Some("Open Folder"), Some(missing.as_str())),
+            ("relative path", Some("Open Folder"), Some("clip.mp4")),
+            (
+                "url payload",
+                Some("Open Folder"),
+                Some("https://example.com"),
+            ),
+            ("blank label", Some("  "), Some(existing.as_str())),
+            ("no payload", Some("Open Folder"), None),
+            ("no label", None, Some(existing.as_str())),
+        ];
+        for (name, label, payload) in cases {
+            assert_eq!(resolve_action(label, payload), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn push_notification_rejected_for_unknown_plugin() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_notification","plugin_id":"plugin-nope","title":"Hi"}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "unknown plugin push must be rejected: {response:?}",
+        );
+        assert!(
+            response.contains("unknown plugin id"),
+            "rejection must name the cause: {response:?}",
+        );
+    }
+
+    #[test]
+    fn push_notification_rejected_for_invalid_id_format() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_notification","plugin_id":"-bad id!","title":"Hi"}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "malformed plugin id push must be rejected: {response:?}",
+        );
+    }
+
+    #[test]
+    fn push_status_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_status","plugin_id":"plugin-test","status":{"state":"recording"}}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "known plugin status push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn push_status_rejected_for_unknown_plugin() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_status","plugin_id":"plugin-nope","status":{"state":"idle"}}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "unknown plugin status push must be rejected: {response:?}",
         );
     }
 

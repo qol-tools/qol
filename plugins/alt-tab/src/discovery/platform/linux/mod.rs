@@ -1,5 +1,6 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use qol_app_icon::RgbaImage;
+use qol_windowing::WindowRect;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
@@ -285,7 +286,7 @@ struct ResolvedProps {
     wm_name: Vec<Option<GetPropertyReply>>,
     wm_class: Vec<Option<GetPropertyReply>>,
     state: Vec<Option<GetPropertyReply>>,
-    geom: Vec<Option<WindowGeometry>>,
+    geom: Vec<Option<WindowRect>>,
 }
 
 fn collect_window_info(
@@ -341,7 +342,10 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
                 .into_iter()
                 .map(|geom| {
                     let geom = geom.and_then(|c| c.reply().ok())?;
-                    Some(WindowGeometry::from_reply(&geom))
+                    Some(WindowRect::from_size_f32(
+                        f32::from(geom.width),
+                        f32::from(geom.height),
+                    ))
                 })
                 .collect()
         },
@@ -381,32 +385,13 @@ fn build_window_info(
             title,
             app_name,
             icon: None,
-            width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
-            height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),
+            width: props.geom[idx].as_ref().map_or(0.0, |r| r.width as f32),
+            height: props.geom[idx].as_ref().map_or(0.0, |r| r.height as f32),
             is_minimized,
         },
         is_above,
         is_focused,
     ))
-}
-
-#[derive(Clone, Copy)]
-struct WindowGeometry {
-    width: f32,
-    height: f32,
-}
-
-impl WindowGeometry {
-    fn from_reply(geom: &x11rb::protocol::xproto::GetGeometryReply) -> Self {
-        Self::from_parts(geom.width, geom.height)
-    }
-
-    fn from_parts(width: u16, height: u16) -> Self {
-        Self {
-            width: width as f32,
-            height: height as f32,
-        }
-    }
 }
 
 fn hydrate_icons(conn: &impl Connection, atoms: &AtomMap, windows: &mut [WindowInfo]) {

@@ -30,6 +30,7 @@ pub(super) fn routes() -> Router<AppState> {
             post(execute_plugin_action),
         )
         .route("/plugins/{id}/queries/{query}", get(query_plugin_handler))
+        .route("/push-status", get(get_push_status))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
@@ -172,6 +173,12 @@ pub(super) async fn list_installed(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// Latest pushed status per plugin id (empty when no plugin pushed one yet).
+pub(super) async fn get_push_status() -> Json<std::collections::HashMap<String, serde_json::Value>>
+{
+    Json(crate::runtime::PluginStatusRegistry::shared().snapshot())
 }
 
 pub(super) async fn get_plugin_permissions(

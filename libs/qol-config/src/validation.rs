@@ -785,6 +785,49 @@ options = ["foo", "bar"]
         );
     }
 
+    #[test]
+    fn string_array_without_options_is_a_free_form_string_list() {
+        let free_form = validate_contract(
+            r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = ["cargo watch", "tail -f"]
+"#,
+        );
+        assert!(free_form.is_empty(), "{free_form:?}");
+
+        let empty = validate_contract(
+            r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = []
+"#,
+        );
+        assert!(empty.is_empty(), "{empty:?}");
+
+        let wrong_type = validate_contract(
+            r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = "cargo watch"
+"#,
+        );
+        assert_has_error(
+            &wrong_type,
+            "field.service_commands.default",
+            "value does not match field type string_array",
+        );
+    }
+
     fn validate_contract(contract: &str) -> Vec<ValidationError> {
         let spec = parse_spec_str(contract).expect("contract parses");
         validate_spec_collect(&spec)

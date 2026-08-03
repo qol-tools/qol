@@ -74,6 +74,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
+ "qol-windowing",
  "serde",
  "serde_json",
  "smallvec",
@@ -5702,7 +5703,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.35.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -5756,6 +5757,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
+ "qol-zigbee",
  "serde",
  "serde_json",
  "serialport",
@@ -5772,6 +5774,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -6127,6 +6130,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "git2",
  "libc",
  "qol-apps",
  "qol-artifact",
@@ -6140,7 +6144,9 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
+ "qol-plugin-api",
  "qol-process",
+ "qol-profile-sync",
  "qol-workspace",
  "ratatui",
  "serde",
@@ -6420,6 +6426,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-profile-sync"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "git2",
+ "qol-fs",
+ "qol-migrations",
+ "qol-plugin-api",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
@@ -6493,7 +6516,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.46.1"
+version = "3.46.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6536,6 +6559,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
+ "qol-profile-sync",
  "qol-runtime",
  "qol-theme",
  "qol-workspace",
@@ -6564,7 +6588,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.6.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6599,6 +6623,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-windowing"
+version = "1.0.0"
+
+[[package]]
 name = "qol-workspace"
 version = "1.0.0"
 dependencies = [
@@ -6609,6 +6637,18 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+]
+
+[[package]]
+name = "qol-zigbee"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "log",
+ "serde",
+ "serde_json",
+ "serialport",
 ]
 
 [[package]]
@@ -9797,6 +9837,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
+ "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,6 +1,7 @@
 use crate::platform::AudioDevice;
 use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
+use qol_runtime::protocol::NotificationLevel;
 use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,10 @@ use std::thread;
 use x11rb::connection::Connection;
 
 pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
+    let client = qol_runtime::PlatformStateClient::from_env();
+    if client.send_notification(title, message, NotificationLevel::Info) {
+        return;
+    }
     let _ = Command::new("notify-send")
         .args([
             "-u",
@@ -21,12 +26,26 @@ pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
         .status();
 }
 
+/// Saved-file notification with a clickable "Open Folder" action. Pushes
+/// through the runtime channel with the action (payload = saved file path) so
+/// the tray owns the click-through; falls back to the notify-send shell-out
+/// with the same buttons when the tray is unreachable (standalone run).
 pub fn show_saved_notification(
     title: &str,
     message: &str,
     timeout_ms: u32,
     target: crate::capture::completion::RevealTarget,
 ) {
+    let client = qol_runtime::PlatformStateClient::from_env();
+    let payload = target.path().to_string_lossy().into_owned();
+    if client.send_notification_with_action(
+        title,
+        message,
+        NotificationLevel::Info,
+        Some(("Open Folder", &payload)),
+    ) {
+        return;
+    }
     let mut command = saved_notification_command(title, message, timeout_ms);
     let title = title.to_string();
     let message = message.to_string();

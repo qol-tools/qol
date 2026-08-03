@@ -36,7 +36,10 @@ qol-hotkeys = { path = "libs/qol-hotkeys" }
 qol-terminal-sessions = { path = "libs/qol-terminal-sessions" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }
+qol-profile-sync = { path = "libs/qol-profile-sync" }
 qol-workspace = { path = "libs/qol-workspace" }
+qol-windowing = { path = "libs/qol-windowing" }
+qol-zigbee = { path = "libs/qol-zigbee" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)
 base64 = "0.22"

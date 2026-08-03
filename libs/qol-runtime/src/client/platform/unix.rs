@@ -13,6 +13,14 @@ impl Connection for UnixStream {
     fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         UnixStream::set_write_timeout(self, timeout)
     }
+
+    fn try_clone(&self) -> io::Result<Box<dyn Connection>> {
+        Ok(Box::new(UnixStream::try_clone(self)?))
+    }
+
+    fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
+        UnixStream::shutdown(self, how)
+    }
 }
 
 pub(super) fn connect(path: &Path) -> ConnectResult {

@@ -62,7 +62,7 @@ fn drain_one(manager: &PluginConfigManager, id: &str, orphan: &Path) -> bool {
     true
 }
 
-fn installed_ids(plugins_dir: &Path) -> Vec<String> {
+pub(crate) fn installed_ids(plugins_dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else {
         return Vec::new();
     };

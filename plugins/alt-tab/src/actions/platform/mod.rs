@@ -1,3 +1,5 @@
+use qol_windowing::{WindowId, WindowOps};
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -25,7 +27,7 @@ pub(crate) enum CloseOutcome {
 }
 
 pub fn activate_window(window_id: u32) {
-    imp::activate_window(window_id)
+    let _ = imp::Platform.focus_window(&WindowId::from_u32(window_id));
 }
 pub fn cancel_pending_activation() {
     imp::cancel_pending_activation()
@@ -41,5 +43,5 @@ pub fn quit_app(window_id: u32) {
     imp::quit_app(window_id)
 }
 pub fn minimize_window_by_id(window_id: u32) {
-    imp::minimize_window_by_id(window_id)
+    let _ = imp::Platform.minimize_window(&WindowId::from_u32(window_id));
 }

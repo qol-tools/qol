@@ -1,0 +1,16 @@
+[package]
+name = "qol-zigbee"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zigbee Network Processor (ZNP) serial stack for qol-tools"
+
+[dependencies]
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+log = "0.4"
+serde.workspace = true
+serialport = { version = "4", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true

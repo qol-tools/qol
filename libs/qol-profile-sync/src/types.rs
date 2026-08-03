@@ -13,6 +13,13 @@ pub struct SyncConnectRequest {
     pub push_on_change: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncTarget {
+    pub repo_url: String,
+    #[serde(default)]
+    pub auto_created: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncIncidentKind {

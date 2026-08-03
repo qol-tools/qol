@@ -148,6 +148,16 @@
     z-index: var(--z-control);
 }
 
+.plugin-push-status {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-family: var(--font-mono, var(--font-ui));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
 .plugin-grid-store .plugin-card,
 .plugins-grid .plugin-card {
     padding: var(--space-6);

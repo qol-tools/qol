@@ -1,5 +1,4 @@
 mod app;
-mod surfaces;
 
 qol_conventions::declare_build_identity!(Host);
 

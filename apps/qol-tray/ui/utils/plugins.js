@@ -35,6 +35,17 @@ export function markPluginUpdated(plugins, id) {
     return next;
 }
 
+export function formatPushStatus(status) {
+    if (typeof status === 'string') return status.trim();
+    if (typeof status === 'number' || typeof status === 'boolean') return String(status);
+    if (status == null || typeof status !== 'object' || Array.isArray(status)) return '';
+    if (typeof status.text === 'string') return status.text.trim();
+    return Object.entries(status)
+        .filter(([, value]) => value != null && typeof value !== 'object')
+        .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
+        .join(' · ');
+}
+
 export function samePluginList(a, b) {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;

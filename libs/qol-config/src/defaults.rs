@@ -309,6 +309,26 @@ default = "#ffffff"
     }
 
     #[test]
+    fn empty_string_array_default_materializes_as_empty_list() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = []
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            defaults_json_from_spec(&spec).unwrap(),
+            json!({ "service_commands": [] })
+        );
+    }
+
+    #[test]
     fn typed_defaults_deserialize_integer_numbers() {
         #[derive(Debug, serde::Deserialize, PartialEq)]
         struct Config {

@@ -12,6 +12,10 @@ export async function loadInstalledPlugins() {
     };
 }
 
+export async function loadPushStatuses() {
+    return await apiJson('/api/push-status');
+}
+
 export function readInstalledCache() {
     try {
         const raw = localStorage.getItem(INSTALLED_CACHE_KEY);

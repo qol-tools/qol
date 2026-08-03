@@ -59,7 +59,7 @@ pub(crate) fn run() -> Result<()> {
 
         if is_already_running() {
             eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
-            crate::surfaces::native_notifications::show_already_running();
+            qol_tray::surfaces::native_notifications::show_already_running();
             return Ok(());
         }
 
@@ -464,6 +464,7 @@ async fn async_init_inner(
         qol_tray::logging::file_logger::log_startup(&startup_info);
     }
     let daemon = Daemon::new();
+    qol_tray::runtime::install_events(daemon.events.clone());
     #[cfg(feature = "dev")]
     if let Some(report) = PENDING_HEAL_REPORT.get() {
         daemon
@@ -795,7 +796,7 @@ fn show_first_run_welcome() {
         let _ = std::fs::write(&path, "");
     }
 
-    crate::surfaces::native_notifications::show_first_run();
+    qol_tray::surfaces::native_notifications::show_first_run();
 
     wait_for_server_ready();
 

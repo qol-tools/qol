@@ -1,6 +1,7 @@
 mod backends;
 mod desktop;
 mod gsettings;
+mod kconfig;
 
 use anyhow::{bail, Result};
 
@@ -48,6 +49,7 @@ mod tests {
             ("X-Cinnamon", true),
             ("cinnamon", true),
             ("KDE", true),
+            ("plasma", true),
             ("ubuntu:GNOME", true),
             ("GNOME", true),
             ("", false),
