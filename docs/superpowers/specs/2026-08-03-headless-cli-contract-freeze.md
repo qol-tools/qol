@@ -108,7 +108,7 @@ has only status/poll/disconnect (`github_auth/http.rs:23-25`). Namespace (PROPOS
 | Command | Owner | Transport | Kind |
 |---|---|---|---|
 | `auth status` | `features/auth` + `features/github_auth` | direct one-shot host execution (stored credential + scopes → `AuthHealth`) | read-only |
-| `auth login` | `features/github_auth` | direct one-shot host execution: CLI runs the device flow itself (prints `verification_uri` + `user_code`, polls GitHub, persists via storage write) — PROPOSED, no HTTP session-start route exists today; new tray route deferred | state-mutating |
+| `auth login` | `features/github_auth` | authenticated IPC to an already-running tray (PROPOSED new tray route: tray starts the device-flow session and persists via `store_github_credential`, service.rs:229; CLI prints `verification_uri` + `user_code` from the tray's session response and polls the existing `/github-auth/poll/{id}` route, http.rs:24); refuse when tray down (PROPOSED) | state-mutating |
 | `auth logout` | `features/github_auth` | authenticated IPC to an already-running tray (DELETE `/api/github-auth`, `github_auth/http.rs:25`) so credential + sync coupling are torn down by the owner; refuse when tray down (PROPOSED) | destructive |
 
 ## 7. Launcher apps
@@ -132,12 +132,65 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
 | `updates apply` | `src/updates` | authenticated IPC to an already-running tray (POST `/api/self-update`); refuse when tray down (PROPOSED) | destructive (replaces the running host binary) |
 
 ## Transport rules
-- **Direct one-shot host execution** applies when the command reads or replaces a file the
-  tray accesses via the same library fns (theme `theme.rs:96`, mode `mode.rs:28-45`, profile
-  bundle, credential storage) or makes a pure network query (`updates check`); it must never
-  write files the running tray guards with in-process state (plugins lock, runtime config
-  cache, plugin configs) — those are IPC-only. Locking: atomic writes only
-  (`qol_fs::atomic_write_private`, used for the HTTP token, `security.rs:60-72`); no timeouts.
+- **Direct one-shot host execution** applies when the command reads a file the tray
+  accesses via the same library fns (theme `theme.rs:96`, mode `mode.rs:28-45`, profile
+  bundle, credential storage) or makes a pure network query (`updates check`); it must
+  never write files the running tray guards with in-process state (plugins lock, runtime
+  config cache, plugin configs) — those are IPC-only. Writes additionally obey the
+  one-shot write contract:
+  - **Cross-process lock (PROPOSED).** Any one-shot *write* takes a cross-process lock
+    around its full read-modify-write: the config guard is process-local
+    (`PROFILE_CONFIG_LOCK: OnceLock<RwLock<()>>`, apps/qol-tray/src/plugins/config/mod.rs:104;
+    B.4), so a running tray can race the file. Reuse the qol sync `SyncLock` pattern:
+    `SyncLock::acquire` blocks on `file.lock()` (flock), the OS releases it on process
+    exit (libs/qol-profile-sync/src/lock.rs:6-8, 27-29), and both `qol sync` and the
+    tray's sync service already serialize on the same lockfile
+    (tools/qol-cli/src/commands/sync/mod.rs:134;
+    apps/qol-tray/src/features/profile/sync/service.rs:78). PROPOSED: a `ConfigWriteLock`
+    with the same blocking semantics, lockfile keyed on the config dir
+    (`<config>/<namespace>/`, apps/qol-tray/src/paths/mod.rs:95-98); the tray takes the
+    same lock around config-store writes so in-process guard + cross-process lock
+    compose. Blocking, no try-lock, no timeout (same semantics as B.4).
+  - **Reload protocol (PROPOSED).** Before exiting 0, a one-shot writer that changed
+    live state must reach the running tray through one of exactly two verified paths —
+    an existing IPC route, or the tray's existing file watcher. Verified: the tray
+    watches only the profile root — `ensure_watcher` →
+    `next.watch(&root, RecursiveMode::Recursive)`, invalidating on create/modify/remove
+    (apps/qol-tray/src/plugins/config/runtime_cache.rs:718, 750-760, 781); the
+    generation counter is an in-process `AtomicU64` (plugins/config/mod.rs:105), no
+    generation file exists; theme.json, mode.json and `.github-auth.json` live outside
+    the watched root (`shared_config_dir`, paths/mod.rs:95-98; theme.rs:96-98;
+    paths/mod.rs:212-214), so no watcher covers them. Where neither path exists, the
+    command routes through IPC instead.
+  - **Per command (chosen mechanisms):**
+    - `theme set <key>` / `theme set --accent <key>` — **IPC when tray up**: `PUT
+      /theme` and `PUT /theme/accent` already exist, handled in-process by the tray
+      (features/plugin_store/server/settings/mod.rs:53-59; theme_handlers.rs:78-79) —
+      the tray performs its own write on the same path the UI uses, so reload is
+      inherent. Tray down: direct one-shot under the config-dir lock; no tray to race,
+      validation unchanged (theme.rs:59,100).
+    - `mode set dev|prod` — **IPC when tray up** (PROPOSED new tray route): no reload
+      path exists anywhere — the in-process flip itself logs "Restart qol-tray for the
+      menu label to refresh" (features/mode_toggle.rs:50-51) — so the write must
+      happen in the tray process (no cross-process write); restart-required semantics
+      stay as today. Tray down: direct one-shot under the config-dir lock.
+    - `profile backup` — **direct one-shot under the sync lock**, not a new one: writes
+      land in `<profile>/<name>/sync/backups` (libs/qol-profile-sync/src/state.rs:65-66),
+      inside the watched profile root, so the running tray's watcher invalidates its
+      runtime cache on the new file (runtime_cache.rs:750-760) — that is the reload,
+      and backup never replaces live configs. Serialize against the tray's sync engine
+      on the existing `lock_path()` (state.rs:71; service.rs:78).
+    - `auth login` — **IPC when tray up** (PROPOSED new tray route): no reload path
+      exists — no login route (features/github_auth/http.rs:23-25 has status/poll/
+      disconnect only), the credential file is outside the watched root
+      (paths/mod.rs:212-214), and the tray holds in-memory sessions + sync coupling
+      (features/github_auth/service.rs:57, 95-103, 114). PROPOSED: the tray starts the
+      device-flow session and persists via `store_github_credential` (service.rs:229);
+      the CLI prints `verification_uri` + `user_code` from the tray's session response
+      and polls the existing `/github-auth/poll/{id}` route (http.rs:24). Refuse
+      "qol-tray is not running" when down (app/mod.rs:362), matching the IPC pattern.
+  - Atomic writes stay (`qol_fs::atomic_write_private`, HTTP token, `security.rs:60-72`):
+    the lock serializes writers, the atomic write prevents torn files; no lock timeouts.
 - **Authenticated IPC to an already-running tray** applies when the op touches live tray
   state: PluginManager reload/notify (`plugin_services/operations/install.rs:9-26`),
   task-runner runtime, profile-import reconciliation, launcher sync, self-update EventBus.
@@ -145,8 +198,21 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
   defaults (`libs/qol-runtime/src/local_http.rs:36-41`), tray wrapper raises io to 5s
   (`commands/local_http.rs:16-17`). Server: 401 without token, Host + CSRF checks
   (`security.rs:36,47,60-72`); mutating ops stay POST/DELETE (`plugin_handlers.rs:34-36`).
-  OPEN (PROPOSED): install/update/self-update exceed the 5s io timeout (clone + staging,
-  `installer/operations.rs:13-40`) — freeze a raised timeout or async-job response.
+  OPEN resolved: install/update/self-update exceed the 5s io timeout (clone + staging,
+  `installer/operations.rs:13-40`) — **decision (a): raise the mutating-op IPC io
+  timeout to 30s.** The io timeout is a per-client builder value
+  (`Client::with_io_timeout`, libs/qol-runtime/src/local_http.rs:45-48) applied only as
+  TCP read/write timeouts on the loopback socket; the 5s lives at a single call site,
+  `post_to_daemon` (apps/qol-tray/src/commands/local_http.rs:16-17). Install/update/
+  uninstall handlers await the op inline — the response comes only after clone +
+  staging + reload (server/plugin_handlers.rs:87-97), which legitimately exceeds 5s.
+  Rule: all mutating IPC requests (POST/DELETE: install/update/uninstall, self-update,
+  profile import, task run) use a 30s io timeout, equal to the B.3a host command
+  deadline, so no request can outlive the CLI's own 30s bound — a stalled op fails at
+  the deadline with the timeout in `error.details`. Read-only GETs keep 5s (hangs
+  surface fast). Where it lives: `post_to_daemon` raises its `with_io_timeout` to
+  `Duration::from_secs(30)` (apps/qol-tray/src/commands/local_http.rs:16-17); the
+  shared runtime client default stays 2s/2s (libs/qol-runtime/src/local_http.rs:36-41).
 - **Controlled tray autostart** applies only to ops needing the daemon's manager while the
   tray UI may appear; none proposed here (PROPOSED) — mutating IPC commands report "qol-tray
   is not running" (`app/mod.rs:362`) and exit 1 instead.
@@ -205,15 +271,33 @@ NOT wrapped. PROPOSED schema for host commands:
 
 - `ok`: bool. `command`: echoed canonical command path. `result`: command-specific
   object, required when `ok`. `error.class` mirrors the exit code (usage=64, runtime=1,
-  refusal=2); `details` optional, JSON-serializable. Unknown fields are rejected on
-  parse — schema evolution is additive-only.
+  refusal=2); `details` optional, JSON-serializable. Parsers MUST tolerate unknown
+  fields: an unrecognized key never fails a parse, and a tool that rewrites a document
+  preserves unknown fields (round-trip) so forward-compatible additions survive
+  untouched. Validation rejects only shape violations of *known* fields — wrong type,
+  or a required key missing; unknown keys are not shape violations. Schema evolution
+  stays additive-only: new fields are optional additions, old clients ignore them,
+  and no existing field's meaning or type changes.
 
 ## B.3 Timeout policy
 
 **Rule B3a.** Every command terminates within a defined deadline or exits 1 (runtime)
 with the timeout in `error.details`. Defaults PROPOSED: host commands 30s; doctor
-checks 5s (precedent: `PLUGIN_DOCTOR_TIMEOUT = Duration::from_secs(5)`,
-apps/qol-tray/src/doctor/aggregation/plugin_runner.rs:7).
+checks are two-tier:
+- **In-host aggregate runner — `PLUGIN_DOCTOR_TIMEOUT = 5 s`** (existing constant,
+  apps/qol-tray/src/doctor/aggregation/plugin_runner.rs:7). The tray invokes plugin
+  doctor binaries whose daemons are already running and reachable over warm
+  IPC/socket paths; 5 s is the established warm-path bound and stays unchanged.
+- **Standalone contract gate — `DOCTOR_TIMEOUT = 10 s`** (C.2). `qol-contract-gate`
+  spawns the same binaries cold from a shell, with cold platform services (D-Bus,
+  BlueZ) and no tray state; 10 s = 2× the in-host bound plus cold-start margin.
+
+The two bounds are deliberately different tiers, not a conflict: the bluetooth hang
+this policy exists to catch is **unbounded** — the probe awaits `default_adapter()`
+with no deadline at all (plugins/bluetooth/src/platform/linux.rs:369-378), so *any*
+finite timeout catches it. 10 s is sized for cold start and 2× the in-host bound; it
+is not sized against the observed >25 s (a 10 s deadline still fires on a hang that
+never returns).
 
 **Rule B3b.** Doctor checks probing hardware/environment report absence as a
 structured `warn`/`fail` `DoctorCheckResult`, never block. Guest-VM evidence:
@@ -324,10 +408,48 @@ headless:
 - `help` → must exit 0 (`EXIT_SUCCESS`, libs/qol-headless/src/lib.rs:14; help dispatch
   returns before any command handler runs, lib.rs:413-419). Non-zero exit or empty stdout = FAIL.
 - `doctor --json` → must exit within `DOCTOR_TIMEOUT` and print exactly one valid JSON
-  document matching the schema: `status: "ok"|"warn"|"fail"`, `host: DoctorReport`,
-  `plugins: [PluginDoctorReport]` (libs/qol-headless/src/doctor/contract.rs:18-25,120-123).
+  document matching the validator selected for the unit's audit.sh row (mapping below).
   Exit 0/1/2 are all valid for doctor (0 healthy, 1 warnings, 2 failures —
   tools/qol-cli/src/commands/doctor.rs:25); any other exit code or unparseable output = FAIL.
+  The `status/host/plugins` schema applies to the aggregate validator ONLY: plugin
+  binaries emit `DoctorReport{plugin_id,status,checks[]}`
+  (libs/qol-headless/src/doctor/contract.rs:158) and must never be validated against
+  the aggregate shape.
+
+### Doctor report validators (three distinct serde shapes; verified in source)
+
+| Validator | Shape (libs/qol-headless/src/doctor/contract.rs) | Emitted by |
+|---|---|---|
+| (a) plugin report | `DoctorReport{plugin_id, status, checks:[DoctorCheckResult{id, status, message, fix?, details?}]}` (contract.rs:158,179) | every standalone plugin binary; consumer binaries that register their own checks via `HeadlessApp` (qol-guest-runner, qol-tray-install, qol-tray-migrate) |
+| (b) consumer report | per binary — the real shape the binary emits (table below), never a wrapper | `qol`, `qol-guest-runner` (kind `tool`, docs/headless-cli-audit/audit.sh:83-84); `qol-tray-install` / `qol-tray-doctor` / `qol-tray-migrate` (kind `app`, audit.sh:86-87) |
+| (c) aggregate report | `DoctorAggregateReport{status, host: DoctorReport, plugins: [PluginDoctorReport{plugin_id, status, diagnostics, report?}]}` (contract.rs:137,42) | qol-tray front door and `qol-tray-doctor` only (apps/qol-tray/src/doctor/host_cli.rs:29,82) |
+
+Consumer binaries — verified `doctor --json` shape per binary:
+
+| Binary | Shape | Evidence |
+|---|---|---|
+| `qol` | (c) aggregate — `qol doctor` execs the prebuilt `qol-tray-doctor` and passes its stdout/stderr/exit through unmodified | tools/qol-cli/src/commands/doctor.rs:8-21,44-65 |
+| `qol-guest-runner` | (a) — `plugin_id == "qol-guest-runner"`, 2 checks | tools/qol-guest-runner/src/cli.rs:7,78,112-113,153-154 |
+| `qol-tray-install` | (a) — 1 check `inspect_platform_paths` | apps/qol-tray/src/installer/main.rs:79-82,283 |
+| `qol-tray-doctor` | (c) aggregate | apps/qol-tray/src/doctor/host_cli.rs:29,133,161-182 |
+| `qol-tray-migrate` | (a) — 1 check `config_dir` | apps/qol-tray/src/migrate/main.rs:73-76,382 |
+
+Gate mapping — validator per layer-1 audit.sh row:
+
+| audit.sh row | Units | Validator |
+|---|---|---|
+| `plugin` — `check_plugin` over `plugins/*/` (audit.sh:41-63,79-80) | 15 standalone plugins | (a) |
+| `tool` — `check_bin` (audit.sh:83-84) | `qol` → (c); `qol-guest-runner` → (a) | (b) |
+| `app` — `check_bin` (audit.sh:86-87) | `qol-tray` → (c); `qol-tray-doctor` → (c); `qol-tray-install` → (a); `qol-tray-migrate` → (a) | (b) |
+
+PROPOSED (open, fixed in `tools/qol-contract-gate`): strictness follows serde
+semantics — `DoctorReport` flattens unknown fields into `extensions`
+(contract.rs:163-164), so validator (a) tolerates unknown fields;
+`DoctorAggregateReport` / `PluginDoctorReport` have no flatten (contract.rs:137,42),
+so validator (c) rejects unknown fields — schema evolution stays additive-only (B.2).
+A validator mismatch (right shape family, wrong shape; or unparseable JSON) is
+classified `PRODUCT_REGRESSION` under C.4 — a wrong-shape report is a product
+defect, not an environment issue.
 - **FAIL-fast rule**: a doctor command that produces no output within `DOCTOR_TIMEOUT` is a
   FAILURE, never a warning. Rationale: the bluetooth hang (C.1) emitted nothing at all; a
   silent hang is the exact failure mode this gate exists to catch. Precedent: the qol-tray
@@ -338,7 +460,7 @@ headless:
 | Constant | Value | Basis |
 |---|---|---|
 | `HELP_TIMEOUT` | 10 s | help path never touches platform code (lib.rs:413-419) |
-| `DOCTOR_TIMEOUT` | 10 s | 2× the in-host aggregate limit (plugin_runner.rs:7); the bluetooth hang exceeded 25 s, so 10 s catches it with cold-start margin |
+| `DOCTOR_TIMEOUT` | 10 s | standalone tier of B.3a (cold binaries, cold platform services): 2× the in-host `PLUGIN_DOCTOR_TIMEOUT=5 s` (plugin_runner.rs:7) plus cold-start margin; satisfies the gate's own constraint that its direct-execution limit be ≥ the in-host bound. The bluetooth hang is unbounded — no deadline in the probe (plugins/bluetooth/src/platform/linux.rs:369-378) — so any finite timeout catches it; 10 s need not exceed the observed >25 s |
 | `DOCTOR_OUTPUT_LIMIT` | 1 MiB | mirrors the aggregate runner's `PLUGIN_DOCTOR_OUTPUT_LIMIT` |
 | per-unit budget | 30 s | 3 invocations × 10 s worst case |
 
@@ -355,16 +477,40 @@ headless:
   *built binary* — unit tests run in-process and only when the crate's tests run, and
   bluetooth is the only plugin with this test today.
 
-### Host-feature inventory (PROPOSED; ledger, not a pass/fail gate)
+### Host-feature inventory (PROPOSED; per-command ledger, not a pass/fail gate)
 - The 8 host-embedded features (plugin store, profile, task runner, theme, mode, auth,
   launcher apps, updates — roadmap §2) are 0/8 headless today; qol-tray's headless surface
   is `doctor`/`help`/`--version`/`exec`/`open`/`--write-mode=`
   (apps/qol-tray/src/app/mod.rs:192,240-247); only profile has partial coverage via `qol sync`.
-- One row per feature, value `COVERED` (its `<command> help` exits 0, verified) or
-  `NOT_YET`. The check fails only on regressions: a `COVERED` feature whose command
-  disappeared, or a command in help that belongs to no feature. Expected current result:
-  8× `NOT_YET`. As Phase 1 lands commands, rows flip to `COVERED` and the gate starts
-  executing their help.
+- **One ledger row per command, not per feature.** Rows are the 21 commands named in the
+  section A tables (`task list` and `task status` share one table row there but are two
+  ledger rows). Value is `COVERED` or `NOT_YET`; `NOT_YET` = unimplemented — the expected
+  current result for all 21. A feature counts as covered only when every command in its
+  namespace is `COVERED` (8× feature NOT_YET stands until then).
+- **`COVERED` is three conditions, all verified by execution** — `<command> help` exiting
+  0 is necessary but never sufficient (help dispatch returns before any command handler
+  runs, libs/qol-headless/src/lib.rs:413-419; `EXIT_SUCCESS` at lib.rs:14):
+  1. `<command> help` exits 0 and lists the command;
+  2. read-only commands execute successfully: exit 0 and, run with `--json`, print exactly
+     one valid B.2 envelope with `ok: true` (schema `{ok, command, result|error{class,
+     message, details}}`; `error.class` mirrors the exit code, B.2);
+  3. mutating commands pass the confirmation gate: in non-TTY, without `--yes`, they refuse
+     with rc=2 and a structured refusal (B.1 reserves rc=2 for failure/refusal; the `--json`
+     refusal is the B.2 envelope with `error.class: "refusal"`); with `--yes`, they execute
+     to completion (B.5 reload before exit 0) or return the B.6 preview instead of executing.
+- **A command that appears in help but fails condition 2 or 3 is a regression**, not
+  coverage — the failure mode the help-only rule masked. The gate fails on: a `COVERED`
+  command that disappears from help, errors at runtime, or skips its gate; or a command in
+  help that belongs to no ledger row. Expected current result: 21× `NOT_YET`.
+- **Read-only vs mutating, from the section A `Kind` column (test matrix derivable):**
+  - Read-only (9): `plugin-store list`, `profile export`, `task list`, `task status`,
+    `theme get`, `mode get`, `auth status`, `launcher-apps list`, `updates check`.
+  - State-mutating (8): `plugin-store install|update`, `profile backup`,
+    `task run <action> [k=v...]`, `theme set <key>` / `theme set --accent <key>`,
+    `mode set dev|prod`, `auth login`, `launcher-apps sync`.
+  - Destructive (4, subset of state-mutating): `plugin-store remove`, `profile import`,
+    `auth logout`, `updates apply` — their `--yes` probe also exercises the B.6 class
+    table (preview; backup/rollback where the table says so).
 
 ## C.3 Runner shape: Rust tool for layers 2–3, bash stays for layer 1
 
@@ -466,10 +612,10 @@ guest supervisor's instance already served returned rc=1 "Address already in use
 | plugin-ide-checkout | task-runner | default_command `daemon` (cli.rs:26) with **no env gate** (daemon/mod.rs:14-22) → bare invocation binds TCP 42720 and blocks (server.rs:18-29). **GAP (D.3)** | `daemon` | yes — native | — | `status` (cli.rs:37, /health probe) | none; port 42720 (:27) |
 | plugin-keyremap | keyremap | default_command `run` (cli.rs:26); macOS no env → listener fails → silent exit 0 (platform/macos/app/mod.rs:24-28); non-macOS → rc=1 (main.rs:29-38 test); env → event-tap daemon | `run` | no | `kill` / `--kill` (cli.rs:53-54) | — | /tmp/qol-keyremap.sock (:20) |
 | plugin-launcher | launcher | default_command `run` (cli.rs:68); no env → "[launcher] daemon listener failed, exiting", exit 0 (ui/run.rs:30-32); env → retained GPUI launcher | `run` | no | `--kill` (cli.rs:94) | — | /tmp/qol-launcher.sock (:25) |
-| plugin-lights | plugin-lights | **env-gated inside default** `launch` (cli.rs:37; runtime/mod.rs:14-17): no env → open_settings (safe); env → daemon | `daemon` | yes — native (`run` is alias, cli.rs:65-66) | — | — | /tmp/plugin-lights.sock (:109) |
+| plugin-lights | plugin-lights | **env-gated inside default** `launch` (cli.rs:37; runtime/mod.rs:14-17): no env → open_settings (platform/mod.rs:55-58) — action-only exemption D4b-1 (**PROPOSED**); env → daemon | `daemon` | yes — native (`run` is alias, cli.rs:66) | — | — | /tmp/plugin-lights.sock (:109) |
 | plugin-os-themes | plugin-os-themes | default_command `run` (cli.rs:32); no env → rc=1 "failed to start daemon listener" (app/daemon_run.rs:17-19); env → cursor-effect daemon | `run` | no | `kill` (cli.rs:55) | — | /tmp/qol-os-themes.sock (:33) |
 | plugin-pointz | pointzerver | default_command `server` (cli.rs:73); no env → silent exit 0 (app/mod.rs:35-40); env → input server | `server` | no — `daemon` swallowed by legacy fallback, forwarded as action (cli.rs:151-160) | `kill` (cli.rs:77,127) | `connection_status` (action, not `status`) | /tmp/qol-pointz.sock (:28) |
-| qol-shot | qol-shot | **env-gated on `QOL_TRAY_DAEMON_REPLACE_EXISTING`** (main.rs:14,25-27); bare → default_command `record` (cli.rs:25), capture — not a daemon | none (host-spawn only) | no | — | — | /tmp/qol-shot.sock (:54) |
+| qol-shot | qol-shot | **env-gated on `QOL_TRAY_DAEMON_REPLACE_EXISTING`** (main.rs:31-40); bare → default_command `record` (cli.rs:25), opens region selection and starts capture (cli.rs:60,69) — action-only exemption D4b-1 (**PROPOSED**); host-fallback forward only with `QOL_TRAY_DAEMON_SOCKET` set (cli.rs:74-83) | none (host-spawn only) | no | — | — | /tmp/qol-shot.sock (:54) |
 | qol-voice | qol-voice | **env-gated** (main.rs:5); bare → default `session status` → rc=1 "qol-voice daemon is not reachable" (cli/mod.rs:23; app/mod.rs:41-44) | none (host-spawn only) | no | — | `session status` (cli/session.rs:45) | /tmp/qol-voice.sock (:36) |
 | plugin-window-actions | window-actions | default_command `daemon` (cli.rs:72); no env → rc=1 "Failed to start window-actions daemon listener" (app/mod.rs:138-141); env → glide daemon | `daemon` | yes — native (`run` is alias, cli.rs:89-90) | — | — | /tmp/qol-window-actions.sock (:75) |
 
@@ -494,8 +640,9 @@ the injected `QOL_TRAY_DAEMON_SOCKET` is the dev-generation rewrite (D.1).
 
 **Assertion 1 — with supervisor env, no args** (env set exactly as spawn.rs:96-125:
 `QOL_TRAY_PLUGIN_ID`, `QOL_TRAY_DAEMON_SOCKET`→temp path, `QOL_TRAY_DAEMON_REPLACE_EXISTING=1`,
-`QOL_TRAY_STATE_SOCKET`, `RUST_LOG`, theme env). Within `N = 10 s` (aligned with C.2
-`DOCTOR_TIMEOUT`) the process must either (a) stay alive and emit a daemon-mode marker on
+`QOL_TRAY_STATE_SOCKET`, `RUST_LOG`, theme env). Within `N = 10 s` (the standalone `DOCTOR_TIMEOUT` tier of B.3a/C.2 — `daemon-spawn`
+launches cold daemon binaries, not the tray's warm in-host `PLUGIN_DOCTOR_TIMEOUT=5 s`
+path) the process must either (a) stay alive and emit a daemon-mode marker on
 stderr (unix.rs:350 / server.rs:20 / pointz app/mod.rs:42), or (b) exit rc=1 with non-empty
 stderr (structured error — e.g. task-runner "Address already in use"). **FAIL** if it
 prints help/usage/status text instead of daemonizing (the V1 bug class), or exits 0
@@ -520,17 +667,50 @@ alongside the socket). One of the two mechanisms in D.1 is required; a daemon mu
 bind its socket/port on its own authority.
 
 **Rule D4b (bare invocation).** No-args invocation without the gate must never start a
-daemon and must never block a session. Safe outcomes: status/read-only default (bluetooth,
-controllers, qol-voice), safe action (lights opens settings, qol-shot `record`), or a
-structured error. rc=1 + stderr message is the preferred no-gate outcome; the silent
-exit-0 rows (alt-tab, launcher, pointz, keyremap-macOS) are compliant (non-blocking) but
-mask failure — **PROPOSED** convergence to rc=1 + structured stderr in Phase 1.
+daemon and must never block a session. Safe outcomes: status/read-only default
+(bluetooth, controllers, qol-voice), a structured error, or — under Exemption D4b-1 — a
+side-effecting action verb. rc=1 + stderr message is the preferred no-gate outcome; the
+silent exit-0 rows (alt-tab, launcher, pointz, keyremap-macOS) are compliant
+(non-blocking) but mask failure — **PROPOSED** convergence to rc=1 + structured stderr
+in Phase 1.
+
+**Exemption D4b-1 (action-only exemption).** A feature whose bare invocation is a
+side-effecting action verb MUST either (a) declare the exemption in its D.2 matrix row
+and document the side effect in `help`, or (b) change bare to status/help. The exemption
+never waives D4b's core invariants: bare still must not start a daemon and must never
+block a session. Help-side baseline: the framework already prints `binary  # <default>`
+when a default command exists (libs/qol-headless/src/lib.rs:615-619); the default
+command's about/detail must state the action it runs.
+
+Per-feature verdicts (PROPOSED, Phase 1):
+- **qol-shot — keep `record` under the exemption.** Daemon mode requires no args AND
+  `QOL_TRAY_DAEMON_REPLACE_EXISTING` (main.rs:31-40); bare without env → default
+  command `record` (cli.rs:25) → `recording::toggle_recording` (cli.rs:69) — "When
+  idle, opens region selection and starts capture" (cli.rs:60), exit 0. Side-effecting
+  but non-blocking; the record detail already states the side effect (cli.rs:60), so
+  only the matrix declaration is missing (D.2).
+- **removeapp — change bare to `help`.** Bare → default command `open` (cli/mod.rs:30)
+  → `open_command` (cli/mod.rs:65): forwards to a running daemon (`send_action`,
+  cli/mod.rs:74), else `daemon::run()` (cli/mod.rs:77) → `ui::run::run()`
+  (daemon/mod.rs:3-5), which binds fallback socket `qol-removeapp.sock`
+  (daemon/actions.rs:6-7) and enters a blocking GPUI app loop (ui/run.rs:17-31). With
+  no daemon reachable, bare invocation blocks the session — it cannot meet D4b-1's
+  never-block invariant, so bare routes to `help` (no status verb exists; `scan`
+  requires `<app>`). The ungated fallback bind is a D4a-adjacent gap; removeapp is not
+  a D.2 row (no `[daemon]` in plugin.toml:10 — `[runtime]` only) and is governed by
+  this rule, not the matrix.
+- **lights — keep under the exemption.** Bare → default command `launch` (cli.rs:37) →
+  `daemon_or_settings` (runtime/mod.rs:13-19): `QOL_TRAY_DAEMON_SOCKET` set →
+  `daemon::run_from_env()` (:15), else `platform::open_settings()` (:18), which opens
+  the settings URL (platform/mod.rs:55-58). Side-effecting (opens a settings page) but
+  non-blocking; the `launch` about text already documents it (cli.rs:53); only the
+  matrix declaration is missing (D.2).
 
 **Known gap.** plugin-ide-checkout violates D4a/D4b: `task-runner` with no args starts the
 daemon unconditionally (daemon/mod.rs:14-22) and blocks the session. **PROPOSED fix
-(Phase 1):** gate `daemon::run` on the supervisor env (pattern: bluetooth main.rs:14) and
-route bare `task-runner` to `status`. Until fixed, the D.3 gate records it as an expected
-GAP and does not block CI.
+(Phase 0.5):** gate `daemon::run` on the supervisor env (pattern: bluetooth main.rs:14) and
+route bare `task-runner` to `status`. GAP blocks Phase 0.5; the gate reports it as FAIL
+until fixed.
 
 ## D.5 Decisions
 
@@ -540,8 +720,9 @@ GAP and does not block CI.
    REPLACE_EXISTING gate is accepted (supervisor always injects it).
 3. **D3** — The `daemon-spawn` regression test ships inside `tools/qol-contract-gate`
    (C.3), guest-VM full matrix + CI non-GPUI subset, `N = 10 s`, three assertions.
-4. **D4** — Env gate mandatory; bare invocation never daemonizes or blocks; task-runner
-   gap fixed in Phase 1; silent exit-0 rows converge on rc=1 + structured stderr.
+4. **D4** — Env gate mandatory; bare invocation never daemonizes or blocks; the
+   action-only exemption D4b-1 is declared per feature; task-runner gap fixed in
+   Phase 0.5; silent exit-0 rows converge on rc=1 + structured stderr.
 ## E. Canonical inventory
 
 Status: section E of the contract-freeze spec. Single source of truth for every
@@ -690,7 +871,7 @@ mislabeled path is a false repro (qol-dev-environments rule). Decision lines
 | Phase | Work | Criterion |
 |---|---|---|
 | 0 | Audit script + this doc + the freeze spec | measure exists, gateable exit code (done) |
-| **0.5** | **Contract freeze: land this spec; normalize exit codes (B.1); add the executable gate `tools/qol-contract-gate` (C.2–C.6) with `daemon-spawn` (D.3); fix the task-runner env gate (D.4); rename ide-checkout display name to "IDE Checkout" (E.3.3)** | **gate runs green on the 13-unit guest set with the 8 host features listed NOT_YET; inventory counts (E.4) quoted with categories** |
+| **0.5** | **Contract freeze: land this spec; normalize exit codes (B.1); add the executable gate `tools/qol-contract-gate` (C.2–C.6) with `daemon-spawn` (D.3); fix the task-runner env gate (D.4) — mandatory: gate `daemon::run` on the supervisor env (pattern: bluetooth main.rs:14) and route bare `task-runner` to `status` (the gap: daemon/mod.rs:14-22 starts the daemon with no args); fix the bluetooth doctor deadline (B.3a/C.2) — mandatory: BlueZ probes run under the doctor deadline (plugins/bluetooth/src/cli.rs:281-314; the deadline-free await is platform/linux.rs:369-378), absent BlueZ → structured warn/fail (C.4); rename ide-checkout display name to "IDE Checkout" (E.3.3)** | **gate green on the 13-unit guest set only when D.4 rows all pass — no expected-gap allowance for task-runner — and every doctor probe terminates within the deadline; 8 host features listed NOT_YET; inventory counts (E.4) quoted with categories** |
 | 1 | 8 host-feature command surfaces per A (order: plugin-store → profile → theme/mode → updates → task → auth → launcher-apps) | 8/8 host features COVERED in the ledger (C.2); each command obeys B (timeouts, locking, reload, destructive policy) |
 | 2 | UI-adapter hardening: UI layers consume headless APIs only; testable dependency rule (no `features/*` imports in UI beyond the command surface) | `qol doctor` headless-contract check group green; dependency rule enforced by the gate |
 | 3 | `qol doctor` "headless contract" check group surfaces C.1–C.6; audit.sh demoted to the no-build pre-filter | gate fails on any regression |
@@ -702,16 +883,26 @@ mislabeled path is a false repro (qol-dev-environments rule). Decision lines
    keeps `sync`. Transport per command as tabled in A: read-only file/network
    queries are direct one-shot; anything touching live tray state is
    authenticated IPC to a running tray and refuses ("qol-tray is not running",
-   exit 1) when down; no controlled autostart, no helper process.
+   exit 1) when down; no controlled autostart, no helper process. One-shot
+   writes take the cross-process `ConfigWriteLock` (qol sync `SyncLock`
+   pattern) and reach the running tray via an existing IPC route or the
+   profile-root watcher before exit 0; where neither exists the command routes
+   through IPC (theme set / mode set / auth login: IPC when tray up).
+   Mutating IPC requests use a 30 s io timeout (POST/DELETE); read-only GETs
+   keep 5 s.
 2. **B1** — Usage errors exit 64 on every binary; qol-tray
    `Invocation::Invalid` migrates 2 → 64 in Phase 1; 0/1/2 keep
    success/runtime/failure-refusal; doctor aggregates stay 0/1/2.
 3. **B2** — Host `--json` output uses `{ok, command, result|error{class,
-   message, details}}`; doctor reports keep their existing unwrapped shape.
-4. **B3** — Every command has a deadline (30 s host / 5 s doctor); a doctor
-   command with no output within the timeout is a FAILURE with no env
-   exception; unavailable hardware/environment is a structured warn/fail,
-   never a hang.
+   message, details}}`; doctor reports keep their existing unwrapped shape;
+   parsers tolerate unknown fields (ignore on read, preserve on rewrite),
+   validation rejects only known-field shape violations; evolution stays
+   additive-only.
+4. **B3** — Every command has a deadline (host 30 s); doctor deadlines are
+   two-tier: in-host aggregate `PLUGIN_DOCTOR_TIMEOUT=5 s` (warm daemons),
+   standalone gate `DOCTOR_TIMEOUT=10 s` (cold binaries); a doctor command
+   with no output within the timeout is a FAILURE with no env exception;
+   unavailable hardware/environment is a structured warn/fail, never a hang.
 5. **B4** — Config mutations take `profile_config_write_guard` for the whole
    mutation (blocking RwLock, never across long I/O); named locks for
    non-config state.
@@ -720,11 +911,17 @@ mislabeled path is a false repro (qol-dev-environments rule). Decision lines
 7. **B6** — Destructive commands: `--yes`/TTY confirm, idempotent,
    preview-able, backup + rollback per the class table, wait for completion.
 8. **C** — Three-layer gate (structural audit → executable smoke → manifest
-   action→argv) + host-feature ledger; `tools/qol-contract-gate` (Rust);
-   env classification with the timeout rule having no exception.
+   action→argv) + per-command host-feature ledger; `tools/qol-contract-gate`
+   (Rust); doctor reports validated per unit kind — plugin report (a),
+   consumer report (b), aggregate report (c) — never the aggregate shape for
+   plugins; env classification with the timeout rule having no exception;
+   host-feature `COVERED` requires help + read-only execution probes +
+   mutating confirmation gate, never help alone.
 9. **D** — Every daemon honors one of the two env-gate mechanisms; bare
-   invocation never daemonizes or blocks; task-runner gap fixed in Phase 1;
-   silent exit-0 rows converge on rc=1 + structured stderr.
+   invocation never daemonizes or blocks (action-only exemption D4b-1
+   declared per feature); task-runner gap fixed in Phase 0.5 and the gate
+   reports it as FAIL until then; silent exit-0 rows converge on rc=1 +
+   structured stderr.
 10. **E** — Inventory is the single source of truth; every count names its
     category and verification method; guest-verification statements name the
     13-unit subset on Linux.
