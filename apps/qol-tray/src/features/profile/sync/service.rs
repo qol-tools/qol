@@ -9,7 +9,7 @@ use qol_profile_sync::{
     SyncIncidentKind, SyncLock, SyncPaths, SyncStateFile, SyncStatus, SyncToggles,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -77,7 +77,7 @@ impl SyncService {
         let repo = tokio::task::spawn_blocking(move || -> Result<GitRepo> {
             let _sync_lock = SyncLock::acquire(&lock_path)?;
             let repo = if has_content {
-                clone_remote_via_staging(&clone_target, &repo_path, &token)?
+                clone_remote_via_staging(&clone_target, &repo_path, &token, &|| false)?
             } else {
                 let repo = GitRepo::init(&repo_path, &clone_target.repo_url)?;
                 ensure_gitignore(&repo_path)?;
@@ -157,14 +157,17 @@ impl SyncService {
     }
 
     pub async fn manual_pull(&self) -> Result<SyncActionResult> {
-        self.do_pull().await
+        self.do_pull(None).await
     }
 
-    pub async fn pull_on_launch(&self) -> Result<SyncActionResult> {
+    pub async fn pull_on_launch(
+        &self,
+        cancellation: Arc<qol_process::CancellationToken>,
+    ) -> Result<SyncActionResult> {
         if !self.snapshot_toggles().pull_on_launch {
             return self.noop_result("Pull on launch disabled");
         }
-        self.do_pull().await
+        self.do_pull(Some(cancellation)).await
     }
 
     pub async fn manual_push(&self) -> Result<SyncActionResult> {
@@ -238,7 +241,10 @@ impl SyncService {
         })
     }
 
-    async fn do_pull(&self) -> Result<SyncActionResult> {
+    async fn do_pull(
+        &self,
+        cancellation: Option<Arc<qol_process::CancellationToken>>,
+    ) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
         let Some(target) = load_sync_target()? else {
             return self.noop_result("Sync not configured");
@@ -248,15 +254,23 @@ impl SyncService {
         let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
         let clone_target = target.clone();
         let pulled = tokio::task::spawn_blocking(move || -> Result<PullTaskOutput> {
+            let cancelled = || {
+                cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+            };
+            reject_cancelled_pull(&cancelled)?;
             let _sync_lock = SyncLock::acquire(&lock_path)?;
+            reject_cancelled_pull(&cancelled)?;
             let (repo, cloned) = match GitRepo::open(&repo_path) {
                 Ok(repo) => (repo, false),
                 Err(_) => (
-                    clone_remote_via_staging(&clone_target, &repo_path, &token)?,
+                    clone_remote_via_staging(&clone_target, &repo_path, &token, &cancelled)?,
                     true,
                 ),
             };
-            let outcome = repo.fetch(Some(&token))?;
+            let outcome = repo.fetch_with_cancel(Some(&token), &cancelled)?;
+            reject_cancelled_pull(&cancelled)?;
             let mut applied_remote = cloned;
             if matches!(outcome, PullOutcome::FastForwarded { .. }) {
                 apply_fast_forward(&repo, &outcome, "pull")?;
@@ -266,9 +280,11 @@ impl SyncService {
             let mut auto_applied = false;
             if matches!(outcome, PullOutcome::Diverged { .. }) {
                 let merge = reconcile(&repo)?;
+                reject_cancelled_pull(&cancelled)?;
                 if merge.conflicts.is_empty() {
                     apply_merged_profile(&repo, &repo_path, &merge.merged, "pull")?;
                     repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
+                    reject_cancelled_pull(&cancelled)?;
                     repo.push(Some(&token))?;
                     auto_applied = true;
                     applied_remote = true;
@@ -277,6 +293,7 @@ impl SyncService {
                 }
             }
             if !matches!(outcome, PullOutcome::Diverged { .. }) {
+                reject_cancelled_pull(&cancelled)?;
                 commit_profile_schema_repair(&repo_path, &repo, Some(&token))?;
             }
             let head = repo.head_sha()?;
@@ -719,9 +736,10 @@ fn clone_remote_via_staging(
     target: &SyncTarget,
     profile_dir: &Path,
     token: &str,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<GitRepo> {
     let staging = create_staging_dir(profile_dir)?;
-    let outcome = clone_into_staging_then_promote(target, &staging, profile_dir, token);
+    let outcome = clone_into_staging_then_promote(target, &staging, profile_dir, token, cancelled);
     if let Err(error) = std::fs::remove_dir_all(&staging) {
         log::warn!(
             "[sync] cleanup of staging dir {} failed: {error:#}",
@@ -736,11 +754,21 @@ fn clone_into_staging_then_promote(
     staging: &Path,
     profile_dir: &Path,
     token: &str,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<GitRepo> {
-    GitRepo::clone(&target.repo_url, staging, Some(token))?;
+    GitRepo::clone_with_cancel(&target.repo_url, staging, Some(token), cancelled)?;
+    reject_cancelled_pull(cancelled)?;
     promote_allowlisted_clone(staging, profile_dir)?;
+    reject_cancelled_pull(cancelled)?;
     promote_clone_git_dir(staging, profile_dir)?;
     GitRepo::open(profile_dir).context("open promoted profile repo")
+}
+
+fn reject_cancelled_pull(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        anyhow::bail!("profile pull cancelled");
+    }
+    Ok(())
 }
 
 /// Promotes an allowlisted clone while holding the runtime-config guards:

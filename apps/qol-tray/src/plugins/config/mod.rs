@@ -143,7 +143,7 @@ impl ProfileConfigReadGuard {
     }
 }
 
-pub(crate) struct ProfileConfigWriteGuard {
+pub struct ProfileConfigWriteGuard {
     _guard: RwLockWriteGuard<'static, ()>,
 }
 
@@ -166,7 +166,7 @@ pub(crate) fn profile_config_read_guard() -> ProfileConfigReadGuard {
     }
 }
 
-pub(crate) fn profile_config_write_guard() -> ProfileConfigWriteGuard {
+pub fn profile_config_write_guard() -> ProfileConfigWriteGuard {
     profile_config_write_guard_for_scope(ProfileConfigInvalidation::All)
 }
 

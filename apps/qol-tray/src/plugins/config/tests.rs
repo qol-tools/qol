@@ -214,6 +214,7 @@ fn load_configs_parses_valid_json() {
 
 #[test]
 fn save_configs_creates_parent_directory() {
+    let _env_lock = crate::test_support::env_lock().blocking_lock();
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
     let configs = PluginConfigs::default();
     let result = manager.save_configs(&configs);
@@ -223,6 +224,7 @@ fn save_configs_creates_parent_directory() {
 
 #[test]
 fn save_configs_writes_pretty_json() {
+    let _env_lock = crate::test_support::env_lock().blocking_lock();
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
     let mut configs = PluginConfigs::default();
     configs
@@ -238,6 +240,7 @@ fn save_configs_writes_pretty_json() {
 
 #[test]
 fn save_configs_overwrites_existing_file() {
+    let _env_lock = crate::test_support::env_lock().blocking_lock();
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
     let mut configs1 = PluginConfigs::default();
     configs1

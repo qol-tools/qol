@@ -11,7 +11,7 @@
 use crate::cloud::gist_store::{GistMetadata, GistStore, GitHubGistStore};
 use crate::sentinel::ensure_marker_or_create;
 use crate::transforms::gist_v1_to_layout::transform_gist_v1_to_layout;
-use crate::{CloudMigration, MigrationContext, MigrationReport};
+use crate::{CloudMigration, MigrationContext, MigrationReport, ProfileMutationBoundary};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -95,6 +95,7 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
         &self,
         ctx: &MigrationContext<'_>,
         _archive_dir: &Path,
+        profile_mutation: &dyn ProfileMutationBoundary,
     ) -> Result<MigrationReport> {
         let token = ctx
             .github_token
@@ -126,23 +127,27 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
         let layout = transform_gist_v1_to_layout(&json, target_os)
             .context("transforming gist v1 to layout")?;
 
-        let profile_dir = self.profile_dir(ctx.config_dir);
-        for (rel_path, content) in &layout {
-            let final_path = profile_dir.join(rel_path);
-            atomic_write_file(&final_path, content)
-                .with_context(|| format!("writing {} from gist", final_path.display()))?;
-        }
+        let mut write_profile = || {
+            let profile_dir = self.profile_dir(ctx.config_dir);
+            for (rel_path, content) in &layout {
+                let final_path = profile_dir.join(rel_path);
+                atomic_write_file(&final_path, content)
+                    .with_context(|| format!("writing {} from gist", final_path.display()))?;
+            }
 
-        ensure_marker_or_create(
-            &profile_dir.join(MARKER_FILE_NAME),
-            None,
-            &self.active_profile_name,
-            SCHEMA_VERSION,
-        )
-        .context("writing sentinel marker after gist recovery")?;
+            ensure_marker_or_create(
+                &profile_dir.join(MARKER_FILE_NAME),
+                None,
+                &self.active_profile_name,
+                SCHEMA_VERSION,
+            )
+            .context("writing sentinel marker after gist recovery")?;
 
-        crate::portability::ensure_gitattributes(&ctx.config_dir.join("profile"))
-            .context("ensuring .gitattributes for profile repo")?;
+            crate::portability::ensure_gitattributes(&ctx.config_dir.join("profile"))
+                .context("ensuring .gitattributes for profile repo")?;
+            Ok(())
+        };
+        profile_mutation.run(&mut write_profile)?;
 
         Ok(MigrationReport {
             name: self.name().to_string(),
@@ -336,7 +341,10 @@ mod tests {
             http: None,
             host_version: "3.15.1",
         };
-        let report = migration.migrate(&ctx, &archive_dir).await.unwrap();
+        let report = migration
+            .migrate(&ctx, &archive_dir, &crate::DirectProfileMutationBoundary)
+            .await
+            .unwrap();
         assert_eq!(report.archived.len(), 0, "gist stays on GitHub");
 
         let profile_dir = dir.path().join("profile/default");
@@ -395,7 +403,10 @@ mod tests {
             http: None,
             host_version: "3.15.1",
         };
-        migration.migrate(&ctx, &archive_dir).await.unwrap();
+        migration
+            .migrate(&ctx, &archive_dir, &crate::DirectProfileMutationBoundary)
+            .await
+            .unwrap();
 
         let marker_path = dir.path().join("profile/default").join(MARKER_FILE_NAME);
         let marker = crate::sentinel::read_marker(&marker_path)
@@ -418,11 +429,44 @@ mod tests {
             http: None,
             host_version: "3.15.1",
         };
-        migration.migrate(&ctx, &archive_dir).await.unwrap();
+        migration
+            .migrate(&ctx, &archive_dir, &crate::DirectProfileMutationBoundary)
+            .await
+            .unwrap();
 
         let attrs = dir.path().join("profile/.gitattributes");
         assert!(attrs.is_file(), ".gitattributes ensured at profile/");
         let content = std::fs::read_to_string(&attrs).unwrap();
         assert_eq!(content, crate::portability::GITATTRIBUTES_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn migrate_routes_every_profile_write_through_the_mutation_boundary() {
+        struct RejectingBoundary;
+
+        impl ProfileMutationBoundary for RejectingBoundary {
+            fn run(&self, _mutation: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+                Err(anyhow!("profile mutation rejected"))
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive_dir = dir.path().join("archive");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        let migration = migration_with(store_with_matching_gist());
+        let ctx = MigrationContext {
+            config_dir: dir.path(),
+            github_token: Some("tok"),
+            http: None,
+            host_version: "3.15.1",
+        };
+
+        let error = migration
+            .migrate(&ctx, &archive_dir, &RejectingBoundary)
+            .await
+            .expect_err("the boundary must control the profile mutation");
+
+        assert!(format!("{error:#}").contains("profile mutation rejected"));
+        assert!(!dir.path().join("profile").exists());
     }
 }

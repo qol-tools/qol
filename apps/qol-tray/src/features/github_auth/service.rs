@@ -305,12 +305,7 @@ async fn run_post_auth_migrations() {
     };
     match crate::migrations_startup::run_post_auth_if_authed(&config_dir).await {
         Ok(true) => {
-            log::info!(
-                "post-auth migrations applied, bumping profile generation for supervisor reconcile"
-            );
-            {
-                let _guard = crate::plugins::config::profile_config_write_guard();
-            }
+            log::info!("post-auth migrations applied; supervisor reconcile requested");
         }
         Ok(false) => {}
         Err(error) => {

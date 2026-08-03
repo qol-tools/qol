@@ -46,6 +46,18 @@ pub trait FileMigration: Send + Sync {
     fn migrate(&self, config_dir: &Path, archive_dir: &Path) -> Result<MigrationReport>;
 }
 
+pub trait ProfileMutationBoundary: Send + Sync {
+    fn run(&self, mutation: &mut dyn FnMut() -> Result<()>) -> Result<()>;
+}
+
+pub struct DirectProfileMutationBoundary;
+
+impl ProfileMutationBoundary for DirectProfileMutationBoundary {
+    fn run(&self, mutation: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        mutation()
+    }
+}
+
 #[async_trait::async_trait]
 pub trait CloudMigration: Send + Sync {
     fn name(&self) -> &'static str;
@@ -54,6 +66,7 @@ pub trait CloudMigration: Send + Sync {
         &self,
         ctx: &MigrationContext<'_>,
         archive_dir: &Path,
+        profile_mutation: &dyn ProfileMutationBoundary,
     ) -> Result<MigrationReport>;
 }
 
@@ -193,12 +206,27 @@ pub fn run_pre_flight_with(
 }
 
 pub async fn run_post_auth(ctx: &MigrationContext<'_>) -> Result<Vec<MigrationReport>> {
-    run_post_auth_with(ctx, &PostAuthRegistry::current()?).await
+    run_post_auth_guarded(ctx, &DirectProfileMutationBoundary).await
+}
+
+pub async fn run_post_auth_guarded(
+    ctx: &MigrationContext<'_>,
+    profile_mutation: &dyn ProfileMutationBoundary,
+) -> Result<Vec<MigrationReport>> {
+    run_post_auth_with_boundary(ctx, &PostAuthRegistry::current()?, profile_mutation).await
 }
 
 pub async fn run_post_auth_with(
     ctx: &MigrationContext<'_>,
     registry: &PostAuthRegistry,
+) -> Result<Vec<MigrationReport>> {
+    run_post_auth_with_boundary(ctx, registry, &DirectProfileMutationBoundary).await
+}
+
+pub async fn run_post_auth_with_boundary(
+    ctx: &MigrationContext<'_>,
+    registry: &PostAuthRegistry,
+    profile_mutation: &dyn ProfileMutationBoundary,
 ) -> Result<Vec<MigrationReport>> {
     let _lock = lock::MigrationLock::acquire(ctx.config_dir)
         .context("acquiring migration lock for post-auth")?;
@@ -222,7 +250,7 @@ pub async fn run_post_auth_with(
         let archive_dir = archive_path(ctx.config_dir, name)?;
         std::fs::create_dir_all(&archive_dir).context("creating archive dir")?;
         let report = migration
-            .migrate(ctx, &archive_dir)
+            .migrate(ctx, &archive_dir, profile_mutation)
             .await
             .with_context(|| format!("running migration {name}"))?;
         journal::write_done(ctx.config_dir, name)
@@ -350,6 +378,7 @@ mod tests {
             &self,
             _ctx: &MigrationContext<'_>,
             _archive_dir: &Path,
+            _profile_mutation: &dyn ProfileMutationBoundary,
         ) -> Result<MigrationReport> {
             self.order_log.lock().unwrap().push(self.name);
             Ok(MigrationReport {

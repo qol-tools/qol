@@ -332,11 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn promotion_scope_from_files_sorts_plugin_ids_regardless_of_walk_order() {
+    fn promotion_scope_from_files_sorts_and_deduplicates_plugin_ids() {
         let (_tmp, staging, _profile) = setup();
         let files = vec![
             staging.join("default/os/macos/plugin-configs/plugin-b.json"),
             staging.join("default/core/plugin-configs/plugin-a.json"),
+            staging.join("default/os/linux/plugin-configs/plugin-a.json"),
             staging.join("default/manifest.json"),
         ];
         assert_eq!(

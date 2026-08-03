@@ -490,14 +490,24 @@ async fn async_init_inner(
     let launch_pull_factory = if !shadow_generation && !rolling_restart {
         let sync_for_pull = Arc::clone(&sync_service);
         let config_dir = qol_tray::paths::shared_config_dir().ok();
-        Some(move || {
+        Some(move |cancellation| {
             let sync = Arc::clone(&sync_for_pull);
             let cd = config_dir.clone();
             tokio::spawn(async move {
-                if let Some(dir) = cd {
-                    run_post_auth_migration_step(&dir).await;
-                }
-                sync.pull_on_launch().await
+                run_launch_profile_tasks(
+                    async move {
+                        match cd {
+                            Some(dir) => run_post_auth_migration_step(&dir).await,
+                            None => false,
+                        }
+                    },
+                    async move {
+                        sync.pull_on_launch(cancellation)
+                            .await
+                            .map(|result| result.applied_remote)
+                    },
+                )
+                .await
             })
         })
     } else {
@@ -570,7 +580,7 @@ async fn start_local_daemons_before_launch_pull<F>(
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<(Vec<String>, Option<tokio::task::JoinHandle<()>>)>
 where
-    F: FnOnce() -> tokio::task::JoinHandle<anyhow::Result<qol_tray::sync::SyncActionResult>>,
+    F: FnOnce(Arc<qol_process::CancellationToken>) -> tokio::task::JoinHandle<anyhow::Result<bool>>,
 {
     let missing_generation_daemons =
         autostart_plugin_daemons(Arc::clone(&plugin_manager), generation_restart).await;
@@ -588,7 +598,7 @@ where
         lifecycle_cancellation.cancel();
         return Ok((missing_generation_daemons, None));
     }
-    let launch_pull = launch_pull_factory();
+    let launch_pull = launch_pull_factory(Arc::clone(&lifecycle_cancellation));
     let post_pull_task = tokio::spawn(reconcile_after_launch_pull(
         launch_pull,
         plugin_manager,
@@ -599,7 +609,7 @@ where
 }
 
 async fn reconcile_after_launch_pull(
-    mut launch_pull: tokio::task::JoinHandle<anyhow::Result<qol_tray::sync::SyncActionResult>>,
+    mut launch_pull: tokio::task::JoinHandle<anyhow::Result<bool>>,
     plugin_manager: Arc<Mutex<PluginManager>>,
     mut shutdown_rx: broadcast::Receiver<()>,
     lifecycle_cancellation: Arc<qol_process::CancellationToken>,
@@ -612,7 +622,7 @@ async fn reconcile_after_launch_pull(
         }
         result = &mut launch_pull => result,
     };
-    let pull_result = match pull_result {
+    let profile_changed = match pull_result {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
             log::error!("Cloud profile pull on launch failed: {error:#}");
@@ -625,7 +635,7 @@ async fn reconcile_after_launch_pull(
             return;
         }
     };
-    if !pull_result.applied_remote || lifecycle_cancellation.is_cancelled() {
+    if !profile_changed || lifecycle_cancellation.is_cancelled() {
         return;
     }
 
@@ -663,7 +673,17 @@ async fn reconcile_after_launch_pull(
     }
 }
 
-async fn run_post_auth_migration_step(config_dir: &std::path::Path) {
+async fn run_launch_profile_tasks<M, P>(migration: M, pull: P) -> anyhow::Result<bool>
+where
+    M: std::future::Future<Output = bool>,
+    P: std::future::Future<Output = anyhow::Result<bool>>,
+{
+    let migration_changed = migration.await;
+    let pull_changed = pull.await?;
+    Ok(migration_changed || pull_changed)
+}
+
+async fn run_post_auth_migration_step(config_dir: &std::path::Path) -> bool {
     let started = std::time::Instant::now();
     trace_post_auth_migration("start", "running", 0, "");
     match qol_tray::migrations_startup::run_post_auth_if_authed(config_dir).await {
@@ -674,9 +694,7 @@ async fn run_post_auth_migration_step(config_dir: &std::path::Path) {
                 started.elapsed().as_millis() as u64,
                 "",
             );
-            {
-                let _guard = qol_tray::plugins::config::profile_config_write_guard();
-            }
+            true
         }
         Ok(false) => {
             trace_post_auth_migration(
@@ -685,6 +703,7 @@ async fn run_post_auth_migration_step(config_dir: &std::path::Path) {
                 started.elapsed().as_millis() as u64,
                 "no pending migration",
             );
+            false
         }
         Err(error) => {
             log::error!("qol-migrations[post-auth] failed: {error:#}");
@@ -692,8 +711,9 @@ async fn run_post_auth_migration_step(config_dir: &std::path::Path) {
                 "finish",
                 "failed",
                 started.elapsed().as_millis() as u64,
-                "network error",
+                "migration error",
             );
+            true
         }
     }
 }
@@ -873,7 +893,7 @@ async fn check_for_updates() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        finished_update_available, reconcile_after_launch_pull,
+        finished_update_available, reconcile_after_launch_pull, run_launch_profile_tasks,
         start_local_daemons_before_launch_pull,
     };
     use qol_tray::plugins::PluginManager;
@@ -896,13 +916,43 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn launch_migration_precedes_pull_and_either_change_requests_reconcile() {
+        for (migration_changed, pull_changed, expected) in [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let migration_order = Arc::clone(&order);
+            let pull_order = Arc::clone(&order);
+
+            let changed = run_launch_profile_tasks(
+                async move {
+                    migration_order.lock().unwrap().push("migration");
+                    migration_changed
+                },
+                async move {
+                    pull_order.lock().unwrap().push("pull");
+                    Ok(pull_changed)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(changed, expected);
+            assert_eq!(*order.lock().unwrap(), ["migration", "pull"]);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn local_daemons_start_before_a_pending_launch_pull() {
         let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
         let (release_tx, release_rx) = oneshot::channel();
         let (missing, post_pull_task) = start_local_daemons_before_launch_pull(
             manager,
             false,
-            Some(|| {
+            Some(|_| {
                 tokio::spawn(async move {
                     release_rx.await.unwrap();
                     anyhow::bail!("test pull remains pending until local startup completes")
@@ -946,5 +996,42 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_reaches_a_detached_blocking_launch_pull() {
+        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let (_, post_pull_task) = start_local_daemons_before_launch_pull(
+            manager,
+            false,
+            Some(move |cancellation: Arc<qol_process::CancellationToken>| {
+                tokio::spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        while !cancellation.is_cancelled() {
+                            std::thread::yield_now();
+                        }
+                        let _ = observed_tx.send(());
+                        Ok(false)
+                    })
+                    .await?
+                })
+            }),
+            shutdown_rx,
+        )
+        .await
+        .unwrap();
+        let post_pull_task = post_pull_task.unwrap();
+
+        shutdown_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), post_pull_task)
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(1), observed_rx)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

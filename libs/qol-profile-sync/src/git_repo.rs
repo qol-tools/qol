@@ -61,11 +61,22 @@ impl GitRepo {
     }
 
     pub fn clone(remote_url: &str, repo_path: &Path, token: Option<&str>) -> Result<Self> {
+        Self::clone_with_cancel(remote_url, repo_path, token, &|| false)
+    }
+
+    pub fn clone_with_cancel(
+        remote_url: &str,
+        repo_path: &Path,
+        token: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        reject_if_cancelled(cancelled)?;
         if let Some(parent) = repo_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
         let mut callbacks = RemoteCallbacks::new();
         bind_credentials(&mut callbacks, token);
+        callbacks.transfer_progress(|_| !cancelled());
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(callbacks);
         let mut builder = RepoBuilder::new();
@@ -74,6 +85,7 @@ impl GitRepo {
         builder
             .clone(remote_url, repo_path)
             .with_context(|| format!("clone {remote_url} -> {}", repo_path.display()))?;
+        reject_if_cancelled(cancelled)?;
         Ok(Self {
             repo_path: repo_path.to_path_buf(),
         })
@@ -86,17 +98,28 @@ impl GitRepo {
     }
 
     pub fn fetch(&self, token: Option<&str>) -> Result<PullOutcome> {
+        self.fetch_with_cancel(token, &|| false)
+    }
+
+    pub fn fetch_with_cancel(
+        &self,
+        token: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PullOutcome> {
+        reject_if_cancelled(cancelled)?;
         let repo = self.open_repo()?;
         let mut remote = repo
             .find_remote(DEFAULT_REMOTE)
             .with_context(|| format!("find remote {DEFAULT_REMOTE}"))?;
         let mut callbacks = RemoteCallbacks::new();
         bind_credentials(&mut callbacks, token);
+        callbacks.transfer_progress(|_| !cancelled());
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(callbacks);
         remote
             .fetch(&[DEFAULT_BRANCH], Some(&mut fo), None)
             .context("fetch from remote")?;
+        reject_if_cancelled(cancelled)?;
 
         let local_oid = local_branch_oid(&repo);
         let remote_oid = remote_branch_oid(&repo)?;
@@ -386,6 +409,13 @@ fn bind_credentials(callbacks: &mut RemoteCallbacks<'_>, token: Option<&str>) {
     }
 }
 
+fn reject_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        bail!("git operation cancelled");
+    }
+    Ok(())
+}
+
 fn fast_forward(repo: &Repository, target: git2::Oid) -> Result<()> {
     let mut reference = repo.find_reference(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
     reference.set_target(target, "fast-forward")?;
@@ -438,6 +468,38 @@ mod tests {
             repo.find_remote(DEFAULT_REMOTE).unwrap().url().unwrap(),
             "https://example.invalid/repo.git"
         );
+    }
+
+    #[test]
+    fn clone_rejects_cancellation_before_creating_a_repository() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("cancelled-clone");
+
+        let error = match GitRepo::clone_with_cancel(
+            "https://example.invalid/repo.git",
+            &repo_path,
+            None,
+            &|| true,
+        ) {
+            Ok(_) => panic!("pre-cancelled clone must not start"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:#}").contains("cancelled"));
+        assert!(!repo_path.exists());
+    }
+
+    #[test]
+    fn fetch_rejects_cancellation_before_contacting_the_remote() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+
+        let error = repo
+            .fetch_with_cancel(None, &|| true)
+            .expect_err("pre-cancelled fetch must not start");
+
+        assert!(format!("{error:#}").contains("cancelled"));
     }
 
     #[test]

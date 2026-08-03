@@ -184,7 +184,6 @@ fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::PluginManifest;
     use crate::plugins::{PluginId, PluginLoader};
     use std::time::{Duration, Instant};
 
@@ -245,6 +244,7 @@ command = "daemon"
             .unwrap();
         let mut manager = PluginManager::new();
         insert_loaded_plugin(&mut manager, PLUGIN_ID, &plugins_dir.join(PLUGIN_ID));
+        assert_eq!(manager.profile_reconciliation_count(), 0);
         let old_pid = manager
             .get(PLUGIN_ID)
             .unwrap()
@@ -271,6 +271,11 @@ command = "daemon"
             respawned_pid.is_some(),
             "daemon must respawn with a fresh pid after it dies, still stuck on pid {}",
             old_pid
+        );
+        assert_eq!(
+            manager.profile_reconciliation_count(),
+            0,
+            "liveness respawn must not be satisfied by profile reconciliation"
         );
 
         manager

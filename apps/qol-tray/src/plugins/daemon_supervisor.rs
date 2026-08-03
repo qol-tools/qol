@@ -798,6 +798,7 @@ mod tests {
 
     #[test]
     fn unchanged_supervisor_ticks_do_not_read_profile_state() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let plugin_manager = Arc::new(Mutex::new(PluginManager::new()));
