@@ -80,6 +80,7 @@ fn promotion_scope_from_files(staging: &Path, files: &[PathBuf]) -> PromotionSco
             plugin_ids.push(plugin_id);
         }
     }
+    plugin_ids.sort();
     PromotionScope::Plugins(plugin_ids)
 }
 
@@ -325,6 +326,20 @@ mod tests {
         write(&staging.join("default/manifest.json"), b"{\"v\":1}");
         assert_eq!(
             promotion_scope(&staging).unwrap(),
+            PromotionScope::Plugins(vec!["plugin-a".to_string(), "plugin-b".to_string()])
+        );
+    }
+
+    #[test]
+    fn promotion_scope_from_files_sorts_plugin_ids_regardless_of_walk_order() {
+        let (_tmp, staging, _profile) = setup();
+        let files = vec![
+            staging.join("default/os/macos/plugin-configs/plugin-b.json"),
+            staging.join("default/core/plugin-configs/plugin-a.json"),
+            staging.join("default/manifest.json"),
+        ];
+        assert_eq!(
+            promotion_scope_from_files(&staging, &files),
             PromotionScope::Plugins(vec!["plugin-a".to_string(), "plugin-b".to_string()])
         );
     }
