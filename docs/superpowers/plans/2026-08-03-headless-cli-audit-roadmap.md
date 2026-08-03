@@ -2,175 +2,84 @@
 
 Date: 2026-08-03
 
-Grand goal: every feature — including plugins — is a headless CLI tool at its
-base. qol-tray orchestrates those tools; UI (gpui popups, web settings,
-native overlays) is a strategy layered on top, never the home of the feature.
+Goal: every feature is a headless CLI tool at its base; qol-tray orchestrates;
+UI is an adapter. Regenerate the coverage check with
+`docs/headless-cli-audit/audit.sh` (exits non-zero on any gap).
 
-This document is the audit of where the monorepo stands against that goal and
-the roadmap for closing the remaining gap. It was produced in the
-`headless-cli-audit` worktree.
+## 1. Plugin features (15/15 headless CLI)
 
-## What "headless at base" means (the invariant)
+All: `[runtime]` command + `capabilities.doctor` + action→argv mapping
+(`catalog_runtime_args`), built on `qol-headless` (`help`/`doctor`/`--json`).
 
-Per `qol-arch-code` ("Headless-first feature shape" + "Headless CLI contract"):
+| Plugin | Headless CLI commands | Daemon | UI strategy |
+|---|---|---|---|
+| alt-tab | `daemon`, `--show`, `--show-reverse`, `--settings`, `--kill` | yes | retained GPUI picker |
+| bluetooth | `list`, `search`, `stop_search`, `pair`, `trust`, `untrust`, `connect`, `disconnect`, `remove`, `reconnect`, `reconnect_trusted`, `host_fixes`, `apply_host_fix`, `settings` | yes | settings surface |
+| cli-sessions | `run`, `open`, `next`, `snapshot` | yes | GPUI overview panel |
+| controllers | `status`, `apply_fixes`, `settings` | yes | settings surface |
+| ide-checkout | `daemon`, `status` | yes | settings surface |
+| keyremap | `run`, `reload`, `kill` | yes | settings surface |
+| launcher | `run` (default), `--show`, `--settings`, `--kill` | yes | retained GPUI popup |
+| lights | `launch`, `daemon` + 20 action cmds (`toggle_main`, `on_main`, `off_main`, `brighter_main`, `dimmer_main`, `warmer_main`, `cooler_main`, `preset_1..8`, `set_color_main`, `set_brightness_main`, `set_colortemp_main`, `pair`, `stop_pair`, `reload`, `settings`) | yes | settings surface |
+| os-themes | `run`, `toggle_theme`, `settings` | yes | settings surface |
+| pointz | `server` + action group (`settings`) | yes | settings surface |
+| qol-shot | `record`, `screenshot`, `copy`, `copy-path`, `preview`, `settings` | yes | GPUI overlay/preview + native overlay |
+| qol-voice | `start`, `stop`, `status`, `listen`, `session`, `assistant`, `stt`, `audio`, `devices`, `events`, `providers`, `request`, `probe`, `settings` | yes | web UI + GPUI |
+| removeapp | `scan`, `remove`, `open` | no (on-demand) | GPUI removal UI |
+| template | `run`, `settings` | no (scaffold) | scaffold |
+| window-actions | `daemon` + 12 action cmds (`snap-left`, `snap-right`, `snap-bottom`, `maximize`, `minimize`, `restore`, `center`, `move-monitor-left`, `move-monitor-right`, `glide-left`, `glide-right`, `glide-up`, `glide-down`) | yes | settings surface |
 
-1. The unit is a standalone binary with a thin entrypoint (`main.rs` → `cli::exit_code`).
-2. It speaks the `qol-headless` contract: `help`, `help <path>`, `<path> help`,
-   `doctor`, `--json doctor`, `version`, stdout/stderr split, exit codes.
-3. Domain logic lives in library/capability modules; adapters own argv,
-   host-injected config, and presentation.
-4. Host actions map to CLI argv (`catalog_runtime_args` in `plugin.toml`);
-   qol-tray dispatches `binary <action-args>` or a daemon-socket message.
-5. Daemon mode is an optional layer over the CLI, never a replacement.
-6. UI is an adapter over the headless core, via the shared gpui surface kit
-   (`qol-plugin-gpui-surfaces`) or host-served web UI.
+## 2. Host-embedded features (0/8 headless — the entire gap)
 
-## Method
+| Feature | Capability today | Access | Headless status | Missing commands |
+|---|---|---|---|---|
+| plugin store | install / update / remove / list plugins | host IPC + HTTP + dev-links API | no | `plugin-store list\|install\|update\|remove` |
+| profile | export / import / backup; sync | host UI; sync via `qol sync` | partial (sync only) | `profile export\|import\|backup` |
+| task runner | run / supervise checkout tasks | host `features/task_runner`; guardian entry is spawned-internal | no | `task run\|list\|status` |
+| theme | host UI theming | host | no | `theme get\|set` |
+| mode toggle | dev-mode switch | host | no | `mode get\|set` |
+| auth / github auth | OAuth state for profile sync | host UI | no | `auth status\|login\|logout` |
+| launcher apps | app inventory (overlaps launcher plugin discovery) | host | no | `launcher-apps list` or fold into launcher |
+| updates | qol-tray update check / apply | host | no | `updates check\|apply` |
 
-The audit is regenerable: `docs/headless-cli-audit/audit.sh` walks every
-release unit under `plugins/*` and `tools/*` plus the host `[[bin]]` targets,
-and reports headless coverage per unit. It exits non-zero on any gap, so it is
-also the seed of the Phase 3 gate. Run it from the repo root; `--json` emits
-machine-readable records.
+## 3. Host surface layers (orchestration, not features)
 
-Per-unit criteria:
-- plugin: manifest declares `[runtime]` command, `capabilities.doctor = true`,
-  and a `qol-headless` CLI surface in source
-- tool / host bin: depends on `qol-headless` and has a documented headless entry
+tray, menu, hotkeys, shortcuts, settings surface, world canvas, native
+notifications. `qol-tray` headless entry today: `doctor` (+`--json`), `help`,
+`--version`, `exec <target> <action>`, `open <route>`, `--write-mode=`, URL
+courier. Missing but mission-relevant: `hotkeys list` / `shortcuts list`
+(state queries behind "qol-tray takes the hotkey back").
 
-## Findings
+## 4. Headless CLIs that exist (consumers, 5/5)
 
-Snapshot at commit `057c461e` (regenerate with the script; the numbers below
-are the script's output, not maintained prose).
+| Binary | Commands |
+|---|---|
+| qol | `setup`, `dev`, `emu`, `env`, `flow`, `cat`, `build`, `check`, `clean`, `install`, `doctor`, `sync`, `trace`, `trace-rs` (+ hidden workers: process-guardian, flow-worker, image-import-worker) |
+| qol-guest-runner | headless runner + doctor |
+| qol-tray-install | headless install + doctor |
+| qol-tray-doctor | aggregate doctor (host + every plugin `doctor --json`) |
+| qol-tray-migrate | headless migrations |
 
-### Standalone feature units: 21/21 headless (100%)
+## 5. Gap summary
 
-- **Plugins: 15/15.** Every directory under `plugins/*` with a `plugin.toml`
-  declares `[runtime]`, `doctor = true`, maps actions to argv, and builds its
-  CLI on `qol-headless`. 13/15 layer a `[daemon]` on top; the two without
-  (`removeapp`, `template`) are on-demand CLI by design.
-- **Tools: 2/2.** `qol` (dev, env, flow, sync, doctor front door, trace) and
-  `qol-guest-runner` both implement the `qol-headless` contract.
-- **Host auxiliary binaries: 3/3.** `qol-tray-install`, `qol-tray-doctor`,
-  `qol-tray-migrate` are standalone headless CLIs built on `qol-headless`.
-- **`qol-tray` itself: headless entry points + daemon.** With no args it is the
-  daemon; with args it dispatches `doctor` (+ `--json`), `help`, `--version`,
-  `exec <target> <action>`, `open <route>`, URL courier, and `--write-mode=`.
-  Two internal headless modes exist for spawned work: the settings-surface
-  boot route and the process-tree guardian entry (task execution supervision).
-  Neither is user-facing.
+- 21/21 standalone units headless (100%).
+- 0/8 host-embedded features have user-facing headless commands.
+- 1 partial: profile (sync headless via `qol sync`; export/import/backup not).
 
-Headless profile sync is already real: `qol sync` drives `qol-profile-sync`
-without the tray (the `ecosystem-features.md` P0-1 entry calling it a gap is
-stale). `qol doctor` is the headless front door onto the host's aggregate
-doctor, which invokes every installed plugin's `doctor --json`.
+## 6. Roadmap
 
-### The only non-headless remainder: host-embedded features
-
-Eight user-facing features live inside the qol-tray daemon with **no headless
-command surface** — this is the entire gap to 100%:
-
-| Feature | Capability today | Headless surface |
+| Phase | Work | Criterion |
 |---|---|---|
-| plugin store | install / update / remove via host IPC + dev-links API | none |
-| profile | export / import / backup in host (sync itself is headless via `qol sync`) | none |
-| task runner | host-side execution; guardian entry is spawned-internal | none user-facing |
-| theme | host theming | none |
-| mode toggle | dev-mode switch | none |
-| auth / github auth | OAuth state | none |
-| launcher apps | host app inventory (overlaps launcher plugin discovery) | none |
-| updates | update check / apply | none |
+| 0 | Audit script + this doc (done) | measure exists, gateable exit code |
+| 1 | Add 8 host-feature command surfaces on `qol-tray` / `qol` front door, qol-headless contract, order: plugin-store → profile export/import/backup → theme/mode → updates → task → auth → launcher-apps | 8/8 host features headless |
+| 2 | UI-adapter hardening: UI layers consume headless APIs only; extend gallery-parity rule to plugin surfaces | no domain logic behind UI boundary |
+| 3 | Grow audit.sh into CI gate + `qol doctor` "headless contract" check group (action→command mapping, `doctor --json` parses, `help` exit 0, host features covered) | gate fails on any regression |
+| 4 | `qol plugin new` scaffolder; new ecosystem features headless-first | no new feature ships without a command |
 
-Host surface layers (tray, menu, hotkeys, shortcuts, settings surface, world
-canvas) are presentation/orchestration, not features — but their state should
-be headless-queryable where the mission makes it meaningful (e.g. the hotkey
-claim inventory behind "qol-tray takes the hotkey back").
+## 7. Definition of 100%
 
-### Shared libs
-
-Infrastructure, not features, and already correctly shaped: `qol-headless`
-owns the CLI contract (including the serialized doctor types), `qol-gpui` the
-UI kit, `qol-plugin-daemon` the daemon helper. No action beyond consuming.
-
-## Roadmap
-
-### Phase 0 — Codify (this worktree)
-
-- Commit `docs/headless-cli-audit/audit.sh` (the measure) and this plan.
-- Encode the host-feature corollary into `qol-arch-code` via
-  `qol-workflow:standards-evolution`: "every user-facing feature — including
-  host-embedded ones — exposes headless commands; presentation surfaces are
-  adapters." The plugin-side standard already exists; the host side does not.
-
-### Phase 1 — Close the host-embedded gap
-
-Give each of the eight host features a headless command surface, using the
-existing `qol doctor` / `qol-tray-doctor` precedent: feature logic stays in
-qol-tray's lib; the command route is either `qol-tray <cmd>` dispatching
-in-process (daemon running) or a `qol` CLI front door that routes to the
-daemon or executes the same lib code standalone. Every command honors the
-`qol-headless` contract (`help`, `--json` where meaningful).
-
-Order by user value:
-
-1. **plugin store**: `list`, `install <id>`, `update [id]`, `remove <id>` —
-   the "machine becomes yours" flow, and the missing headless half of the
-   plugin store.
-2. **profile**: `export`, `import`, `backup` — completes the headless profile
-   story next to the existing `qol sync`.
-3. **theme / mode**: `theme get|set`, `mode get|set` — scriptable QoL.
-4. **updates**: `check`, `apply`.
-5. **task runner**: `run <task>`, `list`, `status` — surface the guardian
-   entry as a user-facing command.
-6. **auth**: `status`, `login`, `logout`.
-7. **launcher apps**: `list` — or fold into the launcher plugin's discovery
-   and delete the host copy; decide once, don't build two surfaces.
-
-### Phase 2 — UI-strategy hardening
-
-Plugins already layer UI as adapters (gpui retained surfaces, web settings,
-native overlays). Make that a checked invariant for plugin and host UI alike:
-UI layers may only consume headless APIs; no domain logic behind a UI
-boundary. The gallery/production parity rule in `qol-tray-page-creation` is
-the existing mechanism for host UI; extend the same rule to plugin surfaces
-via `qol-plugin-gpui-surfaces`.
-
-### Phase 3 — The 100% gate
-
-- Grow `audit.sh` into a CI-enforced gate: add per-plugin action mapping
-  coverage (every `[action.*]` resolves to a declared command), `doctor --json`
-  parse check, `help` exit-0 check, and "no host feature without a command
-  route".
-- Extend `qol doctor` with a "headless contract" check group so the gate is
-  visible to the user (mission: failures are visible), not only to CI.
-
-### Phase 4 — New features start headless
-
-- `qol plugin new` scaffolder (ecosystem P3-1) generates headless-first
-  plugins from `template`.
-- New ecosystem candidates (clipboard-history, text-expander, window-tiling,
-  ...) are built headless-first; UI strategy is picked from the shared kit.
-- Definition of done: a feature without a headless command is not done — the
-  Phase 3 gate is what makes that a fact, not a preference.
-
-## Definition of 100%
-
-- Every feature unit answers `help` and `doctor --json`, and every user
-  capability is invocable as `<binary> <command>` under the `qol-headless`
-  contract.
-- Every host-embedded feature has a command route that works without the tray
-  UI (in-process or via the `qol` front door).
-- No domain logic lives in UI/presentation layers (gate-enforced).
-- `qol doctor` aggregates the whole ecosystem headlessly — one command
-  exercises everything, host and plugins alike.
-
-## Open decisions for later sessions
-
-- **Command ownership**: which host-feature commands live on `qol-tray` vs the
-  `qol` front door. Precedent (`qol doctor`) favors: qol-tray owns logic,
-  `qol` is the front door for user-scriptable features; record the choice per
-  feature in Phase 1.
-- **launcher apps**: dedupe host inventory with launcher plugin discovery
-  before building its command surface.
-- **Host-surface state queries**: whether `hotkeys list` / `shortcuts list`
-  commands are worth adding behind the "qol-tray owns its surface" promise.
+- Every feature answers `help` + `doctor --json`; every capability is
+  `<binary> <command>` under the qol-headless contract.
+- Every host-embedded feature works headlessly without the tray UI.
+- No domain logic in UI layers.
+- `qol doctor` exercises the whole ecosystem headlessly.
