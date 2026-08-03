@@ -2,30 +2,36 @@ use super::{GistMetadata, GistStore};
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
-const GISTS_LIST_URL: &str = "https://api.github.com/gists?per_page=100";
-const GIST_BY_ID_URL: &str = "https://api.github.com/gists";
+const API_BASE_URL: &str = "https://api.github.com";
 const USER_AGENT: &str = "qol-migrations";
 const GITHUB_ACCEPT: &str = "application/vnd.github+json";
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct GitHubGistStore {
     http: reqwest::Client,
+    base_url: String,
 }
 
 impl GitHubGistStore {
-    pub fn new() -> Self {
-        Self {
-            http: reqwest::Client::new(),
-        }
+    pub fn new() -> Result<Self> {
+        Self::with_timeout(REQUEST_TIMEOUT, API_BASE_URL)
     }
 
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { http: client }
+        Self {
+            http: client,
+            base_url: API_BASE_URL.to_string(),
+        }
     }
-}
 
-impl Default for GitHubGistStore {
-    fn default() -> Self {
-        Self::new()
+    fn with_timeout(timeout: std::time::Duration, base_url: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            http: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .map_err(|error| anyhow!("building GitHub API client: {error}"))?,
+            base_url: base_url.into(),
+        })
     }
 }
 
@@ -34,7 +40,7 @@ impl GistStore for GitHubGistStore {
     async fn list(&self, token: &str) -> Result<Vec<GistMetadata>> {
         let response = self
             .http
-            .get(GISTS_LIST_URL)
+            .get(format!("{}/gists?per_page=100", self.base_url))
             .bearer_auth(token)
             .header(reqwest::header::ACCEPT, GITHUB_ACCEPT)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -57,7 +63,7 @@ impl GistStore for GitHubGistStore {
     }
 
     async fn fetch_file(&self, token: &str, gist_id: &str, file_name: &str) -> Result<String> {
-        let url = format!("{GIST_BY_ID_URL}/{gist_id}");
+        let url = format!("{}/gists/{gist_id}", self.base_url);
         let response = self
             .http
             .get(&url)
@@ -144,13 +150,60 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let _ = GitHubGistStore::new();
+        let _ = GitHubGistStore::new().unwrap();
     }
 
     #[test]
     fn with_client_accepts_user_provided_client() {
         let client = reqwest::Client::new();
         let _ = GitHubGistStore::with_client(client);
+    }
+
+    #[test]
+    fn list_times_out_when_server_stalls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+                .unwrap();
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut stream, &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+        });
+        let store = GitHubGistStore::with_timeout(
+            std::time::Duration::from_millis(300),
+            format!("http://{addr}"),
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let result = runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), store.list("token")).await
+        });
+        let elapsed = started.elapsed();
+        drop(runtime);
+        server.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "stalled request must fail via the client timeout, got: {result:?}"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(200),
+            "request failed too fast to prove the server stalled"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "client timeout did not bound the stalled request: {elapsed:?}"
+        );
     }
 
     #[test]

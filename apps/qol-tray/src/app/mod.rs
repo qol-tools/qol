@@ -450,15 +450,15 @@ async fn async_init_inner(
     qol_tray::doctor::spawn_target_cache_watch();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
-    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
-        if let Err(error) = qol_tray::migrations_startup::run_post_auth_if_authed(&config_dir).await
-        {
-            log::error!("qol-migrations[post-auth] failed: {error:#}");
-        }
-    }
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
+    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+        tokio::spawn(run_post_auth_migration(
+            Arc::clone(&plugin_manager),
+            config_dir,
+        ));
+    }
     {
         let startup_info = build_startup_info(&plugin_manager);
         qol_tray::logging::file_logger::log_startup(&startup_info);
@@ -657,6 +657,65 @@ async fn reconcile_after_launch_pull(
             }
         }
     }
+}
+
+async fn run_post_auth_migration(
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    config_dir: std::path::PathBuf,
+) {
+    let started = std::time::Instant::now();
+    trace_post_auth_migration("start", "running", 0, "");
+    match qol_tray::migrations_startup::run_post_auth_if_authed(&config_dir).await {
+        Ok(true) => {
+            trace_post_auth_migration(
+                "finish",
+                "applied",
+                started.elapsed().as_millis() as u64,
+                "",
+            );
+            materialize_installed_runtime_configs();
+            let _guard = qol_tray::plugins::config::profile_config_write_guard();
+            match plugin_manager.lock() {
+                Ok(mut manager) => {
+                    if let Err(error) = manager.reconcile_profile_generation() {
+                        log::error!(
+                            "Failed to reconcile plugin state after post-auth migration: {error:#}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    log::error!("Plugin manager mutex poisoned after post-auth migration: {error}");
+                }
+            }
+        }
+        Ok(false) => {
+            trace_post_auth_migration(
+                "finish",
+                "skipped",
+                started.elapsed().as_millis() as u64,
+                "no pending migration",
+            );
+        }
+        Err(error) => {
+            log::error!("qol-migrations[post-auth] failed: {error:#}");
+            trace_post_auth_migration(
+                "finish",
+                "failed",
+                started.elapsed().as_millis() as u64,
+                &format!("{error:#}"),
+            );
+        }
+    }
+}
+
+fn trace_post_auth_migration(event: &str, outcome: &str, duration_ms: u64, reason: &str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PROFILE_MIGRATION",
+        "event={event} outcome={outcome} duration_ms={duration_ms} reason={reason}"
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (event, outcome, duration_ms, reason);
 }
 
 async fn autostart_plugin_daemons(

@@ -37,8 +37,11 @@ impl V3_15ToV3_16GistToRepo {
     /// Convenience factory for production code: uses [`GitHubGistStore`] and
     /// the well-known `default` profile name. Tests should call [`Self::new`]
     /// with a [`crate::cloud::gist_store::MemoryGistStore`] instead.
-    pub fn default_for_production() -> Self {
-        Self::new(Arc::new(GitHubGistStore::new()), "default".to_string())
+    pub fn default_for_production() -> Result<Self> {
+        Ok(Self::new(
+            Arc::new(GitHubGistStore::new()?),
+            "default".to_string(),
+        ))
     }
 
     fn profile_dir(&self, config_dir: &Path) -> PathBuf {

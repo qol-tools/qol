@@ -25,7 +25,7 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3.8"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

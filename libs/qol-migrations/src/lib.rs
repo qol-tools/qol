@@ -122,12 +122,12 @@ impl PostAuthRegistry {
         }
     }
 
-    pub fn current() -> Self {
+    pub fn current() -> Result<Self> {
         let mut registry = Self::new();
         registry.register(Box::new(
-            v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo::default_for_production(),
+            v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo::default_for_production()?,
         ));
-        registry
+        Ok(registry)
     }
 
     pub fn register(&mut self, migration: Box<dyn CloudMigration>) {
@@ -193,7 +193,7 @@ pub fn run_pre_flight_with(
 }
 
 pub async fn run_post_auth(ctx: &MigrationContext<'_>) -> Result<Vec<MigrationReport>> {
-    run_post_auth_with(ctx, &PostAuthRegistry::current()).await
+    run_post_auth_with(ctx, &PostAuthRegistry::current()?).await
 }
 
 pub async fn run_post_auth_with(
