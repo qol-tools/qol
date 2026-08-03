@@ -270,6 +270,7 @@ command = "daemon"
 
     #[test]
     fn ensure_plugin_daemon_running_respawns_daemon_after_unexpected_exit() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
