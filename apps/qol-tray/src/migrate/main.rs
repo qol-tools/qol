@@ -162,9 +162,10 @@ fn run_post_auth_blocking(config_dir: &Path) -> Result<()> {
         .enable_all()
         .build()
         .context("building tokio runtime for post-auth")?;
-    rt.block_on(qol_tray::migrations_startup::run_post_auth_if_authed(
+    let _ran = rt.block_on(qol_tray::migrations_startup::run_post_auth_if_authed(
         config_dir,
-    ))
+    ))?;
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
