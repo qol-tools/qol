@@ -2,7 +2,8 @@ use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::super::install_id::{active_install_id_path, marker_path_for, read_install_id_file};
 use super::runtime_prereqs;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use qol_conventions::artifact::BuildIntent;
 use std::path::PathBuf;
 
 const ID: &str = "install_identity";
@@ -34,13 +35,31 @@ fn build_context() -> Result<Context> {
     let current_exe = runtime_prereqs::current_exe()?;
     let marker_path = marker_path_for(&current_exe)?;
     let active_path = active_install_id_path()?;
+    let intent = qol_conventions::artifact::current()
+        .map(|identity| identity.intent)
+        .context("running build identity is unavailable")?;
+    let marker_id = read_install_id_file(&marker_path);
+    let active_id = read_install_id_file(&active_path);
+    let marker_required = requires_install_marker(
+        intent,
+        super::super::platform::install_marker_required(&current_exe),
+    );
+    log::trace!(
+        "doctor install identity intent={intent:?} marker_present={} active_present={} marker_required={marker_required}",
+        marker_id.is_some(),
+        active_id.is_some()
+    );
 
     Ok(Context {
-        marker_id: read_install_id_file(&marker_path),
-        active_id: read_install_id_file(&active_path),
+        marker_id,
+        active_id,
         marker_path,
-        marker_required: super::super::platform::install_marker_required(&current_exe),
+        marker_required,
     })
+}
+
+fn requires_install_marker(intent: BuildIntent, platform_requires_marker: bool) -> bool {
+    matches!(intent, BuildIntent::Production) && platform_requires_marker
 }
 
 fn diagnose_both(marker: String, active: String) -> CheckReport {
@@ -102,6 +121,24 @@ fn diagnose(context: Context) -> CheckReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_production_layouts_require_install_markers() {
+        let cases = [
+            (BuildIntent::Production, true, true),
+            (BuildIntent::Production, false, false),
+            (BuildIntent::Development, true, false),
+            (BuildIntent::Sandbox, true, false),
+            (BuildIntent::Unspecified, true, false),
+        ];
+        for (intent, platform_requires_marker, expected) in cases {
+            assert_eq!(
+                requires_install_marker(intent, platform_requires_marker),
+                expected,
+                "intent={intent:?} platform_requires_marker={platform_requires_marker}"
+            );
+        }
+    }
 
     #[test]
     fn active_install_id_is_ok_without_marker_for_app_bundle_installs() {
