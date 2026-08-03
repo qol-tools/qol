@@ -12,19 +12,16 @@ pub(crate) use qol_workspace::{
 #[cfg(test)]
 use qol_workspace::discover_plugin_dirs;
 
-pub(crate) const DOCTOR_BUILD_ARGS: [&str; 7] = [
-    "build",
-    "-p",
-    "qol-tray",
-    "--features",
-    "dev",
-    "--bin",
-    "qol-tray-doctor",
-];
-
 const DEFAULT_WORKSPACE_FILE: &str = "dev/default-workspace.txt";
 
 pub(crate) fn doctor_binary_path(root: &Path) -> PathBuf {
+    let dev_build = qol_dev_build::tray::debug_binary_path(
+        root,
+        qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+    );
+    if dev_build.is_file() {
+        return dev_build;
+    }
     root.join("target")
         .join("debug")
         .join(exe_name("qol-tray-doctor"))
@@ -488,5 +485,30 @@ mod tests {
 
         let resolved = resolve_crate_target(&workspace, "plugin-alt-tab").unwrap();
         assert_eq!(display_name(&resolved), "alt-tab");
+    }
+
+    #[test]
+    fn doctor_binary_path_prefers_the_isolated_dev_artifact_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dev_binary = qol_dev_build::tray::debug_binary_path(
+            tmp.path(),
+            qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+        );
+        fs::create_dir_all(dev_binary.parent().unwrap()).unwrap();
+        fs::write(&dev_binary, "").unwrap();
+
+        assert_eq!(doctor_binary_path(tmp.path()), dev_binary);
+    }
+
+    #[test]
+    fn doctor_binary_path_falls_back_to_workspace_debug_without_dev_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            doctor_binary_path(tmp.path()),
+            tmp.path()
+                .join("target")
+                .join("debug")
+                .join(exe_name("qol-tray-doctor"))
+        );
     }
 }

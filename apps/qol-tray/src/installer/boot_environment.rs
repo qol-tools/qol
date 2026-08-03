@@ -101,6 +101,9 @@ pub fn canonical_boot_binary() -> Result<PathBuf> {
     let main_clone = main_clone_debug_path();
     let main_exists = main_clone.as_ref().is_some_and(|p| p.is_file());
     let current_exe = std::env::current_exe()?;
+    let current_role = qol_conventions::artifact::current()
+        .map(|identity| identity.role)
+        .ok_or_else(|| anyhow::anyhow!("running build identity is unavailable"))?;
 
     let probes = CanonicalProbes {
         install_binary,
@@ -108,17 +111,18 @@ pub fn canonical_boot_binary() -> Result<PathBuf> {
         main_clone_debug: main_clone,
         main_clone_debug_exists: main_exists,
         current_exe,
+        current_role,
     };
     Ok(canonical_boot_binary_inner(&probes, cfg!(feature = "dev")))
 }
 
-#[derive(Default)]
 struct CanonicalProbes {
     install_binary: Option<PathBuf>,
     install_binary_exists: bool,
     main_clone_debug: Option<PathBuf>,
     main_clone_debug_exists: bool,
     current_exe: PathBuf,
+    current_role: qol_conventions::artifact::BuildRole,
 }
 
 fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> PathBuf {
@@ -138,6 +142,13 @@ fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> Pa
         if probes.install_binary_exists {
             return install.clone();
         }
+    }
+    if probes.current_role != qol_conventions::artifact::BuildRole::Host {
+        return probes
+            .current_exe
+            .parent()
+            .map(|dir| dir.join(crate::installer::platform::binary_filename()))
+            .unwrap_or_else(|| probes.current_exe.clone());
     }
     probes.current_exe.clone()
 }
@@ -184,6 +195,7 @@ mod canonical_tests {
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: true,
             current_exe: PathBuf::from("/install"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, true), PathBuf::from("/install"));
     }
@@ -196,6 +208,7 @@ mod canonical_tests {
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: true,
             current_exe: PathBuf::from("/worktree"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, true), PathBuf::from("/main"));
     }
@@ -208,6 +221,7 @@ mod canonical_tests {
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: true,
             current_exe: PathBuf::from("/worktree"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, false), PathBuf::from("/install"));
     }
@@ -220,6 +234,7 @@ mod canonical_tests {
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: false,
             current_exe: PathBuf::from("/worktree"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, true), PathBuf::from("/install"));
     }
@@ -232,8 +247,50 @@ mod canonical_tests {
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: false,
             current_exe: PathBuf::from("/worktree"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, true), PathBuf::from("/worktree"));
+    }
+
+    #[test]
+    fn step_5_non_host_roles_fall_back_to_sibling_tray() {
+        let roles = [
+            qol_conventions::artifact::BuildRole::Doctor,
+            qol_conventions::artifact::BuildRole::Installer,
+            qol_conventions::artifact::BuildRole::Migrator,
+        ];
+        for current_role in roles {
+            let probes = CanonicalProbes {
+                install_binary: Some(PathBuf::from("/install")),
+                install_binary_exists: false,
+                main_clone_debug: None,
+                main_clone_debug_exists: false,
+                current_exe: PathBuf::from("/repo/target/debug/renamed-tool.exe"),
+                current_role,
+            };
+            assert_eq!(
+                pick(&probes, false),
+                PathBuf::from("/repo/target/debug")
+                    .join(crate::installer::platform::binary_filename()),
+                "role: {current_role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn step_5_host_exe_still_resolves_to_itself() {
+        let probes = CanonicalProbes {
+            install_binary: Some(PathBuf::from("/install")),
+            install_binary_exists: false,
+            main_clone_debug: None,
+            main_clone_debug_exists: false,
+            current_exe: PathBuf::from("/repo/target/debug/qol-tray"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
+        };
+        assert_eq!(
+            pick(&probes, false),
+            PathBuf::from("/repo/target/debug/qol-tray")
+        );
     }
 }
 

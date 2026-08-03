@@ -360,14 +360,8 @@ pub(super) fn spawn_doctor(mode: DoctorMode) -> ManualDoctor {
 fn run_doctor(mode: DoctorMode, progress: &Arc<Mutex<String>>) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     set_progress(progress, "building doctor binary");
-    build_doctor(&root)?;
-    run_doctor_streaming(
-        &crate::workspace::doctor_binary_path(&root),
-        &root,
-        mode,
-        mode.full_command_args(),
-        progress,
-    )
+    let binary = build_doctor(&root)?;
+    run_doctor_streaming(&binary, &root, mode, mode.full_command_args(), progress)
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
@@ -472,19 +466,21 @@ fn parse_doctor_run(
     })
 }
 
-fn build_doctor(root: &std::path::Path) -> Result<(), String> {
-    let output = crate::workspace::cargo_build_command(root, &crate::workspace::DOCTOR_BUILD_ARGS)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        return Ok(());
+fn build_doctor(root: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let result = qol_dev_build::tray::build_tray(
+        root,
+        &[qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME],
+        |_, _| {},
+    );
+    if !result.success {
+        return Err(result.output);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let detail = stderr
-        .lines()
-        .rfind(|line| line.contains("error"))
-        .unwrap_or("no cargo error line captured");
-    Err(format!("doctor build failed ({}): {detail}", output.status))
+    qol_dev_build::cargo_build::select_binary_executable(
+        &result.artifacts,
+        &qol_dev_build::tray::tray_manifest_path(root),
+        qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+    )
+    .map_err(|error| error.to_string())
 }
 
 type ParsedDoctorOutput = (DoctorReport, Vec<String>, Vec<String>);

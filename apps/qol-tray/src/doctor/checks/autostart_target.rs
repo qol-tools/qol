@@ -60,7 +60,7 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
 
 #[cfg(not(feature = "dev"))]
 fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
-    let current_exe = match super::runtime_prereqs::current_exe() {
+    let expected = match crate::installer::boot_environment::canonical_boot_binary() {
         Ok(p) => p,
         Err(e) => return CheckReport::error(e.to_string(), ID),
     };
@@ -80,14 +80,14 @@ fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
     let Some(target_path) = target else {
         return warn_with_fix(
             format!("autostart entry missing at {}", autostart_path.display()),
-            current_exe,
+            expected,
         );
     };
-    let expected = file_io::canonical_or_original(&current_exe);
+    let expected_canon = file_io::canonical_or_original(&expected);
     let actual = file_io::canonical_or_original(&target_path);
-    if expected == actual {
+    if expected_canon == actual {
         return CheckReport::ok(format!(
-            "autostart target matches current binary ({})",
+            "autostart target matches canonical boot binary ({})",
             actual.display()
         ));
     }
@@ -95,9 +95,9 @@ fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
         format!(
             "autostart target points to {} instead of {}",
             target_path.display(),
-            current_exe.display()
+            expected.display()
         ),
-        current_exe,
+        expected,
     )
 }
 
