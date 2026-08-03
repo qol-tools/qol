@@ -12,8 +12,9 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use super::activity::Activity;
+use super::log_pane::clamp_offset;
 use super::render_util::{
-    cursor_window_start, list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
+    list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
 };
 use super::{Dash, View};
 
@@ -85,7 +86,6 @@ const TARGET_TOTAL_LABEL: &str = "target";
 pub(super) fn open_disk(dash: &mut Dash) {
     dash.view = View::Disk;
     dash.scroll_offset = 0;
-    dash.disk_cursor = 0;
     if dash.disk.last.is_none() {
         start_disk_scan(dash);
     }
@@ -282,7 +282,9 @@ pub(super) fn draw_disk(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Navig
     let lines = disk_view_lines(&dash.disk);
     let total = lines.len();
     let height = list_capacity(area.height);
-    let start = cursor_window_start(total, height, dash.disk_cursor);
+    dash.log_height = height;
+    dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
+    let start = dash.scroll_offset;
     view_content(
         frame,
         area,
@@ -326,6 +328,7 @@ fn disk_row_line(row: &DiskRow) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev_console::key_bindings::Action;
 
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
@@ -457,15 +460,26 @@ mod tests {
             "rows below the viewport must not render initially"
         );
 
-        dash.disk_cursor = 19;
+        for _ in 0..20 {
+            super::super::session::apply_action(&mut dash, Action::ScrollDown, false);
+        }
         let scrolled_rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
         assert!(
             scrolled_rows.iter().any(|line| line.contains("bucket-19")),
-            "scrolling down must reveal the last row"
+            "down keys must reveal the last row"
         );
         assert!(
             !scrolled_rows.iter().any(|line| line.contains("bucket-0")),
-            "scrolling down must hide the first row"
+            "down keys must hide the first row"
+        );
+
+        for _ in 0..20 {
+            super::super::session::apply_action(&mut dash, Action::ScrollUp, false);
+        }
+        let top_rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
+        assert!(
+            top_rows.iter().any(|line| line.contains("bucket-0")),
+            "up keys must return to the first row"
         );
     }
 

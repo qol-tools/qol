@@ -477,9 +477,19 @@ enum ScrollDirection {
 }
 
 fn apply_scroll(dash: &mut Dash, dir: ScrollDirection) {
-    match scroll_cursor_and_total(dash) {
-        Some((cursor, total)) => move_cursor(cursor, total, dir),
-        None => move_stream(&mut dash.scroll_offset, dir),
+    match dash.view {
+        View::Disk | View::Endpoints => move_top_anchored(&mut dash.scroll_offset, dir),
+        _ => match scroll_cursor_and_total(dash) {
+            Some((cursor, total)) => move_cursor(cursor, total, dir),
+            None => move_stream(&mut dash.scroll_offset, dir),
+        },
+    }
+}
+
+fn move_top_anchored(offset: &mut usize, dir: ScrollDirection) {
+    match dir {
+        ScrollDirection::Up => *offset = offset.saturating_sub(1),
+        ScrollDirection::Down => *offset = offset.saturating_add(1),
     }
 }
 
@@ -497,17 +507,6 @@ fn scroll_cursor_and_total(dash: &mut Dash) -> Option<(&mut usize, usize)> {
         View::Doctor => {
             let total = doctor_scroll_len(&dash.doctor);
             Some((&mut dash.doctor_cursor, total))
-        }
-        View::Disk => {
-            let total = disk_view_lines(&dash.disk).len();
-            Some((&mut dash.disk_cursor, total))
-        }
-        View::Endpoints => {
-            let total = match &dash.endpoints {
-                EndpointsState::Done(items) => items.len(),
-                EndpointsState::Probing => 0,
-            };
-            Some((&mut dash.endpoints_cursor, total))
         }
         _ => None,
     }
@@ -664,6 +663,13 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         dash.trace.len()
     } else if dash.view == View::EmuDetail {
         emu_detail_scroll_len(dash)
+    } else if dash.view == View::Disk {
+        disk_view_lines(&dash.disk).len()
+    } else if dash.view == View::Endpoints {
+        match &dash.endpoints {
+            EndpointsState::Done(items) => items.len(),
+            EndpointsState::Probing => 0,
+        }
     } else {
         dash.logs.len()
     };
@@ -728,7 +734,6 @@ pub(super) fn dive_row(dash: &mut Dash) {
 pub(super) fn open_endpoints(dash: &mut Dash) {
     dash.view = View::Endpoints;
     dash.scroll_offset = 0;
-    dash.endpoints_cursor = 0;
 }
 
 pub(super) fn health_state(up: bool) -> Health {

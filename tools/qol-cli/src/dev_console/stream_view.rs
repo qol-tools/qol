@@ -16,8 +16,7 @@ use crate::dev_server::EndpointStatus;
 use super::filters::{line_matches_filters, LogFilter};
 use super::log_pane::{clamp_offset, dev_log_dir, window_start, LogRing};
 use super::render_util::{
-    accent, cursor_window_start, list_capacity, list_status, styled_line, view_content,
-    NavigationOverflow, SignBox,
+    accent, list_capacity, list_status, styled_line, view_content, NavigationOverflow, SignBox,
 };
 use super::{copy_highlight, spawn_forwarders, Dash, TraceRenderer, View};
 
@@ -467,7 +466,9 @@ pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> 
     };
     let total = lines.len();
     let height = list_capacity(area.height);
-    let start = cursor_window_start(total, height, dash.endpoints_cursor);
+    dash.log_height = height;
+    dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
+    let start = dash.scroll_offset;
     view_content(
         frame,
         area,
