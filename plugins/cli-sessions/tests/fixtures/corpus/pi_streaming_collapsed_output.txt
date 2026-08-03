@@ -1,0 +1,38 @@
+ session was streaming tool results and the spinner stayed).
+
+ OK let me look at this from a totally different angle: the trace evidence for pi is unambiguous (90s Done with changing screens). Rather
+ than reverse-engineering pi's layout, catch it live. The pi sessions ARE working right now; the monitor is still running. Let me restart a
+ capture loop on pi panes at a faster cadence (every 1s per pane) and keep it running until a misread fires; the frames around it will show
+ the layout.
+
+ But wait — the capture loop polls each pane; the daemon's read and mine are both kitty get-text — but there's a subtlety: the daemon's
+ screen cache only updates on subscription signals; my capture is independent. When the daemon misreads, the pane's live text at that moment
+ is what matters — the daemon's cached text (which it misread) could differ slightly from live, but the class is the same.
+
+ Let me restart capture (wid 28 33 37, 1s cadence per pane) for 5 minutes and keep monitoring. Meanwhile, I'll start building the kimi
+ fixture + test.
+
+ Actually — wait. Let me look at the pi-tui Loader to see if the spinner stops during streaming. If the Loader keeps spinning during
+ streaming, then the only spinner-absent moments are: (a) before the loader starts (first render), (b) when the loader is disposed (turn
+ complete), (c) when pi switches to a non-Loader rendering (e.g. picker, or "worker" panels).
+
+ From the trace, the 90s Done run ended when Busy reappeared — so during the run, the loader was GONE. What was on screen instead? pi
+ streaming output with the response text pinned... Let me look at pi-tui Loader: maybe when the content area gets full during streaming, the
+ status area layout shifts — e.g. pi renders the streaming text in the footer area, pushing the loader out, or the loader hides while
+ streaming (since you can see output, the "Working..." is redundant).
+
+ Let me grep pi's interactive-mode for where the WorkingStatusIndicator is created/stopped — around streaming events.
+
+ Pi's spinner is a Loader from @earendil-works/pi-tui. Let me find when pi stops/starts the working loader — especially around streaming —
+ and check the loader's frame glyphs.
+
+
+ $ PI=/home/kmrh47/.nvm/versions/node/v22.22.2/lib/node_modules/@earendil-works/pi-coding-agent; grep -n
+ "WorkingStatusIndicator\|start(\|\.stop()\|workingMessage" $PI/dist/modes/interactive/interactive-mode.js | head -25
+
+ ... (15 earlier lines, ctrl+o to expand)
+ 3019:            this.ui.start();
+ 3024:            this.ui.stop();
+ 3149:        this.ui.stop();
+ 3160:            this.ui.start();
+ 5065:            this.ui.stop();

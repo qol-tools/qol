@@ -1,0 +1,58 @@
+ tools/qol-cli/src/commands/emu/workflow/hotkey_shadow/platform/linux.rs:97, +6 more
+
+ ● Found: apps/qol-tray/src/doctor/checks/hotkey_shadows/platform/linux.rs. Let me read the
+   hotkey_shadows check and takeover to understand the mechanism, then figure why the bug is back. Let
+   ... (1 more lines, ctrl+o to expand)
+
+ ● Found the doctor hotkey-shadow check. Reading it now.
+
+ ● Ran a command
+   $ ls apps/qol-tray/src/doctor/checks/hotkey_shadows/ apps/qol-tray/src/hotkeys/takeover/
+   apps/qol-tray/src/doctor/checks/hotkey_shadows/:
+   mod.rs
+   platform
+   ... (6 more lines, ctrl+o to expand)
+
+ ● Used Read (…qol-tray/src/doctor/checks/hotkey_shadows/platform/linux.rs) · 174 lines
+
+ ● Now understand the takeover mechanism: apps/qol-tray/src/hotkeys/takeover. The user says "the bug is
+   back" - sometimes the capture doesn't work. Competing hotkey ctrl+super+s. Possibilities:
+   ... (9 more lines, ctrl+o to expand)
+
+ ● Read 2 files · 868 lines
+   ├─ apps/qol-tray/src/hotkeys/takeover/mod.rs · 624 lines
+   └─ apps/qol-tray/src/hotkeys/takeover/dconf.rs · 244 lines
+
+ ● Key insight: on Linux Mint Cinnamon, "Ctrl+Super+S" - but Cinnamon gsettings modifiers: `<Control>`
+   vs `<Ctrl>`. The `normalize_combo` in `crate::doctor::de_bindings` handles that. The user says
+   ... (21 more lines, ctrl+o to expand)
+
+ ● The mechanism: doctor detects DE bindings shadowing qol combos and the fix clears them via dconf,
+   with a ledger. Let me check your live system for a competing binding on that combo.
+
+ ✗ Ran a command
+   $ for root in /org/cinnamon/desktop/keybindings/ /org/cinnamon/muffin/keybindings/
+   /org/gnome/desktop/wm/keybindings/ /org/gnome/settings-daemon/plugins/media-keys/; do echo "==
+   $root"; dconf dump "$root" 2>/dev/null | grep -i -B3 -A1
+   "control><super>s\|ctrl.*super.*s\|<super>s\|<control><super>"; done
+   == /org/cinnamon/desktop/keybindings/
+   == /org/cinnamon/muffin/keybindings/
+   == /org/gnome/desktop/wm/keybindings/
+   ... (2 more lines, ctrl+o to expand)
+
+ ● Ran a command
+   $ dconf dump /org/cinnamon/desktop/keybindings/ 2>&1 | head -50; echo ---; echo
+   $XDG_CURRENT_DESKTOP; ls ~/.config/qol*/  2>/dev/null; ls ~/.local/share/qol* 2>/dev/null
+   [/]
+   custom-keybindings=['custom0', 'custom1', 'custom2', 'custom3', 'custom4']
+   custom-list=['custom1', 'custom3', 'custom4', 'custom5']
+   ... (77 more lines, ctrl+o to expand)
+
+ ⠦ thinking...
+   ledger. Also check which combo qol-shot actually binds. And check the doctor check's combo index. Let
+   me look at
+ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                   │
+ ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ yolo  K3-256k thinking: low  …/WD_SN850X/Git/qol-monorepo  main [±]
+                                                                               context: 21% (51.5k/256k)

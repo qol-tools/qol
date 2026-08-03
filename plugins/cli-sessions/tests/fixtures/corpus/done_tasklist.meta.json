@@ -11,5 +11,6 @@
     "node",
     "claude"
   ],
-  "expect": "YourTurn"
+  "expect": "YourTurn",
+  "screen_changed": false
 }

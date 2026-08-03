@@ -110,7 +110,9 @@ pub fn tick_with_caches(
             caches.screens.remove(&window_id(pane));
             None
         };
-        let new_hash = screen.as_deref().map(screen_hash);
+        let new_hash = screen
+            .as_deref()
+            .map(|s| screen_hash(strategy.stable_screen_hash(s)));
 
         let (prev, prev_hash) = snapshot(registry, window_id(pane));
         let screen_changed = match (new_hash, prev_hash) {
@@ -121,7 +123,7 @@ pub fn tick_with_caches(
 
         let is_service = tool == Tool::Generic && !pane.at_prompt && service_probe.is_service(pane);
 
-        let reading = strategy.read(&Ctx {
+        let ctx = Ctx {
             pane,
             cli_session,
             screen: screen.as_deref(),
@@ -129,16 +131,26 @@ pub fn tick_with_caches(
             prev,
             now,
             is_service,
-        });
+        };
+        #[cfg(debug_assertions)]
+        let evidence = (
+            strategy.working(&ctx),
+            strategy.awaiting(&ctx),
+            strategy.turn_taken(&ctx),
+        );
+        let reading = strategy.read(&ctx);
 
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane wid={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} read_phase={:?} label={:?} title={:?}",
+            "phase=pane wid={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} working={} awaiting={} turn_taken={} read_phase={:?} label={:?} title={:?}",
             window_id(pane),
             tool,
             cli_tool,
             pane.at_prompt,
+            evidence.0,
+            evidence.1,
+            evidence.2,
             reading.phase,
             reading.label,
             short(&pane.title)

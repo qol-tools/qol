@@ -113,6 +113,49 @@ fn claude_done_detects_completion_marker_only() {
 }
 
 #[test]
+fn kimi_working_detects_moon_dot_bare_moon_and_braille_shapes() {
+    use plugin_cli_sessions::signal::screen::kimi_working;
+    let boxed = |spinner: &str| {
+        format!(
+            "{spinner}\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]"
+        )
+    };
+    let bare_moon = boxed("  \u{1F317}");
+    let bare_moon_fe0f = boxed("\u{1F312}\u{FE0F}");
+    let braille = boxed("\u{2819} thinking...");
+    let braille_nested = boxed("ledger output\n\u{2826} Working... (esc to interrupt)");
+    let moon_in_answer = boxed("Here is the status:\n\u{1F315}\nThat's the full report.");
+    let cases = [
+        (
+            "\u{1F315} \u{00B7} Tip: /tasks to check progress and status for background tasks",
+            true,
+        ),
+        (
+            "\u{1F315}\u{FE0F} \u{00B7} Tip: /sessions to browse and resume earlier sessions",
+            true,
+        ),
+        (bare_moon.as_str(), true),
+        (bare_moon_fe0f.as_str(), true),
+        (braille.as_str(), true),
+        (braille_nested.as_str(), true),
+        ("\u{1F315} release status is green", false),
+        (
+            "Assistant answer:\n\u{1F315} release status is green\n> ",
+            false,
+        ),
+        (moon_in_answer.as_str(), false),
+        (
+            "yolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]",
+            false,
+        ),
+        ("", false),
+    ];
+    for (t, expected) in cases {
+        assert_eq!(kimi_working(t), expected, "kimi_working: {t:?}");
+    }
+}
+
+#[test]
 fn codex_signals_distinguish_working_and_fresh() {
     use plugin_cli_sessions::signal::screen::{codex_banner, codex_working};
     assert!(codex_working("Working (1s \u{00B7} esc to interrupt)"));

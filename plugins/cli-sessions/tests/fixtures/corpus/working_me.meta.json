@@ -1,5 +1,5 @@
 {
-  "title": "⠂ Claude Sessions Improvements",
+  "title": "\u2802 Claude Sessions Improvements",
   "at_prompt": false,
   "foreground_basenames": [
     "caffeinate",
@@ -11,5 +11,6 @@
     "node",
     "claude"
   ],
-  "expect": "Working"
+  "expect": "Working",
+  "screen_changed": false
 }

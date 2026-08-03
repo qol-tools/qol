@@ -92,18 +92,26 @@ previous reading + now) into a `Reading { phase, label }`. The default impl
   "Deterministic service detection")
 
 Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`,
-`Pi`, `Kimi`) override `read` and never consult `is_service`, so a thinking
-agent always keeps its `Working` spinner - its busy -> your-turn lifecycle is
-the whole point.
+`Pi`, `Kimi`) supply evidence hooks (`working`, `awaiting`, `turn_taken`) and
+never consult `is_service`; the shared `read` composes the hooks through the
+pure `phase_for` skeleton (Busy > Blocked > Done > Idle) and enforces the
+moving-screen invariant in one place: a changing screen is a working session,
+so every waiting phase requires a settled screen, and a moving screen with no
+evidence still reads Busy. `Cli` alone overrides `read` because its shell
+model is busy-by-default (absence of a foreground process is the idle signal),
+which does not fit the evidence skeleton. Strategies also expose a
+`stable_screen_hash` so the daemon compares only the region whose movement
+means something (the footer counters of `Pi`/`Kimi` are excluded); the
+decision that "the screen settled" therefore ignores cosmetic noise.
 
-`Claude`, `Codex`, `Pi`, and `Kimi` override `read`/`wants_screen` to detect the
-*same* four phases from their own tells instead of the generic prompt
-heuristics. Labels and session activity metadata arrive through the shared
-descriptor:
+`Claude`, `Codex`, `Pi`, and `Kimi` implement the evidence hooks and
+`wants_screen` to detect the *same* four phases from their own tells instead
+of the generic prompt heuristics. Labels and session activity metadata arrive
+through the shared descriptor:
 
 | Phase   | `Cli` (generic)              | `Claude`                    | `Codex`                       | `Pi`                            | `Kimi`                  |
 |---------|------------------------------|-----------------------------|-------------------------------|---------------------------------|-------------------------|
-| Busy    | not at prompt                | `esc to interrupt` / spinner | `esc to interrupt`, title     | braille spinner + `...` loader  | moon-phase spinner line |
+| Busy    | not at prompt                | `esc to interrupt` / spinner | `esc to interrupt`, title     | braille spinner + `...` loader  | moon spinner / bare moon above the editor box / braille `thinking...` |
 | Blocked | selection/input prompt       | choice carets `❯ 1.`        | selection prompt markers      | selector hint (`↑↓ navigate …`) | numbered choice prompt |
 | Done    | returned to prompt after run | `✱ ... for <dur>` summary   | session file has >1 turn      | session file has a message      | session has a prompt    |
 | Idle    | otherwise                    | otherwise                   | welcome banner / untouched    | startup help / untouched        | untouched / fresh       |

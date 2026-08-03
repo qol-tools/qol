@@ -1,0 +1,9 @@
+{
+  "title": "\u03c0 - qol-monorepo",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "pi"
+  ],
+  "expect": "Working",
+  "screen_changed": true
+}

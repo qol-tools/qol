@@ -1,6 +1,6 @@
 use crate::signal::screen::{codex_banner, codex_working, has_numbered_choice_prompt};
 use crate::signal::title::title_working;
-use crate::strategy::{Ctx, Phase, Reading, Strategy};
+use crate::strategy::{Ctx, Strategy};
 
 pub struct Codex;
 
@@ -9,26 +9,17 @@ impl Strategy for Codex {
         true
     }
 
-    fn read(&self, ctx: &Ctx) -> Reading {
-        let screen = ctx.screen.unwrap_or("");
-        let phase = if title_working(&ctx.pane.title) || codex_working(screen) {
-            Phase::Busy
-        } else if has_numbered_choice_prompt(screen) {
-            Phase::Blocked
-        } else if turn_taken(ctx, screen) {
-            Phase::Done
-        } else {
-            Phase::Idle
-        };
-        Reading {
-            phase,
-            label: self.label(ctx),
-        }
+    fn working(&self, ctx: &Ctx) -> bool {
+        title_working(&ctx.pane.title) || ctx.screen.is_some_and(codex_working)
     }
-}
 
-fn turn_taken(ctx: &Ctx, screen: &str) -> bool {
-    ctx.cli_session
-        .has_activity
-        .unwrap_or_else(|| !codex_banner(screen))
+    fn awaiting(&self, ctx: &Ctx) -> bool {
+        ctx.screen.is_some_and(has_numbered_choice_prompt)
+    }
+
+    fn turn_taken(&self, ctx: &Ctx) -> bool {
+        ctx.cli_session
+            .has_activity
+            .unwrap_or_else(|| !ctx.screen.is_some_and(codex_banner))
+    }
 }

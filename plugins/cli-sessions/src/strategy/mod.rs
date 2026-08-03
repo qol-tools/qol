@@ -50,29 +50,47 @@ pub trait Strategy {
         ctx.cli_session.display_name.clone()
     }
 
+    fn working(&self, _ctx: &Ctx) -> bool {
+        false
+    }
+
+    fn awaiting(&self, _ctx: &Ctx) -> bool {
+        false
+    }
+
+    fn turn_taken(&self, _ctx: &Ctx) -> bool {
+        false
+    }
+
+    fn stable_screen_hash<'a>(&self, text: &'a str) -> &'a str {
+        text
+    }
+
     fn read(&self, ctx: &Ctx) -> Reading {
-        let pane = ctx.pane;
-        let phase = if pane.at_prompt {
-            let prev_running = ctx.prev.and_then(|p| p.running_since);
-            let finished_long = prev_running
-                .map(|start| ctx.now.saturating_sub(start) > DONE_THRESHOLD_SECS)
-                .unwrap_or(false);
-            if finished_long {
-                Phase::Done
-            } else {
-                Phase::Idle
-            }
-        } else if blocked(ctx) {
-            Phase::Blocked
-        } else if ctx.is_service {
-            Phase::Service
-        } else {
-            Phase::Busy
-        };
+        let phase = phase_for(
+            self.working(ctx),
+            self.awaiting(ctx),
+            self.turn_taken(ctx),
+            ctx.screen_changed,
+        );
         Reading {
             phase,
             label: self.label(ctx),
         }
+    }
+}
+
+pub fn phase_for(working: bool, awaiting: bool, turn_taken: bool, screen_changed: bool) -> Phase {
+    if working {
+        Phase::Busy
+    } else if !screen_changed && awaiting {
+        Phase::Blocked
+    } else if !screen_changed && turn_taken {
+        Phase::Done
+    } else if screen_changed {
+        Phase::Busy
+    } else {
+        Phase::Idle
     }
 }
 
@@ -113,7 +131,32 @@ pub fn status_for(prev: Status, phase: Phase) -> Status {
 }
 
 pub struct Cli;
-impl Strategy for Cli {}
+impl Strategy for Cli {
+    fn read(&self, ctx: &Ctx) -> Reading {
+        let pane = ctx.pane;
+        let phase = if pane.at_prompt {
+            let prev_running = ctx.prev.and_then(|p| p.running_since);
+            let finished_long = prev_running
+                .map(|start| ctx.now.saturating_sub(start) > DONE_THRESHOLD_SECS)
+                .unwrap_or(false);
+            if finished_long {
+                Phase::Done
+            } else {
+                Phase::Idle
+            }
+        } else if blocked(ctx) {
+            Phase::Blocked
+        } else if ctx.is_service {
+            Phase::Service
+        } else {
+            Phase::Busy
+        };
+        Reading {
+            phase,
+            label: self.label(ctx),
+        }
+    }
+}
 
 pub fn for_tool(tool: Tool) -> Box<dyn Strategy> {
     match tool {

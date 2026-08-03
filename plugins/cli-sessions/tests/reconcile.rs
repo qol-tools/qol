@@ -304,12 +304,13 @@ fn tick_classifies_codex_blocked_from_screen() {
         screen: SELECTION.into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].status,
         Status::NeedsYou,
-        "a selection box on screen => blocked => red"
+        "a selection box on a settled screen => blocked => red"
     );
 }
 
@@ -327,11 +328,8 @@ fn tick_claude_blocked_when_choice_picker_on_screen() {
         screen: CLAUDE_PICKER.into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
-    assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
-        Status::NeedsYou,
-        "a claude session showing a choice picker must read needs-you, not idle"
-    );
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou,);
 }
 
 #[test]
@@ -343,17 +341,14 @@ fn tick_codex_idle_when_no_turn_taken() {
         screen: String::new(),
     };
     tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100);
+    tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 101);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(
         rows[0].status,
         Status::Unknown,
         "no turn in the rollout => idle, not your turn"
     );
-    assert_eq!(
-        rows[0].name.as_deref(),
-        Some("Asasdsadasd"),
-        "label comes from the codex session store"
-    );
+    assert_eq!(rows[0].name.as_deref(), Some("Asasdsadasd"),);
 }
 
 #[test]
@@ -364,10 +359,11 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
         screen: "What remains:\n1. Add golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag\n4. Rename the WIP commit".into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
-        "a codex answer ending in a numbered list is your-turn, not needs-you"
+        "a codex answer ending in a numbered list is your-turn once the screen settles"
     );
 }
 
@@ -378,12 +374,9 @@ fn tick_returns_attention_notice_for_new_needs_you() {
         panes: vec![pane(40, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    let notices = tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
-    assert_eq!(
-        notices.len(),
-        1,
-        "a fresh session that needs you emits one notice"
-    );
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    let notices = tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    assert_eq!(notices.len(), 1, "settling onto needs-you emits one notice");
     assert_eq!(notices[0].body, "Codex \u{00B7} needs you");
 }
 
@@ -394,9 +387,10 @@ fn tick_does_not_repeat_notice_while_status_holds() {
         panes: vec![pane(41, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    let first = tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    let first = tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
     assert_eq!(first.len(), 1, "first transition into needs-you notifies");
-    let second = tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    let second = tick(&reg, &host, &interpreter(), &NoServiceProbe, 102);
     assert!(second.is_empty(), "staying needs-you must not re-notify");
 }
 
@@ -429,6 +423,7 @@ fn tick_agent_never_reads_service() {
         screen: "Welcome to Claude Code\n\u{276F} ".into(),
     };
     tick(&reg, &host, &interpreter(), &YesService, 100);
+    tick(&reg, &host, &interpreter(), &YesService, 101);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Unknown,
@@ -445,6 +440,7 @@ fn tick_codex_your_turn_when_turn_taken() {
         screen: String::new(),
     };
     tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100);
+    tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 101);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
 }
 
@@ -462,6 +458,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         screen: CLAUDE_WORKING.into(),
     };
     tick(&reg, &working, &interpreter(), &NoServiceProbe, 100);
+    tick(&reg, &working, &interpreter(), &NoServiceProbe, 101);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
 
     let parked = FakeHost {
@@ -475,19 +472,12 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         screen: CLAUDE_DONE.into(),
     };
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 200);
-    assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
-        Status::YourTurn,
-        "a completion marker means your turn"
-    );
+    tick(&reg, &parked, &interpreter(), &NoServiceProbe, 201);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn,);
 
     reg.lock().unwrap().get_mut(10).unwrap().acknowledge();
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 300);
-    assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
-        Status::Acknowledged,
-        "ack survives a tick while still parked"
-    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Acknowledged,);
 }
 
 #[test]
@@ -504,11 +494,8 @@ fn tick_claude_fresh_is_idle() {
         screen: "Welcome to Claude Code\n\u{276F} ".into(),
     };
     tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
-    assert_eq!(
-        reg.lock().unwrap().sorted()[0].status,
-        Status::Unknown,
-        "no completion marker yet => idle"
-    );
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Unknown,);
 }
 
 #[test]

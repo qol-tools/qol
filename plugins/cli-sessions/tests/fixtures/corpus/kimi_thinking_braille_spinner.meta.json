@@ -1,9 +1,9 @@
 {
-  "title": "\u2733 Claude Sessions Plugin",
+  "title": "Kimi Code",
   "at_prompt": false,
   "foreground_basenames": [
-    "claude"
+    "kimi"
   ],
-  "expect": "NeedsYou",
+  "expect": "Working",
   "screen_changed": false
 }

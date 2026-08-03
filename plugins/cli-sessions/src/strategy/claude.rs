@@ -2,7 +2,7 @@ use crate::signal::screen::{
     claude_awaiting_choice, claude_done, claude_working, has_numbered_choice_prompt,
 };
 use crate::signal::title::title_working;
-use crate::strategy::{Ctx, Phase, Reading, Strategy};
+use crate::strategy::{Ctx, Strategy};
 
 pub struct Claude;
 
@@ -11,20 +11,17 @@ impl Strategy for Claude {
         true
     }
 
-    fn read(&self, ctx: &Ctx) -> Reading {
-        let screen = ctx.screen.unwrap_or("");
-        let phase = if claude_working(screen) || title_working(&ctx.pane.title) {
-            Phase::Busy
-        } else if claude_awaiting_choice(screen) || has_numbered_choice_prompt(screen) {
-            Phase::Blocked
-        } else if claude_done(screen) {
-            Phase::Done
-        } else {
-            Phase::Idle
-        };
-        Reading {
-            phase,
-            label: self.label(ctx),
-        }
+    fn working(&self, ctx: &Ctx) -> bool {
+        ctx.screen.is_some_and(claude_working) || title_working(&ctx.pane.title)
+    }
+
+    fn awaiting(&self, ctx: &Ctx) -> bool {
+        ctx.screen.is_some_and(|screen| {
+            claude_awaiting_choice(screen) || has_numbered_choice_prompt(screen)
+        })
+    }
+
+    fn turn_taken(&self, ctx: &Ctx) -> bool {
+        ctx.screen.is_some_and(claude_done)
     }
 }

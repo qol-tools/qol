@@ -15,6 +15,7 @@ struct Meta {
     #[serde(default)]
     at_prompt: bool,
     foreground_basenames: Vec<String>,
+    screen_changed: bool,
     expect: Option<String>,
 }
 
@@ -49,7 +50,7 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         pane: &pane,
         cli_session,
         screen: Some(screen),
-        screen_changed: true,
+        screen_changed: meta.screen_changed,
         prev: None,
         now: 0,
         is_service: false,

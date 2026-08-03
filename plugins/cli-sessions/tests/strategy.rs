@@ -1,11 +1,12 @@
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
+use plugin_cli_sessions::signal::screen::screen_hash;
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::claude::Claude;
 use plugin_cli_sessions::strategy::codex::Codex;
 use plugin_cli_sessions::strategy::kimi::Kimi;
 use plugin_cli_sessions::strategy::pi::Pi;
 use plugin_cli_sessions::strategy::{
-    running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
+    phase_for, running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
 };
 use qol_terminal_sessions::cli::{
     codex_tool, kimi_tool, pi_tool, CliSessionDescriptor, CliSessionInterpreter,
@@ -150,6 +151,35 @@ fn running_since_tracks_busy_phase_only() {
             running_since_for(prev, phase, now),
             expected,
             "{prev:?}+{phase:?}"
+        );
+    }
+}
+
+#[test]
+fn phase_for_never_reads_waiting_on_a_moving_screen() {
+    let cases = [
+        (true, false, false, false, Phase::Busy),
+        (true, false, false, true, Phase::Busy),
+        (true, false, true, false, Phase::Busy),
+        (true, false, true, true, Phase::Busy),
+        (true, true, false, false, Phase::Busy),
+        (true, true, false, true, Phase::Busy),
+        (true, true, true, false, Phase::Busy),
+        (true, true, true, true, Phase::Busy),
+        (false, false, false, false, Phase::Idle),
+        (false, false, false, true, Phase::Busy),
+        (false, false, true, false, Phase::Done),
+        (false, false, true, true, Phase::Busy),
+        (false, true, false, false, Phase::Blocked),
+        (false, true, false, true, Phase::Busy),
+        (false, true, true, false, Phase::Blocked),
+        (false, true, true, true, Phase::Busy),
+    ];
+    for (working, awaiting, turn_taken, changed, expected) in cases {
+        assert_eq!(
+            phase_for(working, awaiting, turn_taken, changed),
+            expected,
+            "working={working} awaiting={awaiting} turn_taken={turn_taken} screen_changed={changed}"
         );
     }
 }
@@ -485,6 +515,216 @@ fn kimi_choice_picker_is_blocked() {
             .phase,
         Phase::Blocked,
         "an on-screen choice picker is needs-you even when the caret glyph is absent"
+    );
+}
+
+#[test]
+fn kimi_bare_moon_and_braille_spinners_are_working() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let boxed = |spinner: &str| {
+        format!(
+            "{spinner}\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]"
+        )
+    };
+    let cases = [
+        boxed("  \u{1F317}"),
+        boxed("\u{1F312}\u{FE0F}"),
+        boxed("\u{2819} thinking..."),
+        boxed("ledger output\n\u{2826} thinking..."),
+        boxed("\u{1F315} \u{00B7} Tip: /tasks to check progress"),
+    ];
+    for screen in cases {
+        assert_eq!(
+            Kimi.read(&kimi_ctx(&p, Some(&screen), Some("proj"), Some(true)))
+                .phase,
+            Phase::Busy,
+            "screen: {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn kimi_bare_moon_in_settled_content_is_not_working() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let screen = "Here is the status:\n\u{1F315}\nThat's the full report.\n\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]";
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done,
+        "a bare moon inside a completed answer is not a spinner"
+    );
+}
+
+#[test]
+fn pi_stable_hash_tracks_content_not_footer() {
+    let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+    let base = format!(
+        "conversation output\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+    );
+    let footer = format!(
+        "conversation output\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.480 (sub) 30.1%/1.0M (auto)"
+    );
+    let content = format!(
+        "new output arrived\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+    );
+    let hash = |s: &str| screen_hash(Pi.stable_screen_hash(s));
+    assert_eq!(
+        hash(&base),
+        hash(&footer),
+        "footer counters must not count as movement"
+    );
+    assert_ne!(
+        hash(&base),
+        hash(&content),
+        "content changes must count as movement"
+    );
+}
+
+#[test]
+fn pi_stable_hash_requires_footer_rules_near_the_tail() {
+    let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+    let a = format!(
+        "streamed output\n{rule}\nchanging line A\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+    );
+    let b = format!(
+        "streamed output\n{rule}\nchanging line B\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+    );
+    let hash = |s: &str| screen_hash(Pi.stable_screen_hash(s));
+    assert_ne!(
+        hash(&a),
+        hash(&b),
+        "a rule-looking line inside streamed output must not hide movement below it"
+    );
+}
+
+#[test]
+fn kimi_stable_hash_tracks_content_not_status_bar() {
+    let boxed = "\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}";
+    let base = format!(
+        "conversation output\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
+    );
+    let status = format!(
+        "conversation output\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 21% (51.5k/256k)"
+    );
+    let content = format!(
+        "new output arrived\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
+    );
+    let hash = |s: &str| screen_hash(Kimi.stable_screen_hash(s));
+    assert_eq!(
+        hash(&base),
+        hash(&status),
+        "status bar changes must not count as movement"
+    );
+    assert_ne!(
+        hash(&base),
+        hash(&content),
+        "content changes must count as movement"
+    );
+}
+
+#[test]
+fn pi_streaming_collapsed_output_is_working_until_the_screen_settles() {
+    let p = pane(false, "pi", "\u{03C0} - qol-monorepo");
+    let screen = "\"WorkingStatusIndicator|start|.stop()|workingMessage\" $PI/dist/modes/interactive/interactive-mode.js | head -25\n ... (15 earlier lines, ctrl+o to expand)\n 3019:            this.ui.start();\n 3024:            this.ui.stop();\n 5065:            this.ui.stop();";
+    let mut moving = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
+    moving.screen_changed = true;
+    assert_eq!(
+        Pi.read(&moving).phase,
+        Phase::Busy,
+        "streaming output with the spinner hidden by the expander is still working"
+    );
+    let settled = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
+    assert_eq!(
+        Pi.read(&settled).phase,
+        Phase::Done,
+        "the same frame once the screen settles is your turn"
+    );
+}
+
+#[test]
+fn moving_screen_defers_your_turn_for_every_tool() {
+    let pi_pane = pane(false, "pi", "\u{03C0} - proj");
+    let pi_settled =
+        "conversation output\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)";
+    let mut pi_moving = pi_ctx(&pi_pane, Some(pi_settled), Some("proj"), Some(true));
+    pi_moving.screen_changed = true;
+    assert_eq!(Pi.read(&pi_moving).phase, Phase::Busy);
+    assert_eq!(
+        Pi.read(&pi_ctx(
+            &pi_pane,
+            Some(pi_settled),
+            Some("proj"),
+            Some(true)
+        ))
+        .phase,
+        Phase::Done
+    );
+
+    let kimi_pane = pane(false, "kimi-code", "qol-monorepo");
+    let kimi_settled = "\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{2191}5]";
+    let mut kimi_moving = kimi_ctx(&kimi_pane, Some(kimi_settled), Some("proj"), Some(true));
+    kimi_moving.screen_changed = true;
+    assert_eq!(Kimi.read(&kimi_moving).phase, Phase::Busy);
+    assert_eq!(
+        Kimi.read(&kimi_ctx(
+            &kimi_pane,
+            Some(kimi_settled),
+            Some("proj"),
+            Some(true)
+        ))
+        .phase,
+        Phase::Done
+    );
+
+    let claude_pane = pane(false, "claude", "\u{2733} Topic");
+    let claude_settled = "\u{273B} Brewed for 2m 9s";
+    assert_eq!(
+        Claude
+            .read(&ctx(&claude_pane, Some(claude_settled), true, None, 0))
+            .phase,
+        Phase::Busy
+    );
+    assert_eq!(
+        Claude
+            .read(&ctx(&claude_pane, Some(claude_settled), false, None, 0))
+            .phase,
+        Phase::Done
+    );
+
+    let codex_pane = pane(false, "codex", "qol-monorepo");
+    let codex_settled = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
+    let mut codex_moving = codex_ctx(&codex_pane, Some(codex_settled), Some("Topic"), Some(true));
+    codex_moving.screen_changed = true;
+    assert_eq!(Codex.read(&codex_moving).phase, Phase::Busy);
+    assert_eq!(
+        Codex
+            .read(&codex_ctx(
+                &codex_pane,
+                Some(codex_settled),
+                Some("Topic"),
+                Some(true)
+            ))
+            .phase,
+        Phase::Done
+    );
+}
+
+#[test]
+fn choice_prompt_on_a_moving_screen_is_working_not_needs_you() {
+    let p = pane(false, "pi", "\u{03C0} - proj");
+    let screen = "Replace current session with /tmp/x.jsonl?\n\n\u{276F} Yes\n  No\n\n\u{2191}\u{2193} navigate  enter select  esc cancel";
+    let mut moving = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
+    moving.screen_changed = true;
+    assert_eq!(
+        Pi.read(&moving).phase,
+        Phase::Busy,
+        "a prompt still rendering on a moving screen is not settled"
+    );
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Blocked,
+        "the same prompt once settled needs the user"
     );
 }
 

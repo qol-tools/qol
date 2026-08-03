@@ -88,24 +88,60 @@ pub fn pi_banner(text: &str) -> bool {
 const KIMI_STATUS_WINDOW: usize = 30;
 
 pub fn kimi_working(text: &str) -> bool {
-    text.lines()
-        .rev()
+    let tail: Vec<&str> = text
+        .lines()
         .filter(|l| !l.trim().is_empty())
+        .rev()
         .take(KIMI_STATUS_WINDOW)
-        .any(|l| is_kimi_spinner(l.trim_start()))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    tail.iter().any(|l| is_kimi_spinner(l.trim_start()))
+        || tail
+            .windows(2)
+            .any(|w| is_bare_moon(w[0].trim_start()) && is_editor_box_top(w[1].trim_start()))
 }
 
 fn is_kimi_spinner(text: &str) -> bool {
     let mut chars = text.chars();
-    if !matches!(chars.next(), Some(c) if matches!(c as u32, 0x1F311..=0x1F318)) {
+    let Some(first) = chars.next() else {
         return false;
+    };
+    if is_moon_phase(first) {
+        chars
+            .as_str()
+            .strip_prefix('\u{FE0F}')
+            .unwrap_or(chars.as_str())
+            .trim_start()
+            .starts_with('\u{00B7}')
+    } else if matches!(first as u32, 0x2800..=0x28FF) {
+        text.contains("...") || text.contains('\u{2026}')
+    } else {
+        false
     }
-    chars
-        .as_str()
-        .strip_prefix('\u{FE0F}')
-        .unwrap_or(chars.as_str())
-        .trim_start()
-        .starts_with('\u{00B7}')
+}
+
+fn is_bare_moon(text: &str) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    is_moon_phase(first)
+        && chars
+            .as_str()
+            .strip_prefix('\u{FE0F}')
+            .unwrap_or(chars.as_str())
+            .trim()
+            .is_empty()
+}
+
+fn is_moon_phase(c: char) -> bool {
+    matches!(c as u32, 0x1F311..=0x1F318)
+}
+
+fn is_editor_box_top(text: &str) -> bool {
+    matches!(text.chars().next(), Some('\u{256D}'))
 }
 
 fn starts_with_star(t: &str) -> bool {
