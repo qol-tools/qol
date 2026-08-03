@@ -14,6 +14,8 @@ struct Frame {
     #[serde(default)]
     title: String,
     #[serde(default)]
+    cwd: String,
+    #[serde(default)]
     at_prompt: bool,
     #[serde(default)]
     foreground_basenames: Vec<String>,
@@ -29,7 +31,7 @@ fn main() {
     let pane = Pane {
         id: kitty_session_id(0),
         root_pid: 0,
-        cwd: String::new(),
+        cwd: frame.cwd,
         title: frame.title,
         at_prompt: frame.at_prompt,
         reported_cmd: None,

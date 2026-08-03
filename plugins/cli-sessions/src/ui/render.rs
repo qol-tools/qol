@@ -218,6 +218,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
     let tool_tag = match s.tool {
         Tool::Claude => "Claude",
         Tool::Codex => "Codex",
+        Tool::Pi => "Pi",
         Tool::Generic => "",
     };
     let tool_color = s.tool.accent().rgb24();

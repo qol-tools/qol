@@ -11,6 +11,7 @@ fn classify_picks_agent_from_process_group() {
             Tool::Claude,
         ),
         (vec!["zsh".to_string(), "codex".to_string()], Tool::Codex),
+        (vec!["zsh".to_string(), "pi".to_string()], Tool::Pi),
         (
             vec!["zsh".to_string(), "codex".to_string(), "claude".to_string()],
             Tool::Codex,

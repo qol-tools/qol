@@ -2,10 +2,13 @@ use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::claude::Claude;
 use plugin_cli_sessions::strategy::codex::Codex;
+use plugin_cli_sessions::strategy::pi::Pi;
 use plugin_cli_sessions::strategy::{
     running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
 };
-use qol_terminal_sessions::cli::{codex_tool, CliSessionDescriptor, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{
+    codex_tool, pi_tool, CliSessionDescriptor, CliSessionInterpreter,
+};
 
 fn pane(at_prompt: bool, cmd: &str, title: &str) -> Pane {
     Pane {
@@ -67,6 +70,28 @@ fn ran_since(start: u64) -> Option<Prev> {
         status: Status::Working,
         running_since: Some(start),
     })
+}
+
+fn pi_ctx<'a>(
+    p: &'a Pane,
+    screen: Option<&'a str>,
+    name: Option<&str>,
+    has_activity: Option<bool>,
+) -> Ctx<'a> {
+    Ctx {
+        pane: p,
+        cli_session: CliSessionDescriptor {
+            tool: pi_tool(),
+            display_name: name.map(str::to_owned),
+            external_id: Some("019fc6e8-18a0-7983-9fd6-0200f1e9a72b".to_owned()),
+            has_activity,
+        },
+        screen,
+        screen_changed: false,
+        prev: None,
+        now: 0,
+        is_service: false,
+    }
 }
 
 #[test]
@@ -244,6 +269,114 @@ fn claude_label_strips_status_glyph() {
     p.foreground_basenames = vec!["claude".to_owned()];
     let r = Claude.read(&ctx(&p, Some(""), false, None, 0));
     assert_eq!(r.label.as_deref(), Some("Improve logging"));
+}
+
+#[test]
+fn pi_working_loader_is_busy() {
+    let p = pane(false, "pi", "\u{03C0} - qol-monorepo");
+    let cases = [
+        "\u{280B} Working...",
+        "\u{2819} Working... (esc to interrupt)",
+        "\u{280B} Retrying (1/3) in 4s... (esc to cancel)",
+        "\u{2838} Compacting... (esc to cancel)",
+        "conversation output\n\u{2807} Working...\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 9.4%/262k (auto)",
+    ];
+    for screen in cases {
+        assert_eq!(
+            Pi.read(&pi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+                .phase,
+            Phase::Busy,
+            "screen: {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn pi_selector_is_blocked() {
+    let p = pane(false, "pi", "\u{03C0} - proj");
+    let screen = "Replace current session with /tmp/x.jsonl?\n\n\u{276F} Yes\n  No\n\n\u{2191}\u{2193} navigate  enter select  esc cancel";
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Blocked,
+        "an extension selector waits for the user"
+    );
+}
+
+#[test]
+fn pi_hint_in_conversation_text_does_not_false_positive() {
+    let p = pane(false, "pi", "\u{03C0} - proj");
+    // A conversation that discusses the selector hint format — but it's
+    // scrolled up, so the tail is clean (editor + footer only).
+    let mut screen = String::new();
+    // Enough filler lines to push any hint mentions out of the tail-8 window.
+    for i in 0..20 {
+        screen.push_str(&format!("conversation line {i}\n"));
+    }
+    screen.push_str(
+        "The selector renders a hint: \u{2191}\u{2193} navigate  enter select  esc cancel\n",
+    );
+    screen.push_str("and it's shown at the bottom.\n");
+    for i in 30..50 {
+        screen.push_str(&format!("more conversation line {i}\n"));
+    }
+    // Tail: editor borders + footer (clean, no selector hint).
+    screen.push_str("\n\u{2500}\u{2500}\u{2500}\n\n\u{2500}\u{2500}\u{2500}\n");
+    screen.push_str("/tmp\n");
+    screen.push_str("$0.000 (sub) 0.0%/262k (auto)");
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(&screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done,
+        "a selector hint buried in conversation text must not block"
+    );
+}
+
+#[test]
+fn pi_idle_footer_does_not_read_as_working() {
+    let p = pane(false, "pi", "\u{03C0} - proj");
+    let idle = "\u{2500}\u{2500}\u{2500}\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)  (kimi-coding) k3-256k \u{2022} high";
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(idle), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done,
+        "the idle footer bullet must not look like a spinner"
+    );
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(idle), Some("proj"), Some(false)))
+            .phase,
+        Phase::Idle,
+        "a fresh pi with no messages is idle"
+    );
+}
+
+#[test]
+fn pi_idle_via_banner_when_activity_metadata_is_absent() {
+    let p = pane(false, "pi", "\u{03C0} - proj");
+    let fresh = " pi v0.83.0\n escape interrupt \u{00B7} ctrl+c/ctrl+d clear/exit\n Press ctrl+o to show full startup help and loaded resources.";
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some(fresh), Some("proj"), None)).phase,
+        Phase::Idle,
+        "startup help => fresh => idle"
+    );
+    assert_eq!(
+        Pi.read(&pi_ctx(&p, Some("conversation output"), Some("proj"), None))
+            .phase,
+        Phase::Done,
+        "no banner => a turn happened"
+    );
+}
+
+#[test]
+fn pi_label_comes_from_the_descriptor() {
+    let p = pane(false, "pi", "\u{03C0} - Refactor auth module - proj");
+    let r = Pi.read(&pi_ctx(
+        &p,
+        Some(""),
+        Some("Refactor auth module"),
+        Some(true),
+    ));
+    assert_eq!(r.label.as_deref(), Some("Refactor auth module"));
 }
 
 #[test]

@@ -55,6 +55,36 @@ pub fn codex_banner(text: &str) -> bool {
     text.contains("OpenAI Codex (v") || text.contains("Tip: Try the Codex App")
 }
 
+pub fn pi_working(text: &str) -> bool {
+    text.lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(8)
+        .any(|l| {
+            let t = l.trim_start();
+            starts_with_braille(t) && (t.contains("...") || t.contains('\u{2026}'))
+        })
+}
+
+fn starts_with_braille(t: &str) -> bool {
+    matches!(t.chars().next(), Some(c) if (0x2800..=0x28FF).contains(&(c as u32)))
+}
+
+pub fn pi_awaiting_choice(text: &str) -> bool {
+    text.lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(8)
+        .any(|l| {
+            let t = l.trim();
+            t.contains('\u{2191}') && t.contains("navigate") && t.contains("select")
+        })
+}
+
+pub fn pi_banner(text: &str) -> bool {
+    text.contains("to show full startup help")
+}
+
 fn starts_with_star(t: &str) -> bool {
     matches!(t.chars().next(), Some(c) if (0x2733..=0x273F).contains(&(c as u32)))
 }
