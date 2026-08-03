@@ -13,8 +13,18 @@ struct FakeEnvironment {
 }
 
 impl PiEnvironment for FakeEnvironment {
-    fn session_file(&self, _cwd: &str) -> Option<std::path::PathBuf> {
+    fn session_file(&self, _pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
         Some(self.session_file.clone())
+    }
+}
+
+struct PerPidEnvironment {
+    session_files: std::collections::HashMap<i32, std::path::PathBuf>,
+}
+
+impl PiEnvironment for PerPidEnvironment {
+    fn session_file(&self, pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
+        self.session_files.get(&pid).cloned()
     }
 }
 
@@ -86,6 +96,51 @@ fn display_name_falls_back_to_the_terminal_title() {
     let descriptor = strategy.describe(&facts);
     assert_eq!(descriptor.display_name.as_deref(), Some("Named work"));
     assert_eq!(descriptor.has_activity, None);
+}
+
+#[test]
+fn two_panes_in_one_directory_keep_their_own_session_names() {
+    let root = TempDir::new().unwrap();
+    let named = |file: &std::path::Path, name: &str| {
+        std::fs::write(
+            file,
+            format!(
+                "{{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}}\n{{\"type\":\"session_info\",\"id\":\"k1\",\"parentId\":null,\"timestamp\":\"t\",\"name\":\"{name}\"}}\n"
+            ),
+        )
+        .unwrap();
+    };
+    let first = root
+        .path()
+        .join("2026-08-03T12-33-49-576Z_019fc79d-b608-7dd5-83c0-af0e4691150a.jsonl");
+    let second = root
+        .path()
+        .join("2026-08-03T12-37-45-895Z_019fc7a1-5126-7ae6-8749-0d2c7688c6ad.jsonl");
+    named(&first, "Bug Hunt");
+    named(&second, "Headless CLI research");
+
+    let strategy = PiStrategy::with_environment(Arc::new(PerPidEnvironment {
+        session_files: [(22, first), (23, second)].into_iter().collect(),
+    }));
+
+    let mut bug_hunt = session();
+    bug_hunt.foreground_pids = vec![22];
+    let mut research = session();
+    research.foreground_pids = vec![23];
+
+    assert_eq!(
+        strategy.describe(&bug_hunt).display_name.as_deref(),
+        Some("Bug Hunt")
+    );
+    assert_eq!(
+        strategy.describe(&research).display_name.as_deref(),
+        Some("Headless CLI research"),
+        "renaming one pane must not rename the other"
+    );
+    assert_eq!(
+        strategy.describe(&bug_hunt).external_id.as_deref(),
+        Some("019fc79d-b608-7dd5-83c0-af0e4691150a")
+    );
 }
 
 #[test]

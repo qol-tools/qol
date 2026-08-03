@@ -27,7 +27,7 @@ pub(super) struct PiMetadataResolver {
 
 #[derive(Default)]
 struct PiCache {
-    session_files: HashMap<String, Timed<Option<PathBuf>>>,
+    session_files: HashMap<i32, Timed<Option<PathBuf>>>,
     facts: HashMap<PathBuf, CachedFacts>,
 }
 
@@ -61,7 +61,7 @@ impl PiMetadataResolver {
         let mut cache = self.cache.lock().ok();
         let path = cache
             .as_mut()
-            .and_then(|cache| session_file(&session.cwd, self.environment.as_ref(), cache));
+            .and_then(|cache| session_file(session, self.environment.as_ref(), cache));
         let external_id = path.as_deref().and_then(id_from_path);
         let facts = cache
             .as_mut()
@@ -78,23 +78,35 @@ impl PiMetadataResolver {
 
     pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
         let mut cache = self.cache.lock().ok()?;
-        session_file(&session.cwd, self.environment.as_ref(), &mut cache)
+        session_file(session, self.environment.as_ref(), &mut cache)
     }
 }
 
 fn session_file(
+    session: &SessionFacts,
+    environment: &dyn PiEnvironment,
+    cache: &mut PiCache,
+) -> Option<PathBuf> {
+    session
+        .foreground_pids
+        .iter()
+        .find_map(|pid| cached_session_file(*pid, &session.cwd, environment, cache))
+}
+
+fn cached_session_file(
+    pid: i32,
     cwd: &str,
     environment: &dyn PiEnvironment,
     cache: &mut PiCache,
 ) -> Option<PathBuf> {
-    if let Some(entry) = cache.session_files.get(cwd) {
+    if let Some(entry) = cache.session_files.get(&pid) {
         if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
             return entry.value.clone();
         }
     }
-    let value = environment.session_file(cwd);
+    let value = environment.session_file(pid, cwd);
     cache.session_files.insert(
-        cwd.to_owned(),
+        pid,
         Timed {
             value: value.clone(),
             checked_at: Instant::now(),
