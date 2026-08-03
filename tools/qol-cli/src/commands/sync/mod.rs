@@ -246,11 +246,27 @@ fn sync_through_host(target: &SyncTarget) -> Result<SyncOutcome> {
 
     let (push_message, _) = post_sync_action("/api/sync/push")?;
     let state = load_state_file(&paths)?;
+    if !state.conflicts.is_empty() {
+        return Ok(SyncOutcome::Conflicts {
+            message: push_message,
+            status: build_status_for(&state, Some(target)),
+        });
+    }
     Ok(SyncOutcome::Synced {
-        message: push_message,
+        message: host_sync_message(&pull_message, &push_message, applied_remote),
         applied_remote,
         status: build_status_for(&state, Some(target)),
     })
+}
+
+fn host_sync_message(pull_message: &str, push_message: &str, applied_remote: bool) -> String {
+    if push_message == "Pushed changes to remote" {
+        push_message.to_string()
+    } else if applied_remote {
+        pull_message.to_string()
+    } else {
+        push_message.to_string()
+    }
 }
 
 fn post_sync_action(route: &str) -> Result<(String, bool)> {
@@ -662,6 +678,47 @@ mod tests {
             panic!("expected synced outcome, got {outcome:?}");
         };
         assert_eq!(message, "Nothing to push");
+    }
+
+    #[test]
+    fn host_sync_message_merges_pull_and_push_results() {
+        let cases = [
+            (
+                ("Pulled changes from remote", "Nothing to push", true),
+                "Pulled changes from remote",
+            ),
+            (
+                ("Already up to date", "Pushed changes to remote", false),
+                "Pushed changes to remote",
+            ),
+            (
+                ("Merged remote changes", "Nothing to push", true),
+                "Merged remote changes",
+            ),
+            (
+                ("Already up to date", "Pulled changes from remote", false),
+                "Pulled changes from remote",
+            ),
+            (
+                ("Already up to date", "Nothing to push", false),
+                "Nothing to push",
+            ),
+            (
+                (
+                    "Pulled changes from remote",
+                    "Pushed changes to remote",
+                    true,
+                ),
+                "Pushed changes to remote",
+            ),
+        ];
+        for ((pull, push, applied), expected) in cases {
+            assert_eq!(
+                host_sync_message(pull, push, applied),
+                expected,
+                "pull={pull:?} push={push:?} applied={applied}"
+            );
+        }
     }
 
     #[test]
