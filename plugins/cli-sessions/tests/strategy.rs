@@ -2,12 +2,13 @@ use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::claude::Claude;
 use plugin_cli_sessions::strategy::codex::Codex;
+use plugin_cli_sessions::strategy::kimi::Kimi;
 use plugin_cli_sessions::strategy::pi::Pi;
 use plugin_cli_sessions::strategy::{
     running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
 };
 use qol_terminal_sessions::cli::{
-    codex_tool, pi_tool, CliSessionDescriptor, CliSessionInterpreter,
+    codex_tool, kimi_tool, pi_tool, CliSessionDescriptor, CliSessionInterpreter,
 };
 
 fn pane(at_prompt: bool, cmd: &str, title: &str) -> Pane {
@@ -84,6 +85,28 @@ fn pi_ctx<'a>(
             tool: pi_tool(),
             display_name: name.map(str::to_owned),
             external_id: Some("019fc6e8-18a0-7983-9fd6-0200f1e9a72b".to_owned()),
+            has_activity,
+        },
+        screen,
+        screen_changed: false,
+        prev: None,
+        now: 0,
+        is_service: false,
+    }
+}
+
+fn kimi_ctx<'a>(
+    p: &'a Pane,
+    screen: Option<&'a str>,
+    name: Option<&str>,
+    has_activity: Option<bool>,
+) -> Ctx<'a> {
+    Ctx {
+        pane: p,
+        cli_session: CliSessionDescriptor {
+            tool: kimi_tool(),
+            display_name: name.map(str::to_owned),
+            external_id: Some("session_40794504-36ff-4315-be5a-5357029b19e1".to_owned()),
             has_activity,
         },
         screen,
@@ -371,6 +394,104 @@ fn pi_idle_via_banner_when_activity_metadata_is_absent() {
 fn pi_label_comes_from_the_descriptor() {
     let p = pane(false, "pi", "\u{03C0} - Refactor auth module - proj");
     let r = Pi.read(&pi_ctx(
+        &p,
+        Some(""),
+        Some("Refactor auth module"),
+        Some(true),
+    ));
+    assert_eq!(r.label.as_deref(), Some("Refactor auth module"));
+}
+
+#[test]
+fn kimi_moon_spinner_line_is_busy() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let cases = [
+        "\u{1F315} \u{00B7} Tip: /tasks to check progress and status for background tasks",
+        "\u{1F315}\u{FE0F} \u{00B7} Tip: /tasks to check progress and status for background tasks",
+        "\u{1F312} \u{00B7} Tip: /sessions to browse and resume earlier sessions",
+        "conversation output\n\u{1F314} \u{00B7} Tip: Try /dance for a hidden Easter egg",
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n\u{1F313} \u{00B7} Tip: run /help",
+    ];
+    for screen in cases {
+        assert_eq!(
+            Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+                .phase,
+            Phase::Busy,
+            "screen: {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn kimi_moon_beyond_the_status_window_does_not_read_as_busy() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let mut screen = String::new();
+    for i in 0..40 {
+        screen.push_str(&format!("conversation line {i}\n"));
+    }
+    screen.push_str("\u{1F315} \u{00B7} Tip: a turn that mentioned the spinner\n");
+    for i in 40..75 {
+        screen.push_str(&format!("more conversation line {i}\n"));
+    }
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(&screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done,
+        "a moon emoji scrolled far above the status area must not look live"
+    );
+}
+
+#[test]
+fn kimi_moon_led_conversation_line_is_not_busy() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let screen = "Assistant answer:\n\u{1F315} release status is green\n> ";
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done
+    );
+}
+
+#[test]
+fn kimi_idle_screen_is_done_after_a_turn_and_idle_when_fresh() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let idle = "\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  DeepSeek V4 Flash thinking: max  \u{2026}/qol-monorepo  main [\u{2191}5]";
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(idle), Some("proj"), Some(true)))
+            .phase,
+        Phase::Done,
+        "a settled screen after a turn is your-turn"
+    );
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(idle), Some("proj"), Some(false)))
+            .phase,
+        Phase::Idle,
+        "a fresh session with no prompts is idle"
+    );
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(idle), Some("proj"), None))
+            .phase,
+        Phase::Done,
+        "without metadata a settled screen counts as a turn taken"
+    );
+}
+
+#[test]
+fn kimi_choice_picker_is_blocked() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let screen = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
+    assert_eq!(
+        Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
+            .phase,
+        Phase::Blocked,
+        "an on-screen choice picker is needs-you even when the caret glyph is absent"
+    );
+}
+
+#[test]
+fn kimi_label_comes_from_the_descriptor() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let r = Kimi.read(&kimi_ctx(
         &p,
         Some(""),
         Some("Refactor auth module"),

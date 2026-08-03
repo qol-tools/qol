@@ -85,6 +85,29 @@ pub fn pi_banner(text: &str) -> bool {
     text.contains("to show full startup help")
 }
 
+const KIMI_STATUS_WINDOW: usize = 30;
+
+pub fn kimi_working(text: &str) -> bool {
+    text.lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(KIMI_STATUS_WINDOW)
+        .any(|l| is_kimi_spinner(l.trim_start()))
+}
+
+fn is_kimi_spinner(text: &str) -> bool {
+    let mut chars = text.chars();
+    if !matches!(chars.next(), Some(c) if matches!(c as u32, 0x1F311..=0x1F318)) {
+        return false;
+    }
+    chars
+        .as_str()
+        .strip_prefix('\u{FE0F}')
+        .unwrap_or(chars.as_str())
+        .trim_start()
+        .starts_with('\u{00B7}')
+}
+
 fn starts_with_star(t: &str) -> bool {
     matches!(t.chars().next(), Some(c) if (0x2733..=0x273F).contains(&(c as u32)))
 }

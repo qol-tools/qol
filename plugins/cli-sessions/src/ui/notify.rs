@@ -11,6 +11,7 @@ impl Notice {
         let prefix = match tool {
             Tool::Claude => "Claude \u{00B7} ",
             Tool::Codex => "Codex \u{00B7} ",
+            Tool::Kimi => "Kimi \u{00B7} ",
             Tool::Pi => "Pi \u{00B7} ",
             Tool::Generic => "",
         };

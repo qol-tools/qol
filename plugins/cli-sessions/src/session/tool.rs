@@ -1,6 +1,6 @@
 use qol_terminal_sessions::cli::{
     CliSessionDescriptor, CliToolColor, CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT,
-    CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, PI_TOOL_ACCENT, PI_TOOL_ID,
+    CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, KIMI_TOOL_ACCENT, KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum Tool {
     Claude,
     Codex,
+    Kimi,
     Pi,
     Generic,
 }
@@ -17,6 +18,7 @@ impl Tool {
         match session.tool.id.as_str() {
             CODEX_TOOL_ID => Self::Codex,
             CLAUDE_TOOL_ID => Self::Claude,
+            KIMI_TOOL_ID => Self::Kimi,
             PI_TOOL_ID => Self::Pi,
             _ => Self::Generic,
         }
@@ -26,6 +28,7 @@ impl Tool {
         match self {
             Self::Claude => CLAUDE_TOOL_ACCENT,
             Self::Codex => CODEX_TOOL_ACCENT,
+            Self::Kimi => KIMI_TOOL_ACCENT,
             Self::Pi => PI_TOOL_ACCENT,
             Self::Generic => GENERIC_TOOL_ACCENT,
         }

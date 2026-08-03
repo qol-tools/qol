@@ -60,6 +60,13 @@ impl TerminalHost for CountingHost {
 struct SubscribedCodex {
     tool: CliTool,
     handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
+    external_id: Arc<Mutex<String>>,
+}
+
+struct SubscribedHarness {
+    interpreter: CliSessionInterpreter,
+    handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
+    external_id: Arc<Mutex<String>>,
 }
 
 impl CliSessionStrategy for SubscribedCodex {
@@ -75,7 +82,7 @@ impl CliSessionStrategy for SubscribedCodex {
         CliSessionDescriptor {
             tool: self.tool.clone(),
             display_name: Some("Subscribed".to_owned()),
-            external_id: Some("subscribed-session".to_owned()),
+            external_id: Some(self.external_id.lock().unwrap().clone()),
             has_activity: Some(true),
         }
     }
@@ -135,18 +142,21 @@ fn fake_codex(name: &str, touched: bool) -> CliSessionInterpreter {
     .unwrap()
 }
 
-fn subscribed_codex() -> (
-    CliSessionInterpreter,
-    Arc<Mutex<Vec<CliSessionChangeHandler>>>,
-) {
+fn subscribed_codex() -> SubscribedHarness {
     let handlers = Arc::new(Mutex::new(Vec::new()));
+    let external_id = Arc::new(Mutex::new("subscribed-session".to_owned()));
     let interpreter = CliSessionInterpreter::from_strategies([Arc::new(SubscribedCodex {
         tool: codex_tool(),
         handlers: handlers.clone(),
+        external_id: external_id.clone(),
     })
         as Arc<dyn CliSessionStrategy>])
     .unwrap();
-    (interpreter, handlers)
+    SubscribedHarness {
+        interpreter,
+        handlers,
+        external_id,
+    }
 }
 
 fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) -> Pane {
@@ -178,33 +188,95 @@ fn subscribed_screens_use_signals_with_a_bounded_fallback() {
         panes,
         reads: AtomicUsize::new(0),
     };
-    let (interpreter, handlers) = subscribed_codex();
+    let harness = subscribed_codex();
     let mut caches = ReconcileCaches::default();
 
-    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 100, &mut caches);
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        100,
+        &mut caches,
+    );
     assert_eq!(host.reads.load(Ordering::Relaxed), 6);
 
-    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 110, &mut caches);
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        110,
+        &mut caches,
+    );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
         6,
         "unchanged subscribed panes reuse their cached screen"
     );
 
-    handlers.lock().unwrap()[2]();
-    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 111, &mut caches);
+    harness.handlers.lock().unwrap()[2]();
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        111,
+        &mut caches,
+    );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
         7,
         "a metadata signal refreshes only its pane"
     );
 
-    tick_with_caches(&reg, &host, &interpreter, &NoServiceProbe, 171, &mut caches);
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        171,
+        &mut caches,
+    );
     assert_eq!(
         host.reads.load(Ordering::Relaxed),
         13,
         "every subscribed pane still has a bounded full-screen fallback"
     );
+}
+
+#[test]
+fn changed_external_session_replaces_the_metadata_subscription() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = CountingHost {
+        panes: vec![pane(1, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        reads: AtomicUsize::new(0),
+    };
+    let harness = subscribed_codex();
+    let mut caches = ReconcileCaches::default();
+
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        100,
+        &mut caches,
+    );
+    assert_eq!(harness.handlers.lock().unwrap().len(), 1);
+
+    *harness.external_id.lock().unwrap() = "replacement-session".to_owned();
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        101,
+        &mut caches,
+    );
+
+    assert_eq!(harness.handlers.lock().unwrap().len(), 2);
+    assert_eq!(host.reads.load(Ordering::Relaxed), 2);
 }
 
 #[test]

@@ -52,8 +52,8 @@ so commands can reject a vanished or reused target.
 It always has a generic fallback, so every terminal works as a normal CLI
 session. Registered strategies enrich recognized tools with a stable tool id,
 display name, external session id, and optional activity evidence. Codex,
-Claude, and Pi are built-ins; future tools are added at this shared seam rather
-than reimplemented in every consumer.
+Claude, Pi, and Kimi are built-ins; future tools are added at this shared seam
+rather than reimplemented in every consumer.
 
 The plugin-local `TerminalHost` is a narrow compatibility adapter for the
 dashboard:
@@ -92,19 +92,21 @@ previous reading + now) into a `Reading { phase, label }`. The default impl
   "Deterministic service detection")
 
 Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`,
-`Pi`) override `read` and never consult `is_service`, so a thinking agent always
-keeps its `Working` spinner - its busy -> your-turn lifecycle is the whole point.
+`Pi`, `Kimi`) override `read` and never consult `is_service`, so a thinking
+agent always keeps its `Working` spinner - its busy -> your-turn lifecycle is
+the whole point.
 
-`Claude`, `Codex`, and `Pi` override `read`/`wants_screen` to detect the *same*
-four phases from their own tells instead of the generic prompt heuristics.
-Labels and session activity metadata arrive through the shared descriptor:
+`Claude`, `Codex`, `Pi`, and `Kimi` override `read`/`wants_screen` to detect the
+*same* four phases from their own tells instead of the generic prompt
+heuristics. Labels and session activity metadata arrive through the shared
+descriptor:
 
-| Phase   | `Cli` (generic)              | `Claude`                    | `Codex`                       | `Pi`                            |
-|---------|------------------------------|-----------------------------|-------------------------------|---------------------------------|
-| Busy    | not at prompt                | `esc to interrupt` / spinner | `esc to interrupt`, title     | braille spinner + `...` loader  |
-| Blocked | selection/input prompt       | choice carets `❯ 1.`        | selection prompt markers      | selector hint (`↑↓ navigate …`) |
-| Done    | returned to prompt after run | `✱ ... for <dur>` summary   | session file has >1 turn      | session file has a message      |
-| Idle    | otherwise                    | otherwise                   | welcome banner / untouched    | startup help / untouched        |
+| Phase   | `Cli` (generic)              | `Claude`                    | `Codex`                       | `Pi`                            | `Kimi`                  |
+|---------|------------------------------|-----------------------------|-------------------------------|---------------------------------|-------------------------|
+| Busy    | not at prompt                | `esc to interrupt` / spinner | `esc to interrupt`, title     | braille spinner + `...` loader  | moon-phase spinner line |
+| Blocked | selection/input prompt       | choice carets `❯ 1.`        | selection prompt markers      | selector hint (`↑↓ navigate …`) | numbered choice prompt |
+| Done    | returned to prompt after run | `✱ ... for <dur>` summary   | session file has >1 turn      | session file has a message      | session has a prompt    |
+| Idle    | otherwise                    | otherwise                   | welcome banner / untouched    | startup help / untouched        | untouched / fresh       |
 
 The shared detectors live in `signal::screen` and `signal::title`
 (`has_prompt_markers`, `has_input_request`, `claude_working`, `claude_done`,

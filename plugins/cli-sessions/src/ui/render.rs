@@ -218,6 +218,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
     let tool_tag = match s.tool {
         Tool::Claude => "Claude",
         Tool::Codex => "Codex",
+        Tool::Kimi => "Kimi",
         Tool::Pi => "Pi",
         Tool::Generic => "",
     };

@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use qol_terminal_sessions::cli::{CliSessionInterpreter, CliSessionSubscription, CliToolId};
+use qol_terminal_sessions::cli::{
+    CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription, CliToolId,
+};
 
 use crate::host::{project_of, window_id, Pane, TerminalHost};
 use crate::session::git;
@@ -39,14 +41,16 @@ struct ScreenIdentity {
     root_pid: i32,
     foreground_pids: Vec<i32>,
     tool: CliToolId,
+    external_id: Option<String>,
 }
 
 impl ScreenIdentity {
-    fn new(pane: &Pane, tool: CliToolId) -> Self {
+    fn new(pane: &Pane, cli_session: &CliSessionDescriptor) -> Self {
         Self {
             root_pid: pane.root_pid,
             foreground_pids: pane.foreground_pids.clone(),
-            tool,
+            tool: cli_session.tool.id.clone(),
+            external_id: cli_session.external_id.clone(),
         }
     }
 }
@@ -101,14 +105,7 @@ pub fn tick_with_caches(
         let strategy = for_tool(tool);
         let wants_screen = strategy.wants_screen(pane);
         let screen = if wants_screen {
-            cached_screen(
-                host,
-                cli_interpreter,
-                pane,
-                &cli_session.tool.id,
-                now,
-                caches,
-            )
+            cached_screen(host, cli_interpreter, pane, &cli_session, now, caches)
         } else {
             caches.screens.remove(&window_id(pane));
             None
@@ -199,12 +196,12 @@ fn cached_screen(
     host: &dyn TerminalHost,
     cli_interpreter: &CliSessionInterpreter,
     pane: &Pane,
-    tool: &CliToolId,
+    cli_session: &CliSessionDescriptor,
     now: u64,
     caches: &mut ReconcileCaches,
 ) -> Option<String> {
     let id = window_id(pane);
-    let identity = ScreenIdentity::new(pane, tool.clone());
+    let identity = ScreenIdentity::new(pane, cli_session);
     let replace = caches
         .screens
         .get(&id)

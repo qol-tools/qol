@@ -36,7 +36,7 @@ pub fn summary_for(status: Status, tool: Tool) -> String {
     match status {
         Status::Working => match tool {
             Tool::Generic => "running",
-            Tool::Claude | Tool::Codex | Tool::Pi => "working",
+            Tool::Claude | Tool::Codex | Tool::Kimi | Tool::Pi => "working",
         },
         Status::Service => "live",
         Status::YourTurn => "your turn",

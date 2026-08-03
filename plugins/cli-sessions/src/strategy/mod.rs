@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod kimi;
 pub mod pi;
 
 use crate::host::Pane;
@@ -118,6 +119,7 @@ pub fn for_tool(tool: Tool) -> Box<dyn Strategy> {
     match tool {
         Tool::Claude => Box::new(claude::Claude),
         Tool::Codex => Box::new(codex::Codex),
+        Tool::Kimi => Box::new(kimi::Kimi),
         Tool::Pi => Box::new(pi::Pi),
         Tool::Generic => Box::new(Cli),
     }

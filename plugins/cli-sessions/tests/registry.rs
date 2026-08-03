@@ -8,6 +8,7 @@ fn working_summary_is_tool_aware() {
         (Tool::Generic, "running"),
         (Tool::Claude, "working"),
         (Tool::Codex, "working"),
+        (Tool::Kimi, "working"),
         (Tool::Pi, "working"),
     ];
     for (tool, expected) in cases {
