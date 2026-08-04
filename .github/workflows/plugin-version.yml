@@ -46,7 +46,7 @@ jobs:
       qol_tray_tag: ${{ steps.plan.outputs.qol_tray_tag }}
     steps:
       - name: Checkout successful source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
@@ -149,7 +149,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.plugin_matrix) }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
 
@@ -199,7 +199,7 @@ jobs:
     env:
       RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
           fetch-depth: 0
@@ -253,7 +253,7 @@ jobs:
     env:
       RUSTFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
           fetch-depth: 0
@@ -313,7 +313,7 @@ jobs:
       RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0
