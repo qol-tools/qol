@@ -1,7 +1,7 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
-    NSWindowAnimationBehavior,
+    NSWindowAnimationBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -374,7 +374,18 @@ pub fn set_window_type_dock_by_title(_title: &str) -> bool {
 }
 
 pub fn configure_overlay_window(title: &str) -> bool {
-    configure_popup_window(title)
+    if !configure_popup_window(title) {
+        return false;
+    }
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    // gpui opens ghost windows with NSTitledWindowMask, and AppKit runs
+    // constrainFrameRect:toScreen: on titled windows, which pushes a display-sized
+    // overlay down by the menu bar height. Borderless windows are exempt, and gpui's
+    // window class overrides canBecomeKeyWindow, so the overlay still takes focus.
+    window.setStyleMask(NSWindowStyleMask::Borderless);
+    true
 }
 
 pub fn configure_pinned_window(title: &str) -> bool {
