@@ -44,7 +44,7 @@ where
         }
 
         if !builds.is_empty() {
-            self.run_builds_parallel(&builds);
+            self.run_builds(&builds);
         }
 
         self.events.run_finished(&self.results);
@@ -165,6 +165,39 @@ where
         completed.sort_by_key(|(i, _)| *i);
         for (idx, result) in completed {
             self.record_build_result(&self.plans[idx].clone(), result);
+        }
+    }
+
+    fn run_builds(&mut self, build_indices: &[usize]) {
+        let plugins: Vec<(&str, &std::path::Path)> = build_indices
+            .iter()
+            .map(|&plan_index| {
+                let plan = &self.plans[plan_index];
+                (plan.plugin_id.as_str(), plan.path.as_path())
+            })
+            .collect();
+        let mut on_progress = |plugin_id: &str, percent: u8, phase: String| {
+            self.events
+                .plugin_progress(plugin_id, BuildStatus::Building, percent, &phase);
+        };
+        let Some(results) = self
+            .builder
+            .build_plugins_with_progress(&plugins, &mut on_progress)
+        else {
+            self.run_builds_parallel(build_indices);
+            return;
+        };
+        if results.len() != build_indices.len() {
+            log::error!(
+                "[dev-build] event=batch_result_mismatch expected={} actual={}",
+                build_indices.len(),
+                results.len()
+            );
+            self.run_builds_parallel(build_indices);
+            return;
+        }
+        for (plan_index, result) in build_indices.iter().copied().zip(results) {
+            self.record_build_result(&self.plans[plan_index].clone(), result);
         }
     }
 

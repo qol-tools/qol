@@ -42,6 +42,7 @@ pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
         .arg("--path")
         .arg(package)
         .args(["--locked", "--force", "--debug"]);
+    qol_dev_build::configure_dev_cargo(&mut command);
     run_step(
         "install",
         StepKind::Pending,

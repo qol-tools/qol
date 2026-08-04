@@ -359,9 +359,16 @@ pub(super) fn spawn_doctor(mode: DoctorMode) -> ManualDoctor {
 
 fn run_doctor(mode: DoctorMode, progress: &Arc<Mutex<String>>) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
-    set_progress(progress, "building doctor binary");
-    let binary = build_doctor(&root)?;
+    let binary = build_manual_doctor_binary(&root, progress)?;
     run_doctor_streaming(&binary, &root, mode, mode.full_command_args(), progress)
+}
+
+fn build_manual_doctor_binary(
+    root: &std::path::Path,
+    progress: &Arc<Mutex<String>>,
+) -> Result<std::path::PathBuf, String> {
+    set_progress(progress, "building doctor binary");
+    build_doctor(root)
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
@@ -561,9 +568,38 @@ mod tests {
     use super::*;
     use crate::dev_console::key_bindings::Action;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    use std::fs;
 
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn manual_doctor_builds_even_when_the_dev_binary_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = qol_dev_build::tray::debug_binary_path(
+            root.path(),
+            qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+        );
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"prebuilt").unwrap();
+        let progress = Arc::new(Mutex::new(String::new()));
+
+        let error = build_manual_doctor_binary(root.path(), &progress).unwrap_err();
+
+        assert!(error.contains("Cargo.toml not found"), "error: {error}");
+        assert_eq!(progress.lock().unwrap().as_str(), "building doctor binary");
+    }
+
+    #[test]
+    fn manual_doctor_builds_when_the_dev_binary_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let progress = Arc::new(Mutex::new(String::new()));
+
+        let error = build_manual_doctor_binary(root.path(), &progress).unwrap_err();
+
+        assert!(error.contains("Cargo.toml not found"), "error: {error}");
+        assert_eq!(progress.lock().unwrap().as_str(), "building doctor binary");
     }
 
     fn outcome(id: &str, status: OutcomeStatus, message: &str, fix_available: bool) -> Outcome {

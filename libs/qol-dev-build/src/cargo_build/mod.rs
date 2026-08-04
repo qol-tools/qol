@@ -368,6 +368,17 @@ impl CargoPluginBuilder for CargoCommandPluginBuilder {
     ) -> BuildResult {
         plugin_build::build_cargo_plugin_with_progress(plugin_id, path, on_progress)
     }
+
+    fn build_plugins_with_progress(
+        &self,
+        plugins: &[(&str, &Path)],
+        on_progress: &mut dyn FnMut(&str, u8, String),
+    ) -> Option<Vec<BuildResult>> {
+        Some(plugin_build::build_cargo_plugins_with_progress(
+            plugins,
+            on_progress,
+        ))
+    }
 }
 
 #[cfg(all(test, unix))]

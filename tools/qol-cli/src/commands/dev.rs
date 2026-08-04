@@ -25,6 +25,7 @@ const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 
 const TRAY_DEV_BINS: [&str; 2] = ["qol-tray", "qol-tray-doctor"];
+const TRAY_RELOAD_BINS: [&str; 1] = ["qol-tray"];
 pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
 pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
 pub(crate) const DEV_RELOAD_PROGRESS_PREFIX: &str = "[qol dev:reload-progress]\t";
@@ -66,7 +67,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         target.branch.as_deref(),
     )?;
     let run_root = dev_run_root(&target.root);
-    let built_binary = build_qol_tray_dev(&target.root, verbose)?;
+    let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose)?;
     let runtime = qol_dev_build::tray::stage_runtime_generation(&target.root, &built_binary)
         .map_err(anyhow::Error::msg)?;
     apply_marker_update(&plan.marker_update)?;
@@ -349,7 +350,7 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     dev_reload_progress("plugins", "dev-linked plugins");
     reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
     dev_reload_progress("build", "qol-tray dev");
-    build_qol_tray_dev(&plan.target.root, verbose)?;
+    build_qol_tray_dev(&plan.target.root, &TRAY_RELOAD_BINS, verbose)?;
     dev_reload_progress("build", "qol dev cli");
     build_qol_cli_debug(&root, verbose)?;
     dev_reload_progress("handoff", "successor generation");
@@ -485,9 +486,9 @@ pub(crate) fn dev_run_root(root: &Path) -> PathBuf {
     qol_dev_build::tray::artifact_root(root)
 }
 
-fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<PathBuf> {
+fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathBuf> {
     dev_step_label("build", StepKind::Pending, "qol-tray dev", verbose);
-    let result = qol_dev_build::tray::build_tray(root, &TRAY_DEV_BINS, |percent, phase| {
+    let result = qol_dev_build::tray::build_tray(root, bins, |percent, phase| {
         dev_step_label(
             "build",
             StepKind::Info,
@@ -508,6 +509,7 @@ fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<PathBuf> {
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
     let mut command = cargo_build_command(root, &QOL_CLI_BUILD_ARGS);
+    qol_dev_build::configure_dev_cargo(&mut command);
     run_dev_step(
         "build",
         StepKind::Pending,
@@ -564,6 +566,7 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
     for plugin in plugins {
         command.arg("-p").arg(&plugin.package_name);
     }
+    qol_dev_build::configure_dev_cargo(&mut command);
     let result = run_dev_step("build", StepKind::Pending, &label, &mut command, verbose);
     if result.is_err() {
         eprintln!("qol dev: plugin batch build failed");
@@ -760,6 +763,7 @@ mod tests {
             TRAY_DEV_BINS.contains(&"qol-tray"),
             "startup must still build the qol-tray binary it launches"
         );
+        assert_eq!(TRAY_RELOAD_BINS, ["qol-tray"]);
     }
 
     #[test]

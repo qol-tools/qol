@@ -13,6 +13,15 @@ pub trait CargoPluginBuilder: Send + Sync {
         path: &Path,
         on_progress: &mut dyn FnMut(u8, String),
     ) -> BuildResult;
+
+    fn build_plugins_with_progress(
+        &self,
+        plugins: &[(&str, &Path)],
+        on_progress: &mut dyn FnMut(&str, u8, String),
+    ) -> Option<Vec<BuildResult>> {
+        let _ = (plugins, on_progress);
+        None
+    }
 }
 
 pub trait BuildFingerprintStore: Send + Sync {

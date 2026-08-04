@@ -322,6 +322,7 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
         ])
         .arg(manifest_path)
         .current_dir(root);
+    crate::configure_dev_cargo(&mut command);
     command
 }
 

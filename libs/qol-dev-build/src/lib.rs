@@ -21,3 +21,8 @@ pub use service::{
     MAX_CONCURRENT_PLUGIN_BUILDS,
 };
 pub use types::{BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress};
+
+pub fn configure_dev_cargo(command: &mut std::process::Command) {
+    let wrapper = std::env::var_os("QOL_DEV_RUSTC_WRAPPER").unwrap_or_default();
+    command.env("RUSTC_WRAPPER", wrapper);
+}
