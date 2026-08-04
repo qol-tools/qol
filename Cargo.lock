@@ -5703,7 +5703,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.36.3"
+version = "0.36.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6516,7 +6516,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.48.2"
+version = "3.48.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -6588,7 +6588,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "candle-core",
