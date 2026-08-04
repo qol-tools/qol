@@ -30,6 +30,7 @@ mod platform;
 mod qmp;
 mod registry;
 mod serial;
+mod strategy;
 mod usb_host;
 mod workflow;
 
@@ -62,22 +63,27 @@ pub(crate) fn workflow_ids() -> Vec<&'static str> {
 pub(crate) fn validate_workflow_adapter(
     workflow: WorkflowDefinition,
     adapter: GuestAdapter,
-) -> Result<()> {
-    match (workflow, adapter) {
-        (workflow::Definition::Serial { .. }, GuestAdapter::DebianNocloud)
+) -> Result<strategy::GuestPlan> {
+    let plan = adapter.plan();
+    match (workflow, plan.guest_strategy()) {
+        (workflow::Definition::Serial { .. }, strategy::GuestStrategy::DebianNocloud)
         | (
             workflow::Definition::Desktop { .. },
-            GuestAdapter::MacosDesktop | GuestAdapter::MintCinnamon | GuestAdapter::WindowsDesktop,
-        ) => Ok(()),
+            strategy::GuestStrategy::Macos
+            | strategy::GuestStrategy::MintCinnamon
+            | strategy::GuestStrategy::Windows,
+        ) => Ok(plan),
         (
             workflow::Definition::Serial { .. },
-            GuestAdapter::MacosDesktop | GuestAdapter::MintCinnamon | GuestAdapter::WindowsDesktop,
+            strategy::GuestStrategy::Macos
+            | strategy::GuestStrategy::MintCinnamon
+            | strategy::GuestStrategy::Windows,
         ) => bail!(
             "workflow `{}` requires the verified serial guest adapter, not `{}`",
             workflow.id(),
             adapter.as_str()
         ),
-        (workflow::Definition::Desktop { .. }, GuestAdapter::DebianNocloud) => bail!(
+        (workflow::Definition::Desktop { .. }, strategy::GuestStrategy::DebianNocloud) => bail!(
             "workflow `{}` requires a desktop guest adapter, not `debian-nocloud`",
             workflow.id()
         ),
@@ -212,6 +218,7 @@ impl BackendImageKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BackendSpec {
+    machine: strategy::MachineBackend,
     arch: GuestArch,
     firmware: Firmware,
     image_kind: BackendImageKind,
@@ -226,29 +233,28 @@ impl BackendSpec {
         firmware: Option<&str>,
         acceleration: Option<&str>,
     ) -> std::result::Result<Self, String> {
-        if backend != "qemu" {
-            return Err(format!("backend `{backend}` is unsupported on this host"));
-        }
-        let arch = arch.unwrap_or("x86_64");
-        let arch = GuestArch::parse(arch)
-            .ok_or_else(|| format!("unsupported image architecture `{arch}`"))?;
-        let firmware = match firmware {
-            Some(value) => {
-                Firmware::parse(value).ok_or_else(|| format!("unsupported firmware `{value}`"))?
-            }
-            None => Firmware::for_arch(arch),
-        };
-        let image_kind = BackendImageKind::parse(image_kind)
-            .ok_or_else(|| format!("unsupported image kind `{image_kind}`"))?;
-        let acceleration = acceleration.unwrap_or("allow-tcg");
-        let acceleration = AccelerationRequirement::parse(acceleration)
-            .ok_or_else(|| format!("unsupported acceleration requirement `{acceleration}`"))?;
-        Ok(Self {
+        strategy::resolve_machine_strategy(backend)?.backend_spec(
+            image_kind,
             arch,
             firmware,
-            image_kind,
             acceleration,
-        })
+        )
+    }
+
+    fn from_backend(
+        backend: &str,
+        arch: GuestArch,
+        firmware: Firmware,
+        image_kind: BackendImageKind,
+        acceleration: AccelerationRequirement,
+    ) -> std::result::Result<Self, String> {
+        Self::from_manifest(
+            backend,
+            image_kind.as_str(),
+            Some(arch.as_str()),
+            Some(firmware.as_str()),
+            Some(acceleration.as_str()),
+        )
     }
 
     fn from_launch(
@@ -258,6 +264,7 @@ impl BackendSpec {
         acceleration: AccelerationRequirement,
     ) -> Self {
         Self {
+            machine: strategy::MachineBackend::Qemu,
             arch,
             firmware,
             image_kind,
@@ -629,7 +636,7 @@ fn run_workflow(
     let guest_adapter = options.guest_adapter.ok_or_else(|| {
         anyhow!("automated workflows require a manifest-selected --guest-adapter")
     })?;
-    validate_workflow_adapter(workflow, guest_adapter)?;
+    let guest_plan = validate_workflow_adapter(workflow, guest_adapter)?;
     if workflow.requires_payload() != options.payload_manifest.is_some() {
         bail!(
             "workflow `{workflow_id}` {} a parent-covered immutable payload",
@@ -659,9 +666,12 @@ fn run_workflow(
     let mut vm = boot_vm_with_options(options, command_name, verbose)?;
     let outcome = match workflow {
         workflow::Definition::Serial { run, .. } => {
+            guest_plan.serial_guest()?;
             drive_serial_workflow(&vm, run, guest_adapter.guest()?)
         }
-        workflow::Definition::Desktop { run, .. } => workflow::run_desktop(&vm, run, guest_adapter),
+        workflow::Definition::Desktop { run, .. } => {
+            workflow::run_desktop(&vm, run, guest_plan.desktop()?)
+        }
     };
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
@@ -1967,12 +1977,26 @@ fn resolve_environment_with(
     image_kind: BackendImageKind,
     acceleration_requirement: AccelerationRequirement,
 ) -> Resolution {
-    let spec = BackendSpec::from_launch(
+    let spec = match BackendSpec::from_backend(
+        &environment.backend,
         environment.arch,
         environment.firmware,
         image_kind,
         acceleration_requirement,
-    );
+    ) {
+        Ok(spec) => spec,
+        Err(reason) => {
+            return Resolution {
+                state: ResolveState::Unsupported,
+                reason,
+                image_path: environment.image_path.clone(),
+                qemu_system: None,
+                qemu_img: None,
+                acceleration: platform::acceleration(environment.arch),
+                firmware: None,
+            }
+        }
+    };
     let backend = match resolve_backend(spec) {
         Ok(backend) => backend,
         Err(reason) => {
@@ -2045,6 +2069,12 @@ fn resolve_backend_with(
     acceleration: &'static str,
     firmware_fallback_dirs: &[&str],
 ) -> std::result::Result<ReadyBackend, String> {
+    if spec.machine != strategy::MachineBackend::Qemu {
+        return Err(format!(
+            "machine strategy `{}` cannot be launched by the QEMU backend",
+            spec.machine.as_str()
+        ));
+    }
     let qemu_system = qemu_system.ok_or_else(|| {
         format!(
             "missing {}",
@@ -2636,6 +2666,18 @@ mod tests {
             firmware: Firmware::Uefi,
             media: BootMedia::Disk,
         }
+    }
+
+    #[test]
+    fn environment_backend_selects_the_explicit_machine_strategy() {
+        let mut environment = report_environment();
+        environment.backend = "apple-virtualization".to_string();
+
+        let resolution = resolve_environment(&environment);
+
+        assert_eq!(resolution.state, ResolveState::Unsupported);
+        assert!(resolution.reason.contains("Apple Virtualization.framework"));
+        assert!(resolution.qemu_system.is_none());
     }
 
     fn report_resolution() -> Resolution {

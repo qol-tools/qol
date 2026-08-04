@@ -3,6 +3,7 @@ mod debian;
 pub(crate) use debian::DebianNocloud;
 
 use super::serial::SerialClient;
+use super::strategy::{DesktopStrategy, GuestPlan, GuestStrategy};
 use anyhow::{bail, Result};
 
 static DEBIAN_NOCLOUD: debian::DebianNocloud = debian::DebianNocloud;
@@ -35,15 +36,31 @@ impl GuestAdapter {
         }
     }
 
-    pub(crate) fn guest(self) -> Result<&'static dyn GuestOs> {
+    pub(crate) fn plan(self) -> GuestPlan {
         match self {
-            Self::DebianNocloud => Ok(&DEBIAN_NOCLOUD),
-            Self::MacosDesktop | Self::MintCinnamon | Self::WindowsDesktop => {
-                bail!(
-                    "guest adapter `{}` is a desktop workflow adapter and does not implement the serial GuestOs contract",
-                    self.as_str()
-                )
+            Self::DebianNocloud => GuestPlan::new(GuestStrategy::DebianNocloud, None),
+            Self::MacosDesktop => {
+                GuestPlan::new(GuestStrategy::Macos, Some(DesktopStrategy::Macos))
             }
+            Self::MintCinnamon => {
+                GuestPlan::new(GuestStrategy::MintCinnamon, Some(DesktopStrategy::Linux))
+            }
+            Self::WindowsDesktop => {
+                GuestPlan::new(GuestStrategy::Windows, Some(DesktopStrategy::Windows))
+            }
+        }
+    }
+
+    pub(crate) fn guest(self) -> Result<&'static dyn GuestOs> {
+        match self.plan().guest_strategy() {
+            GuestStrategy::DebianNocloud => Ok(&DEBIAN_NOCLOUD),
+            GuestStrategy::Macos => bail!(
+                "guest strategy `macos` is not available yet; the Apple Virtualization.framework guest backend is not implemented"
+            ),
+            GuestStrategy::MintCinnamon | GuestStrategy::Windows => bail!(
+                "guest strategy `{}` does not implement the serial GuestOs contract",
+                self.as_str()
+            ),
         }
     }
 }
@@ -74,13 +91,24 @@ mod tests {
         }
 
         assert!(GuestAdapter::DebianNocloud.guest().is_ok());
-        for adapter in [
-            GuestAdapter::MacosDesktop,
-            GuestAdapter::MintCinnamon,
-            GuestAdapter::WindowsDesktop,
-        ] {
+        let macos_error = GuestAdapter::MacosDesktop.guest().err().unwrap();
+        assert!(macos_error.to_string().contains("not available yet"));
+        for adapter in [GuestAdapter::MintCinnamon, GuestAdapter::WindowsDesktop] {
             let error = adapter.guest().err().unwrap();
-            assert!(error.to_string().contains("desktop workflow adapter"));
+            assert!(error.to_string().contains("serial GuestOs contract"));
         }
+    }
+
+    #[test]
+    fn adapter_plan_separates_guest_and_desktop_strategies() {
+        assert_eq!(
+            GuestAdapter::DebianNocloud.plan().guest_strategy(),
+            GuestStrategy::DebianNocloud
+        );
+        assert_eq!(
+            GuestAdapter::MacosDesktop.plan().desktop().unwrap(),
+            DesktopStrategy::Macos
+        );
+        assert!(GuestAdapter::DebianNocloud.plan().desktop().is_err());
     }
 }

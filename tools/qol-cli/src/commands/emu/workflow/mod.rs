@@ -115,32 +115,13 @@ pub(crate) enum DesktopWorkflow {
     WindowActionsStorm,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum DesktopGuestPlatform {
-    Linux,
-    Macos,
-    Windows,
-}
-
-impl DesktopGuestPlatform {
-    fn from_adapter(adapter: super::GuestAdapter) -> Result<Self> {
-        match adapter {
-            super::GuestAdapter::MintCinnamon => Ok(Self::Linux),
-            super::GuestAdapter::MacosDesktop => Ok(Self::Macos),
-            super::GuestAdapter::WindowsDesktop => Ok(Self::Windows),
-            super::GuestAdapter::DebianNocloud => anyhow::bail!(
-                "guest adapter `debian-nocloud` does not implement the desktop workflow contract"
-            ),
-        }
-    }
-}
+pub(super) use super::strategy::DesktopStrategy as DesktopGuestPlatform;
 
 pub(crate) fn run_desktop(
     vm: &BootedVm,
     workflow: DesktopWorkflow,
-    adapter: super::GuestAdapter,
+    platform: DesktopGuestPlatform,
 ) -> Result<Verdict> {
-    let platform = DesktopGuestPlatform::from_adapter(adapter)?;
     match workflow {
         DesktopWorkflow::AltTabPerformance => alt_tab::run_performance(vm, platform),
         DesktopWorkflow::AltTabStorm => alt_tab::run(vm, platform),
@@ -296,19 +277,29 @@ mod tests {
     #[test]
     fn desktop_guest_platform_resolution_is_runtime_guest_specific() {
         assert_eq!(
-            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::MintCinnamon).unwrap(),
+            super::super::GuestAdapter::MintCinnamon
+                .plan()
+                .desktop()
+                .unwrap(),
             DesktopGuestPlatform::Linux
         );
         assert_eq!(
-            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::MacosDesktop).unwrap(),
+            super::super::GuestAdapter::MacosDesktop
+                .plan()
+                .desktop()
+                .unwrap(),
             DesktopGuestPlatform::Macos
         );
         assert_eq!(
-            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::WindowsDesktop).unwrap(),
+            super::super::GuestAdapter::WindowsDesktop
+                .plan()
+                .desktop()
+                .unwrap(),
             DesktopGuestPlatform::Windows
         );
-        assert!(
-            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::DebianNocloud).is_err()
-        );
+        assert!(super::super::GuestAdapter::DebianNocloud
+            .plan()
+            .desktop()
+            .is_err());
     }
 }
