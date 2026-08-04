@@ -210,8 +210,8 @@ fn spawn_reconcile_timer(
 ) {
     let mut active = active_session_exists(&registry);
     let mut panel_showing = show_on_start;
-    let mut interval = reconcile_interval(panel_showing, active);
     cx.spawn(async move |cx: &mut AsyncApp| loop {
+        let interval = reconcile_interval(panel_showing, active);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
@@ -247,7 +247,6 @@ fn spawn_reconcile_timer(
             .update(|cx| notify_panel_if_showing(&panel, cx))
             .unwrap_or(false);
         active = active_session_exists(&registry);
-        interval = reconcile_interval(panel_showing, active);
     })
     .detach();
 }
