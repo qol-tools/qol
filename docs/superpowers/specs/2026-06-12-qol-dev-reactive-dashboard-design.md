@@ -56,8 +56,8 @@ Adaptive mode (doctor): the work closure reports whether the result changed (`T:
 
 ## Doctor semantics
 
-- **Auto runs skip the cargo build.** They execute the existing `target/debug/qol-tray-doctor check` binary directly (measured: 1.2s wall, 0.6s CPU). If the binary is missing, the auto run reports "doctor binary not built" without triggering a build.
-- **Manual runs are unchanged**: `d` / enter rebuilds then checks; armed enter runs fix. Manual state renders "checking"/"fixing" as today.
+- **Auto runs skip the cargo build.** They execute the existing `target/qol-dev/build/debug/qol-tray-doctor check` binary directly. If the binary is missing, the auto run reports that the Doctor artifact is not prebuilt without triggering a build.
+- **Manual runs use the same prebuilt artifact**: `d` / enter checks it and armed enter runs fix. Manual state renders "checking"/"fixing" as today. If the artifact is missing or stale, the dashboard asks the user to press `ctrl+r`; Doctor never compiles at invocation time.
 - **Silent refresh**: while an auto run is in flight, the row keeps showing the last completed report. New state model separates `last: Option<DoctorRun>` + `manual_in_flight: Option<Receiver<...>>` instead of the current replace-on-run enum.
 - **Freshness**: the row appends a dim `· 12s ago` age (reuses `relative_age`). The doctor view title shows the same age.
 - **Manual/auto interplay**: when a manual run completes, the auto poller is dropped and respawned, discarding any stale in-flight auto result, then poked.

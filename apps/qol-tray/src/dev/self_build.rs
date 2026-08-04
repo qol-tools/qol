@@ -7,7 +7,11 @@ where
     F: FnMut(u8, String),
 {
     let repo_root = resolve_qol_tray_self_root(repo_root);
-    qol_dev_build::tray::build_tray(&repo_root, &["qol-tray"], on_progress)
+    qol_dev_build::tray::build_tray(
+        &repo_root,
+        &qol_dev_build::tray::DEV_TRAY_BINARIES,
+        on_progress,
+    )
 }
 
 pub fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> PathBuf {

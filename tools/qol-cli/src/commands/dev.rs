@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 
-const TRAY_DEV_BINS: [&str; 2] = ["qol-tray", "qol-tray-doctor"];
-const TRAY_RELOAD_BINS: [&str; 1] = ["qol-tray"];
+const TRAY_DEV_BINS: [&str; 2] = qol_dev_build::tray::DEV_TRAY_BINARIES;
+const TRAY_RELOAD_BINS: [&str; 2] = qol_dev_build::tray::DEV_TRAY_BINARIES;
 pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
 pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
 pub(crate) const DEV_RELOAD_PROGRESS_PREFIX: &str = "[qol dev:reload-progress]\t";
@@ -763,7 +763,7 @@ mod tests {
             TRAY_DEV_BINS.contains(&"qol-tray"),
             "startup must still build the qol-tray binary it launches"
         );
-        assert_eq!(TRAY_RELOAD_BINS, ["qol-tray"]);
+        assert_eq!(TRAY_RELOAD_BINS, ["qol-tray", "qol-tray-doctor"]);
     }
 
     #[test]

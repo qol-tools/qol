@@ -43,6 +43,9 @@ pub(super) struct ManualDoctor {
     started_at_ms: u64,
 }
 
+const DOCTOR_PREBUILT_ERROR: &str =
+    "doctor binary is not prebuilt or is stale · press ctrl+r to compile all dev binaries";
+
 impl ManualDoctor {
     fn progress_step(&self) -> String {
         self.progress
@@ -359,16 +362,18 @@ pub(super) fn spawn_doctor(mode: DoctorMode) -> ManualDoctor {
 
 fn run_doctor(mode: DoctorMode, progress: &Arc<Mutex<String>>) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
-    let binary = build_manual_doctor_binary(&root, progress)?;
+    let binary = resolve_manual_doctor_binary(&root, progress)?;
     run_doctor_streaming(&binary, &root, mode, mode.full_command_args(), progress)
 }
 
-fn build_manual_doctor_binary(
+fn resolve_manual_doctor_binary(
     root: &std::path::Path,
     progress: &Arc<Mutex<String>>,
 ) -> Result<std::path::PathBuf, String> {
-    set_progress(progress, "building doctor binary");
-    build_doctor(root)
+    set_progress(progress, "using prebuilt doctor binary");
+    let binary = prebuilt_doctor_binary_path(root);
+    verify_prebuilt_doctor_binary(root, &binary)?;
+    Ok(binary)
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
@@ -418,9 +423,9 @@ fn run_doctor_streaming(
 
 fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
-    let binary = crate::workspace::doctor_binary_path(&root);
-    if !binary.exists() {
-        return Err("doctor binary not built · press d".to_string());
+    let binary = prebuilt_doctor_binary_path(&root);
+    if !binary.is_file() {
+        return Err(DOCTOR_PREBUILT_ERROR.to_string());
     }
     run_doctor_binary(
         &binary,
@@ -429,6 +434,33 @@ fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
         DoctorScope::Quick,
         QUICK_DOCTOR_CHECK_ARGS,
     )
+}
+
+fn prebuilt_doctor_binary_path(root: &std::path::Path) -> std::path::PathBuf {
+    qol_dev_build::tray::debug_binary_path(root, qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME)
+}
+
+fn verify_prebuilt_doctor_binary(
+    root: &std::path::Path,
+    binary: &std::path::Path,
+) -> Result<(), String> {
+    if !binary.is_file() {
+        return Err(DOCTOR_PREBUILT_ERROR.to_string());
+    }
+    let identity = qol_build_identity::BuildIdentityEnvironment::development(
+        &qol_dev_build::tray::artifact_root(root),
+    )
+    .map_err(|error| format!("cannot verify prebuilt doctor binary: {error}"))?;
+    let expectation = qol_artifact::ArtifactExpectation::development_debug(
+        qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+        qol_conventions::artifact::TRAY_PACKAGE_NAME,
+        qol_conventions::artifact::BuildRole::Doctor,
+        true,
+    )
+    .with_exact_source(identity.source());
+    qol_artifact::verify_path(binary, &expectation)
+        .map(|_| ())
+        .map_err(|error| format!("{DOCTOR_PREBUILT_ERROR}: {error}"))
 }
 
 fn run_doctor_binary(
@@ -471,23 +503,6 @@ fn parse_doctor_run(
         details,
         scope,
     })
-}
-
-fn build_doctor(root: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let result = qol_dev_build::tray::build_tray(
-        root,
-        &[qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME],
-        |_, _| {},
-    );
-    if !result.success {
-        return Err(result.output);
-    }
-    qol_dev_build::cargo_build::select_binary_executable(
-        &result.artifacts,
-        &qol_dev_build::tray::tray_manifest_path(root),
-        qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
-    )
-    .map_err(|error| error.to_string())
 }
 
 type ParsedDoctorOutput = (DoctorReport, Vec<String>, Vec<String>);
@@ -575,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_doctor_builds_even_when_the_dev_binary_exists() {
+    fn manual_doctor_resolves_the_prebuilt_dev_binary_path() {
         let root = tempfile::tempdir().unwrap();
         let binary = qol_dev_build::tray::debug_binary_path(
             root.path(),
@@ -585,21 +600,24 @@ mod tests {
         fs::write(&binary, b"prebuilt").unwrap();
         let progress = Arc::new(Mutex::new(String::new()));
 
-        let error = build_manual_doctor_binary(root.path(), &progress).unwrap_err();
+        let resolved = prebuilt_doctor_binary_path(root.path());
 
-        assert!(error.contains("Cargo.toml not found"), "error: {error}");
-        assert_eq!(progress.lock().unwrap().as_str(), "building doctor binary");
+        assert_eq!(resolved, binary);
+        assert_eq!(progress.lock().unwrap().as_str(), "");
     }
 
     #[test]
-    fn manual_doctor_builds_when_the_dev_binary_is_missing() {
+    fn manual_doctor_reports_when_the_prebuilt_dev_binary_is_missing() {
         let root = tempfile::tempdir().unwrap();
         let progress = Arc::new(Mutex::new(String::new()));
 
-        let error = build_manual_doctor_binary(root.path(), &progress).unwrap_err();
+        let error = resolve_manual_doctor_binary(root.path(), &progress).unwrap_err();
 
-        assert!(error.contains("Cargo.toml not found"), "error: {error}");
-        assert_eq!(progress.lock().unwrap().as_str(), "building doctor binary");
+        assert_eq!(error, DOCTOR_PREBUILT_ERROR);
+        assert_eq!(
+            progress.lock().unwrap().as_str(),
+            "using prebuilt doctor binary"
+        );
     }
 
     fn outcome(id: &str, status: OutcomeStatus, message: &str, fix_available: bool) -> Outcome {
@@ -724,10 +742,10 @@ mod tests {
                     last: None,
                     last_at_ms: None,
                     manual: None,
-                    error: Some("doctor binary not built · press d".to_string()),
+                    error: Some(DOCTOR_PREBUILT_ERROR.to_string()),
                 },
                 Color::Yellow,
-                "doctor binary not built · press d",
+                DOCTOR_PREBUILT_ERROR,
             ),
         ];
         for (panel, expected_color, expected_text) in cases {

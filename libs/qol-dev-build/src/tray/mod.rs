@@ -16,6 +16,12 @@ static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 const QOL_TRAY_ID: &str = qol_conventions::artifact::TRAY_PACKAGE_NAME;
 const WORKTREE_SCAN_MAX_DEPTH: u8 = 5;
 
+/// Development always keeps both tray executables in sync.
+pub const DEV_TRAY_BINARIES: [&str; 2] = [
+    qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+    qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+];
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct WorktreeInfo {
     pub branch: String,
