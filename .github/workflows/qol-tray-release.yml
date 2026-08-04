@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RUSTFLAGS: -D warnings
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
