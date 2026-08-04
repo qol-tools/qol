@@ -1,2 +1,8 @@
 [alias]
 setup = "install --path tools/qol-cli --locked --force --debug"
+
+# Fast linking: rustc injects -B <sysroot>/.../bin/gcc-ld when it sees
+# -fuse-ld=lld, so the toolchain-bundled rust-lld is used with zero install.
+# Links are never cached by sccache, so this pays off on every rebuild.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
