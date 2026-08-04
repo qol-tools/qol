@@ -87,6 +87,9 @@ fn spawn_build(path: &Path) -> Result<CargoChild, std::io::Error> {
         .env("CARGO_TERM_PROGRESS_WIDTH", "80")
         .env("CARGO_TERM_COLOR", "never")
         .current_dir(path);
+    for feature in qol_workspace::plugin_build_features(path) {
+        command.arg("--features").arg(feature);
+    }
     crate::configure_dev_cargo(&mut command);
     spawn_piped(command)
 }
@@ -269,6 +272,13 @@ fn build_cargo_plugin_batch_with_progress(
         .current_dir(root);
     for package_name in &package_names {
         command.arg("-p").arg(package_name);
+    }
+    for (package_name, (_, path)) in package_names.iter().zip(plugins) {
+        for feature in qol_workspace::plugin_build_features(path) {
+            command
+                .arg("--features")
+                .arg(format!("{package_name}/{feature}"));
+        }
     }
     crate::configure_dev_cargo(&mut command);
     let CargoChild {

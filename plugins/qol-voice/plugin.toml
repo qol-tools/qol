@@ -7,6 +7,9 @@ version = "0.7.1"
 author = "KMRH47"
 platforms = ["linux"]
 
+[build]
+features = ["local-stt"]
+
 [config]
 default_scope = "os"
 

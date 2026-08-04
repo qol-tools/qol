@@ -198,6 +198,8 @@ pub enum ConfigScope {
 pub struct BuildInfo {
     #[serde(default)]
     pub commit: Option<String>,
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

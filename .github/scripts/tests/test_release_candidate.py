@@ -460,10 +460,11 @@ class BuildNodeTests(unittest.TestCase):
                 ],
             ),
         ]
+        root = SCRIPTS.parents[1]
         for kind, package, target, expected in cases:
-            with self.subTest(kind=kind):
+            with self.subTest(kind=kind, package=package):
                 self.assertEqual(
-                    rc.build_commands(kind, package, target), expected
+                    rc.build_commands(root, kind, package, target), expected
                 )
 
 

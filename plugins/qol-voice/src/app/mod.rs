@@ -122,10 +122,13 @@ fn audio_sources() -> Result<serde_json::Value> {
 }
 
 fn stt_providers() -> Result<serde_json::Value> {
-    let mut options = vec![serde_json::json!({
-        "value": "auto",
-        "label": "Automatic",
-    })];
+    let mut options = Vec::new();
+    if crate::transcribe::resolve_descriptor("auto").is_ok() {
+        options.push(serde_json::json!({
+            "value": "auto",
+            "label": "Automatic",
+        }));
+    }
     options.extend(
         crate::transcribe::transcriber_descriptors().map(|provider| {
             serde_json::json!({
@@ -146,6 +149,10 @@ fn set_activation(
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| anyhow::anyhow!("set_activation requires boolean `enabled`"))?;
     let mut config = crate::config::load();
+    if enabled && config.recognition.enabled {
+        crate::transcribe::resolve_descriptor(&config.recognition.provider)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    }
     config.activation.enabled = enabled;
     persist_config(&config)?;
     if !enabled {
@@ -199,7 +206,21 @@ fn to_value(value: impl serde::Serialize) -> Result<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_id;
+    use super::{parse_id, stt_providers};
+
+    #[test]
+    fn automatic_is_offered_only_when_this_build_can_select_it() {
+        let options = stt_providers().unwrap();
+        let offers_auto = options
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["value"] == "auto");
+        assert_eq!(
+            offers_auto,
+            crate::transcribe::resolve_descriptor("auto").is_ok()
+        );
+    }
 
     #[test]
     fn assistant_turn_ids_require_unsigned_numbers() {

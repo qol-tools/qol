@@ -47,8 +47,19 @@ def platform_excludes():
     return ubuntu, macos
 
 
+def package_features():
+    features = {}
+    for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
+        declared = tomllib.loads(manifest.read_text()).get("build", {}).get("features", [])
+        if not declared:
+            continue
+        name = tomllib.loads((manifest.parent / "Cargo.toml").read_text())["package"]["name"]
+        features[name] = [f"{name}/{feature}" for feature in declared]
+    return features
+
+
 UBUNTU_EXCLUDE, MACOS_EXCLUDE = platform_excludes()
-PACKAGE_FEATURES = {"qol-voice": "qol-voice/local-stt"}
+PACKAGE_FEATURES = package_features()
 
 
 def exclude_flags(names):
@@ -58,8 +69,9 @@ def exclude_flags(names):
 def feature_flags(packages):
     return "".join(
         f" --features {feature}"
-        for package, feature in sorted(PACKAGE_FEATURES.items())
+        for package, declared in sorted(PACKAGE_FEATURES.items())
         if package in packages
+        for feature in declared
     )
 
 

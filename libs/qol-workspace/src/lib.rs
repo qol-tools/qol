@@ -304,6 +304,24 @@ pub fn non_host_plugin_packages(root: &Path) -> Result<Vec<String>> {
     Ok(excluded)
 }
 
+pub fn plugin_build_features(plugin_dir: &Path) -> Vec<String> {
+    PluginManifest::read_from_dir(plugin_dir)
+        .map(|manifest| manifest.build.features)
+        .unwrap_or_default()
+}
+
+pub fn qualified_plugin_build_features(plugin_dir: &Path) -> Result<Vec<String>> {
+    let features = plugin_build_features(plugin_dir);
+    if features.is_empty() {
+        return Ok(Vec::new());
+    }
+    let package = cargo_package_name(plugin_dir)?;
+    Ok(features
+        .into_iter()
+        .map(|feature| format!("{package}/{feature}"))
+        .collect())
+}
+
 pub fn display_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())

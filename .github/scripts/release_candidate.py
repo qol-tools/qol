@@ -23,7 +23,6 @@ REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-PLUGIN_RELEASE_FEATURES = {"qol-voice": "local-stt"}
 ATTESTATION_PREFIX = "qol/release-candidate"
 HOST_ID = "qol-tray"
 REQUIRED_CI_JOBS = {
@@ -177,8 +176,17 @@ def require_attestation(
     return status
 
 
+def plugin_release_features(root: Path, package: str) -> list[str]:
+    for manifest in sorted(root.glob("plugins/*/plugin.toml")):
+        cargo = tomllib.loads((manifest.parent / "Cargo.toml").read_text())
+        if cargo["package"]["name"] != package:
+            continue
+        return tomllib.loads(manifest.read_text()).get("build", {}).get("features", [])
+    return []
+
+
 def build_commands(
-    kind: str, package: str | None, target: str | None
+    root: Path, kind: str, package: str | None, target: str | None
 ) -> list[list[str]]:
     verify = [
         "cargo",
@@ -231,9 +239,8 @@ def build_commands(
         "--target",
         target,
     ]
-    features = PLUGIN_RELEASE_FEATURES.get(package)
-    if features:
-        command.extend(["--features", features])
+    for feature in plugin_release_features(root, package):
+        command.extend(["--features", feature])
     return [command]
 
 
@@ -404,7 +411,7 @@ def execute_build(
     report_path: str,
 ) -> None:
     started_at = utc_now()
-    commands = build_commands(kind, package, target)
+    commands = build_commands(root, kind, package, target)
     report = {
         "name": "release-build",
         "started_at": started_at,

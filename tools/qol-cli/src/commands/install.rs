@@ -1,5 +1,5 @@
 use crate::progress::{print_hint, print_title, run_cargo_step, run_step, step_label, StepKind};
-use crate::workspace::{repo_root, scan_buildable_plugins};
+use crate::workspace::{qualified_plugin_build_features, repo_root, scan_buildable_plugins};
 use anyhow::Result;
 use std::process::Command;
 
@@ -25,6 +25,9 @@ pub(crate) fn run(verbose: bool) -> Result<()> {
         .args(["build", "--release", "-p", "qol-tray"]);
     for plugin in &scan.buildable {
         build.arg("-p").arg(&plugin.package_name);
+        for feature in qualified_plugin_build_features(&plugin.dir)? {
+            build.arg("--features").arg(feature);
+        }
     }
     let build_identity = qol_build_identity::BuildIdentityEnvironment::production(&root)?;
     build_identity.apply_to(&mut build);

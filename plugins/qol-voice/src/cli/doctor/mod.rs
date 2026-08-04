@@ -336,25 +336,47 @@ fn audio_capture_check() -> Result<DoctorCheckResult> {
 }
 
 fn transcription_provider_check() -> Result<DoctorCheckResult> {
-    let providers = crate::transcribe::transcriber_descriptors().collect::<Vec<_>>();
-    if providers.is_empty() {
-        return Ok(DoctorCheckResult::fail(
-            "transcription_providers",
-            "no speech-recognition providers are registered",
-        ));
-    }
-    Ok(DoctorCheckResult::ok(
-        "transcription_providers",
-        format!(
-            "{} provider(s) registered: {}",
-            providers.len(),
-            providers
-                .iter()
-                .map(|provider| provider.id)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+    let configured = crate::config::inspect()
+        .map(|inspection| inspection.config.recognition.provider)
+        .unwrap_or_else(|_| "auto".to_owned());
+    Ok(transcription_provider_result(
+        &configured,
+        crate::transcribe::transcriber_descriptors()
+            .map(|provider| provider.id)
+            .collect(),
+        crate::transcribe::resolve_descriptor(&configured),
     ))
+}
+
+fn transcription_provider_result(
+    configured: &str,
+    registered: Vec<&'static str>,
+    resolved: Result<
+        crate::transcribe::TranscriberDescriptor,
+        crate::transcribe::TranscriptionError,
+    >,
+) -> DoctorCheckResult {
+    let summary = format!("{} registered: {}", registered.len(), registered.join(", "));
+    let details = json!({
+        "configured_provider": configured,
+        "registered": registered,
+        "resolved_provider": resolved.as_ref().ok().map(|provider| provider.id),
+    });
+    match resolved {
+        Err(error) => DoctorCheckResult::fail(
+            "transcription_providers",
+            format!("the configured provider '{configured}' cannot be selected: {error}"),
+        )
+        .with_fix(
+            "build QoL Voice with the features its plugin.toml declares, or select a provider this build registers",
+        )
+        .with_details(details),
+        Ok(provider) => DoctorCheckResult::ok(
+            "transcription_providers",
+            format!("provider '{configured}' resolves to {}; {summary}", provider.id),
+        )
+        .with_details(details),
+    }
 }
 
 fn speech_output_check() -> Result<DoctorCheckResult> {
@@ -406,6 +428,33 @@ mod tests {
         assert_eq!(result.status, DoctorStatus::Warn);
         assert!(!missing.exists());
         assert_eq!(result.details.unwrap()["created"], false);
+    }
+
+    #[test]
+    fn a_configured_provider_this_build_cannot_select_fails_the_check() {
+        let registered = crate::transcribe::transcriber_descriptors()
+            .map(|provider| provider.id)
+            .collect::<Vec<_>>();
+        let cases = [
+            ("nonexistent", DoctorStatus::Fail),
+            ("websocket", DoctorStatus::Ok),
+            (
+                "auto",
+                if crate::transcribe::resolve_descriptor("auto").is_ok() {
+                    DoctorStatus::Ok
+                } else {
+                    DoctorStatus::Fail
+                },
+            ),
+        ];
+        for (configured, status) in cases {
+            let result = transcription_provider_result(
+                configured,
+                registered.clone(),
+                crate::transcribe::resolve_descriptor(configured),
+            );
+            assert_eq!(result.status, status, "configured: {configured}");
+        }
     }
 
     #[test]

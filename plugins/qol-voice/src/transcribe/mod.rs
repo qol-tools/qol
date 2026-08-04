@@ -66,39 +66,46 @@ pub fn transcriber_descriptors() -> impl Iterator<Item = TranscriberDescriptor> 
         .map(|provider| provider.descriptor)
 }
 
+fn select_registration(
+    provider: &str,
+) -> Result<&'static TranscriberRegistration, TranscriptionError> {
+    if provider == "auto" {
+        return platform::providers()
+            .iter()
+            .find(|provider| provider.auto_select)
+            .ok_or_else(|| {
+                TranscriptionError::ProviderUnavailable(
+                    "no automatic STT provider is registered".to_owned(),
+                )
+            });
+    }
+    platform::providers()
+        .iter()
+        .find(|candidate| candidate.descriptor.id == provider)
+        .ok_or_else(|| {
+            let available = transcriber_descriptors()
+                .map(|provider| provider.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            TranscriptionError::ProviderUnavailable(format!(
+                "unknown STT provider '{provider}'; available providers: {available}"
+            ))
+        })
+}
+
+pub fn resolve_descriptor(provider: &str) -> Result<TranscriberDescriptor, TranscriptionError> {
+    select_registration(provider).map(|registration| registration.descriptor)
+}
+
 pub fn create_transcriber(
     request: &TranscriberRequest,
 ) -> Result<SelectedTranscriber, TranscriptionError> {
-    if request.provider == "auto" {
-        if !request.options.is_empty() {
-            return Err(TranscriptionError::InvalidConfiguration(
-                "automatic STT selection does not accept provider-specific options".to_owned(),
-            ));
-        }
-        let Some(provider) = platform::providers()
-            .iter()
-            .find(|provider| provider.auto_select)
-        else {
-            return Err(TranscriptionError::ProviderUnavailable(
-                "no automatic STT provider is registered".to_owned(),
-            ));
-        };
-        return instantiate(provider, &request.options);
+    if request.provider == "auto" && !request.options.is_empty() {
+        return Err(TranscriptionError::InvalidConfiguration(
+            "automatic STT selection does not accept provider-specific options".to_owned(),
+        ));
     }
-    let Some(provider) = platform::providers()
-        .iter()
-        .find(|provider| provider.descriptor.id == request.provider)
-    else {
-        let available = transcriber_descriptors()
-            .map(|provider| provider.id)
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(TranscriptionError::ProviderUnavailable(format!(
-            "unknown STT provider '{}'; available providers: {available}",
-            request.provider
-        )));
-    };
-    instantiate(provider, &request.options)
+    instantiate(select_registration(&request.provider)?, &request.options)
 }
 
 fn instantiate(
@@ -184,7 +191,9 @@ pub trait Transcriber {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{create_transcriber, transcriber_descriptors, TranscriberRequest};
+    use super::{
+        create_transcriber, resolve_descriptor, transcriber_descriptors, TranscriberRequest,
+    };
 
     #[test]
     fn provider_ids_are_unique_and_introspectable() {
@@ -197,6 +206,20 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), descriptors.len());
         assert!(ids.contains(&"websocket"));
+    }
+
+    #[test]
+    fn automatic_selection_requires_a_provider_that_opts_in() {
+        let opted_in = super::platform::providers()
+            .iter()
+            .any(|provider| provider.auto_select);
+        assert_eq!(resolve_descriptor("auto").is_ok(), opted_in);
+    }
+
+    #[test]
+    fn unknown_providers_never_resolve() {
+        assert!(resolve_descriptor("nonexistent").is_err());
+        assert!(resolve_descriptor("websocket").is_ok());
     }
 
     #[test]
