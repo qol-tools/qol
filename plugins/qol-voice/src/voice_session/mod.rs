@@ -698,6 +698,102 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_starting_during_finalization_is_still_committed() {
+        let first = TurnId(41);
+        let second = TurnId(42);
+        let (events, receiver) = unbounded();
+        events
+            .send(Ok(Some(ListenEvent::VoiceActivityStarted {
+                turn_id: first,
+                observed_at_ms: 100,
+                level_permille: 20,
+            })))
+            .unwrap();
+        events
+            .send(Ok(Some(ListenEvent::VoiceActivityEnded {
+                turn_id: first,
+                observed_at_ms: 200,
+                level_permille: 2,
+                reason: UtteranceEndReason::Silence,
+            })))
+            .unwrap();
+        events
+            .send(Ok(Some(ListenEvent::VoiceActivityStarted {
+                turn_id: second,
+                observed_at_ms: 300,
+                level_permille: 20,
+            })))
+            .unwrap();
+        events
+            .send(Ok(Some(ListenEvent::VoiceActivityEnded {
+                turn_id: second,
+                observed_at_ms: 800,
+                level_permille: 2,
+                reason: UtteranceEndReason::Silence,
+            })))
+            .unwrap();
+        events
+            .send(Ok(Some(ListenEvent::TranscriptHypothesis {
+                turn_id: first,
+                observed_at_ms: 500,
+                text: "first fragment".to_owned(),
+                confidence_permille: Some(900),
+                final_result: true,
+            })))
+            .unwrap();
+        events
+            .send(Ok(Some(ListenEvent::TranscriptHypothesis {
+                turn_id: second,
+                observed_at_ms: 900,
+                text: "the long sentence".to_owned(),
+                confidence_permille: Some(900),
+                final_result: true,
+            })))
+            .unwrap();
+        let recognition = FakeRecognition {
+            events: receiver,
+            finalized: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut session = VoiceSession::from_recognition(
+            SessionId(7),
+            VoiceSessionInfo {
+                input: AudioInputInfo {
+                    device_name: "test".to_owned(),
+                    format: AudioFormat {
+                        sample_rate: 16_000,
+                        channels: 1,
+                        encoding: AudioEncoding::PcmS16Le,
+                    },
+                },
+                transcription: crate::transcribe::transcriber_descriptors().next(),
+            },
+            Box::new(recognition),
+        );
+
+        for _ in 0..4 {
+            session.receive().unwrap().unwrap();
+        }
+        let superseded = session.receive().unwrap().unwrap();
+        let VoiceSessionEvent::Update(superseded) = superseded else {
+            panic!("expected final transcript update");
+        };
+        assert!(superseded.effects.effects.is_empty());
+
+        let committed = session.receive().unwrap().unwrap();
+        let VoiceSessionEvent::Update(committed) = committed else {
+            panic!("expected final transcript update");
+        };
+        assert_eq!(
+            committed.effects.effects,
+            vec![Effect::Conversation(ConversationCommand::CommitUserTurn {
+                turn_id: second,
+                text: "the long sentence".to_owned(),
+            })]
+        );
+        assert_eq!(committed.snapshot.user, UserActivityState::Idle);
+    }
+
+    #[test]
     fn control_handle_wakes_an_idle_session_for_agent_interruption() {
         let (_events, receiver) = unbounded();
         let recognition = FakeRecognition {

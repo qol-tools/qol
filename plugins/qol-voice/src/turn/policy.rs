@@ -223,10 +223,12 @@ impl ResponsiveTurnPolicy {
         observed_at_ms: u64,
     ) -> TurnDecision {
         let user = match &state.user {
-            UserActivityState::Idle => UserActivityState::Candidate {
-                turn_id,
-                started_at_ms: observed_at_ms,
-            },
+            UserActivityState::Idle | UserActivityState::Finalizing { .. } => {
+                UserActivityState::Candidate {
+                    turn_id,
+                    started_at_ms: observed_at_ms,
+                }
+            }
             active => active.clone(),
         };
         let Some((response_id, utterance_id)) = state.assistant.active_ids() else {
