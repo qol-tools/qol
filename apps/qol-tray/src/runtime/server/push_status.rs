@@ -150,7 +150,7 @@ mod tests {
 
         let registry = PluginStatusRegistry::default();
         registry.set(
-            "plugin-qol-shot",
+            "plugin-push-status-event-bus",
             serde_json::json!({ "state": "recording" }),
         );
 
@@ -162,7 +162,7 @@ mod tests {
                     let DaemonEvent::StatusChanged { plugin_id, status } = event else {
                         continue;
                     };
-                    if plugin_id == "plugin-qol-shot" {
+                    if plugin_id == "plugin-push-status-event-bus" {
                         assert_eq!(status, serde_json::json!({ "state": "recording" }));
                         return;
                     }
