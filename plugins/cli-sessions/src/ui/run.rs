@@ -73,10 +73,8 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
     let service_snapshot = SharedSnapshotCache::default();
 
-    let probe = SystemServiceProbe::with_shared_cache(
-        service_commands.to_vec(),
-        Some(service_snapshot.clone()),
-    );
+    let probe =
+        SystemServiceProbe::with_shared_cache(service_commands.to_vec(), service_snapshot.clone());
     if let Ok(mut caches) = reconcile_caches.lock() {
         reconcile::tick_with_caches(
             &registry,
@@ -234,8 +232,7 @@ fn spawn_reconcile_timer(
         let service_snapshot = runtime.service_snapshot.clone();
         let now = now_secs();
         cx.background_spawn(async move {
-            let probe =
-                SystemServiceProbe::with_shared_cache(commands.to_vec(), Some(service_snapshot));
+            let probe = SystemServiceProbe::with_shared_cache(commands.to_vec(), service_snapshot);
             let notices = match cache.lock() {
                 Ok(mut caches) => reconcile::tick_with_caches(
                     &reg,

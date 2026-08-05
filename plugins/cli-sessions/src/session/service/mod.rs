@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::host::Pane;
@@ -22,9 +22,8 @@ impl ServiceProbe for NoServiceProbe {
 
 pub struct SystemServiceProbe {
     declared: Vec<String>,
-    snapshot: OnceLock<CachedProcessSnapshot>,
     load: fn() -> Option<ProcessSnapshot>,
-    shared: Option<SharedSnapshotCache>,
+    shared: SharedSnapshotCache,
 }
 
 #[derive(Default, Clone)]
@@ -35,24 +34,16 @@ struct ProcessSnapshot {
 
 #[derive(Default)]
 pub(crate) struct CachedProcessSnapshot {
-    value: Option<ProcessSnapshot>,
+    value: Option<Arc<ProcessSnapshot>>,
     loaded_at: Option<Instant>,
 }
 
 pub(crate) type SharedSnapshotCache = Arc<Mutex<CachedProcessSnapshot>>;
 
 impl SystemServiceProbe {
-    pub fn snapshot(declared: Vec<String>) -> Self {
-        Self::with_shared_cache(declared, None)
-    }
-
-    pub(crate) fn with_shared_cache(
-        declared: Vec<String>,
-        shared: Option<SharedSnapshotCache>,
-    ) -> Self {
+    pub(crate) fn with_shared_cache(declared: Vec<String>, shared: SharedSnapshotCache) -> Self {
         Self {
             declared,
-            snapshot: OnceLock::new(),
             load: platform::process_snapshot,
             shared,
         }
@@ -60,23 +51,17 @@ impl SystemServiceProbe {
 
     #[cfg(test)]
     fn with_loader(declared: Vec<String>, load: fn() -> Option<ProcessSnapshot>) -> Self {
-        Self {
-            declared,
-            snapshot: OnceLock::new(),
-            load,
-            shared: None,
-        }
+        Self::with_loader_and_cache(declared, load, SharedSnapshotCache::default())
     }
 
     #[cfg(test)]
     fn with_loader_and_cache(
         declared: Vec<String>,
         load: fn() -> Option<ProcessSnapshot>,
-        shared: Option<SharedSnapshotCache>,
+        shared: SharedSnapshotCache,
     ) -> Self {
         Self {
             declared,
-            snapshot: OnceLock::new(),
             load,
             shared,
         }
@@ -119,74 +104,39 @@ impl SystemServiceProbe {
         false
     }
 
-    fn process_snapshot(&self) -> Option<ProcessSnapshot> {
-        match &self.shared {
-            Some(shared) => {
-                let mut cache = shared.lock().unwrap_or_else(|error| error.into_inner());
-                if snapshot_fresh(cache.loaded_at, Instant::now()) {
-                    qol_runtime::probe!(
-                        "CLI_SESSIONS_RECON",
-                        "phase=service_probe cache=hit outcome={} age_ms={}",
-                        if cache.value.is_some() {
-                            "available"
-                        } else {
-                            "unavailable"
-                        },
-                        cache
-                            .loaded_at
-                            .map_or(0_u128, |loaded_at| loaded_at.elapsed().as_millis()),
-                    );
-                    return cache.value.clone();
-                }
-                let fresh = (self.load)();
-                let outcome = if fresh.is_some() {
-                    cache.value = fresh;
-                    cache.loaded_at = Some(Instant::now());
+    fn process_snapshot(&self) -> Option<Arc<ProcessSnapshot>> {
+        let mut cache = self
+            .shared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if snapshot_fresh(cache.loaded_at, Instant::now()) {
+            qol_runtime::probe!(
+                "CLI_SESSIONS_RECON",
+                "phase=service_probe cache=hit outcome={} age_ms={}",
+                if cache.value.is_some() {
                     "available"
                 } else {
-                    "transient_failure"
-                };
-                qol_runtime::probe!(
-                    "CLI_SESSIONS_RECON",
-                    "phase=service_probe cache=load outcome={outcome} age_ms=0"
-                );
-                cache.value.clone()
-            }
-            None => {
-                let was_cached = self.snapshot.get().is_some();
-                let snapshot = self.snapshot.get_or_init(|| {
-                    let value = (self.load)();
-                    let outcome = if value.is_some() {
-                        "available"
-                    } else {
-                        "transient_failure"
-                    };
-                    qol_runtime::probe!(
-                        "CLI_SESSIONS_RECON",
-                        "phase=service_probe cache=load outcome={outcome} age_ms=0"
-                    );
-                    CachedProcessSnapshot {
-                        value,
-                        loaded_at: Some(Instant::now()),
-                    }
-                });
-                if was_cached {
-                    let outcome = if snapshot.value.is_some() {
-                        "available"
-                    } else {
-                        "transient_failure"
-                    };
-                    let age_ms = snapshot
-                        .loaded_at
-                        .map_or(0_u128, |loaded_at| loaded_at.elapsed().as_millis());
-                    qol_runtime::probe!(
-                        "CLI_SESSIONS_RECON",
-                        "phase=service_probe cache=hit outcome={outcome} age_ms={age_ms}"
-                    );
-                }
-                snapshot.value.clone()
-            }
+                    "unavailable"
+                },
+                cache
+                    .loaded_at
+                    .map_or(0_u128, |loaded_at| loaded_at.elapsed().as_millis()),
+            );
+            return cache.value.clone();
         }
+        let fresh = (self.load)();
+        let outcome = if fresh.is_some() {
+            cache.value = fresh.map(Arc::new);
+            cache.loaded_at = Some(Instant::now());
+            "available"
+        } else {
+            "transient_failure"
+        };
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=service_probe cache=load outcome={outcome} age_ms=0"
+        );
+        cache.value.clone()
     }
 }
 
@@ -278,16 +228,10 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap();
         reset_loads();
         let shared = SharedSnapshotCache::default();
-        let first = SystemServiceProbe::with_loader_and_cache(
-            Vec::new(),
-            counted_snapshot,
-            Some(shared.clone()),
-        );
-        let second = SystemServiceProbe::with_loader_and_cache(
-            Vec::new(),
-            counted_snapshot,
-            Some(shared.clone()),
-        );
+        let first =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
+        let second =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
         let pane = pane(10, "server", Vec::new());
         assert!(first.is_service(&pane));
         assert!(second.is_service(&pane));
@@ -307,17 +251,14 @@ mod tests {
         let failing = SystemServiceProbe::with_loader_and_cache(
             Vec::new(),
             transient_failure,
-            Some(shared.clone()),
+            shared.clone(),
         );
         assert!(
             !failing.is_service(&pane),
             "failed load must not report a service"
         );
-        let recovered = SystemServiceProbe::with_loader_and_cache(
-            Vec::new(),
-            counted_snapshot,
-            Some(shared.clone()),
-        );
+        let recovered =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
         assert!(
             recovered.is_service(&pane),
             "next probe must retry the load"
