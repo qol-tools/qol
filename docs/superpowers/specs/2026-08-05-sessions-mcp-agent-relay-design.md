@@ -172,3 +172,10 @@ ownership/pattern skill updates.
 
 - 2026-08-05: research pass completed (above). PoC `qol sessions` in progress.
 - 2026-08-05: PoC landed (list/send/read/focus, JSON list, unit tests, clippy clean); guest-VM verification passed (transcript + probes above).
+- 2026-08-05: MCP server landed (`qol sessions mcp`, stdio, newline-delimited JSON-RPC; hand-rolled to keep the CLI dependency-light, 13 unit tests covering handshake, tools, errors). `sessions list` now enriches rows with the shared interpreter's tool/display/activity. pi tools shipped in the qol-skills marketplace (`plugins/qol-sessions`, tools sessions_list / session_read_screen / session_send_text / session_focus). Guest-VM verification of the MCP path passed: initialize -> tools/list -> sessions_list -> session_send_text "print(6*7)" submit -> session_read_screen returned the screen with 42 (probe log: discover, submit text, read screen all success).
+
+## MCP protocol notes
+
+- Transport: stdio, one JSON-RPC 2.0 message per line; notifications get no response; errors -32700/-32601/-32602; tool failures are isError results, not protocol errors.
+- Capabilities: tools only (listChanged false); resources/prompts answered with -32601.
+- The same backend constraint applies as in the CLI PoC: the `kitten @` client needs KITTY_LISTEN_ON in env (host works via controlling-tty fallback because the caller runs inside kitty).
