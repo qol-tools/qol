@@ -695,20 +695,27 @@ async fn connect_with(
             redacted(address),
             source.label(),
         );
-        bail!("Bluetooth connection for {address} is already in flight");
+        bail!(
+            "Bluetooth connection for {} is already in flight",
+            redacted(address)
+        );
     };
     let mut device = adapter.device(address)?;
     let initial = match device_info(&device).await {
         Ok(info) => info,
         Err(error) => cached.with_context(|| {
-            format!("BlueZ dropped {address} before the connection operation began: {error}")
+            format!(
+                "BlueZ dropped {} before the connection operation began: {error}",
+                redacted(address)
+            )
         })?,
     };
     let was_connected = initial.connected;
     if is_audio_device(&initial) && !supports_audio_sink(&initial) {
         if mode == ConnectionMode::Reconnect {
             bail!(
-                "{address} is bonded without an A2DP audio profile; use the explicit Connect action to repair it"
+                "{} is bonded without an A2DP audio profile; use the explicit Connect action to repair it",
+                redacted(address)
             );
         }
         device = prepare_bredr_audio_device(adapter, address, &initial).await?;
@@ -717,13 +724,13 @@ async fn connect_with(
         device
             .pair()
             .await
-            .with_context(|| format!("BlueZ failed to pair {address}"))?;
+            .with_context(|| format!("BlueZ failed to pair {}", redacted(address)))?;
     }
     if !device.is_trusted().await? {
         device
             .set_trusted(true)
             .await
-            .with_context(|| format!("BlueZ failed to trust {address}"))?;
+            .with_context(|| format!("BlueZ failed to trust {}", redacted(address)))?;
     }
     if !device.is_connected().await? {
         connect_all_profiles(&device, address, source).await?;
@@ -731,7 +738,10 @@ async fn connect_with(
     let paired = device_info(&device).await?;
     if is_audio_device(&paired) {
         if !supports_audio_sink(&paired) {
-            bail!("{address} paired without exposing the A2DP audio sink profile");
+            bail!(
+                "{} paired without exposing the A2DP audio sink profile",
+                redacted(address)
+            );
         }
         ensure_audio_playback_profile(&device, address, mode).await?;
     }
@@ -748,7 +758,10 @@ async fn pair_with(
     let initial = match device_info(&device).await {
         Ok(info) => info,
         Err(error) => cached.with_context(|| {
-            format!("BlueZ dropped {address} before the pairing operation began: {error}")
+            format!(
+                "BlueZ dropped {} before the pairing operation began: {error}",
+                redacted(address)
+            )
         })?,
     };
     if is_audio_device(&initial) && !supports_audio_sink(&initial) {
@@ -758,14 +771,20 @@ async fn pair_with(
         device
             .pair()
             .await
-            .with_context(|| format!("BlueZ failed to pair {address}"))?;
+            .with_context(|| format!("BlueZ failed to pair {}", redacted(address)))?;
     }
     let info = device_info(&device).await?;
     if !info.paired {
-        bail!("BlueZ returned from Pair but {address} is still unpaired");
+        bail!(
+            "BlueZ returned from Pair but {} is still unpaired",
+            redacted(address)
+        );
     }
     if is_audio_device(&info) && !supports_audio_sink(&info) {
-        bail!("{address} paired without exposing the A2DP audio sink profile");
+        bail!(
+            "{} paired without exposing the A2DP audio sink profile",
+            redacted(address)
+        );
     }
     Ok(info)
 }
@@ -781,7 +800,10 @@ async fn prepare_bredr_audio_device(
             .disconnect()
             .await
             .with_context(|| {
-                format!("failed to disconnect the incomplete BLE link for {address}")
+                format!(
+                    "failed to disconnect the incomplete BLE link for {}",
+                    redacted(address)
+                )
             })?;
     }
     qol_runtime::probe!(
@@ -826,7 +848,8 @@ async fn discover_bredr_device_with_filter(adapter: &Adapter, address: Address) 
         tokio::select! {
             _ = &mut timeout => {
                 bail!(
-                    "timed out finding {address} over BR/EDR; put the audio device in pairing mode and try Connect again"
+                    "timed out finding {} over BR/EDR; put the audio device in pairing mode and try Connect again",
+                    redacted(address)
                 );
             }
             event = events.next() => match event {
@@ -839,7 +862,10 @@ async fn discover_bredr_device_with_filter(adapter: &Adapter, address: Address) 
                     }
                 }
                 Some(_) => {}
-                None => bail!("BlueZ BR/EDR discovery ended before finding {address}"),
+                None => bail!(
+                    "BlueZ BR/EDR discovery ended before finding {}",
+                    redacted(address)
+                ),
             }
         }
     }
@@ -881,7 +907,8 @@ async fn connect_all_profiles(
                 tokio::time::sleep(DEVICE_CONNECT_RETRY_DELAY).await;
             }
             Err(error) => {
-                return Err(error).with_context(|| format!("BlueZ failed to connect {address}"))
+                return Err(error)
+                    .with_context(|| format!("BlueZ failed to connect {}", redacted(address)))
             }
         }
     }
@@ -929,8 +956,12 @@ async fn connect_audio_profile(
     match result {
         Ok(()) => Ok(()),
         Err(error) if tolerated_profile_connect(&error.kind).is_some() => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("BlueZ failed to connect the A2DP profile for {address}")),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "BlueZ failed to connect the A2DP profile for {}",
+                redacted(address)
+            )
+        }),
     }
 }
 
@@ -951,7 +982,7 @@ async fn ensure_audio_playback_profile(
     match activate_pipewire_a2dp(address, mode).await? {
         PipewireActivation::Active => return Ok(()),
         PipewireActivation::ServerUnavailable => {
-            bail!("the audio server is unreachable, so the Bluetooth link for {address} was left connected without routing")
+            bail!("the audio server is unreachable, so the Bluetooth link for {} was left connected without routing", redacted(address))
         }
         PipewireActivation::Stale => {}
     }
@@ -960,7 +991,10 @@ async fn ensure_audio_playback_profile(
     match activate_pipewire_a2dp(address, mode).await? {
         PipewireActivation::Active => Ok(()),
         PipewireActivation::Stale | PipewireActivation::ServerUnavailable => {
-            bail!("PipeWire A2DP activation for {address} still failed after a self-heal retry")
+            bail!(
+                "PipeWire A2DP activation for {} still failed after a self-heal retry",
+                redacted(address)
+            )
         }
     }
 }
@@ -972,7 +1006,10 @@ async fn heal_stale_pipewire_transport(
 ) -> Result<()> {
     let profile = Uuid::from_u16(AUDIO_SINK_PROFILE);
     device.disconnect_profile(&profile).await.with_context(|| {
-        format!("BlueZ failed to disconnect the A2DP profile for {address} during self-heal")
+        format!(
+            "BlueZ failed to disconnect the A2DP profile for {} during self-heal",
+            redacted(address)
+        )
     })?;
     qol_runtime::probe!(
         "BLUETOOTH_PROFILE_REPAIR",
@@ -1088,7 +1125,10 @@ async fn adopt_default_sink(address: Address) -> Result<()> {
                 "device={} outcome=failed",
                 redacted(address)
             );
-            bail!("{address} activated A2DP without exposing a PipeWire sink to adopt as default");
+            bail!(
+                "{} activated A2DP without exposing a PipeWire sink to adopt as default",
+                redacted(address)
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -1110,7 +1150,10 @@ async fn wait_for_connection_ready(device: &Device, address: Address) -> Result<
             return Ok(info);
         }
         if Instant::now() >= deadline {
-            bail!("{address} connected without making its required Bluetooth profiles ready");
+            bail!(
+                "{} connected without making its required Bluetooth profiles ready",
+                redacted(address)
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -1122,13 +1165,18 @@ async fn set_trusted_with(
     trusted: bool,
 ) -> Result<DeviceInfo> {
     let device = adapter.device(address)?;
-    device
-        .set_trusted(trusted)
-        .await
-        .with_context(|| format!("BlueZ failed to set trusted={trusted} for {address}"))?;
+    device.set_trusted(trusted).await.with_context(|| {
+        format!(
+            "BlueZ failed to set trusted={trusted} for {}",
+            redacted(address)
+        )
+    })?;
     let info = device_info(&device).await?;
     if info.trusted != trusted {
-        bail!("BlueZ did not persist trusted={trusted} for {address}");
+        bail!(
+            "BlueZ did not persist trusted={trusted} for {}",
+            redacted(address)
+        );
     }
     Ok(info)
 }
@@ -1137,7 +1185,7 @@ async fn remove_with(adapter: &Adapter, address: Address) -> Result<()> {
     adapter
         .remove_device(address)
         .await
-        .with_context(|| format!("BlueZ failed to remove {address}"))?;
+        .with_context(|| format!("BlueZ failed to remove {}", redacted(address)))?;
     remove_discovered_device(address);
     Ok(())
 }
@@ -1148,11 +1196,14 @@ async fn disconnect_with(adapter: &Adapter, address: Address) -> Result<DeviceIn
         device
             .disconnect()
             .await
-            .with_context(|| format!("BlueZ failed to disconnect {address}"))?;
+            .with_context(|| format!("BlueZ failed to disconnect {}", redacted(address)))?;
     }
     let info = device_info(&device).await?;
     if info.connected {
-        bail!("BlueZ returned from Disconnect but {address} is still connected");
+        bail!(
+            "BlueZ returned from Disconnect but {} is still connected",
+            redacted(address)
+        );
     }
     Ok(info)
 }
@@ -2083,7 +2134,10 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let device = match adapter.device(address) {
         Ok(device) => device,
         Err(error) => {
-            eprintln!("failed to resolve discovered Bluetooth device {address}: {error:#}");
+            eprintln!(
+                "failed to resolve discovered Bluetooth device {}: {error:#}",
+                redacted(address)
+            );
             qol_runtime::probe!(
                 "BLUETOOTH_SEARCH_DEVICE",
                 "device={} outcome=partial stage=resolve",
@@ -2095,7 +2149,10 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let device = match device_info(&device).await {
         Ok(device) => device,
         Err(error) => {
-            eprintln!("failed to inspect discovered Bluetooth device {address}: {error:#}");
+            eprintln!(
+                "failed to inspect discovered Bluetooth device {}: {error:#}",
+                redacted(address)
+            );
             qol_runtime::probe!(
                 "BLUETOOTH_SEARCH_DEVICE",
                 "device={} outcome=partial stage=inspect",
