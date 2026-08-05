@@ -14,20 +14,52 @@ mod contract;
 mod export;
 mod mcp;
 
+pub(crate) struct SessionSubcommand {
+    pub(crate) name: &'static str,
+    run: fn(&[OsString], OutputFormat) -> Result<()>,
+}
+
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
+    SessionSubcommand {
+        name: "list",
+        run: |_rest, format| list(format),
+    },
+    SessionSubcommand {
+        name: "send",
+        run: |rest, _format| send(rest),
+    },
+    SessionSubcommand {
+        name: "read",
+        run: |rest, _format| read_screen(rest),
+    },
+    SessionSubcommand {
+        name: "wait",
+        run: |rest, _format| wait(rest),
+    },
+    SessionSubcommand {
+        name: "focus",
+        run: |rest, _format| focus(rest),
+    },
+    SessionSubcommand {
+        name: "mcp",
+        run: |_rest, _format| mcp::run(),
+    },
+    SessionSubcommand {
+        name: "export",
+        run: |rest, _format| export::run(rest),
+    },
+];
+
 pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let subcommand = args
         .first()
         .and_then(|argument| argument.to_str())
-        .unwrap_or("list");
+        .unwrap_or(SUBCOMMANDS[0].name);
     let rest = &args[1..];
+    if let Some(subcommand) = SUBCOMMANDS.iter().find(|entry| entry.name == subcommand) {
+        return (subcommand.run)(rest, output_format);
+    }
     match subcommand {
-        "list" => list(output_format),
-        "send" => send(rest),
-        "read" => read_screen(rest),
-        "focus" => focus(rest),
-        "wait" => wait(rest),
-        "mcp" => mcp::run(),
-        "export" => export::run(rest),
         "help" | "-h" | "--help" => {
             print!("{}", help_text());
             Ok(())
