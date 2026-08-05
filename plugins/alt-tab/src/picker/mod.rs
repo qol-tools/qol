@@ -62,6 +62,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, req.current, is_visible);
     let rendering = RenderingFlow::current();
+    monitor_listener::store_flow_fill(rendering.captures_preview_fill());
     qol_runtime::probe!(
         "OPEN_PICKER",
         "show_id={} reverse={} visible={} target={},{},{}x{}",
