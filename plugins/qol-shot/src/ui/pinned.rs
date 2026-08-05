@@ -122,6 +122,7 @@ pub fn pre_create(cx: &mut App) {
             let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
             continue;
         }
+        platform::reassert_parked(&title, cx);
         PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
     }
     PIN_CACHE.with(|cache| {
@@ -243,6 +244,7 @@ mod cache {
                 );
                 window.focus(&view.focus_handle(cx));
                 window.activate_window();
+                view.schedule_reveal_after_present(window, cx);
                 title
             })
             .ok();
@@ -428,6 +430,7 @@ impl PinnedView {
     }
 
     fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::platform::mark_reveal_requested(&self.title);
         let generation = self.reveal_generation;
         if self.pending_reveal.is_none() || self.scheduled_reveal_generation == Some(generation) {
             return;
@@ -438,9 +441,25 @@ impl PinnedView {
             "title={} generation={generation} state=scheduled",
             self.title
         );
-        cx.on_next_frame(window, move |view, _window, _cx| {
-            view.reveal_presented_generation(generation);
-        });
+        if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_generation(generation);
+            });
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_PIN_REVEAL",
+            "title={} generation={generation} state=parked-deferred",
+            self.title
+        );
+        cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
+                }
+            });
+        })
+        .detach();
     }
 
     fn reveal_presented_generation(&mut self, generation: u64) {

@@ -1,9 +1,12 @@
 use anyhow::Result;
-use gpui::{Bounds, Pixels, Point, WindowDecorations, WindowKind};
+use gpui::{App, Bounds, Pixels, Point, WindowDecorations, WindowKind};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use std::collections::HashSet;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
@@ -59,6 +62,7 @@ pub fn pre_create_selector(cx: &mut gpui::App) {
             return;
         };
         prepare_selector_window(&title, rect_from_bounds(bounds));
+        reassert_parked(&title, cx);
     });
 }
 
@@ -68,6 +72,44 @@ pub fn pre_create_pins(cx: &mut gpui::App) {
 
 pub fn pin_cache_enabled() -> bool {
     true
+}
+
+static REVEAL_REQUESTED: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) fn mark_reveal_requested(title: &str) {
+    if let Ok(mut requested) = REVEAL_REQUESTED.lock() {
+        requested.insert(title.to_string());
+    }
+}
+
+fn reveal_requested(title: &str) -> bool {
+    REVEAL_REQUESTED
+        .lock()
+        .map(|requested| requested.contains(title))
+        .unwrap_or(false)
+}
+
+pub(crate) fn reassert_parked(title: &str, cx: &mut App) {
+    let title = title.to_string();
+    cx.spawn(async move |cx| {
+        for _ in 0..8 {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let parked = cx
+                .update(|_| qol_gpui::popup_window::visible_windows_by_title_prefix(&title) == 0)
+                .unwrap_or(true);
+            if parked {
+                return;
+            }
+            if reveal_requested(&title) {
+                return;
+            }
+            let _ = cx.update(|_| qol_gpui::popup_window::hide_invisible(&title));
+        }
+    })
+    .detach();
 }
 
 pub fn after_pin_open(title: &str) {

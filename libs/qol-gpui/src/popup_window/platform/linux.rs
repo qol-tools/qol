@@ -6,7 +6,7 @@ use x11rb::protocol::Event;
 use x11rb::wrapper::ConnectionExt as _;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -249,6 +249,16 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
+static UNMAP_HIDE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_unmap_hide(enabled: bool) {
+    UNMAP_HIDE.store(enabled, Ordering::Relaxed);
+}
+
+fn unmap_hide_enabled() -> bool {
+    UNMAP_HIDE.load(Ordering::Relaxed)
+}
+
 pub fn park_window_by_title(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -401,20 +411,22 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         return false;
     };
     release_input_focus(&conn, root, wid);
-    if cached_card(title) == Some(target) {
-        return true;
-    }
-    if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
-        let applied = set_window_opacity(&conn, wid, opacity);
-        let _ = conn.flush();
-        if applied {
-            store_card(title, wid, Some(target));
+    if opacity > 0.0 || !unmap_hide_enabled() {
+        if cached_card(title) == Some(target) {
+            return true;
         }
-        qol_runtime::probe!(
-            "HIDE_WIN",
-            "title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}",
-        );
-        return true;
+        if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
+            let applied = set_window_opacity(&conn, wid, opacity);
+            let _ = conn.flush();
+            if applied {
+                store_card(title, wid, Some(target));
+            }
+            qol_runtime::probe!(
+                "HIDE_WIN",
+                "title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}",
+            );
+            return true;
+        }
     }
     let _ = conn.unmap_window(wid);
     let _ = conn.flush();

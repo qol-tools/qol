@@ -225,6 +225,7 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
             view.set_showing(false);
             park_ghost(&title, window, view.window_origin);
         });
+        crate::platform::reassert_parked(&title, cx);
     }
 }
 
@@ -414,6 +415,7 @@ fn reuse_existing(
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
+            view.schedule_reveal_after_present(window, cx);
             PreviewWindowReuse::Reuse
         })
         .ok();
@@ -781,15 +783,28 @@ impl PreviewView {
     }
 
     fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::platform::mark_reveal_requested(&self.title);
         if self.pending_reveal.is_none() || self.scheduled_reveal_seq == Some(self.seq) {
             return;
         }
         let seq = self.seq;
         self.scheduled_reveal_seq = Some(seq);
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
-        cx.on_next_frame(window, move |view, _window, _cx| {
-            view.reveal_presented_seq(seq);
-        });
+        if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_seq(seq);
+            });
+            return;
+        }
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-deferred");
+        cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
+                }
+            });
+        })
+        .detach();
     }
 
     fn reveal_presented_seq(&mut self, seq: u64) {

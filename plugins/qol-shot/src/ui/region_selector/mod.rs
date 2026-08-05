@@ -511,7 +511,12 @@ impl RegionSelector {
         }
     }
 
-    fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_reveal_after_present(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::platform::mark_reveal_requested(&self.title);
         let generation = self.reveal_generation;
         if self.pending_reveal.is_none() || self.scheduled_reveal_generation == Some(generation) {
             return;
@@ -522,9 +527,25 @@ impl RegionSelector {
             "title={} generation={generation} state=scheduled",
             self.title
         );
-        cx.on_next_frame(window, move |view, _window, _cx| {
-            view.reveal_presented_generation(generation);
-        });
+        if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_generation(generation);
+            });
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_SELECT_REVEAL",
+            "title={} generation={generation} state=parked-deferred",
+            self.title
+        );
+        cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
+                }
+            });
+        })
+        .detach();
     }
 
     fn reveal_presented_generation(&mut self, generation: u64) {

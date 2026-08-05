@@ -140,6 +140,8 @@ pub fn pinned_window_kind() -> gpui::WindowKind {
 
 pub fn set_ghost_debug(_opacity: Option<f32>, _color_hex: Option<&str>) {}
 
+pub fn set_unmap_hide(_enabled: bool) {}
+
 pub fn window_backing_scale(_title: &str) -> Option<f32> {
     None
 }
