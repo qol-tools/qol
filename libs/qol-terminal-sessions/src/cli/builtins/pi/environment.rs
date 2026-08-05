@@ -12,12 +12,25 @@ pub(super) struct SystemPiEnvironment;
 
 impl PiEnvironment for SystemPiEnvironment {
     fn session_file(&self, pid: i32, cwd: &str) -> Option<PathBuf> {
-        let directory = agent_dir()?.join("sessions").join(session_dir_name(cwd));
+        let directory = session_dir(cwd)?;
         match process_start_unix_secs(pid) {
             Some(started_at) => session_file_started_at(&directory, started_at),
             None => newest_session_file(&directory),
         }
     }
+}
+
+fn session_dir(cwd: &str) -> Option<PathBuf> {
+    let base = match session_dir_override() {
+        Some(base) => base,
+        None => agent_dir()?.join("sessions"),
+    };
+    Some(base.join(session_dir_name(cwd)))
+}
+
+fn session_dir_override() -> Option<PathBuf> {
+    let dir = std::env::var_os("PI_CODING_AGENT_SESSION_DIR")?;
+    expand_tilde(PathBuf::from(dir))
 }
 
 fn agent_dir() -> Option<PathBuf> {
@@ -32,12 +45,14 @@ fn agent_dir() -> Option<PathBuf> {
 
 fn expand_tilde(path: PathBuf) -> Option<PathBuf> {
     let text = path.to_str()?;
-    if text == "~" || text.starts_with("~/") {
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
-        Some(home.join(text.strip_prefix('~').unwrap_or_default()))
-    } else {
-        Some(path)
+    if text == "~" {
+        return std::env::var_os("HOME").map(PathBuf::from);
     }
+    let Some(rest) = text.strip_prefix("~/") else {
+        return Some(path);
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join(rest))
 }
 
 fn session_dir_name(cwd: &str) -> String {
@@ -156,6 +171,27 @@ mod tests {
             "--media-kmrh47-WD_SN850X-Git-qol-monorepo--"
         );
         assert_eq!(session_dir_name("/"), "----");
+    }
+
+    #[test]
+    fn session_dir_override_replaces_the_agent_dir_sessions_default() {
+        let previous_home = std::env::var_os("HOME");
+        let previous_override = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
+        std::env::set_var("HOME", "/home/u");
+        std::env::set_var("PI_CODING_AGENT_SESSION_DIR", "~/relay-sessions");
+        let directory = session_dir("/work/proj");
+        match previous_override {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
+        }
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(
+            directory,
+            Some(PathBuf::from("/home/u/relay-sessions/--work-proj--"))
+        );
     }
 
     #[test]
