@@ -50,12 +50,16 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
     },
 ];
 
-pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
-    let subcommand = args
+fn split_subcommand(args: &[OsString]) -> (&str, &[OsString]) {
+    let name = args
         .first()
         .and_then(|argument| argument.to_str())
         .unwrap_or(SUBCOMMANDS[0].name);
-    let rest = &args[1..];
+    (name, args.get(1..).unwrap_or_default())
+}
+
+pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
+    let (subcommand, rest) = split_subcommand(args);
     if let Some(subcommand) = SUBCOMMANDS.iter().find(|entry| entry.name == subcommand) {
         return (subcommand.run)(rest, output_format);
     }
@@ -326,6 +330,26 @@ mod tests {
         assert!(capability_names(&caps).is_empty());
         caps = SessionCapabilities::SCREEN_READING | SessionCapabilities::TEXT_INPUT;
         assert_eq!(capability_names(&caps), ["read", "input"]);
+    }
+
+    #[test]
+    fn bare_invocation_defaults_to_the_first_subcommand_without_slicing_past_the_end() {
+        let cases: [(&[&str], &str, &[&str]); 4] = [
+            (&[], "list", &[]),
+            (&["list"], "list", &[]),
+            (
+                &["send", "v1:kitty:1:42", "hello"],
+                "send",
+                &["v1:kitty:1:42", "hello"],
+            ),
+            (&["nonsense"], "nonsense", &[]),
+        ];
+        for (input, expected_name, expected_rest) in cases {
+            let args: Vec<OsString> = input.iter().map(OsString::from).collect();
+            let (name, rest) = split_subcommand(&args);
+            assert_eq!(name, expected_name, "input: {input:?}");
+            assert_eq!(rest, expected_rest, "input: {input:?}");
+        }
     }
 
     #[test]
