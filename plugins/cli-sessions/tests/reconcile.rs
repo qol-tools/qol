@@ -351,7 +351,11 @@ fn answered_picker_stays_working_through_the_transition() {
         102,
         &mut caches,
     );
-    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::NeedsYou,
+        "a chrome-less transition frame holds the answered session instead of flipping it"
+    );
 
     *host.screen.lock().unwrap() = KIMI_WORKING.to_owned();
     tick_with_caches(
@@ -439,6 +443,41 @@ fn kimi_stale_spinner_line_settles_to_your_turn() {
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
         "a settled screen with a stale spinner line is your-turn, not working"
+    );
+}
+
+#[test]
+fn kimi_scrolled_screen_holds_working_until_the_live_view_returns() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(1, "project", false, &["zsh", "kimi"], "kimi")],
+        screen: KIMI_WORKING.into(),
+    };
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
+
+    let scrolled = "User message number 57 asking about topic 57.\n\nAssistant reply number 57 with a fairly long answer\nthat wraps across multiple terminal lines.";
+    host.screen = scrolled.to_owned();
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 102);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Working,
+        "a scrolled chrome-less view must hold the working status, not flip to your turn"
+    );
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].running_since,
+        Some(100),
+        "the running timer survives the scrolled hold"
+    );
+
+    host.screen = KIMI_STALE_LINE.to_owned();
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 103);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 104);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::YourTurn,
+        "the live view returns and the settled stale line is your-turn"
     );
 }
 

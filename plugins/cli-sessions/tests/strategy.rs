@@ -132,6 +132,10 @@ fn status_for_maps_every_phase_with_ack_carry() {
         (Status::Acknowledged, Phase::Done, Status::Acknowledged),
         (Status::Acknowledged, Phase::Idle, Status::Acknowledged),
         (Status::Acknowledged, Phase::Busy, Status::Working),
+        (Status::Working, Phase::Hold, Status::Working),
+        (Status::YourTurn, Phase::Hold, Status::YourTurn),
+        (Status::NeedsYou, Phase::Hold, Status::NeedsYou),
+        (Status::Acknowledged, Phase::Hold, Status::Acknowledged),
     ];
     for (prev, phase, expected) in cases {
         assert_eq!(status_for(prev, phase), expected, "{prev:?}+{phase:?}");
@@ -148,6 +152,8 @@ fn running_since_tracks_busy_phase_only() {
         (Some(50), Phase::Blocked, 100, None),
         (Some(50), Phase::Done, 100, None),
         (Some(50), Phase::Idle, 100, None),
+        (Some(50), Phase::Hold, 100, Some(50)),
+        (None, Phase::Hold, 100, None),
     ];
     for (prev, phase, now, expected) in cases {
         assert_eq!(
@@ -563,12 +569,10 @@ fn kimi_settled_spinner_line_is_your_turn_not_working() {
         )
     };
     let cases = [
-        "\u{1F315} \u{00B7} Tip: /tasks to check progress and status for background tasks"
-            .to_string(),
-        "conversation output\n\u{1F314} \u{00B7} Tip: Try /dance for a hidden Easter egg"
-            .to_string(),
-        "\u{2819} working... \u{00B7} Tip: ask Kimi to schedule tasks".to_string(),
-        "\u{2819} working...".to_string(),
+        boxed("\u{1F315} \u{00B7} Tip: /tasks to check progress and status for background tasks"),
+        boxed("conversation output\n\u{1F314} \u{00B7} Tip: Try /dance for a hidden Easter egg"),
+        boxed("\u{2819} working... \u{00B7} Tip: ask Kimi to schedule tasks"),
+        boxed("\u{2819} working..."),
         boxed("  \u{1F317}"),
         boxed("\u{2819} thinking..."),
     ];
@@ -593,6 +597,7 @@ fn kimi_moon_beyond_the_status_window_does_not_read_as_busy() {
     for i in 40..75 {
         screen.push_str(&format!("more conversation line {i}\n"));
     }
+    screen.push_str("\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]");
     assert_eq!(
         Kimi.read(&kimi_ctx(&p, Some(&screen), Some("proj"), Some(true)))
             .phase,
@@ -604,7 +609,7 @@ fn kimi_moon_beyond_the_status_window_does_not_read_as_busy() {
 #[test]
 fn kimi_moon_led_conversation_line_is_not_busy() {
     let p = pane(false, "kimi-code", "qol-monorepo");
-    let screen = "Assistant answer:\n\u{1F315} release status is green\n> ";
+    let screen = "Assistant answer:\n\u{1F315} release status is green\n\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}";
     assert_eq!(
         Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
             .phase,
@@ -645,6 +650,53 @@ fn kimi_choice_picker_is_blocked() {
             .phase,
         Phase::Blocked,
         "an on-screen choice picker is needs-you even when the caret glyph is absent"
+    );
+}
+
+#[test]
+fn kimi_scrolled_screen_holds_the_previous_status() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let scrolled = "User message number 57 asking about topic 57.\n\nAssistant reply number 57 with a fairly long answer\nthat wraps across multiple terminal lines.\n\nUser message number 58 asking about topic 58.\n\nAssistant reply number 58 with more text that keeps\nscrolling the old transcript into view.";
+    for prev_status in [
+        Status::Working,
+        Status::YourTurn,
+        Status::NeedsYou,
+        Status::Acknowledged,
+    ] {
+        let mut held = kimi_ctx(&p, Some(scrolled), Some("proj"), Some(true));
+        held.screen_changed = false;
+        held.prev = Some(Prev {
+            status: prev_status,
+            running_since: None,
+        });
+        assert_eq!(
+            Kimi.read(&held).phase,
+            Phase::Hold,
+            "a chrome-less scrolled view must not flip the status from {prev_status:?}"
+        );
+        assert_eq!(
+            status_for(prev_status, Kimi.read(&held).phase),
+            prev_status,
+            "the scrolled view holds {prev_status:?}"
+        );
+    }
+}
+
+#[test]
+fn kimi_scrolled_screen_with_live_evidence_is_not_held() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let scrolled =
+        "older transcript line\n\u{2819} working... \u{00B7} Tip: ask Kimi to schedule tasks";
+    let mut live = kimi_ctx(&p, Some(scrolled), Some("proj"), Some(true));
+    live.screen_changed = true;
+    live.prev = Some(Prev {
+        status: Status::Working,
+        running_since: None,
+    });
+    assert_eq!(
+        Kimi.read(&live).phase,
+        Phase::Busy,
+        "a moving screen with a spinner line is live work even without the box"
     );
 }
 

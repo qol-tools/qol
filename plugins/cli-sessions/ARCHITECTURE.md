@@ -108,7 +108,11 @@ Kimi's and Pi's `working` hooks are the exception to the skeleton's hard
 `Busy` override: their activity lines (`⠙ working...` / moon + tip) stay
 rendered on a settled screen after the model has finished, so the line only
 reads as live work while the screen is changing. A settled line is stale and
-reads `Done`, which is exactly the "your turn" the user sees.
+reads `Done`, which is exactly the "your turn" the user sees. Kimi renders
+inline (no alternate screen), so scrolling the kitty window back shows the
+transcript overflow without the editor chrome; a chrome-less kimi screen with
+no working evidence reads `Hold` and keeps the previous status instead of
+flipping to "your turn" while the agent still works.
 `Cli` alone overrides `read` because its
 shell model is busy-by-default (absence of a foreground process is the idle
 signal), which does not fit the evidence skeleton. Strategies also expose a

@@ -1,6 +1,5 @@
 use crate::signal::screen::{has_numbered_choice_prompt, kimi_questionnaire, kimi_working};
 use crate::strategy::{phase_for, Ctx, Phase, Reading, Strategy};
-
 pub struct Kimi;
 
 impl Strategy for Kimi {
@@ -45,6 +44,12 @@ impl Strategy for Kimi {
                 label: self.label(ctx),
             };
         }
+        if !working && !ctx.screen.is_some_and(has_live_chrome) {
+            return Reading {
+                phase: Phase::Hold,
+                label: self.label(ctx),
+            };
+        }
         Reading {
             phase: phase_for(
                 working,
@@ -56,4 +61,12 @@ impl Strategy for Kimi {
             label: self.label(ctx),
         }
     }
+}
+
+fn has_live_chrome(screen: &str) -> bool {
+    screen
+        .lines()
+        .rev()
+        .take(6)
+        .any(|l| l.trim_start().starts_with('\u{256D}'))
 }
