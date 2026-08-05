@@ -916,9 +916,9 @@ mod tests {
 
     #[test]
     fn flow_fill_gate_suppresses_arming_but_keeps_focus_requeue() {
-        let control = super::WarmerControl::new();
-        assert!(super::WARMER_CONTROL.set(control).is_ok());
-        let warmer = super::WARMER_CONTROL.get().expect("control set");
+        let warmer = super::WARMER_CONTROL
+            .get_or_init(super::WarmerControl::new)
+            .clone();
 
         super::store_flow_fill(false);
         assert!(!super::flow_fills_previews());
