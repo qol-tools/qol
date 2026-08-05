@@ -1,6 +1,8 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
+use crate::input::{
+    InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds, ScreenBoundsCache,
+};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -23,6 +25,7 @@ pub struct InputHandlerImpl {
     button_state: Mutex<Option<Button>>,
     last_click: Mutex<Option<ClickState>>,
     drag_state: Mutex<DragState>,
+    bounds: ScreenBoundsCache,
 }
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
@@ -71,8 +74,66 @@ impl InputHandlerImpl {
                 last_flush: Instant::now(),
                 button: None,
             }),
+            bounds: ScreenBoundsCache::new(screen_bounds),
         })
     }
+}
+
+fn screen_bounds() -> Option<ScreenBounds> {
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    extern "C" {
+        fn CGGetActiveDisplayList(
+            max_displays: u32,
+            active_displays: *mut u32,
+            display_count: *mut u32,
+        ) -> i32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+    }
+
+    const MAX_DISPLAYS: usize = 16;
+    let mut displays = [0u32; MAX_DISPLAYS];
+    let mut count = 0u32;
+
+    let spanned = unsafe {
+        if CGGetActiveDisplayList(MAX_DISPLAYS as u32, displays.as_mut_ptr(), &mut count) != 0 {
+            return None;
+        }
+        displays[..count as usize].iter().fold(
+            None,
+            |spanned: Option<(f64, f64, f64, f64)>, display| {
+                let rect = CGDisplayBounds(*display);
+                let (left, top) = (rect.origin.x, rect.origin.y);
+                let (right, bottom) = (left + rect.size.width, top + rect.size.height);
+                Some(match spanned {
+                    Some((min_x, min_y, max_x, max_y)) => (
+                        min_x.min(left),
+                        min_y.min(top),
+                        max_x.max(right),
+                        max_y.max(bottom),
+                    ),
+                    None => (left, top, right, bottom),
+                })
+            },
+        )
+    };
+
+    let (min_x, min_y, max_x, max_y) = spanned?;
+    ScreenBounds::from_origin_and_size(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
 fn send_event(event_type: EventType) -> Result<()> {
@@ -91,6 +152,7 @@ impl InputHandlerTrait for InputHandlerImpl {
 
         log::debug!("[SERVER] Received: x={:.2} y={:.2}", x, y);
 
+        let bounds = self.bounds.current();
         let (new_x, new_y, button) = {
             let mut pos_opt = self
                 .current_pos
@@ -101,14 +163,8 @@ impl InputHandlerTrait for InputHandlerImpl {
                 .lock()
                 .expect("Button state mutex poisoned");
 
-            let (new_x, new_y) = if let Some((px, py)) = *pos_opt {
-                (px + x, py + y)
-            } else {
-                (
-                    ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0 + x,
-                    ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0 + y,
-                )
-            };
+            let (px, py) = (*pos_opt).unwrap_or_else(|| bounds.center());
+            let (new_x, new_y) = bounds.clamp(px + x, py + y);
 
             *pos_opt = Some((new_x, new_y));
             (new_x, new_y, button)
@@ -295,20 +351,12 @@ impl InputHandlerImpl {
     }
 
     fn resolve_pointer_position(&self) -> (f64, f64) {
+        let center = self.bounds.current().center();
         let mut pos = self
             .current_pos
             .lock()
             .expect("Cursor position mutex poisoned");
-        if let Some(coords) = *pos {
-            coords
-        } else {
-            let fallback = (
-                ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0,
-                ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0,
-            );
-            *pos = Some(fallback);
-            fallback
-        }
+        *pos.get_or_insert(center)
     }
 
     fn next_click_count(&self, button: u8) -> i64 {

@@ -1,15 +1,21 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
+use crate::input::{
+    InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds, ScreenBoundsCache,
+};
 use anyhow::Result;
 use std::sync::Mutex;
 use std::time::Duration;
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+};
 use windows::{Win32::Foundation::POINT, Win32::UI::Input::KeyboardAndMouse::*};
 
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
     modifier_state: Mutex<ModifierKeys>,
+    bounds: ScreenBoundsCache,
 }
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
@@ -36,6 +42,7 @@ impl InputHandlerImpl {
         Ok(Self {
             current_pos: Mutex::new(None),
             modifier_state: Mutex::new(ModifierKeys::default()),
+            bounds: ScreenBoundsCache::new(screen_bounds),
         })
     }
 
@@ -51,6 +58,17 @@ impl InputHandlerImpl {
     }
 }
 
+fn screen_bounds() -> Option<ScreenBounds> {
+    unsafe {
+        ScreenBounds::from_origin_and_size(
+            GetSystemMetrics(SM_XVIRTUALSCREEN) as f64,
+            GetSystemMetrics(SM_YVIRTUALSCREEN) as f64,
+            GetSystemMetrics(SM_CXVIRTUALSCREEN) as f64,
+            GetSystemMetrics(SM_CYVIRTUALSCREEN) as f64,
+        )
+    }
+}
+
 impl InputHandlerTrait for InputHandlerImpl {
     fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let mut pos_opt = self
@@ -58,16 +76,11 @@ impl InputHandlerTrait for InputHandlerImpl {
             .lock()
             .expect("Cursor position mutex poisoned");
 
-        let (new_x, new_y) = if let Some((px, py)) = *pos_opt {
-            (px + x, py + y)
-        } else if let Some((cx, cy)) = Self::get_cursor_position() {
-            (cx + x, cy + y)
-        } else {
-            (
-                ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0 + x,
-                ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0 + y,
-            )
-        };
+        let bounds = self.bounds.current();
+        let (px, py) = (*pos_opt)
+            .or_else(Self::get_cursor_position)
+            .unwrap_or_else(|| bounds.center());
+        let (new_x, new_y) = bounds.clamp(px + x, py + y);
 
         *pos_opt = Some((new_x, new_y));
 

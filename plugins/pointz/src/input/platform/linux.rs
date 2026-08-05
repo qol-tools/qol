@@ -1,6 +1,8 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
+use crate::input::{
+    InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds, ScreenBoundsCache,
+};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -10,6 +12,7 @@ use x11::xlib;
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
     modifier_state: Mutex<ModifierKeys>,
+    bounds: ScreenBoundsCache,
 }
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
@@ -73,6 +76,7 @@ impl InputHandlerImpl {
         Ok(Self {
             current_pos: Mutex::new(None),
             modifier_state: Mutex::new(ModifierKeys::default()),
+            bounds: ScreenBoundsCache::new(screen_bounds),
         })
     }
 
@@ -109,6 +113,20 @@ impl InputHandlerImpl {
     }
 }
 
+fn screen_bounds() -> Option<ScreenBounds> {
+    unsafe {
+        let display = xlib::XOpenDisplay(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let screen = xlib::XDefaultScreen(display);
+        let width = xlib::XDisplayWidth(display, screen) as f64;
+        let height = xlib::XDisplayHeight(display, screen) as f64;
+        xlib::XCloseDisplay(display);
+        ScreenBounds::from_origin_and_size(0.0, 0.0, width, height)
+    }
+}
+
 fn send_event(event_type: EventType) -> Result<()> {
     match simulate(&event_type) {
         Ok(()) => Ok(()),
@@ -126,16 +144,11 @@ impl InputHandlerTrait for InputHandlerImpl {
             .lock()
             .expect("Cursor position mutex poisoned");
 
-        let (new_x, new_y) = if let Some((px, py)) = *pos_opt {
-            (px + x, py + y)
-        } else if let Some((cx, cy)) = Self::get_cursor_position() {
-            (cx + x, cy + y)
-        } else {
-            (
-                ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0 + x,
-                ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0 + y,
-            )
-        };
+        let bounds = self.bounds.current();
+        let (px, py) = (*pos_opt)
+            .or_else(Self::get_cursor_position)
+            .unwrap_or_else(|| bounds.center());
+        let (new_x, new_y) = bounds.clamp(px + x, py + y);
 
         *pos_opt = Some((new_x, new_y));
 
