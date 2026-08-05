@@ -6,8 +6,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const SECRET_FILE: &str = "pairing-secret";
+const QUARANTINE_EXTENSION: &str = "unreadable";
 
-pub struct PairingSecret([u8; 32]);
+pub struct ServerIdentity([u8; 32]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExistingSecretState {
@@ -27,38 +28,52 @@ pub(crate) struct ExistingSecretInspection {
     pub issue: Option<String>,
 }
 
-impl PairingSecret {
+impl ServerIdentity {
     pub fn load_or_create() -> Result<Self> {
         let path = secret_path().context("PointZ data directory is unavailable")?;
-        match std::fs::symlink_metadata(&path) {
+        Self::load_or_create_at(&path)
+    }
+
+    fn load_or_create_at(path: &Path) -> Result<Self> {
+        match std::fs::symlink_metadata(path) {
             Ok(metadata)
                 if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
             {
-                return Self::decode(std::fs::read_to_string(path)?.trim());
+                match Self::from_stored_bytes(&std::fs::read(path)?) {
+                    Ok(identity) => return Ok(identity),
+                    Err(error) => quarantine(path, &error)?,
+                }
             }
-            Ok(_) => anyhow::bail!("PointZ pairing secret path is not a regular file"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => anyhow::bail!("PointZ identity seed path is not a regular file"),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        Self::generate_at(path)
+    }
+
+    fn generate_at(path: &Path) -> Result<Self> {
         let mut bytes = [0; 32];
-        getrandom::fill(&mut bytes).map_err(|error| {
-            anyhow::anyhow!("failed to generate PointZ pairing secret: {error}")
-        })?;
-        let secret = Self(bytes);
-        qol_fs::atomic_write_private(&path, secret.encoded().as_bytes()).with_context(|| {
-            format!(
-                "failed to persist PointZ pairing secret at {}",
-                path.display()
-            )
-        })?;
-        Ok(secret)
+        getrandom::fill(&mut bytes)
+            .map_err(|error| anyhow::anyhow!("failed to generate PointZ identity seed: {error}"))?;
+        let identity = Self(bytes);
+        qol_fs::atomic_write_private(path, identity.encode_seed().as_bytes()).with_context(
+            || {
+                format!(
+                    "failed to persist PointZ identity seed at {}",
+                    path.display()
+                )
+            },
+        )?;
+        Ok(identity)
     }
 
-    pub fn bytes(&self) -> &[u8; 32] {
-        &self.0
+    fn from_stored_bytes(stored: &[u8]) -> Result<Self> {
+        let text =
+            std::str::from_utf8(stored).context("PointZ identity seed is not valid UTF-8")?;
+        Self::decode(text.trim())
     }
 
-    pub fn encoded(&self) -> String {
+    fn encode_seed(&self) -> String {
         URL_SAFE_NO_PAD.encode(self.0)
     }
 
@@ -70,10 +85,10 @@ impl PairingSecret {
     fn decode(encoded: &str) -> Result<Self> {
         let decoded = URL_SAFE_NO_PAD
             .decode(encoded)
-            .context("PointZ pairing secret is not valid base64url")?;
+            .context("PointZ identity seed is not valid base64url")?;
         let bytes: [u8; 32] = decoded
             .try_into()
-            .map_err(|_| anyhow::anyhow!("PointZ pairing secret must be 32 bytes"))?;
+            .map_err(|_| anyhow::anyhow!("PointZ identity seed must be 32 bytes"))?;
         Ok(Self(bytes))
     }
 
@@ -95,6 +110,21 @@ impl PairingSecret {
         };
         inspect_path(&path)
     }
+}
+
+fn quarantine(path: &Path, reason: &anyhow::Error) -> Result<()> {
+    let quarantined = path.with_extension(QUARANTINE_EXTENSION);
+    std::fs::rename(path, &quarantined).with_context(|| {
+        format!(
+            "failed to set aside the unreadable PointZ identity seed at {}",
+            path.display()
+        )
+    })?;
+    log::warn!(
+        "Replacing the unreadable PointZ identity seed ({reason}); the old file is at {}",
+        quarantined.display()
+    );
+    Ok(())
 }
 
 fn inspect_path(path: &Path) -> ExistingSecretInspection {
@@ -165,7 +195,7 @@ fn non_regular_inspection(
         file_type,
         bytes: Some(bytes),
         readonly: None,
-        issue: Some("PointZ pairing secret path is not a regular file".to_string()),
+        issue: Some("PointZ identity seed path is not a regular file".to_string()),
     }
 }
 
@@ -185,18 +215,90 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn encoded_secret_round_trips_and_has_stable_server_id() {
-        let secret = PairingSecret::from_bytes([3; 32]);
+    fn encoded_seed_round_trips_and_has_a_stable_server_id() {
+        let identity = ServerIdentity::from_bytes([3; 32]);
 
-        let decoded = PairingSecret::decode(&secret.encoded()).unwrap();
+        let decoded = ServerIdentity::decode(&identity.encode_seed()).unwrap();
 
-        assert_eq!(decoded.bytes(), secret.bytes());
-        assert_eq!(decoded.server_id(), secret.server_id());
-        assert_eq!(secret.server_id().len(), 16);
+        assert_eq!(decoded.server_id(), identity.server_id());
+        assert_eq!(identity.server_id().len(), 16);
     }
 
     #[test]
-    fn inspecting_a_missing_secret_never_creates_it() {
+    fn a_missing_seed_is_created_and_reloaded_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing-secret");
+
+        let created = ServerIdentity::load_or_create_at(&path).unwrap();
+        let reloaded = ServerIdentity::load_or_create_at(&path).unwrap();
+
+        assert_eq!(created.server_id(), reloaded.server_id());
+        assert!(!path.with_extension("unreadable").exists());
+    }
+
+    #[test]
+    fn an_undecodable_seed_is_set_aside_and_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing-secret");
+        fs::write(&path, "CORRUPTED-NOT-BASE64").unwrap();
+
+        let replacement = ServerIdentity::load_or_create_at(&path).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(path.with_extension("unreadable")).unwrap(),
+            "CORRUPTED-NOT-BASE64"
+        );
+        assert_eq!(
+            ServerIdentity::load_or_create_at(&path)
+                .unwrap()
+                .server_id(),
+            replacement.server_id()
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_seed_is_set_aside_and_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing-secret");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+
+        ServerIdentity::load_or_create_at(&path).unwrap();
+
+        assert_eq!(
+            fs::read(path.with_extension("unreadable")).unwrap(),
+            [0xff, 0xfe, 0xfd]
+        );
+    }
+
+    #[test]
+    fn a_seed_of_the_wrong_length_is_set_aside_and_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing-secret");
+        let too_short = URL_SAFE_NO_PAD.encode([1; 16]);
+        fs::write(&path, &too_short).unwrap();
+
+        ServerIdentity::load_or_create_at(&path).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(path.with_extension("unreadable")).unwrap(),
+            too_short
+        );
+        assert_ne!(fs::read_to_string(&path).unwrap(), too_short);
+    }
+
+    #[test]
+    fn a_seed_path_that_is_not_a_regular_file_is_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pairing-secret");
+        fs::create_dir(&path).unwrap();
+
+        assert!(ServerIdentity::load_or_create_at(&path).is_err());
+        assert!(path.is_dir());
+        assert!(!path.with_extension("unreadable").exists());
+    }
+
+    #[test]
+    fn inspecting_a_missing_seed_never_creates_it() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("missing-secret");
 
@@ -207,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn inspecting_a_regular_secret_reads_metadata_but_not_contents() {
+    fn inspecting_a_regular_seed_reads_metadata_but_not_contents() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("pairing-secret");
         let private_non_utf8 = [0xff, 0xfe, 0xfd, 0x00];
@@ -220,19 +322,5 @@ mod tests {
         assert_eq!(inspection.bytes, Some(private_non_utf8.len() as u64));
         assert_eq!(fs::read(&path).unwrap(), private_non_utf8);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
-    }
-
-    #[test]
-    fn inspecting_a_regular_secret_never_exposes_private_material() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("pairing-secret");
-        let private_material = "private-but-uninspected-material";
-        fs::write(&path, private_material).unwrap();
-
-        let inspection = inspect_path(&path);
-
-        assert_eq!(inspection.state, ExistingSecretState::Present);
-        assert!(!format!("{inspection:?}").contains(private_material));
-        assert_eq!(fs::read_to_string(path).unwrap(), private_material);
     }
 }

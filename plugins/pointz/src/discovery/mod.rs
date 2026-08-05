@@ -8,6 +8,8 @@ use model::DiscoveryResponse;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
+const AUTHENTICATION: &str = "pair-x25519-v1";
+
 pub struct DiscoveryService {
     pub(crate) socket: UdpSocket,
     security: Arc<CommandGate>,
@@ -24,13 +26,13 @@ impl DiscoveryService {
         request.trim() == ServerConfig::DISCOVER_MESSAGE
     }
 
-    async fn send_response(&self, addr: std::net::SocketAddr) {
+    async fn send_discovery(&self, addr: std::net::SocketAddr) {
         let auth = self.security.discovery_auth();
         let response = DiscoveryResponse {
             hostname: get_hostname(),
             server_id: auth.server_id,
-            authentication: "hmac-sha256-v1",
-            pairing_secret: auth.pairing_secret,
+            authentication: AUTHENTICATION,
+            pairing_open: auth.pairing_open,
         };
         let Ok(json) = serde_json::to_string(&response) else {
             return;
@@ -45,13 +47,16 @@ impl DiscoveryService {
             let Ok((size, addr)) = self.socket.recv_from(&mut buf).await else {
                 continue;
             };
+            let datagram = &buf[..size];
 
-            let request = String::from_utf8_lossy(&buf[..size]);
-            if !self.is_discovery_request(&request) {
+            if self.is_discovery_request(&String::from_utf8_lossy(datagram)) {
+                self.send_discovery(addr).await;
                 continue;
             }
 
-            self.send_response(addr).await;
+            if let Some(reply) = self.security.handle_pairing(datagram) {
+                let _ = self.socket.send_to(&reply, addr).await;
+            }
         }
     }
 }

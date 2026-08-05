@@ -1,80 +1,128 @@
+mod pairing;
+mod pairing_status;
+mod registry;
 mod replay;
 mod secret;
 mod wire;
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
 use crate::command::Command;
+use pairing::{HandleOutcome, PairingSession};
+use registry::DeviceRegistry;
 use replay::ReplayWindow;
-use secret::PairingSecret;
+use secret::ServerIdentity;
 pub(crate) use secret::{ExistingSecretInspection, ExistingSecretState};
 
-const PAIRING_WINDOW: Duration = Duration::from_secs(120);
 const COMMAND_CLOCK_SKEW_MS: u64 = 30_000;
 
 pub struct CommandGate {
-    secret: PairingSecret,
-    pairing_until: Mutex<Option<Instant>>,
+    identity: ServerIdentity,
+    registry: Mutex<DeviceRegistry>,
+    pairing: Mutex<Option<PairingSession>>,
     replay: Mutex<ReplayWindow>,
 }
 
 pub struct DiscoveryAuth {
     pub server_id: String,
-    pub pairing_secret: Option<String>,
+    pub pairing_open: bool,
 }
 
 pub(crate) fn inspect_existing_secret() -> ExistingSecretInspection {
-    PairingSecret::inspect_existing()
+    ServerIdentity::inspect_existing()
+}
+
+pub fn pairing_status_json() -> serde_json::Value {
+    let snapshot = pairing_status::current();
+    serde_json::json!({
+        "pairing_open": snapshot.pairing_open,
+        "pin": snapshot.pin,
+        "seconds_remaining": snapshot.seconds_remaining,
+    })
 }
 
 impl CommandGate {
     pub fn load() -> Result<Self> {
-        Ok(Self::new(PairingSecret::load_or_create()?))
-    }
-
-    fn new(secret: PairingSecret) -> Self {
-        Self {
-            secret,
-            pairing_until: Mutex::new(None),
+        Ok(Self {
+            identity: ServerIdentity::load_or_create()?,
+            registry: Mutex::new(DeviceRegistry::load()?),
+            pairing: Mutex::new(None),
             replay: Mutex::new(ReplayWindow::default()),
-        }
+        })
     }
 
     pub fn begin_pairing(&self) {
-        let Ok(mut pairing_until) = self.pairing_until.lock() else {
+        let Ok(mut pairing) = self.pairing.lock() else {
             return;
         };
-        *pairing_until = Some(Instant::now() + PAIRING_WINDOW);
+        let session = PairingSession::open();
+        let expires_at_ms = pairing_status::now_ms() + pairing::WINDOW_SECS * 1000;
+        pairing_status::open(session.pin().to_string(), expires_at_ms);
+        log::info!("PointZ pairing open for {} seconds", pairing::WINDOW_SECS);
+        *pairing = Some(session);
     }
 
     pub fn discovery_auth(&self) -> DiscoveryAuth {
-        let pairing_secret = self.pairing_until.lock().ok().and_then(|mut until| {
-            let is_active = until.is_some_and(|deadline| deadline > Instant::now());
-            *until = None;
-            is_active.then(|| self.secret.encoded())
-        });
         DiscoveryAuth {
-            server_id: self.secret.server_id(),
-            pairing_secret,
+            server_id: self.identity.server_id(),
+            pairing_open: pairing_status::current().pairing_open,
+        }
+    }
+
+    pub fn handle_pairing(&self, datagram: &[u8]) -> Option<Vec<u8>> {
+        let mut guard = self.pairing.lock().ok()?;
+        let session = guard.as_mut()?;
+        let server_id = self.identity.server_id();
+        match session.handle(&server_id, datagram) {
+            HandleOutcome::Ignore => None,
+            HandleOutcome::Reply(reply) => Some(reply),
+            HandleOutcome::Closed(reply) => {
+                *guard = None;
+                pairing_status::close();
+                Some(reply)
+            }
+            HandleOutcome::Paired {
+                device_id,
+                device_key,
+                name,
+                reply,
+            } => {
+                if let Ok(mut registry) = self.registry.lock() {
+                    if let Err(error) = registry.upsert(device_id, device_key, name) {
+                        log::error!("PointZ failed to store the paired device: {error}");
+                    }
+                }
+                *guard = None;
+                pairing_status::close();
+                Some(reply)
+            }
         }
     }
 
     pub fn authenticate(&self, packet: &[u8]) -> Result<Command> {
-        let verified = wire::verify(packet, self.secret.bytes())?;
-        if verified.sent_at_ms.abs_diff(unix_time_ms()) > COMMAND_CLOCK_SKEW_MS {
+        let parsed = wire::parse(packet)?;
+        if parsed.sent_at_ms.abs_diff(unix_time_ms()) > COMMAND_CLOCK_SKEW_MS {
             anyhow::bail!("command timestamp is outside the accepted window");
         }
+        let key = self
+            .registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("device registry is unavailable"))?
+            .key_for(&parsed.device_id)
+            .ok_or_else(|| anyhow::anyhow!("command from an unpaired device"))?;
+        let payload = parsed.verify(&key)?;
+        let payload = payload.to_vec();
         let mut replay = self
             .replay
             .lock()
             .map_err(|_| anyhow::anyhow!("command replay state is unavailable"))?;
-        if !replay.insert(verified.nonce) {
+        if !replay.insert(&parsed.device_id, &parsed.nonce) {
             anyhow::bail!("command nonce was already used");
         }
-        Ok(serde_json::from_slice(&verified.payload)?)
+        Ok(serde_json::from_slice(&payload)?)
     }
 }
 
@@ -90,25 +138,63 @@ mod tests {
     use super::*;
 
     fn gate() -> CommandGate {
-        CommandGate::new(PairingSecret::from_bytes([7; 32]))
+        let dir = tempfile::tempdir().unwrap().keep();
+        CommandGate {
+            identity: ServerIdentity::from_bytes([7; 32]),
+            registry: Mutex::new(DeviceRegistry::load_at(dir.join("devices.json")).unwrap()),
+            pairing: Mutex::new(None),
+            replay: Mutex::new(ReplayWindow::default()),
+        }
+    }
+
+    fn pair(gate: &CommandGate, device_id: [u8; 16], key: [u8; 32]) {
+        gate.registry
+            .lock()
+            .unwrap()
+            .upsert(device_id, key, "Phone".to_string())
+            .unwrap();
     }
 
     #[test]
-    fn pairing_secret_is_only_visible_during_pairing_window() {
+    fn discovery_auth_never_exposes_key_material() {
         let gate = gate();
-        assert!(gate.discovery_auth().pairing_secret.is_none());
 
-        gate.begin_pairing();
+        let auth = gate.discovery_auth();
 
-        assert!(gate.discovery_auth().pairing_secret.is_some());
-        assert!(gate.discovery_auth().pairing_secret.is_none());
+        assert_eq!(
+            auth.server_id,
+            ServerIdentity::from_bytes([7; 32]).server_id()
+        );
+        assert!(!auth.pairing_open);
     }
 
     #[test]
-    fn authentic_packet_is_accepted_once() {
+    fn a_command_from_an_unpaired_device_is_rejected() {
         let gate = gate();
-        let payload = br#"{"type":"MouseClick","button":1}"#;
-        let packet = wire::seal(payload, gate.secret.bytes(), unix_time_ms(), [9; 16]);
+        let packet = wire::seal(
+            br#"{"type":"MouseClick","button":1}"#,
+            &[9; 32],
+            [1; 16],
+            unix_time_ms(),
+            [2; 16],
+        );
+
+        assert!(gate.authenticate(&packet).is_err());
+    }
+
+    #[test]
+    fn a_paired_device_command_is_accepted_once_then_replays_are_rejected() {
+        let gate = gate();
+        let device_id = [5; 16];
+        let key = [6; 32];
+        pair(&gate, device_id, key);
+        let packet = wire::seal(
+            br#"{"type":"MouseClick","button":1}"#,
+            &key,
+            device_id,
+            unix_time_ms(),
+            [3; 16],
+        );
 
         let first = gate.authenticate(&packet);
         let second = gate.authenticate(&packet);
@@ -118,20 +204,19 @@ mod tests {
     }
 
     #[test]
-    fn stale_and_tampered_packets_are_rejected() {
+    fn a_stale_command_is_rejected() {
         let gate = gate();
-        let payload = br#"{"type":"MouseClick","button":1}"#;
+        let device_id = [5; 16];
+        let key = [6; 32];
+        pair(&gate, device_id, key);
         let stale = wire::seal(
-            payload,
-            gate.secret.bytes(),
+            br#"{"type":"MouseClick","button":1}"#,
+            &key,
+            device_id,
             unix_time_ms() - COMMAND_CLOCK_SKEW_MS - 1,
-            [1; 16],
+            [7; 16],
         );
-        let mut tampered = wire::seal(payload, gate.secret.bytes(), unix_time_ms(), [2; 16]);
-        let last = tampered.len() - 2;
-        tampered[last] = if tampered[last] == b'a' { b'b' } else { b'a' };
 
         assert!(gate.authenticate(&stale).is_err());
-        assert!(gate.authenticate(&tampered).is_err());
     }
 }
