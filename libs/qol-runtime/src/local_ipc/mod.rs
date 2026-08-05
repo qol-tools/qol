@@ -7,6 +7,8 @@ pub use platform::{LocalListener, LocalStream};
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
+pub const MAX_SOCKET_PATH_BYTES: usize = platform::MAX_SOCKET_PATH_BYTES;
+
 pub fn bind_listener(path: &Path) -> io::Result<LocalListener> {
     platform::bind_listener(path)
 }

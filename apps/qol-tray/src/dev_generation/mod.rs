@@ -119,6 +119,8 @@ pub fn is_rolling_restart() -> bool {
 static DAEMON_AUTOSTART_RELEASED: AtomicBool = AtomicBool::new(false);
 static PROMOTED_TO_STABLE: AtomicBool = AtomicBool::new(false);
 
+const MIN_DISTINGUISHING_GENERATION_ID_CHARS: usize = 8;
+
 #[cfg(feature = "dev")]
 const PREDECESSOR_DAEMON_EXIT_GRACE: Duration = Duration::from_secs(2);
 #[cfg(feature = "dev")]
@@ -279,6 +281,24 @@ fn namespaced_socket(path: &Path, id: &str) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("socket");
     let stem = file_name.strip_suffix(".sock").unwrap_or(file_name);
+    let candidate = parent.join(format!("{stem}.{id}.sock"));
+    let overflow = candidate
+        .as_os_str()
+        .len()
+        .saturating_sub(qol_runtime::local_ipc::MAX_SOCKET_PATH_BYTES);
+    if overflow == 0 {
+        return candidate;
+    }
+    let kept = id.chars().count().saturating_sub(overflow);
+    if kept < MIN_DISTINGUISHING_GENERATION_ID_CHARS {
+        log::error!(
+            "Socket directory leaves only {} characters for the dev generation id at {}; \
+             shadow generations may collide on the same socket",
+            kept,
+            parent.display()
+        );
+    }
+    let id: String = id.chars().take(kept).collect();
     parent.join(format!("{stem}.{id}.sock"))
 }
 
@@ -318,6 +338,54 @@ mod tests {
             ctx.daemon_socket_path("/tmp/qol-launcher.sock"),
             sockets.join("qol-launcher.blue-1.sock")
         );
+    }
+
+    const STAGED_RUNTIME_DIGEST: &str =
+        "dba93b5e5332db99863e2afe0dff8cf71976ae918091ccf9a7592429cea97807";
+
+    fn bounded_socket_path_limit() -> Option<usize> {
+        let limit = qol_runtime::local_ipc::MAX_SOCKET_PATH_BYTES;
+        (limit < usize::MAX).then_some(limit)
+    }
+
+    #[test]
+    fn content_digest_generation_id_stays_within_the_platform_socket_limit() {
+        let Some(limit) = bounded_socket_path_limit() else {
+            return;
+        };
+        let sockets = Path::new("/home/a-developer/.local/share/qol-tray/runtime/sockets");
+
+        let socket = namespaced_socket(&sockets.join(STATE_SOCKET_FILE), STAGED_RUNTIME_DIGEST);
+
+        assert!(
+            socket.as_os_str().len() <= limit,
+            "staged runtime digests are 64 characters, so an unbounded namespace \
+             produces an unbindable address: {} bytes for {}",
+            socket.as_os_str().len(),
+            socket.display()
+        );
+        assert!(socket
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("qol-tray-state.dba93b5e")));
+    }
+
+    #[test]
+    fn namespaced_socket_of_a_near_limit_directory_still_binds() {
+        let Some(limit) = bounded_socket_path_limit() else {
+            return;
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let headroom = STATE_SOCKET_FILE.len() + STAGED_RUNTIME_DIGEST.len();
+        let padding = limit.saturating_sub(tmp.path().as_os_str().len() + headroom);
+        let sockets = tmp.path().join("d".repeat(padding));
+        std::fs::create_dir_all(&sockets).unwrap();
+
+        let socket = namespaced_socket(&sockets.join(STATE_SOCKET_FILE), STAGED_RUNTIME_DIGEST);
+
+        let listener = qol_runtime::local_ipc::bind_listener(&socket)
+            .unwrap_or_else(|error| panic!("{} did not bind: {error}", socket.display()));
+        drop(listener);
     }
 
     #[test]

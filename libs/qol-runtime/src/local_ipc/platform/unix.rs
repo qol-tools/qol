@@ -7,6 +7,10 @@ use crate::broker::{is_same_uid, peer_cred};
 pub type LocalListener = std::os::unix::net::UnixListener;
 pub type LocalStream = std::os::unix::net::UnixStream;
 
+pub(super) const MAX_SOCKET_PATH_BYTES: usize = std::mem::size_of::<libc::sockaddr_un>()
+    - std::mem::offset_of!(libc::sockaddr_un, sun_path)
+    - 1;
+
 pub(super) fn bind_listener(path: &Path) -> io::Result<LocalListener> {
     let listener = LocalListener::bind(path)?;
     let permissions = std::fs::Permissions::from_mode(0o600);

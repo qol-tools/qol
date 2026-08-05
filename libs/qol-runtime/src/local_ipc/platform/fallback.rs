@@ -7,6 +7,8 @@ pub struct LocalListener;
 #[derive(Debug)]
 pub struct LocalStream;
 
+pub(super) const MAX_SOCKET_PATH_BYTES: usize = usize::MAX;
+
 fn unsupported() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
