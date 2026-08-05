@@ -93,6 +93,7 @@ pub(crate) fn open_cached(
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view.start_active_monitor_poll(cx);
+        view.schedule_reveal_after_present(window, cx);
         qol_runtime::probe!("SHOT_SELECT_WINDOW", "title={title} state=reuse");
         Some(title)
     });

@@ -20,6 +20,10 @@ pub use selector::{select_region, select_region_in_app};
 
 pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
+pub(crate) fn reassert_parked(_title: &str, _cx: &mut gpui::App) {}
+
+pub(crate) fn mark_reveal_requested(_title: &str) {}
+
 pub fn pre_create_pins(cx: &mut gpui::App) {
     crate::ui::pinned::pre_create(cx);
 }

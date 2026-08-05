@@ -269,6 +269,8 @@ pub fn set_ghost_debug(opacity: Option<f32>, color_hex: Option<&str>) {
     let _ = (opacity, color_hex);
 }
 
+pub fn set_unmap_hide(_enabled: bool) {}
+
 #[cfg(debug_assertions)]
 fn parse_hex_rgb(hex: &str) -> Option<u32> {
     let hex = hex.trim().trim_start_matches('#');

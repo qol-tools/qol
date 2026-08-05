@@ -78,6 +78,7 @@ pub fn run() {
     Application::new().run(move |cx: &mut App| {
         qol_runtime::probe!("SHOT_DAEMON_APP", "state=running");
         qol_gpui::platform::set_accessory_policy();
+        qol_gpui::popup_window::set_unmap_hide(true);
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
 
         let tracker = MonitorTracker::start(cx);
