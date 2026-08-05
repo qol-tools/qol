@@ -52,6 +52,11 @@ pub(crate) fn run() {
                 eprintln!("[keyremap] kill received, shutting down");
                 break;
             }
+            daemon::Command::Settings => {
+                if let Err(error) = crate::platform::open_settings() {
+                    eprintln!("[keyremap] failed to open settings page: {error}");
+                }
+            }
         }
     }
 

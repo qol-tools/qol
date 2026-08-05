@@ -1,12 +1,14 @@
 use std::process::ExitCode;
 
 use anyhow::Result;
-use qol_headless::{Command, CommandContext, DoctorCheck, DoctorCheckResult, HeadlessApp};
+use qol_headless::{
+    Command, CommandContext, CommandResult, DoctorCheck, DoctorCheckResult, HeadlessApp,
+};
 use serde_json::json;
 
 use crate::platform::{ConfigInspection, Platform, PlatformAdapter, TrustStatus};
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const BINARY_NAME: &str = "keyremap";
 
 pub(crate) fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
@@ -61,7 +63,18 @@ where
                     kill.kill()
                 }),
         )
+        .command(settings_command())
         .doctor_checks(doctor_checks(adapter))
+}
+
+fn settings_command() -> Command {
+    Command::new("settings")
+        .alias("--settings")
+        .about("Open the Key Remap settings page in qol-tray.")
+        .usage(format!("{BINARY_NAME} settings"))
+        .output("No stdout on success; opens the settings URL through the platform launcher.")
+        .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
+        .run_result(move |_| Ok(result_for(crate::platform::open_settings())))
 }
 
 fn no_args(context: &CommandContext) -> Result<()> {
@@ -69,6 +82,13 @@ fn no_args(context: &CommandContext) -> Result<()> {
         anyhow::bail!("keyremap: unexpected argument {argument:?}");
     }
     Ok(())
+}
+
+fn result_for(result: Result<(), String>) -> CommandResult {
+    match result {
+        Ok(()) => CommandResult::success(""),
+        Err(error) => CommandResult::new("", format!("{error}\n"), 1),
+    }
 }
 
 fn doctor_checks<A>(adapter: A) -> Vec<DoctorCheck>
@@ -302,6 +322,10 @@ mod tests {
         assert_eq!(first.stdout, final_token.stdout);
         assert!(first.stdout.contains("reload config atomically"));
         assert!(first.stdout.contains("Does not support --json."));
+
+        let settings_help = app.execute(["help".to_string(), "settings".to_string()]);
+        assert_eq!(settings_help.exit_code, EXIT_SUCCESS);
+        assert!(settings_help.stdout.contains("settings page in qol-tray"));
     }
 
     #[test]
