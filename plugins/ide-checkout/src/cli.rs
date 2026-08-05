@@ -42,7 +42,24 @@ where
                 .exit_behavior("Exits zero after reporting whether the daemon answered.")
                 .run_result(move |_| Ok(CommandResult::new("", "", status()))),
         )
+        .command(settings_command())
         .doctor_checks(crate::doctor::checks())
+}
+
+fn settings_command() -> Command {
+    Command::new("settings")
+        .about("Open the Task Runner settings page in qol-tray.")
+        .usage(format!("{BINARY_NAME} settings"))
+        .output("No stdout on success; opens the settings URL through the platform launcher.")
+        .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
+        .run_result(move |_| Ok(result_for(crate::daemon::open_settings())))
+}
+
+fn result_for(result: Result<(), String>) -> CommandResult {
+    match result {
+        Ok(()) => CommandResult::success(""),
+        Err(error) => CommandResult::new("", format!("{error}\n"), 1),
+    }
 }
 
 fn run_status() -> u8 {
@@ -149,7 +166,7 @@ mod tests {
 
     #[test]
     fn command_help_is_equivalent_in_both_positions() {
-        for command in ["daemon", "status", "doctor"] {
+        for command in ["daemon", "status", "settings", "doctor"] {
             let first = app().execute(["help".to_string(), command.to_string()]);
             let final_token = app().execute([command.to_string(), "help".to_string()]);
 

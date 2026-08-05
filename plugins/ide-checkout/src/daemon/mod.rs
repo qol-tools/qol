@@ -11,6 +11,10 @@ pub(crate) fn is_executable(path: &std::path::Path) -> bool {
     platform::is_executable(path)
 }
 
+pub(crate) fn open_settings() -> Result<(), String> {
+    platform::open_settings()
+}
+
 pub fn run() -> u8 {
     platform::spawn_host_death_watchdog();
     let config = config::Config::load();

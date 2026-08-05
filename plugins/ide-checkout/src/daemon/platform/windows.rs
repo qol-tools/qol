@@ -10,3 +10,7 @@ pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListe
 }
 
 pub(in crate::daemon) fn spawn_host_death_watchdog() {}
+
+pub(in crate::daemon) fn open_settings() -> Result<(), String> {
+    Err("opening Task Runner settings is not supported on this platform".to_string())
+}

@@ -19,3 +19,17 @@ pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListe
 pub(in crate::daemon) fn spawn_host_death_watchdog() {
     qol_runtime::spawn_host_death_watchdog();
 }
+
+pub(in crate::daemon) fn open_settings() -> Result<(), String> {
+    let url = qol_conventions::settings_url(env!("QOL_PLUGIN_ID"));
+    let launcher = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(launcher)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open settings page: {error}"))
+}
