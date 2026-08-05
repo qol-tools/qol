@@ -3,11 +3,14 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
+use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities, SessionFocus,
     SessionInventory, TerminalSessionService, TextInput,
 };
 use serde::Serialize;
+
+mod mcp;
 
 pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let subcommand = args
@@ -20,6 +23,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
         "send" => send(rest),
         "read" => read_screen(rest),
         "focus" => focus(rest),
+        "mcp" => mcp::run(),
         "help" | "-h" | "--help" => {
             print!("{}", help_text());
             Ok(())
@@ -32,7 +36,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions focus <session>\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  focus raises the session's window.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n"
+    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text, session_focus).\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
 }
 
 fn service() -> Result<TerminalSessionService> {
@@ -41,23 +45,22 @@ fn service() -> Result<TerminalSessionService> {
 
 fn list(output_format: OutputFormat) -> Result<()> {
     let facts = service()?.discover().context("session discovery failed")?;
+    let interpreter = CliSessionInterpreter::system();
     let mut rows = facts
         .iter()
         .filter_map(|session| {
             let binding = session.binding().ok()?;
+            let descriptor = interpreter.describe(session);
             Some(SessionRow {
                 session: binding.token(),
                 root_pid: session.root_pid,
                 cwd: session.cwd.clone(),
                 title: session.title.clone(),
                 at_prompt: session.at_prompt,
-                tool: session.reported_cmd.clone().or_else(|| {
-                    session
-                        .foreground_basenames
-                        .first()
-                        .cloned()
-                        .or_else(|| session.foreground_pids.first().map(|pid| pid.to_string()))
-                }),
+                tool: Some(descriptor.tool.id.to_string()),
+                display_name: descriptor.display_name,
+                activity: descriptor.has_activity,
+                reported_cmd: session.reported_cmd.clone(),
                 capabilities: capability_names(&session.capabilities),
             })
         })
@@ -71,13 +74,18 @@ fn list(output_format: OutputFormat) -> Result<()> {
         OutputFormat::PlainText => {
             for row in rows {
                 let caps = row.capabilities.join(",");
+                let activity = row
+                    .activity
+                    .map(|active| if active { "active" } else { "idle" })
+                    .unwrap_or("-");
                 println!(
-                    "{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     row.session,
                     row.tool.as_deref().unwrap_or("-"),
                     row.title,
                     row.cwd,
                     if caps.is_empty() { "-" } else { &caps },
+                    activity,
                 );
             }
         }
@@ -176,6 +184,12 @@ struct SessionRow {
     title: String,
     at_prompt: bool,
     tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reported_cmd: Option<String>,
     capabilities: Vec<String>,
 }
 

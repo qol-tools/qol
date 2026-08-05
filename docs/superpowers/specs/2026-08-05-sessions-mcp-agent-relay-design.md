@@ -168,7 +168,45 @@ wrapper (`qol sessions mcp`) + pi extension tools, contention/queueing,
 send-guardrails (TEXT_INPUT-capability filter already implicit), and
 ownership/pattern skill updates.
 
+## Online research: battle-tested patterns (2026-08-05, 5 parallel research agents)
+
+Sources: MCP spec (2025-03-26/06-18/11-25), sst/opencode source, Claude Code docs, OpenAI Codex docs, kitty remote-control docs + source, tmux man page, gotty, xterm.js, tmate, MCP reference servers, Playwright MCP, pexpect.
+
+### Target selection (Q1)
+- No researched tool filters "agent CLIs" from plain shells. kitty targets every window (rich match: id, title, pid, cwd, cmdline), tmux targets every pane. tmuxp organizes by project intent, not process kind. Filtering is a product opinion, not a convention.
+- Agent tools never attach to existing terminal sessions: opencode/Claude Code/Codex spawn a fresh subprocess per command with stdin ignored. Injecting into a live session is an uncontested niche.
+- In agent vocabulary "session" means a conversation transcript, never a terminal window. Borrow naming discipline (stable ids + labels), not resume/fork semantics.
+- Decision: show everything with labels (interpreter classification), matching kitty/tmux uniformity.
+
+### Turn-taking (Q2)
+- MCP tools/call is blocking-only; no streaming tool results in any spec revision; clients SHOULD implement timeouts. A wait tool is legal and idiomatic.
+- opencode shell tool blocks until exit-or-timeout (model-chosen timeout per call, default 120s), kills on expiry, returns output in one call. Claude Code Bash blocks (2min default, 10min cap), demotes to background task on timeout (does not kill), and ships a Monitor tool (watch background output and react). tmux wait-for is a binary barrier, not output-aware; idle detection is capture-pane polling. pexpect expect(pattern, timeout) is the classic blocking primitive.
+- Decision: keep send fire-and-forget; add a blocking `session_wait_output(session, timeout)` tool that polls screen snapshots until settled or timeout, returning partial screen + settled flag.
+
+### Contention (Q3)
+- Nobody locks or refuses concurrent writers. tmux, kitty, gotty serialize via single-threaded event loop + atomicity of individual PTY writes; interleaving with human typing is accepted behavior.
+- The only queueing shipped is FIFO + coalescing on the output/render side (xterm WriteBuffer, gotty writeMutex, opencode terminalWriter with flush acknowledgement). MCP/Anthropic guidance: side-effect tools should run sequentially (client or server owns ordering).
+- Decision: per-session FIFO queue in the MCP server with flush-acknowledged writes and an exposed busy state; never refuse-when-busy.
+
+### Guardrails (Q4)
+- kitty: remote control defaults OFF; allow_remote_control = no/yes/socket/socket-only/password; remote_control_password scopes a password to an action allowlist; unknown password triggers an interactive allow/disallow prompt; per-window opt-in; custom is_cmd_allowed hook. Same-user alone is not considered a guardrail by kitty.
+- MCP spec: hosts must obtain explicit user consent before invoking any tool; stdio preferred for local servers (limits access to just the client); HTTP requires auth. tmux: filesystem perms + server-access ACL with a read-only tier; tmate authenticates possession of a secret and splits read/write.
+- Claude Code: ask-by-default with fail-closed unknown commands; per-tool MCP permission scopes; servers can self-declare always-approve via requiresUserInteraction. opencode: allow/ask/deny per tool plus a repetition guard (doom loop).
+- Decision: same-user restricted socket as baseline; send_text should be client-side permission-gated (requiresUserInteraction-style) and offer optional kitty rc-password scoping; add a repetition guard later.
+
+### Architecture home (Q5)
+- MCP spec: clients SHOULD support stdio whenever possible; HTTP is for multi-client/remote. Every reference server (filesystem, sequential thinking, Playwright) is a stdio command; Playwright now steers coding agents to CLI + skills over MCP.
+- Claude Code plugins host MCP servers as stdio command entries; Codex ships `codex mcp-server` as a per-invocation stdio subcommand (direct precedent); opencode runs a local HTTP server for its clients but MCP servers are still stdio children. kitty: resident server owns state, per-invocation `kitten @` clients.
+- Decision: keep `qol sessions mcp` as a thin stdio subcommand of the qol CLI; add `--transport http` only if a remote/multi-client consumer appears. Do not move into the tray.
+
 ## Iteration log
 
 - 2026-08-05: research pass completed (above). PoC `qol sessions` in progress.
 - 2026-08-05: PoC landed (list/send/read/focus, JSON list, unit tests, clippy clean); guest-VM verification passed (transcript + probes above).
+- 2026-08-05: MCP server landed (`qol sessions mcp`, stdio, newline-delimited JSON-RPC; hand-rolled to keep the CLI dependency-light, 13 unit tests covering handshake, tools, errors). `sessions list` now enriches rows with the shared interpreter's tool/display/activity. pi tools shipped in the qol-skills marketplace (`plugins/qol-sessions`, tools sessions_list / session_read_screen / session_send_text / session_focus). Guest-VM verification of the MCP path passed: initialize -> tools/list -> sessions_list -> session_send_text "print(6*7)" submit -> session_read_screen returned the screen with 42 (probe log: discover, submit text, read screen all success).
+
+## MCP protocol notes
+
+- Transport: stdio, one JSON-RPC 2.0 message per line; notifications get no response; errors -32700/-32601/-32602; tool failures are isError results, not protocol errors.
+- Capabilities: tools only (listChanged false); resources/prompts answered with -32601.
+- The same backend constraint applies as in the CLI PoC: the `kitten @` client needs KITTY_LISTEN_ON in env (host works via controlling-tty fallback because the caller runs inside kitty).
