@@ -449,57 +449,16 @@ fn wait_result(settled: bool, screen: String, polls: u64, started: Instant) -> S
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "sessions_list",
-            "description": "List live terminal sessions with their tool, activity hint, and capabilities. Session tokens are stable identifiers accepted by the other session tools.",
-            "inputSchema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "session_read_screen",
-            "description": "Read the current screen text of a live terminal session.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "session": { "type": "string", "description": "Session token from sessions_list" } },
-                "required": ["session"]
-            }
-        }),
-        json!({
-            "name": "session_send_text",
-            "description": "Deliver text into a live terminal session's CLI through a per-session FIFO queue. With submit=true an Enter keypress is appended so the CLI executes the text. Delivery is fire-and-forget typing; read the screen or call session_wait_output afterwards to see the result.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Session token from sessions_list" },
-                    "text": { "type": "string", "description": "Text to deliver" },
-                    "submit": { "type": "boolean", "description": "Append Enter after the text (default false)" }
-                },
-                "required": ["session", "text"]
-            }
-        }),
-        json!({
-            "name": "session_wait_output",
-            "description": "Block until the session's screen settles after activity, or until it contains an expected substring. With expect given, returns when the screen contains it. Without expect, returns when the screen changed from the first read and then stayed stable across two reads. Returns settled, the current screen, poll count, and elapsed milliseconds; settled=false means the timeout elapsed.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Session token from sessions_list" },
-                    "timeout_ms": { "type": "integer", "description": "Maximum wait in milliseconds (default 30000, max 600000)" },
-                    "expect": { "type": "string", "description": "Optional substring to wait for in the screen" }
-                },
-                "required": ["session"]
-            }
-        }),
-        json!({
-            "name": "session_focus",
-            "description": "Raise the window of a live terminal session.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "session": { "type": "string", "description": "Session token from sessions_list" } },
-                "required": ["session"]
-            }
-        }),
-    ]
+    super::contract::tool_specs()
+        .iter()
+        .map(|spec| {
+            json!({
+                "name": spec.name,
+                "description": spec.description,
+                "inputSchema": spec.input_schema,
+            })
+        })
+        .collect()
 }
 
 fn capability_names(capabilities: &SessionCapabilities) -> Vec<&'static str> {
@@ -662,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_the_four_tools() {
+    fn tools_list_exposes_the_five_tools() {
         let (server, _) = server();
         let response = server
             .handle_line(&serde_json::to_string(&request(2, "tools/list", json!({}))).unwrap())

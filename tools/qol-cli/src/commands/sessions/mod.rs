@@ -10,6 +10,8 @@ use qol_terminal_sessions::{
 };
 use serde::Serialize;
 
+mod contract;
+mod export;
 mod mcp;
 
 pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
@@ -25,6 +27,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
         "focus" => focus(rest),
         "wait" => wait(rest),
         "mcp" => mcp::run(),
+        "export" => export::run(rest),
         "help" | "-h" | "--help" => {
             print!("{}", help_text());
             Ok(())
@@ -37,7 +40,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or contains the\n  expected text, then prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus). Delivery is a bounded per-session\n  FIFO queue; send reports its queue position, wait_output blocks until\n  the screen settles or an expected substring appears.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
+    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or contains the\n  expected text, then prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus). Delivery is a bounded per-session\n  FIFO queue; send reports its queue position, wait_output blocks until\n  the screen settles or an expected substring appears.\n  export renders a per-client agent surface from the shared tool contract\n  in sessions/contract.rs; qol sessions export pi prints the pi extension\n  source, qol sessions export with no client lists the available clients.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
 }
 
 fn service() -> Result<TerminalSessionService> {
