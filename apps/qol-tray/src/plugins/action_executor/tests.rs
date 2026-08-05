@@ -1,8 +1,4 @@
 use super::resolution::resolve_action;
-use super::tracking::{
-    action_processes_snapshot, clear_tracking, kill_plugin_processes, running_actions_snapshot,
-    track_action_process, untrack_action_process,
-};
 use super::*;
 use crate::plugins::manifest::{
     ActionDeclaration, ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, MenuItem,
@@ -11,17 +7,8 @@ use crate::plugins::manifest::{
 use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-
-fn with_process_tracking_lock<T>(run: impl FnOnce() -> T) -> T {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    clear_tracking();
-    let result = run();
-    clear_tracking();
-    result
-}
 
 fn make_plugin(
     dir: &TempDir,
@@ -434,82 +421,95 @@ fn try_execute_action_returns_plugin_not_found() {
 
 #[test]
 fn process_tracking_adds_and_removes_entries() {
-    with_process_tracking_lock(|| {
-        track_action_process("plugin-a", "open", 101);
-        track_action_process("plugin-a", "close", 102);
-        track_action_process("plugin-b", "open", 201);
+    let tracker = ProcessTracker::default();
+    tracker.track_action_process("plugin-a", "open", 101);
+    tracker.track_action_process("plugin-a", "close", 102);
+    tracker.track_action_process("plugin-b", "open", 201);
 
-        let tracked = action_processes_snapshot();
-        assert_eq!(tracked.get("plugin-a"), Some(&vec![101, 102]));
-        assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
-        let tracked_running = running_actions_snapshot();
-        assert_eq!(tracked_running.get("plugin-a::open"), Some(&101));
-        assert_eq!(tracked_running.get("plugin-a::close"), Some(&102));
+    let tracked = tracker.action_processes_snapshot();
+    assert_eq!(tracked.get("plugin-a"), Some(&vec![101, 102]));
+    assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
+    let tracked_running = tracker.running_actions_snapshot();
+    assert_eq!(tracked_running.get("plugin-a::open"), Some(&101));
+    assert_eq!(tracked_running.get("plugin-a::close"), Some(&102));
 
-        untrack_action_process("plugin-a", "open", 101);
-        let tracked = action_processes_snapshot();
-        assert_eq!(tracked.get("plugin-a"), Some(&vec![102]));
-        let tracked_running = running_actions_snapshot();
-        assert!(!tracked_running.contains_key("plugin-a::open"));
+    tracker.untrack_action_process("plugin-a", "open", 101);
+    let tracked = tracker.action_processes_snapshot();
+    assert_eq!(tracked.get("plugin-a"), Some(&vec![102]));
+    let tracked_running = tracker.running_actions_snapshot();
+    assert!(!tracked_running.contains_key("plugin-a::open"));
 
-        untrack_action_process("plugin-a", "close", 102);
-        let tracked = action_processes_snapshot();
-        assert!(!tracked.contains_key("plugin-a"));
-        assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
-    });
+    tracker.untrack_action_process("plugin-a", "close", 102);
+    let tracked = tracker.action_processes_snapshot();
+    assert!(!tracked.contains_key("plugin-a"));
+    assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
+}
+
+#[test]
+fn a_second_manager_shutdown_leaves_this_managers_tracking_intact() {
+    let root = TempDir::new().unwrap();
+    let _guard = crate::paths::push_test_path_root(root.path());
+    let tracker = PluginManager::new().process_tracker();
+    tracker.track_action_process("plugin-a", "open", 101);
+
+    PluginManager::new().shutdown();
+
+    let tracked = tracker.action_processes_snapshot();
+    assert_eq!(
+        tracked.get("plugin-a"),
+        Some(&vec![101]),
+        "one manager's shutdown must not drain another manager's action processes",
+    );
 }
 
 #[test]
 fn kill_all_plugin_processes_clears_tracking_map() {
-    with_process_tracking_lock(|| {
-        track_action_process("plugin-a", "open", 999_001);
-        track_action_process("plugin-b", "open", 999_002);
-        kill_all_plugin_processes();
+    let tracker = ProcessTracker::default();
+    tracker.track_action_process("plugin-a", "open", 999_001);
+    tracker.track_action_process("plugin-b", "open", 999_002);
+    tracker.kill_all_plugin_processes();
 
-        let tracked = action_processes_snapshot();
-        assert!(tracked.is_empty());
-        let tracked_running = running_actions_snapshot();
-        assert!(tracked_running.is_empty());
-    });
+    let tracked = tracker.action_processes_snapshot();
+    assert!(tracked.is_empty());
+    let tracked_running = tracker.running_actions_snapshot();
+    assert!(tracked_running.is_empty());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn plugin_cleanup_does_not_reap_an_untracked_child() {
-    with_process_tracking_lock(|| {
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !qol_process::is_pid_zombie(child.id()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(qol_process::is_pid_zombie(child.id()));
+    let tracker = ProcessTracker::default();
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !qol_process::is_pid_zombie(child.id()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(qol_process::is_pid_zombie(child.id()));
 
-        kill_all_plugin_processes();
+    tracker.kill_all_plugin_processes();
 
-        assert!(child.wait().unwrap().success());
-    });
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]
 fn kill_plugin_processes_preserves_other_plugins_tracking() {
-    with_process_tracking_lock(|| {
-        track_action_process("plugin-a", "open", 999_001);
-        track_action_process("plugin-a", "close", 999_002);
-        track_action_process("plugin-b", "open", 999_003);
+    let tracker = ProcessTracker::default();
+    tracker.track_action_process("plugin-a", "open", 999_001);
+    tracker.track_action_process("plugin-a", "close", 999_002);
+    tracker.track_action_process("plugin-b", "open", 999_003);
 
-        kill_plugin_processes("plugin-a");
+    tracker.kill_plugin_processes("plugin-a");
 
-        let tracked = action_processes_snapshot();
-        assert!(!tracked.contains_key("plugin-a"));
-        assert_eq!(tracked.get("plugin-b"), Some(&vec![999_003]));
-        let tracked_running = running_actions_snapshot();
-        assert!(!tracked_running.contains_key("plugin-a::open"));
-        assert!(!tracked_running.contains_key("plugin-a::close"));
-        assert_eq!(tracked_running.get("plugin-b::open"), Some(&999_003));
-    });
+    let tracked = tracker.action_processes_snapshot();
+    assert!(!tracked.contains_key("plugin-a"));
+    assert_eq!(tracked.get("plugin-b"), Some(&vec![999_003]));
+    let tracked_running = tracker.running_actions_snapshot();
+    assert!(!tracked_running.contains_key("plugin-a::open"));
+    assert!(!tracked_running.contains_key("plugin-a::close"));
+    assert_eq!(tracked_running.get("plugin-b::open"), Some(&999_003));
 }
 
 #[test]

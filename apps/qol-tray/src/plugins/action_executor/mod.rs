@@ -14,17 +14,11 @@ mod tracking;
 #[cfg(test)]
 mod tests;
 
-pub use tracking::kill_all_plugin_processes;
-pub(crate) use tracking::kill_plugin_processes;
+pub(crate) use tracking::ProcessTracker;
 
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 const QUERY_DAEMON_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
-
-#[cfg(feature = "dev")]
-pub fn action_processes_snapshot() -> std::collections::HashMap<String, Vec<u32>> {
-    tracking::action_processes_snapshot()
-}
 
 #[derive(Debug)]
 pub enum ActionExecutionError {
@@ -180,7 +174,17 @@ pub fn try_execute_action_with_input_result(
         }
     }
     ensure_daemon_ready_for_action(plugin_manager, &resolved)?;
-    execution::execute_resolved_action(&resolved, &input)
+    let tracker = process_tracker(plugin_manager)?;
+    execution::execute_resolved_action(&tracker, &resolved, &input)
+}
+
+fn process_tracker(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+) -> Result<Arc<ProcessTracker>, ActionExecutionError> {
+    plugin_manager
+        .lock()
+        .map(|manager| manager.process_tracker())
+        .map_err(|_| ActionExecutionError::PluginManagerPoisoned)
 }
 
 pub fn dispatch_query(

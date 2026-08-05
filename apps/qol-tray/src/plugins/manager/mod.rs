@@ -4,6 +4,7 @@ mod loading;
 mod runtime;
 
 use super::{Plugin, PluginId, PluginIdentityIndex};
+use crate::plugins::action_executor::ProcessTracker;
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +18,7 @@ pub struct PluginManager {
     last_profile_generation: u64,
     last_reconciled_plugin_generations: HashMap<String, u64>,
     lifecycle_cancellation: Arc<qol_process::CancellationToken>,
+    process_tracker: Arc<ProcessTracker>,
     #[cfg(test)]
     profile_reconciliation_count: u64,
 }
@@ -30,9 +32,14 @@ impl PluginManager {
             last_profile_generation: crate::plugins::config::current_profile_config_generation(),
             last_reconciled_plugin_generations: HashMap::new(),
             lifecycle_cancellation: Arc::new(qol_process::CancellationToken::new()),
+            process_tracker: Arc::new(ProcessTracker::default()),
             #[cfg(test)]
             profile_reconciliation_count: 0,
         }
+    }
+
+    pub(crate) fn process_tracker(&self) -> Arc<ProcessTracker> {
+        Arc::clone(&self.process_tracker)
     }
 
     pub fn load_plugins(&mut self) -> Result<()> {

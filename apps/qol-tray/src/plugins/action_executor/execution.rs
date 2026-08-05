@@ -1,20 +1,19 @@
 use super::resolution::ResolvedAction;
-use super::tracking::{
-    clear_runtime_spawn_reservation, reserve_runtime_spawn, track_action_process,
-    track_unreserved_action_process, untrack_action_process,
-};
+use super::tracking::ProcessTracker;
 use super::ActionExecutionError;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use std::path::Path;
+use std::sync::Arc;
 #[cfg(debug_assertions)]
 use std::time::Instant;
 
 pub(super) fn execute_resolved_action(
+    tracker: &Arc<ProcessTracker>,
     resolved: &ResolvedAction,
     input: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, ActionExecutionError> {
     if let Some(socket_path) = &resolved.daemon_socket {
-        return execute_via_daemon(resolved, socket_path, input);
+        return execute_via_daemon(tracker, resolved, socket_path, input);
     }
 
     if has_action_input(input) {
@@ -23,10 +22,11 @@ pub(super) fn execute_resolved_action(
         ));
     }
 
-    execute_via_runtime(resolved).map(|()| None)
+    execute_via_runtime(tracker, resolved).map(|()| None)
 }
 
 fn execute_via_daemon(
+    tracker: &Arc<ProcessTracker>,
     resolved: &ResolvedAction,
     socket_path: &Path,
     input: &serde_json::Value,
@@ -64,7 +64,7 @@ fn execute_via_daemon(
                 "action input requires an available plugin daemon".into(),
             ));
         }
-        return execute_via_runtime(resolved).map(|()| None);
+        return execute_via_runtime(tracker, resolved).map(|()| None);
     }
     Err(ActionExecutionError::SpawnFailed(format!(
         "{} {}::{}",
@@ -143,10 +143,13 @@ fn daemon_dispatch_error(
     Err(ActionExecutionError::ActionRejected(message.to_string()))
 }
 
-fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
+fn execute_via_runtime(
+    tracker: &Arc<ProcessTracker>,
+    resolved: &ResolvedAction,
+) -> Result<(), ActionExecutionError> {
     let command_path = runtime_command_path(resolved)?;
     if resolved.dedupe_runtime_spawn
-        && !reserve_runtime_spawn(resolved.plugin_id.as_str(), &resolved.action_id)
+        && !tracker.reserve_runtime_spawn(resolved.plugin_id.as_str(), &resolved.action_id)
     {
         return Ok(());
     }
@@ -163,9 +166,9 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
     #[cfg(feature = "dev")]
     let relay_patterns = configure_action_log_relay(resolved, &mut command);
     #[cfg(feature = "dev")]
-    let mut child = spawn_runtime_command(resolved, command)?;
+    let mut child = spawn_runtime_command(tracker, resolved, command)?;
     #[cfg(not(feature = "dev"))]
-    let child = spawn_runtime_command(resolved, command)?;
+    let child = spawn_runtime_command(tracker, resolved, command)?;
     #[cfg(feature = "dev")]
     crate::logging::relay::attach(
         resolved.plugin_id.as_str(),
@@ -175,11 +178,11 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
     );
     let pid = child.id();
     if resolved.dedupe_runtime_spawn {
-        track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
+        tracker.track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
     } else {
-        track_unreserved_action_process(resolved.plugin_id.as_str(), pid);
+        tracker.track_unreserved_action_process(resolved.plugin_id.as_str(), pid);
     }
-    spawn_wait_untracker(resolved, child, pid);
+    spawn_wait_untracker(tracker, resolved, child, pid);
     log::info!("Runtime action started (pid: {})", pid);
     Ok(())
 }
@@ -195,12 +198,14 @@ fn runtime_command_path(resolved: &ResolvedAction) -> Result<&Path, ActionExecut
 }
 
 fn spawn_runtime_command(
+    tracker: &Arc<ProcessTracker>,
     resolved: &ResolvedAction,
     mut command: std::process::Command,
 ) -> Result<std::process::Child, ActionExecutionError> {
     command.spawn().map_err(|error| {
         if resolved.dedupe_runtime_spawn {
-            clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
+            tracker
+                .clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
         }
         ActionExecutionError::SpawnFailed(error.to_string())
     })
@@ -244,12 +249,18 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
     command
 }
 
-fn spawn_wait_untracker(resolved: &ResolvedAction, mut child: std::process::Child, pid: u32) {
+fn spawn_wait_untracker(
+    tracker: &Arc<ProcessTracker>,
+    resolved: &ResolvedAction,
+    mut child: std::process::Child,
+    pid: u32,
+) {
+    let tracker = Arc::clone(tracker);
     let plugin_id = resolved.plugin_id.to_string();
     let action_id = resolved.action_id.clone();
     std::thread::spawn(move || {
         let _ = child.wait();
-        untrack_action_process(&plugin_id, &action_id, pid);
+        tracker.untrack_action_process(&plugin_id, &action_id, pid);
     });
 }
 

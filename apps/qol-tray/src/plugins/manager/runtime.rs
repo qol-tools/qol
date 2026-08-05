@@ -1,8 +1,5 @@
 use super::{autostart, loading, PluginManager};
-use crate::plugins::{
-    action_executor::{kill_all_plugin_processes, kill_plugin_processes},
-    Plugin,
-};
+use crate::plugins::Plugin;
 use anyhow::Result;
 
 pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
@@ -26,7 +23,7 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
     let old_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
     #[cfg(not(debug_assertions))]
     let old_pid = None::<u32>;
-    kill_plugin_processes(plugin_id);
+    manager.process_tracker().kill_plugin_processes(plugin_id);
     drop(manager.plugins.remove(plugin_id));
 
     #[cfg(debug_assertions)]
@@ -116,7 +113,7 @@ pub(super) fn sync_ignore_pids(manager: &PluginManager) {
 }
 
 fn stop_all_plugins(manager: &mut PluginManager) {
-    kill_all_plugin_processes();
+    manager.process_tracker().kill_all_plugin_processes();
     stop_plugin_daemons(manager);
     manager.plugins.clear();
     super::super::daemon_tracker::registry::clear_all(&crate::paths::runtime_pids_dir());
