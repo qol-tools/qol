@@ -32,8 +32,9 @@ const APP_ID: &str = paths::PLUGIN_ID;
 const WINDOW_WIDTH: f32 = 360.0;
 const WINDOW_HEIGHT: f32 = 400.0;
 const CORNER_MARGIN: f32 = 16.0;
-const ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
+const VISIBLE_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const VISIBLE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
+const HIDDEN_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
 const HIDDEN_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
 type PanelHandle = gpui::WindowHandle<SessionsView>;
@@ -319,13 +320,12 @@ fn clear_panel(panel: &SharedPanel) {
 }
 
 fn reconcile_interval(panel_showing: bool, active: bool) -> Duration {
-    if active {
-        return ACTIVE_RECONCILE_INTERVAL;
+    match (panel_showing, active) {
+        (true, true) => VISIBLE_ACTIVE_RECONCILE_INTERVAL,
+        (true, false) => VISIBLE_RECONCILE_INTERVAL,
+        (false, true) => HIDDEN_ACTIVE_RECONCILE_INTERVAL,
+        (false, false) => HIDDEN_RECONCILE_INTERVAL,
     }
-    if panel_showing {
-        return VISIBLE_RECONCILE_INTERVAL;
-    }
-    HIDDEN_RECONCILE_INTERVAL
 }
 
 fn active_session_exists(registry: &Arc<Mutex<Registry>>) -> bool {
@@ -453,5 +453,15 @@ mod tests {
                 "panel_showing={panel_showing}"
             );
         }
+    }
+
+    #[test]
+    fn only_a_visible_panel_earns_the_fastest_active_cadence() {
+        assert!(reconcile_interval(false, true) > reconcile_interval(true, true));
+    }
+
+    #[test]
+    fn hidden_active_reconcile_interval_is_no_faster_than_a_watched_calm_panel() {
+        assert!(reconcile_interval(false, true) >= reconcile_interval(true, false));
     }
 }
