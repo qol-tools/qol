@@ -12,10 +12,16 @@ command = "task-runner"
 
 [capabilities]
 doctor = true
+gpui = true
 
 [action.status]
 label = "Status"
 args = ["status"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
 
 [menu]
 label = "Task Runner"
