@@ -34,7 +34,9 @@ impl CommandService {
                     let Ok(command) = self.security.authenticate(&buf[..size]) else {
                         continue;
                     };
-                    let _ = self.input_handler.handle_command(command);
+                    if let Err(error) = self.input_handler.handle_command(command) {
+                        log::warn!("Rejected command: {error}");
+                    }
                 }
                 Err(e) => {
                     log::error!("Command receive error: {}", e);

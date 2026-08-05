@@ -15,7 +15,13 @@ type = "action"
 label = "Pair a device"
 action = "begin_pairing"
 variant = "primary"
-description = "Shares the pairing key with the next compatible discovery request within two minutes."
+description = "Shows a one-minute pairing code; type it into the PointZ app to pair this device."
+
+[field.pairing_pin]
+type = "status"
+label = "Pairing code"
+query = "pairing_status"
+value_from = "pin"
 
 [field.command_port]
 type = "status"

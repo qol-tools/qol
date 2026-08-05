@@ -48,6 +48,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
             "command_port": ServerConfig::COMMAND_PORT,
             "app_download_url": APP_DOWNLOAD_URL,
         })),
+        "pairing_status" => ReadResult::HandledWithData(crate::security::pairing_status_json()),
         _ => ReadResult::Fallback,
     }
 }
