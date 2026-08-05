@@ -17,6 +17,12 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     {
         return Ok(None);
     }
+    if !has_help
+        && args.json
+        && args.values.first().and_then(|value| value.to_str()) == Some("sessions")
+    {
+        return Ok(None);
+    }
 
     let mut values = args
         .values
@@ -177,6 +183,14 @@ fn app() -> HeadlessApp {
                 crate::commands::sync::run_json()
             }),
         )
+        .command(command(
+            "sessions",
+            "Discover live terminal sessions and deliver text into them.",
+            "qol sessions <list|send|read|focus>",
+            "Sessions come from the shared terminal-sessions backends (kitty remote control).",
+            "Session rows or delivery confirmation on stdout; diagnostics on stderr.",
+            "Exits non-zero when discovery, identity, capability, or delivery fails.",
+        ))
         .command(command(
             "trace",
             "Inspect a named runtime trace target.",

@@ -60,6 +60,14 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "check" => commands::check::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
         "install" => commands::install::run(args.verbose),
+        "sessions" => commands::sessions::run(
+            rest,
+            if args.json {
+                qol_headless::OutputFormat::Json
+            } else {
+                qol_headless::OutputFormat::PlainText
+            },
+        ),
         "trace" => commands::trace::run(rest),
         "trace-rs" => commands::trace_rs::run(rest),
         "doctor" => commands::doctor::run(
