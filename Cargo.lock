@@ -52,7 +52,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.58.4"
+version = "0.58.5"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -5703,7 +5703,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.37.0"
+version = "0.37.1"
 dependencies = [
  "anyhow",
  "gpui",
