@@ -11,7 +11,7 @@ impl Strategy for Pi {
     }
 
     fn working(&self, ctx: &Ctx) -> bool {
-        ctx.screen.is_some_and(pi_working)
+        ctx.screen.is_some_and(pi_working) && ctx.screen_changed
     }
 
     fn awaiting(&self, ctx: &Ctx) -> bool {

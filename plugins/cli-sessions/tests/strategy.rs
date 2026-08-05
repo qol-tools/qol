@@ -417,11 +417,30 @@ fn pi_working_loader_is_busy() {
         "conversation output\n\u{2807} Working...\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 9.4%/262k (auto)",
     ];
     for screen in cases {
+        let mut live = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
+        live.screen_changed = true;
         assert_eq!(
-            Pi.read(&pi_ctx(&p, Some(screen), Some("proj"), Some(true)))
-                .phase,
+            Pi.read(&live).phase,
             Phase::Busy,
-            "screen: {screen:?}"
+            "a changing screen with a pi loader line is live work: {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn pi_settled_loader_line_is_your_turn_not_working() {
+    let p = pane(false, "pi", "\u{03C0} - qol-monorepo");
+    let cases = [
+        "\u{280B} Working...",
+        "\u{2819} Working... (esc to interrupt)",
+        "conversation output\n\u{2807} Working...\n\n\u{2500}\u{2500}\u{2500}\n/tmp\n$0.000 (sub) 9.4%/262k (auto)",
+    ];
+    for screen in cases {
+        let settled = pi_ctx(&p, Some(screen), Some("proj"), Some(true));
+        assert_eq!(
+            Pi.read(&settled).phase,
+            Phase::Done,
+            "a settled screen with a stale pi loader line is your-turn, not working: {screen:?}"
         );
     }
 }
