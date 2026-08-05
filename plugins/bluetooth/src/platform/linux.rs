@@ -2261,7 +2261,10 @@ async fn ensure_reconnected_audio_profile(address: Address) -> Result<AudioProfi
             return Ok(AudioProfile::Active);
         }
         if Instant::now() >= deadline {
-            bail!("{address} reconnected without resolving its A2DP sink profile");
+            bail!(
+                "{} reconnected without resolving its A2DP sink profile",
+                redacted(address)
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -2465,10 +2468,10 @@ fn redacted(address: Address) -> String {
 mod tests {
     use super::{
         begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
-        pactl_sink_matching, parse_address, parse_daemon_request, runtime, set_device_action_state,
-        tolerated_profile_connect, transient_connect_error, AudioRepairGuard,
-        ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout, Duration,
-        ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
+        pactl_sink_matching, parse_address, parse_daemon_request, redacted, runtime,
+        set_device_action_state, tolerated_profile_connect, transient_connect_error, Address,
+        AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout,
+        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -2707,6 +2710,29 @@ mod tests {
                 expected,
                 "prefix: {prefix}"
             );
+        }
+    }
+
+    #[test]
+    fn redacted_addresses_never_carry_the_vendor_prefix() {
+        let cases = [
+            (
+                Address([0x74, 0x68, 0x59, 0x7F, 0x5F, 0xE9]),
+                "**:**:**:**:5F:E9",
+                "74:68:59",
+            ),
+            (
+                Address([0x88, 0x0E, 0x85, 0x16, 0xCA, 0x67]),
+                "**:**:**:**:CA:67",
+                "88:0E:85",
+            ),
+            (Address([0; 6]), "**:**:**:**:00:00", "00:00:00"),
+            (Address([0xFF; 6]), "**:**:**:**:FF:FF", "FF:FF:FF"),
+        ];
+        for (address, expected, vendor) in cases {
+            let masked = redacted(address);
+            assert_eq!(masked, expected, "case: {expected}");
+            assert!(!masked.contains(vendor), "case: {expected}");
         }
     }
 }
