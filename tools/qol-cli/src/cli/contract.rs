@@ -183,14 +183,19 @@ fn app() -> HeadlessApp {
                 crate::commands::sync::run_json()
             }),
         )
-        .command(command(
-            "sessions",
-            "Discover live terminal sessions and deliver text into them.",
-            "qol sessions <list|send|read|focus>",
-            "Sessions come from the shared terminal-sessions backends (kitty remote control).",
-            "Session rows or delivery confirmation on stdout; diagnostics on stderr.",
-            "Exits non-zero when discovery, identity, capability, or delivery fails.",
-        ))
+        .command(
+            command(
+                "sessions",
+                "Discover live terminal sessions and deliver text into them.",
+                "qol sessions <list|send|read|wait|focus|mcp>",
+                "Sessions come from the shared terminal-sessions backends (kitty remote control).",
+                "Session rows, delivery confirmation, or wait JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when discovery, identity, capability, or delivery fails.",
+            )
+            .detail("list --json emits structured rows; send delivers text (--submit appends Enter).")
+            .detail("wait polls until the screen settles or contains --expect text, then prints JSON.")
+            .detail("mcp serves the session tools over stdio."),
+        )
         .command(command(
             "trace",
             "Inspect a named runtime trace target.",
