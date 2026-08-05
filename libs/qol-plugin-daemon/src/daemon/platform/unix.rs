@@ -937,23 +937,17 @@ mod tests {
         LOCK.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    #[test]
-    fn stateful_listener_answers_kill_with_handled_and_terminates() {
+    fn assert_kill_contract(
+        socket_name: &'static str,
+        run_listener: impl FnOnce(DaemonConfig, Sender<io::Result<()>>) + Send + 'static,
+    ) {
         let _lock = daemon_listener_fd_env_lock();
-        let socket_name = temp_socket_name("stateful-kill");
         let config = fallback_config(socket_name);
         let path = socket_path(&config).unwrap();
         let _ = fs::remove_file(&path);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let listener = std::thread::spawn(move || {
-            let result =
-                run_stateful_listener(&config, (), |_state: &mut (), action: &str| match action {
-                    "ping" | "kill" => ReadResult::Handled,
-                    _ => ReadResult::Fallback,
-                });
-            let _ = done_tx.send(result);
-        });
+        let listener = std::thread::spawn(move || run_listener(config, done_tx));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !path.exists() && std::time::Instant::now() < deadline {
@@ -991,6 +985,43 @@ mod tests {
             "the replaced holder must leave the socket path for the replacer to reclaim"
         );
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stateful_listener_answers_kill_with_handled_and_terminates() {
+        assert_kill_contract(
+            temp_socket_name("stateful-kill-action"),
+            |config, done_tx| {
+                let result =
+                    run_stateful_listener(
+                        &config,
+                        (),
+                        |_state: &mut (), action: &str| match action {
+                            "ping" | "kill" => ReadResult::Handled,
+                            _ => ReadResult::Fallback,
+                        },
+                    );
+                let _ = done_tx.send(result);
+            },
+        );
+    }
+
+    #[test]
+    fn stateful_request_listener_answers_kill_with_handled_and_terminates() {
+        assert_kill_contract(
+            temp_socket_name("stateful-kill-request"),
+            |config, done_tx| {
+                let result = run_stateful_request_listener(
+                    &config,
+                    (),
+                    |_state: &mut (), request: &DaemonRequest| match request.action.as_str() {
+                        "ping" | "kill" => ReadResult::Handled,
+                        _ => ReadResult::Fallback,
+                    },
+                );
+                let _ = done_tx.send(result);
+            },
+        );
     }
 
     #[test]
