@@ -385,7 +385,7 @@ fn successful_batch_plugins<'a>(
             let Ok(CargoMessage::Artifact(artifact)) = parse_cargo_message(line) else {
                 return None;
             };
-            if !is_plugin_artifact(&artifact) {
+            if !produced_plugin_executable(&artifact) {
                 return None;
             }
             let manifest = comparable_path(&artifact.manifest_path);
@@ -397,12 +397,8 @@ fn successful_batch_plugins<'a>(
         .collect()
 }
 
-fn is_plugin_artifact(artifact: &CargoArtifact) -> bool {
-    !artifact
-        .target_kind
-        .iter()
-        .any(|kind| kind == "custom-build")
-        && !artifact.filenames.is_empty()
+fn produced_plugin_executable(artifact: &CargoArtifact) -> bool {
+    artifact.executable.is_some()
 }
 
 fn comparable_path(path: &Path) -> PathBuf {
@@ -577,6 +573,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(good.join("src/lib.rs"), "pub fn good() {}\n").unwrap();
+        std::fs::write(good.join("src/main.rs"), "fn main() { good::good(); }\n").unwrap();
         std::fs::write(
             bad.join("Cargo.toml"),
             "[package]\nname = \"bad\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -592,6 +589,47 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].success);
         assert!(!results[1].success);
+    }
+
+    #[test]
+    fn reports_failure_when_only_a_plugin_binary_fails_to_compile() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"good\", \"bad\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let good = root.join("good");
+        let bad = root.join("bad");
+        for (package, name, main) in [
+            (&good, "good", "fn main() { good::good(); }\n"),
+            (&bad, "bad", "fn main() { bad::bad(1); }\n"),
+        ] {
+            std::fs::create_dir_all(package.join("src")).unwrap();
+            std::fs::write(
+                package.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                package.join("src/lib.rs"),
+                format!("pub fn {name}() {{}}\n"),
+            )
+            .unwrap();
+            std::fs::write(package.join("src/main.rs"), main).unwrap();
+        }
+        let plugins = [("good", good.as_path()), ("bad", bad.as_path())];
+        let mut progress = |_: &str, _: u8, _: String| {};
+
+        let results = build_cargo_plugins_with_progress(&plugins, &mut progress);
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        assert!(
+            !results[1].success,
+            "a plugin whose binary failed to compile must not be reported as built"
+        );
     }
 
     #[test]
