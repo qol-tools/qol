@@ -1,5 +1,5 @@
 use futures::{channel::mpsc as futures_mpsc, future::select, FutureExt, StreamExt};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,7 @@ use super::run::{SharedPreviewCache, WindowCache};
 use crate::app::PICKER_VISIBLE;
 use crate::discovery::{Platform, WindowDiscovery};
 use crate::picker::{PickerWindowState, SharedIconCache};
+use crate::rendering::RenderingFlow;
 
 mod platform;
 
@@ -27,6 +28,7 @@ static WARMER_WAKE_TX: OnceLock<futures_mpsc::UnboundedSender<()>> = OnceLock::n
 static CAPTURE_SCHEDULER: OnceLock<PreviewCaptureScheduler> = OnceLock::new();
 static REFRESH_GENERATION: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
 static LATEST_SHOW_ID: OnceLock<Arc<AtomicU64>> = OnceLock::new();
+static FLOW_FILLS_PREVIEWS: AtomicBool = AtomicBool::new(true);
 
 #[derive(Clone, Copy, Default)]
 struct RefreshRequest {
@@ -106,6 +108,13 @@ impl WarmerControl {
         generation
     }
 
+    fn record_focus_generation(&self) -> u64 {
+        self.state
+            .lock()
+            .map(|mut state| state.record_focus_generation_at())
+            .unwrap_or(0)
+    }
+
     fn prepare_refresh_request(&self, request: RefreshRequest) -> RefreshRequest {
         self.state
             .lock()
@@ -150,6 +159,13 @@ impl WarmerState {
             self.latest_focus = None;
             self.focus_result = None;
         }
+        self.next_activity
+    }
+
+    fn record_focus_generation_at(&mut self) -> u64 {
+        self.next_activity = self.next_activity.wrapping_add(1);
+        self.latest_focus = Some(self.next_activity);
+        self.focus_result = None;
         self.next_activity
     }
 
@@ -237,6 +253,7 @@ struct ListenerState {
 }
 
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
+    refresh_flow_flag();
     let (refresh_tx, refresh_rx) = mpsc::channel::<RefreshRequest>();
     let (warmer_wake_tx, warmer_wake_rx) = futures_mpsc::unbounded();
     let _ = DATA_REFRESH_TX.set(refresh_tx);
@@ -291,7 +308,28 @@ pub(crate) fn record_recent_hid_activity() {
     record_hid_activity(false);
 }
 
+pub(crate) fn store_flow_fill(fills: bool) {
+    FLOW_FILLS_PREVIEWS.store(fills, Ordering::Release);
+}
+
+pub(crate) fn refresh_flow_flag() {
+    store_flow_fill(RenderingFlow::current().captures_preview_fill());
+}
+
+fn flow_fills_previews() -> bool {
+    FLOW_FILLS_PREVIEWS.load(Ordering::Acquire)
+}
+
 fn record_hid_activity(focus_refresh: bool) -> u64 {
+    if !flow_fills_previews() {
+        if focus_refresh {
+            return WARMER_CONTROL
+                .get()
+                .map(|control| control.record_focus_generation())
+                .unwrap_or(0);
+        }
+        return 0;
+    }
     WARMER_CONTROL
         .get()
         .map(|control| control.record_activity(focus_refresh))
@@ -398,7 +436,17 @@ fn run_warmer(inputs: &ListenerInputs, app_cx: &mut App) {
     }
 }
 
-fn enqueue_warmer_from_cache(inputs: &ListenerInputs, _activity_generation: u64, app_cx: &mut App) {
+fn enqueue_warmer_from_cache(inputs: &ListenerInputs, activity_generation: u64, app_cx: &mut App) {
+    if !flow_fills_previews() {
+        qol_runtime::probe!(
+            "REFRESH_RUN",
+            "show_id={} lane=hidden_warmer outcome=skipped activity_generation={} active_workers={} cancellation_reason=preview_plane_flow reveal_frame=show_cache_or_placeholder first_paint_latency_ms=none",
+            latest_show_id(),
+            activity_generation,
+            active_capture_workers(),
+        );
+        return;
+    }
     let windows = inputs
         .window_cache
         .lock()
@@ -780,6 +828,9 @@ fn enqueue_requested_capture(
     picker_visible: bool,
     app_cx: &mut App,
 ) {
+    if !flow_fills_previews() {
+        return;
+    }
     if capture_lane_requested(request, CaptureLane::HiddenWarmer, picker_visible) {
         enqueue_capture_lane(inputs, CaptureLane::HiddenWarmer, handle, windows, app_cx);
     }
@@ -861,6 +912,47 @@ mod tests {
             height: 0.0,
             is_minimized: false,
         }
+    }
+
+    #[test]
+    fn flow_fill_gate_suppresses_arming_but_keeps_focus_requeue() {
+        let warmer = super::WARMER_CONTROL
+            .get_or_init(super::WarmerControl::new)
+            .clone();
+
+        super::store_flow_fill(false);
+        assert!(!super::flow_fills_previews());
+        assert_eq!(
+            super::record_hid_activity(false),
+            0,
+            "gate closed must not arm the warmer"
+        );
+
+        let focus_generation = super::record_hid_activity(true);
+        assert!(focus_generation > 0);
+        assert_eq!(
+            warmer.take_due(Instant::now() + Duration::from_secs(1)),
+            WarmerDecision::Idle,
+            "focus tracking must not arm the warmer"
+        );
+        let pending = warmer.prepare_refresh_request(RefreshRequest::default());
+        assert!(
+            pending.refresh_previous_frontmost,
+            "focus must stay pending so a superseded refresh is requeued"
+        );
+        warmer.mark_refresh_applied(focus_generation, true);
+        let settled = warmer.prepare_refresh_request(RefreshRequest::default());
+        assert!(
+            !settled.refresh_previous_frontmost,
+            "applied focus must settle"
+        );
+
+        super::store_flow_fill(true);
+        assert!(super::flow_fills_previews());
+        assert!(
+            super::record_hid_activity(false) > 0,
+            "gate open must arm the warmer"
+        );
     }
 
     #[test]
