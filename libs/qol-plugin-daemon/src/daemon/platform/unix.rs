@@ -267,16 +267,25 @@ where
 
     qol_runtime::spawn_host_death_watchdog();
 
+    let mut kill_requested = false;
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 if local_ipc::authorize_peer(&stream).is_err() {
                     continue;
                 }
-                let result = read_and_parse(&mut stream, |action| handler(&mut state, action));
+                let result = read_and_parse(&mut stream, |action| {
+                    if action == "kill" {
+                        kill_requested = true;
+                    }
+                    handler(&mut state, action)
+                });
                 handle_read_result(&mut stream, result, |_| DaemonResponse::Handled {
                     data: None,
                 });
+                if kill_requested {
+                    break;
+                }
             }
             Err(error) => {
                 eprintln!("accept error: {error:#}");
@@ -285,7 +294,9 @@ where
     }
 
     if let Some(socket_path) = socket_path {
-        remove_socket_file(socket_path);
+        if !kill_requested {
+            remove_socket_file(socket_path);
+        }
     }
     Ok(())
 }
@@ -302,14 +313,23 @@ where
 
     qol_runtime::spawn_host_death_watchdog();
 
+    let mut kill_requested = false;
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
                 if local_ipc::authorize_peer(&s).is_err() {
                     continue;
                 }
-                let result = read_request_and_parse(&mut s, |request| handler(&mut state, request));
+                let result = read_request_and_parse(&mut s, |request| {
+                    if request.action == "kill" {
+                        kill_requested = true;
+                    }
+                    handler(&mut state, request)
+                });
                 handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
+                if kill_requested {
+                    break;
+                }
             }
             Err(error) => {
                 eprintln!("accept error: {error:#}");
@@ -318,7 +338,9 @@ where
     }
 
     if let Some(socket_path) = socket_path {
-        remove_socket_file(socket_path);
+        if !kill_requested {
+            remove_socket_file(socket_path);
+        }
     }
     Ok(())
 }
@@ -330,11 +352,6 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
         return Ok((listener, None));
     }
 
-    // Every daemon-bearing plugin in this repo is spawned with a pre-bound fd
-    // today, so this self-bind path is only a fallback for a plugin binary
-    // launched by hand outside qol-tray, and for any pre-bind attempt
-    // that failed and gracefully degraded (see daemon_lifecycle::listener in
-    // qol-tray).
     let Some(socket_path) = socket_path(config) else {
         #[cfg(debug_assertions)]
         eprintln!(
@@ -918,6 +935,62 @@ mod tests {
     fn daemon_listener_fd_env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[test]
+    fn stateful_listener_answers_kill_with_handled_and_terminates() {
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("stateful-kill");
+        let config = fallback_config(socket_name);
+        let path = socket_path(&config).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let listener = std::thread::spawn(move || {
+            let result =
+                run_stateful_listener(&config, (), |_state: &mut (), action: &str| match action {
+                    "ping" | "kill" => ReadResult::Handled,
+                    _ => ReadResult::Fallback,
+                });
+            let _ = done_tx.send(result);
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(path.exists(), "stateful listener must bind its socket");
+
+        let mut client = UnixStream::connect(&path).expect("connect to stateful listener");
+        write_request(&mut client, "kill", serde_json::Value::Null).expect("send kill request");
+
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read kill response");
+        let response: DaemonResponse =
+            serde_json::from_str(line.trim()).expect("parse kill response");
+        assert!(
+            matches!(response, DaemonResponse::Handled { .. }),
+            "a stateful daemon must answer kill with Handled so the replace handshake succeeds"
+        );
+
+        match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => result.expect("stateful listener must exit cleanly after a kill request"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("stateful listener did not terminate after a kill request")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("stateful listener thread panicked before reporting its result")
+            }
+        }
+        listener
+            .join()
+            .expect("stateful listener thread must not panic");
+        assert!(
+            path.exists(),
+            "the replaced holder must leave the socket path for the replacer to reclaim"
+        );
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

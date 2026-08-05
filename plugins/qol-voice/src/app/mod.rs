@@ -52,6 +52,7 @@ pub fn send_request(action: &str, input: serde_json::Value) -> Result<Option<ser
 fn handle_request(runtime: &mut SessionManager, request: &DaemonRequest) -> ReadResult<()> {
     let result = match request.action.as_str() {
         "ping" => return ReadResult::Handled,
+        "kill" => return ReadResult::Handled,
         "start_listening" => runtime.start(crate::config::load()).and_then(to_value),
         "stop_listening" => runtime.stop().and_then(to_value),
         "session_status" => runtime.status().and_then(to_value),
@@ -206,7 +207,8 @@ fn to_value(value: impl serde::Serialize) -> Result<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_id, stt_providers};
+    use super::*;
+    use qol_runtime::protocol::DaemonRequest;
 
     #[test]
     fn automatic_is_offered_only_when_this_build_can_select_it() {
@@ -236,5 +238,20 @@ mod tests {
                 "input: {input}"
             );
         }
+    }
+
+    #[test]
+    fn daemon_answers_the_replace_kill_with_handled() {
+        let mut runtime = SessionManager::default();
+        let request = DaemonRequest {
+            action: "kill".into(),
+            input: serde_json::Value::Null,
+        };
+        assert!(
+            matches!(handle_request(&mut runtime, &request), ReadResult::Handled),
+            "a support_replace_existing daemon must answer kill with Handled or the \
+             replace handshake fails and the successor exits with \
+             'existing daemon instance is alive'"
+        );
     }
 }
