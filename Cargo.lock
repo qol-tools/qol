@@ -6147,6 +6147,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-process",
  "qol-profile-sync",
+ "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
  "serde",
