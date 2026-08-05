@@ -12,6 +12,7 @@ command = "window-actions"
 
 [capabilities]
 doctor = true
+gpui = true
 
 [action.snap-left]
 label = "Snap Left"
@@ -68,6 +69,11 @@ continuous = true
 label = "Glide Down"
 args = ["glide-down"]
 continuous = true
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
 
 [daemon]
 enabled = true

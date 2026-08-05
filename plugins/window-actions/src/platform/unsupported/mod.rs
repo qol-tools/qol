@@ -10,6 +10,10 @@ use crate::restore::{self, WindowSystem};
 
 pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
 
+pub(crate) fn open_settings() -> Result<(), String> {
+    Err(unsupported("opening the settings page"))
+}
+
 pub(crate) struct GlideController;
 
 impl GlideController {

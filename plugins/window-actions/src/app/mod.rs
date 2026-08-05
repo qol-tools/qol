@@ -25,6 +25,7 @@ enum Command {
         phase: Phase,
         trace: TraceContext,
     },
+    Settings,
     Kill,
 }
 
@@ -91,6 +92,12 @@ impl Runtime {
                 let result = self.update_glide(direction, phase);
                 trace_glide(direction, phase, &trace, started.elapsed(), &result);
                 if let Err(error) = result {
+                    eprintln!("{error}");
+                }
+                true
+            }
+            Command::Settings => {
+                if let Err(error) = crate::platform::open_settings() {
                     eprintln!("{error}");
                 }
                 true
@@ -169,6 +176,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => return ReadResult::Handled,
         "kill" => return ReadResult::Command(Command::Kill),
+        "settings" => return ReadResult::Command(Command::Settings),
         _ => {}
     }
 
@@ -333,6 +341,10 @@ mod tests {
         assert!(matches!(
             parse_request(&request("center", serde_json::Value::Null)),
             ReadResult::Command(Command::Execute(action)) if action == "center"
+        ));
+        assert!(matches!(
+            parse_request(&request("settings", serde_json::Value::Null)),
+            ReadResult::Command(Command::Settings)
         ));
         assert!(matches!(
             parse_request(&request("nope", serde_json::Value::Null)),

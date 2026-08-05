@@ -21,6 +21,15 @@ use geometry::{
 
 pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
 
+pub(crate) fn open_settings() -> Result<(), String> {
+    let url = qol_conventions::settings_url(crate::cli::PLUGIN_ID);
+    Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open settings page: {error}"))
+}
+
 pub(crate) struct GlideController;
 
 impl GlideController {
