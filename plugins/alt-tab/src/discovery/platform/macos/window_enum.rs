@@ -151,7 +151,12 @@ fn true_focus_index(windows: &[CgWindow], frontmost_pid: Option<i32>) -> Option<
     windows
         .iter()
         .position(|window| {
-            window.layer != K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
+            window.layer == K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
+        })
+        .or_else(|| {
+            windows.iter().position(|window| {
+                window.layer != K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
+            })
         })
         .or_else(|| {
             windows
@@ -1096,10 +1101,10 @@ mod tests {
     }
 
     #[test]
-    fn true_focus_index_prefers_panel_of_frontmost_app_then_first_normal_window() {
+    fn true_focus_index_prefers_frontmost_app_normal_window_then_panel() {
         let cases: [(Vec<CgWindow>, Option<i32>, Option<usize>); 5] = [
             (vec![], Some(1), None),
-            (vec![cg(10, 1), cg(20, 2)], Some(2), Some(0)),
+            (vec![cg(10, 1), cg(20, 2)], Some(2), Some(1)),
             (vec![cg(10, 1), cg_panel(20, 2)], Some(2), Some(1)),
             (vec![cg(10, 1), cg_panel(20, 2)], Some(1), Some(0)),
             (vec![cg_panel(10, 1)], Some(2), None),
@@ -1111,5 +1116,12 @@ mod tests {
                 "frontmost_pid: {frontmost_pid:?}"
             );
         }
+
+        let windows = vec![cg_panel(10, 2), cg(20, 2)];
+        assert_eq!(
+            true_focus_index(&windows, Some(2)),
+            Some(1),
+            "a frontmost app's normal window outranks its auxiliary panel"
+        );
     }
 }
