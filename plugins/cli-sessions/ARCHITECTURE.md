@@ -104,6 +104,11 @@ status, a redraw no longer overrides the evidence hooks, so a rename or banner
 refresh in an acknowledged session reads `Done` and stays acknowledged rather
 than re-arming. A redraw with no waiting evidence at all still reads `Busy`,
 because movement is the only signal a tool with a hidden spinner leaves behind.
+Kimi's `working` hook is the one exception to the skeleton's hard `Busy`
+override: its activity line (`⠙ working...` / moon + tip) stays rendered on a
+settled screen after the model has finished, so the line only reads as live
+work while the screen is changing. A settled kimi line is stale and reads
+`Done`, which is exactly the "your turn" the user sees.
 `Cli` alone overrides `read` because its
 shell model is busy-by-default (absence of a foreground process is the idle
 signal), which does not fit the evidence skeleton. Strategies also expose a

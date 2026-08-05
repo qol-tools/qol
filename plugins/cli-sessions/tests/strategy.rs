@@ -525,11 +525,40 @@ fn kimi_moon_spinner_line_is_busy() {
         "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n\u{1F313} \u{00B7} Tip: run /help",
     ];
     for screen in cases {
+        let mut live = kimi_ctx(&p, Some(screen), Some("proj"), Some(true));
+        live.screen_changed = true;
         assert_eq!(
-            Kimi.read(&kimi_ctx(&p, Some(screen), Some("proj"), Some(true)))
-                .phase,
+            Kimi.read(&live).phase,
             Phase::Busy,
-            "screen: {screen:?}"
+            "a changing screen with a moon spinner line is live work: {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn kimi_settled_spinner_line_is_your_turn_not_working() {
+    let p = pane(false, "kimi-code", "qol-monorepo");
+    let boxed = |spinner: &str| {
+        format!(
+            "{spinner}\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]"
+        )
+    };
+    let cases = [
+        "\u{1F315} \u{00B7} Tip: /tasks to check progress and status for background tasks"
+            .to_string(),
+        "conversation output\n\u{1F314} \u{00B7} Tip: Try /dance for a hidden Easter egg"
+            .to_string(),
+        "\u{2819} working... \u{00B7} Tip: ask Kimi to schedule tasks".to_string(),
+        "\u{2819} working...".to_string(),
+        boxed("  \u{1F317}"),
+        boxed("\u{2819} thinking..."),
+    ];
+    for screen in cases {
+        let settled = kimi_ctx(&p, Some(&screen), Some("proj"), Some(true));
+        assert_eq!(
+            Kimi.read(&settled).phase,
+            Phase::Done,
+            "a settled screen with a stale spinner line is your-turn, not working: {screen:?}"
         );
     }
 }
@@ -639,11 +668,12 @@ fn kimi_bare_moon_and_braille_spinners_are_working() {
         boxed("\u{1F315} \u{00B7} Tip: /tasks to check progress"),
     ];
     for screen in cases {
+        let mut live = kimi_ctx(&p, Some(&screen), Some("proj"), Some(true));
+        live.screen_changed = true;
         assert_eq!(
-            Kimi.read(&kimi_ctx(&p, Some(&screen), Some("proj"), Some(true)))
-                .phase,
+            Kimi.read(&live).phase,
             Phase::Busy,
-            "screen: {screen:?}"
+            "a changing screen with a spinner above the box is live work: {screen:?}"
         );
     }
 }
