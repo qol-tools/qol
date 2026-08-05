@@ -60,6 +60,36 @@ fn fresh_session_reads_idle_until_a_message_is_appended() {
 }
 
 #[test]
+fn activity_goes_idle_once_the_session_file_stops_being_written() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n{\"type\":\"message\",\"id\":\"a1\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"user\",\"content\":[]}}\n",
+    )
+    .unwrap();
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment {
+        session_file: file.clone(),
+    }));
+
+    let active = strategy.describe(&session());
+    assert_eq!(active.has_activity, Some(true));
+
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+
+    let idle = strategy.describe(&session());
+    assert_eq!(idle.has_activity, Some(false));
+}
+
+#[test]
 fn session_info_names_are_picked_up_incrementally() {
     let root = TempDir::new().unwrap();
     let file = root

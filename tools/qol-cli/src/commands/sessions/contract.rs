@@ -56,7 +56,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_wait_output",
             label: "Wait for session output",
-            description: "Block until the session's screen settles after activity (changed then stable), or until it contains the expected substring. With expect given, returns when the screen contains it. Without expect, returns when the screen changed from the first read and then stayed stable. Returns settled, the current screen, poll count, and elapsed milliseconds; settled=false means the timeout elapsed.",
+            description: "Block until the session's screen settles or shows the expected output. With expect given, the substring must appear somewhere other than the echo of the text you last sent into the session, and the screen must then settle (one read unchanged) before the call returns. Without expect, returns when the screen changed from the first read and then stayed stable. Returns settled, the current screen, poll count, and elapsed milliseconds; settled=false means the timeout elapsed.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -70,7 +70,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "expect": {
                         "type": "string",
-                        "description": "Substring to wait for in the screen",
+                        "description": "Substring to wait for in the screen; the echo of the last-sent text does not count",
                     },
                 },
                 "required": ["session"],

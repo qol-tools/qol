@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
+use crate::cli::activity::file_activity;
 
 const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -69,7 +70,7 @@ impl CodexMetadataResolver {
             thread_name: title_thread_name(&session.title).or(indexed_name),
             external_id,
             has_activity: title_activity(&session.title)
-                .or_else(|| rollout.as_deref().map(has_activity)),
+                .or_else(|| rollout.as_deref().and_then(rollout_activity)),
         }
     }
 
@@ -195,7 +196,12 @@ fn title_thread_name(title: &str) -> Option<String> {
     (state != name && name != project).then(|| name.to_owned())
 }
 
-fn has_activity(path: &Path) -> bool {
+fn rollout_activity(path: &Path) -> Option<bool> {
+    let signature = file_signature(path)?;
+    file_activity(signature.modified, rollout_has_work(path))
+}
+
+fn rollout_has_work(path: &Path) -> bool {
     let Ok(file) = fs::File::open(path) else {
         return false;
     };

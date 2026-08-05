@@ -51,6 +51,74 @@ fn transcript_title_changes_refresh_semantic_identity() {
 }
 
 #[test]
+fn transcript_activity_tracks_the_last_write() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[]},\"timestamp\":\"2026-08-03T09:00:00.000Z\"}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"timestamp\":\"2026-08-03T09:01:00.000Z\"}\n"
+        ),
+    )
+    .unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript.clone(),
+        },
+    }));
+
+    let active = strategy.describe(&session());
+    assert_eq!(active.has_activity, Some(true));
+
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&transcript)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+
+    let idle = strategy.describe(&session());
+    assert_eq!(idle.has_activity, Some(false));
+}
+
+#[test]
+fn transcript_without_messages_reads_idle_even_when_fresh() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"custom-title\",\"customTitle\":\"Only a rename\"}\n",
+    )
+    .unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+
+    let descriptor = strategy.describe(&session());
+    assert_eq!(descriptor.has_activity, Some(false));
+}
+
+#[test]
+fn missing_transcript_has_no_activity_hint() {
+    let root = TempDir::new().unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: root.path().join("missing.jsonl"),
+        },
+    }));
+
+    let descriptor = strategy.describe(&session());
+    assert_eq!(descriptor.has_activity, None);
+}
+
+#[test]
 fn claude_title_cleanup_preserves_the_semantic_name() {
     let cases = [
         ("✳ Improve logging", "Improve logging"),

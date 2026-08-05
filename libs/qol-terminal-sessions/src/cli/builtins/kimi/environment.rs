@@ -11,6 +11,28 @@ pub(super) struct KimiSessionLocation {
     pub state_path: PathBuf,
 }
 
+pub(super) fn newest_write(session_dir: &Path) -> Option<SystemTime> {
+    let mut newest: Option<SystemTime> = None;
+    let mut pending = vec![session_dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(path);
+            } else if let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) {
+                if newest.is_none_or(|newest| modified > newest) {
+                    newest = Some(modified);
+                }
+            }
+        }
+    }
+    newest
+}
+
 pub(super) trait KimiEnvironment: Send + Sync {
     fn session(&self, cwd: &str) -> Option<KimiSessionLocation>;
 }
@@ -34,11 +56,7 @@ impl KimiEnvironment for SystemKimiEnvironment {
                 continue;
             }
             let state_path = PathBuf::from(entry.session_dir).join("state.json");
-            let Some(modified) = state_path
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .ok()
-            else {
+            let Some(modified) = newest_write(state_path.parent()?) else {
                 continue;
             };
             let replace = newest

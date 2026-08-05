@@ -175,7 +175,7 @@ mod tests {
             .expect("wait_output in contract");
         let source = render_tool_block(spec).expect("render");
         assert!(source.contains("timeout_ms: Type.Optional(Type.Integer({ description: \"Timeout in milliseconds, clamped 1000..600000 (default 30000)\" })),"));
-        assert!(source.contains("expect: Type.Optional(Type.String({ description: \"Substring to wait for in the screen\" })),"));
+        assert!(source.contains("expect: Type.Optional(Type.String({ description: \"Substring to wait for in the screen; the echo of the last-sent text does not count\" })),"));
         assert!(source.contains(
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));

@@ -119,6 +119,37 @@ fn title_activity_falls_back_to_rollout_state_for_unknown_titles() {
     assert_eq!(strategy.describe(&facts).has_activity, Some(true));
 }
 
+#[test]
+fn rollout_fallback_activity_goes_idle_when_the_rollout_stops_being_written() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(
+        &rollout,
+        "{\"type\":\"item_start\"}\n{\"type\":\"response_item\"}\n",
+    )
+    .unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment {
+        rollout: rollout.clone(),
+        index,
+    }));
+
+    let mut facts = session();
+    facts.title = "some unrelated title".to_owned();
+    assert_eq!(strategy.describe(&facts).has_activity, Some(true));
+
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&rollout)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+    assert_eq!(strategy.describe(&facts).has_activity, Some(false));
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),
