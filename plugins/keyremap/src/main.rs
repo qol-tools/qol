@@ -26,9 +26,22 @@ mod tests {
             "keyremap requires CGEventTap; manifest must restrict to macOS so the host never offers it elsewhere"
         );
         assert!(manifest.capabilities.doctor);
+        assert!(manifest.capabilities.gpui);
         assert_eq!(
             manifest.catalog_runtime_args("reload"),
             Some(vec!["--reload".to_string()])
+        );
+        let settings = manifest
+            .actions
+            .get("settings")
+            .expect("plugin.toml must declare a settings action");
+        assert_eq!(
+            settings.kind,
+            qol_plugin_api::manifest::ActionType::Settings
+        );
+        assert_eq!(
+            manifest.catalog_runtime_args("settings"),
+            Some(vec!["--settings".to_string()])
         );
     }
 
