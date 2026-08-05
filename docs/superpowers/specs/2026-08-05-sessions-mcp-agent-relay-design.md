@@ -246,7 +246,7 @@ Four research passes (one per CLI, sources: official docs + upstream source; pi 
 
 ### Second review pass fallout (2026-08-05)
 
-Two review passes (5 agents each) over the `terminal-telepathy` skill surfaced architecture items beyond skill prose:
+Two review passes (5 agents each) over the `qol-terminal-telepathy` skill surfaced architecture items beyond skill prose:
 
 - **Surface split is real**: `session_wait_output` exists only in the MCP server (this worktree); main ships four tools and the CLI has no `wait` subcommand; the qol-skills pi package ships no session tools at all (the earlier "pi tools shipped" claim was false; hooks.ts never landed). The skill now teaches a poll-based loop as the universal procedure with `wait_output` as an optimization.
 - **Capability negotiation gap**: `sessions_list` flattens per-tool phase into a bool `has_activity`, forcing clients to re-derive idle/blocked states; codex blocked-on-approval reads as idle. Future: expose the interpreter phase (Busy/Blocked/Done/Idle) in list rows.
