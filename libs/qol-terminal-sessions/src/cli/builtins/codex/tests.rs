@@ -59,6 +59,66 @@ fn session_index_changes_refresh_names_without_waiting_for_a_ttl() {
     assert_eq!(renamed.has_activity, Some(true));
 }
 
+#[test]
+fn title_activity_and_thread_name_follow_the_default_title_layout() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(&rollout, "\n").unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment {
+        rollout: rollout.clone(),
+        index,
+    }));
+
+    let cases = [
+        (
+            "qol-tts | Working | fix the queue",
+            Some(true),
+            Some("fix the queue"),
+        ),
+        (
+            "qol-tts | Thinking | hard problem",
+            Some(true),
+            Some("hard problem"),
+        ),
+        ("qol-tts | Action Required | qol-tts", Some(false), None),
+        ("qol-tts | Ready | qol-tts", Some(false), None),
+        ("qol-tts", Some(false), None),
+    ];
+
+    for (title, activity, thread_name) in cases {
+        let mut facts = session();
+        facts.title = title.to_owned();
+        let descriptor = strategy.describe(&facts);
+        assert_eq!(descriptor.has_activity, activity, "title: {title}");
+        let expected = thread_name
+            .map(str::to_owned)
+            .or(Some("qol-tts".to_owned()));
+        assert_eq!(descriptor.display_name, expected, "title: {title}");
+    }
+}
+
+#[test]
+fn title_activity_falls_back_to_rollout_state_for_unknown_titles() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(
+        &rollout,
+        "{\"type\":\"item_start\"}\n{\"type\":\"response_item\"}\n",
+    )
+    .unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+
+    let mut facts = session();
+    facts.title = "some unrelated title".to_owned();
+    assert_eq!(strategy.describe(&facts).has_activity, Some(true));
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

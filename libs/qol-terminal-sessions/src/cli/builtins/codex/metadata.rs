@@ -61,14 +61,15 @@ impl CodexMetadataResolver {
             .as_mut()
             .and_then(|cache| rollout_path(session, self.environment.as_ref(), cache));
         let external_id = rollout.as_deref().and_then(uuid_from_path);
-        let thread_name = cache
+        let indexed_name = cache
             .as_mut()
             .zip(external_id.as_deref())
             .and_then(|(cache, id)| thread_name(id, self.environment.as_ref(), cache));
         CodexMetadata {
-            thread_name,
+            thread_name: title_thread_name(&session.title).or(indexed_name),
             external_id,
-            has_activity: rollout.as_deref().map(has_activity),
+            has_activity: title_activity(&session.title)
+                .or_else(|| rollout.as_deref().map(has_activity)),
         }
     }
 
@@ -162,6 +163,36 @@ fn load_index(path: PathBuf, signature: FileSignature) -> Option<SessionIndex> {
         signature,
         names,
     })
+}
+
+fn title_items(title: &str) -> Option<Vec<&str>> {
+    let trimmed = title.trim();
+    let items = trimmed.split(" | ").map(str::trim).collect::<Vec<_>>();
+    (items.len() >= 3).then_some(items)
+}
+
+fn title_activity(title: &str) -> Option<bool> {
+    let items = title_items(title)?;
+    for item in &items {
+        match *item {
+            "Working" | "Thinking" => return Some(true),
+            "Ready" => return Some(false),
+            "Action Required" => return Some(false),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn title_thread_name(title: &str) -> Option<String> {
+    let items = title_items(title)?;
+    let state = items
+        .iter()
+        .copied()
+        .find(|item| matches!(*item, "Working" | "Thinking" | "Ready" | "Action Required"))?;
+    let name = items.last().copied()?;
+    let project = items.first().copied()?;
+    (state != name && name != project).then(|| name.to_owned())
 }
 
 fn has_activity(path: &Path) -> bool {

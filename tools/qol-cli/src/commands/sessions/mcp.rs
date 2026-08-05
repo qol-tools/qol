@@ -1,4 +1,7 @@
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufWriter, Write};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
@@ -16,24 +19,178 @@ const ERROR_INVALID_REQUEST: i64 = -32600;
 const ERROR_METHOD_NOT_FOUND: i64 = -32601;
 const ERROR_INVALID_PARAMS: i64 = -32602;
 
+const QUEUE_CAPACITY_PER_SESSION: usize = 8;
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+pub(super) const WAIT_TIMEOUT_DEFAULT_MS: u64 = 30_000;
+pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
+
+struct QueueState {
+    queues: HashMap<SessionBinding, VecDeque<(String, DeliveryMode)>>,
+    last_error: HashMap<SessionBinding, String>,
+}
+
+struct DeliveryQueue {
+    terminals: Arc<TerminalSessionService>,
+    state: Arc<Mutex<QueueState>>,
+    wake: Arc<Condvar>,
+}
+
+impl DeliveryQueue {
+    fn new(terminals: Arc<TerminalSessionService>, worker: bool) -> Self {
+        let queue = Self {
+            terminals,
+            state: Arc::new(Mutex::new(QueueState {
+                queues: HashMap::new(),
+                last_error: HashMap::new(),
+            })),
+            wake: Arc::new(Condvar::new()),
+        };
+        if worker {
+            queue.spawn_worker();
+        }
+        queue
+    }
+
+    fn spawn_worker(&self) {
+        let terminals = Arc::clone(&self.terminals);
+        let state = Arc::clone(&self.state);
+        let wake = Arc::clone(&self.wake);
+        std::thread::spawn(move || loop {
+            let item = {
+                let mut state = state.lock().unwrap();
+                loop {
+                    let take = {
+                        let mut take = None;
+                        for (binding, queue) in state.queues.iter_mut() {
+                            if let Some(item) = queue.pop_front() {
+                                take = Some((binding.clone(), item));
+                                break;
+                            }
+                        }
+                        take
+                    };
+                    if let Some(item) = take {
+                        break Some(item);
+                    }
+                    if state.queues.is_empty() {
+                        state = wake.wait(state).unwrap();
+                    } else {
+                        state.queues.retain(|_, queue| !queue.is_empty());
+                        break None;
+                    }
+                }
+            };
+            let Some((binding, (text, mode))) = item else {
+                continue;
+            };
+            if let Err(error) = terminals.send_text(&binding, &text, mode) {
+                state
+                    .lock()
+                    .unwrap()
+                    .last_error
+                    .insert(binding, error.to_string());
+            }
+        });
+    }
+
+    fn enqueue(
+        &self,
+        binding: SessionBinding,
+        text: String,
+        mode: DeliveryMode,
+    ) -> Result<usize, String> {
+        let mut state = self.state.lock().unwrap();
+        let queue = state.queues.entry(binding).or_default();
+        if queue.len() >= QUEUE_CAPACITY_PER_SESSION {
+            return Err(format!(
+                "delivery queue full ({QUEUE_CAPACITY_PER_SESSION} pending for this session)"
+            ));
+        }
+        queue.push_back((text, mode));
+        self.wake.notify_all();
+        Ok(queue.len())
+    }
+
+    fn pending(&self, binding: &SessionBinding) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .queues
+            .get(binding)
+            .map_or(0, VecDeque::len)
+    }
+
+    fn take_last_error(&self, binding: &SessionBinding) -> Option<String> {
+        self.state.lock().unwrap().last_error.remove(binding)
+    }
+
+    fn wait_for_empty(&self, binding: &SessionBinding) {
+        let mut state = self.state.lock().unwrap();
+        while state
+            .queues
+            .get(binding)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            state = self.wake.wait(state).unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    fn drain_manual(&self) {
+        loop {
+            let item = {
+                let mut state = self.state.lock().unwrap();
+                let mut take = None;
+                for (binding, queue) in state.queues.iter_mut() {
+                    if let Some(item) = queue.pop_front() {
+                        take = Some((binding.clone(), item));
+                        break;
+                    }
+                }
+                if take.is_none() {
+                    state.queues.retain(|_, queue| !queue.is_empty());
+                }
+                take
+            };
+            let Some((binding, (text, mode))) = item else {
+                break;
+            };
+            if let Err(error) = self.terminals.send_text(&binding, &text, mode) {
+                self.state
+                    .lock()
+                    .unwrap()
+                    .last_error
+                    .insert(binding, error.to_string());
+            }
+        }
+    }
+}
+
 pub(crate) struct McpSessionServer {
-    terminals: TerminalSessionService,
+    terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
+    queue: DeliveryQueue,
 }
 
 impl McpSessionServer {
     pub(crate) fn system() -> Self {
+        let terminals = Arc::new(TerminalSessionService::system());
+        let queue = DeliveryQueue::new(Arc::clone(&terminals), true);
         Self {
-            terminals: TerminalSessionService::system(),
+            terminals,
             interpreter: CliSessionInterpreter::system(),
+            queue,
         }
     }
 
     #[cfg(test)]
     fn with(terminals: TerminalSessionService, interpreter: CliSessionInterpreter) -> Self {
+        let terminals = Arc::new(terminals);
+        let queue = DeliveryQueue::new(Arc::clone(&terminals), false);
         Self {
             terminals,
             interpreter,
+            queue,
         }
     }
 
@@ -109,6 +266,7 @@ impl McpSessionServer {
             "sessions_list" => self.tool_list_sessions(),
             "session_read_screen" => self.tool_read_screen(arguments),
             "session_send_text" => self.tool_send_text(arguments),
+            "session_wait_output" => self.tool_wait_output(arguments),
             "session_focus" => self.tool_focus(arguments),
             other => {
                 return error(
@@ -152,6 +310,7 @@ impl McpSessionServer {
                     "cwd": session.cwd,
                     "at_prompt": session.at_prompt,
                     "activity": descriptor.has_activity,
+                    "pending_input": self.queue.pending(&binding),
                     "capabilities": capability_names(&session.capabilities),
                 }))
             })
@@ -182,14 +341,36 @@ impl McpSessionServer {
         } else {
             DeliveryMode::Insert
         };
-        self.terminals
-            .send_text(&binding, text, mode)
-            .map_err(|error| format!("delivery failed: {error}"))?;
-        Ok(if submit {
-            format!("delivered and submitted to {binding}")
-        } else {
-            format!("delivered to {binding}")
-        })
+        let position = self.queue.enqueue(binding.clone(), text.to_owned(), mode)?;
+        let verb = if submit { "submitted" } else { "inserted" };
+        Ok(format!(
+            "queued at {position} to {binding}; {verb} in flight"
+        ))
+    }
+
+    fn tool_wait_output(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let timeout_ms = arguments
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(WAIT_TIMEOUT_DEFAULT_MS)
+            .clamp(1_000, WAIT_TIMEOUT_MAX_MS);
+        let expect = arguments
+            .get("expect")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|pattern| !pattern.is_empty());
+        self.queue.wait_for_empty(&binding);
+        if let Some(error) = self.queue.take_last_error(&binding) {
+            return Err(format!("delivery failed: {error}"));
+        }
+        let (settled, screen, polls, started) = poll_until_settled(
+            self.terminals.as_ref(),
+            &binding,
+            Duration::from_millis(timeout_ms),
+            expect.as_deref(),
+        )?;
+        Ok(wait_result(settled, screen, polls, started))
     }
 
     fn tool_focus(&self, arguments: Value) -> Result<String, String> {
@@ -227,6 +408,46 @@ fn binding_argument(arguments: &Value, name: &str) -> Result<SessionBinding, Str
         .map_err(|_| format!("invalid session token `{value}`"))
 }
 
+pub(super) fn poll_until_settled(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    timeout: Duration,
+    expect: Option<&str>,
+) -> Result<(bool, String, u64, Instant), String> {
+    let started = Instant::now();
+    let mut previous: Option<String> = None;
+    let mut changed = false;
+    let mut polls = 0_u64;
+    loop {
+        let screen = terminals
+            .read_screen(binding)
+            .map_err(|error| format!("screen read failed: {error}"))?;
+        polls += 1;
+        if let Some(pattern) = expect {
+            if screen.contains(pattern) {
+                return Ok((true, screen, polls, started));
+            }
+        } else if let Some(last) = &previous {
+            if *last != screen {
+                changed = true;
+            } else if changed {
+                return Ok((true, screen, polls, started));
+            }
+        }
+        previous = Some(screen.clone());
+        if started.elapsed() >= timeout {
+            return Ok((false, screen, polls, started));
+        }
+        std::thread::sleep(WAIT_POLL_INTERVAL);
+    }
+}
+
+fn wait_result(settled: bool, screen: String, polls: u64, started: Instant) -> String {
+    let elapsed_ms = started.elapsed().as_millis();
+    json!({ "settled": settled, "screen": screen, "polls": polls, "elapsed_ms": elapsed_ms })
+        .to_string()
+}
+
 fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
@@ -245,7 +466,7 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "session_send_text",
-            "description": "Deliver text into a live terminal session's CLI. With submit=true an Enter keypress is appended so the CLI executes the text.",
+            "description": "Deliver text into a live terminal session's CLI through a per-session FIFO queue. With submit=true an Enter keypress is appended so the CLI executes the text. Delivery is fire-and-forget typing; read the screen or call session_wait_output afterwards to see the result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -254,6 +475,19 @@ fn tool_definitions() -> Vec<Value> {
                     "submit": { "type": "boolean", "description": "Append Enter after the text (default false)" }
                 },
                 "required": ["session", "text"]
+            }
+        }),
+        json!({
+            "name": "session_wait_output",
+            "description": "Block until the session's screen settles after activity, or until it contains an expected substring. With expect given, returns when the screen contains it. Without expect, returns when the screen changed from the first read and then stayed stable across two reads. Returns settled, the current screen, poll count, and elapsed milliseconds; settled=false means the timeout elapsed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Session token from sessions_list" },
+                    "timeout_ms": { "type": "integer", "description": "Maximum wait in milliseconds (default 30000, max 600000)" },
+                    "expect": { "type": "string", "description": "Optional substring to wait for in the screen" }
+                },
+                "required": ["session"]
             }
         }),
         json!({
@@ -300,13 +534,22 @@ mod tests {
     use qol_terminal_sessions::{
         SessionFacts, SessionFocus, SessionId, TerminalBackend, TerminalError,
     };
+    use std::str::FromStr;
     use std::sync::{Arc, Mutex};
 
     struct FakeBackend {
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
+        screens: Mutex<VecDeque<String>>,
     }
 
     impl FakeBackend {
+        fn with_screens(screens: Vec<String>) -> Self {
+            Self {
+                sent: Mutex::new(Vec::new()),
+                screens: Mutex::new(screens.into()),
+            }
+        }
+
         fn session() -> SessionFacts {
             SessionFacts {
                 id: SessionId::new(qol_terminal_sessions::BackendId::new("fake").unwrap(), "7")
@@ -331,6 +574,10 @@ mod tests {
 
     impl ScreenReader for FakeBackend {
         fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            let mut screens = self.screens.lock().unwrap();
+            if let Some(screen) = screens.pop_front() {
+                return Ok(screen);
+            }
             Ok(">>> ready".to_owned())
         }
     }
@@ -373,9 +620,11 @@ mod tests {
     }
 
     fn server() -> (McpSessionServer, Arc<FakeBackend>) {
-        let backend = Arc::new(FakeBackend {
-            sent: Mutex::new(Vec::new()),
-        });
+        server_with_screens(Vec::new())
+    }
+
+    fn server_with_screens(screens: Vec<String>) -> (McpSessionServer, Arc<FakeBackend>) {
+        let backend = Arc::new(FakeBackend::with_screens(screens));
         let service =
             TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
                 .expect("unique fake backend");
@@ -430,6 +679,7 @@ mod tests {
                 "sessions_list",
                 "session_read_screen",
                 "session_send_text",
+                "session_wait_output",
                 "session_focus"
             ]
         );
@@ -478,10 +728,196 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("submitted"));
+        server.queue.drain_manual();
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].1, "print(6*7)");
         assert_eq!(sent[0].2, DeliveryMode::Submit);
+    }
+
+    #[test]
+    fn send_text_tool_queues_in_fifo_order() {
+        let (server, backend) = server();
+        let call = |text: &str| {
+            server
+                .handle_line(
+                    &serde_json::to_string(&request(
+                        10,
+                        "tools/call",
+                        json!({
+                            "name": "session_send_text",
+                            "arguments": { "session": token(), "text": text, "submit": true }
+                        }),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap()
+        };
+        assert!(call("first")["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("queued at 1"));
+        assert!(call("second")["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("queued at 2"));
+        assert_eq!(
+            server
+                .queue
+                .pending(&SessionBinding::from_str(&token()).unwrap()),
+            2
+        );
+        assert!(backend.sent.lock().unwrap().is_empty());
+        server.queue.drain_manual();
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].1, "first");
+        assert_eq!(sent[1].1, "second");
+    }
+
+    #[test]
+    fn delivery_queue_worker_delivers_in_background_in_order() {
+        let backend = Arc::new(FakeBackend::with_screens(Vec::new()));
+        let service =
+            TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
+                .expect("unique fake backend");
+        let queue = DeliveryQueue::new(Arc::new(service), true);
+        let binding = FakeBackend::session().binding().unwrap();
+        queue
+            .enqueue(binding.clone(), "first".to_owned(), DeliveryMode::Submit)
+            .unwrap();
+        queue
+            .enqueue(binding, "second".to_owned(), DeliveryMode::Submit)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let sent = backend.sent.lock().unwrap();
+            if sent.len() == 2 {
+                assert_eq!(sent[0].1, "first");
+                assert_eq!(sent[1].1, "second");
+                break;
+            }
+            drop(sent);
+            assert!(Instant::now() < deadline, "worker never delivered");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn send_text_tool_rejects_when_queue_is_full() {
+        let (server, _) = server();
+        for index in 0..QUEUE_CAPACITY_PER_SESSION {
+            let response = server
+                .handle_line(
+                    &serde_json::to_string(&request(
+                        20,
+                        "tools/call",
+                        json!({
+                            "name": "session_send_text",
+                            "arguments": { "session": token(), "text": format!("item {index}") }
+                        }),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            assert_eq!(response["result"]["isError"], false);
+        }
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    21,
+                    "tools/call",
+                    json!({
+                        "name": "session_send_text",
+                        "arguments": { "session": token(), "text": "overflow" }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("queue full"));
+    }
+
+    #[test]
+    fn wait_output_returns_when_expect_pattern_appears() {
+        let (server, _) = server_with_screens(vec![
+            ">>> idle".to_owned(),
+            ">>> print(6*7)".to_owned(),
+            ">>> print(6*7)\n42\n>>>".to_owned(),
+        ]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    30,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "42" }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let outcome: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(outcome["settled"], true);
+        assert!(outcome["screen"].as_str().unwrap().contains("42"));
+        assert!(outcome["polls"].as_u64().unwrap() >= 3);
+    }
+
+    #[test]
+    fn wait_output_returns_settled_false_on_timeout() {
+        let (server, _) = server_with_screens(vec![">>> idle".to_owned()]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    31,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "NEVER", "timeout_ms": 1100 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], false);
+        assert!(outcome["elapsed_ms"].as_u64().unwrap() >= 1000);
+    }
+
+    #[test]
+    fn wait_output_settles_after_change_then_stable_screen() {
+        let (server, _) = server_with_screens(vec![
+            ">>> idle".to_owned(),
+            ">>> running".to_owned(),
+            ">>> done".to_owned(),
+            ">>> done".to_owned(),
+        ]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    32,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "timeout_ms": 5000 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], true);
+        assert_eq!(outcome["screen"], ">>> done");
     }
 
     #[test]

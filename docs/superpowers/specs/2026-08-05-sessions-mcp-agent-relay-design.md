@@ -210,3 +210,49 @@ Sources: MCP spec (2025-03-26/06-18/11-25), sst/opencode source, Claude Code doc
 - Transport: stdio, one JSON-RPC 2.0 message per line; notifications get no response; errors -32700/-32601/-32602; tool failures are isError results, not protocol errors.
 - Capabilities: tools only (listChanged false); resources/prompts answered with -32601.
 - The same backend constraint applies as in the CLI PoC: the `kitten @` client needs KITTY_LISTEN_ON in env (host works via controlling-tty fallback because the caller runs inside kitty).
+
+## Per-tool strategy research (2026-08-05)
+
+Four research passes (one per CLI, sources: official docs + upstream source; pi verified against the installed package on this machine). Each verified or falsified the existing `CliSessionStrategy` assumptions in `libs/qol-terminal-sessions/src/cli/builtins/`.
+
+### Claude Code
+- Transcripts: `~/.claude/projects/<project>/<session-id>.jsonl`, where `<project>` is the cwd with every non-alphanumeric character replaced by `-` (confirmed in docs; matches the strategy's encoding).
+- Live session record: `~/.claude/sessions/<pid>.json` holds `{sessionId, cwd}` (the strategy's match point).
+- `claude -n <name>` sets a display name shown in `/resume`, the terminal title, and the prompt bar; `/rename` updates it mid-session. The strategy reads it from the transcript.
+- No documented screen-level busy/idle signal; `has_activity` stays None.
+
+### Codex
+- Session storage: `~/.codex/sessions/<YYYY/MM/DD>/rollout-<timestamp>-<uuid>.jsonl` plus `session_index.jsonl` at the sessions root with entries `{id, thread_name, updated_at}` (confirmed in `codex-rs/rollout/src/session_index.rs`).
+- Terminal title (new): configurable items joined by ` | `, defaults `project-name | activity | run-state | thread-title` (confirmed in `codex-rs/tui/src/bottom_pane/title_setup.rs` + snapshot). Run-state is `Ready` (idle), `Working`, or `Thinking` (busy); activity shows a spinner while working and `Action Required` while blocked on approval. The strategy now derives `has_activity` and the live thread name from the title, falling back to rollout/session_index state.
+- `codex exec --ephemeral` skips rollout persistence (so exec-mode sessions leave no metadata).
+
+### Kimi
+- Storage (confirmed in docs): `$KIMI_CODE_HOME/` (default `~/.kimi-code/`) with `config.toml`, `session_index.jsonl`, and `sessions/<workDirKey>/<sessionId>/state.json` + `agents/main/wire.jsonl`. `state.json` carries `title` and `lastPrompt` (the strategy's display name and activity signals).
+- Resume: `kimi --continue` (most recent in cwd), `kimi --session <id>`, or an interactive picker.
+- No documented terminal title behavior; display name comes from `state.json`.
+
+### Pi
+- Terminal title (confirmed in installed source, `dist/modes/interactive/interactive-mode.js`): `π - <sessionName> - <cwdBasename>`, or `π - <cwdBasename>` unnamed. Matches the strategy's parser exactly.
+- Session files: `~/.pi/agent/sessions/<--encoded-cwd-->/<timestamp>_<uuid>.jsonl`, header `{"type":"session","version":3,...,"cwd":...}` (real files on this machine match).
+- Env overrides (confirmed in `dist/config.js`): `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`. The strategy now honors the session-dir override.
+- Bug found + fixed: `expand_tilde` used `strip_prefix('~')` which leaves a leading `/`; `Path::join` with an absolute path replaces the base, so `~/...` values never expanded (affected `PI_CODING_AGENT_DIR` too). Fixed to `strip_prefix("~/")`.
+
+### Resulting changes (commit `a2c97b1e`)
+- codex: title-derived `has_activity` (`Working`/`Thinking` busy, `Ready`/`Action Required` idle) and live thread name; rollout fallback preserved.
+- pi: `PI_CODING_AGENT_SESSION_DIR` override + tilde-expansion fix.
+- claude: project-dir encoding extracted and covered by a docs-grounded test.
+- kimi: covered by docs-grounded tests (already implemented correctly).
+- 40 tests, clippy 0, fmt clean.
+
+### Second review pass fallout (2026-08-05)
+
+Two review passes (5 agents each) over the `terminal-telepathy` skill surfaced architecture items beyond skill prose:
+
+- **Surface split is real**: `session_wait_output` exists only in the MCP server (this worktree); main ships four tools and the CLI has no `wait` subcommand; the qol-skills pi package ships no session tools at all (the earlier "pi tools shipped" claim was false; hooks.ts never landed). The skill now teaches a poll-based loop as the universal procedure with `wait_output` as an optimization.
+- **Capability negotiation gap**: `sessions_list` flattens per-tool phase into a bool `has_activity`, forcing clients to re-derive idle/blocked states; codex blocked-on-approval reads as idle. Future: expose the interpreter phase (Busy/Blocked/Done/Idle) in list rows.
+- **Three turn engines overlap**: cli-sessions status state machine, qol-voice turn coordinator, and the telepathy procedure. Next step is to consume cli-sessions status as the idle oracle instead of re-deriving per-tool signals in prose.
+- **Pending work confirmed**: pi hooks.ts (register the five tools, including `session_wait_output`) is now the top delivery item; a `qol sessions wait` CLI subcommand would close the CLI gap.
+
+- 2026-08-05: `qol sessions wait <session> [--timeout-ms N] [--expect TEXT]` CLI subcommand landed (shared settle poll extracted from the MCP tool; JSON out with settled/screen/polls/elapsed_ms; host-smoke verified against a live kitty session). qol-skills ships the five native pi tools (`plugins/qol-sessions/extensions/hooks.ts`, registered in the package pi.extensions; note: the sync script owns `.pi/extensions` as generated output, so the hand-written tools extension lives in a sibling dir the script does not manage). Extension load verified headless via `pi -p` with zero errors.
+
+- 2026-08-05: review-driven fixes landed: sync script now registers `plugins/*/extensions` (tool extensions) in the pi package manifest, so `qol sessions` tools survive regeneration; pi hooks read the `activity` key (not the MCP-only `has_activity`/`pending_input`); CLI `send` treats `--submit`/`--insert` as flags only in final position and `wait` filters empty `--expect`; skills defer availability to `qol sessions help`. Verified via installed-package discovery (model enumerated all five `session_*` tools) and a live `sessions_list` call.
