@@ -23,6 +23,7 @@ kind = "settings"
 args = ["settings"]
 
 [capabilities]
+gpui = true
 doctor = true
 
 [menu]
