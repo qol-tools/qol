@@ -20,7 +20,7 @@ use crate::diagnostics::snapshot;
 use crate::host::kitty::Kitty;
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
-use crate::session::service::SystemServiceProbe;
+use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
 use crate::ui::placement::{corner_bounds, Corner};
@@ -45,6 +45,7 @@ struct ReconcileRuntime {
     interpreter: Arc<CliSessionInterpreter>,
     service_commands: Arc<[String]>,
     caches: Arc<Mutex<reconcile::ReconcileCaches>>,
+    service_snapshot: SharedSnapshotCache,
 }
 
 pub fn run(show_on_start: bool) -> anyhow::Result<()> {
@@ -70,8 +71,12 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
     let cli_interpreter = Arc::new(CliSessionInterpreter::system());
     let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
+    let service_snapshot = SharedSnapshotCache::default();
 
-    let probe = SystemServiceProbe::snapshot(service_commands.to_vec());
+    let probe = SystemServiceProbe::with_shared_cache(
+        service_commands.to_vec(),
+        Some(service_snapshot.clone()),
+    );
     if let Ok(mut caches) = reconcile_caches.lock() {
         reconcile::tick_with_caches(
             &registry,
@@ -101,6 +106,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
                 interpreter: cli_interpreter.clone(),
                 service_commands: service_commands.clone(),
                 caches: reconcile_caches.clone(),
+                service_snapshot: service_snapshot.clone(),
             },
             panel.clone(),
             show_on_start,
@@ -225,9 +231,11 @@ fn spawn_reconcile_timer(
         let interpreter = runtime.interpreter.clone();
         let commands = runtime.service_commands.clone();
         let cache = runtime.caches.clone();
+        let service_snapshot = runtime.service_snapshot.clone();
         let now = now_secs();
         cx.background_spawn(async move {
-            let probe = SystemServiceProbe::snapshot(commands.to_vec());
+            let probe =
+                SystemServiceProbe::with_shared_cache(commands.to_vec(), Some(service_snapshot));
             let notices = match cache.lock() {
                 Ok(mut caches) => reconcile::tick_with_caches(
                     &reg,
