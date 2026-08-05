@@ -155,6 +155,7 @@ fn is_supported_action(action: &str) -> bool {
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     match action {
         "ping" => ReadResult::Handled,
+        "kill" => ReadResult::Handled,
         "apply_fixes" => match apply_pending() {
             Ok(message) => {
                 runtime.snapshots.invalidate();
@@ -402,6 +403,17 @@ mod tests {
         assert!(
             matches!(handle_action(&mut runtime, "ping"), ReadResult::Handled),
             "the tray gates every action on a ping response"
+        );
+    }
+
+    #[test]
+    fn daemon_answers_the_replace_kill_with_handled() {
+        let mut runtime = DaemonRuntime::default();
+        assert!(
+            matches!(handle_action(&mut runtime, "kill"), ReadResult::Handled),
+            "a support_replace_existing daemon must answer kill with Handled or the \
+             replace handshake fails and the successor exits with \
+             'existing daemon instance is alive'"
         );
     }
 

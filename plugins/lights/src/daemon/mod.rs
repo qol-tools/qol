@@ -135,6 +135,10 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         return DaemonOutcome::Handled;
     }
 
+    if action == "kill" {
+        return DaemonOutcome::Handled;
+    }
+
     if action == LIST_DEVICES_QUERY {
         let devices: Vec<serde_json::Value> = match runtime {
             DaemonRuntime::Ready(s) => {
@@ -235,6 +239,19 @@ mod tests {
         let outcome = dispatch_action(&mut runtime, PING_ACTION);
 
         assert!(matches!(outcome, DaemonOutcome::Handled));
+    }
+
+    #[test]
+    fn daemon_answers_the_replace_kill_with_handled() {
+        let mut runtime = DaemonRuntime::Unavailable("coordinator missing".to_string());
+        let outcome = dispatch_action(&mut runtime, "kill");
+
+        assert!(
+            matches!(outcome, DaemonOutcome::Handled),
+            "a support_replace_existing daemon must answer kill with Handled or the \
+             replace handshake fails and the successor exits with \
+             'existing daemon instance is alive'"
+        );
     }
 
     #[test]
