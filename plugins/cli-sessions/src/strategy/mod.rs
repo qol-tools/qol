@@ -18,6 +18,7 @@ pub enum Phase {
     Blocked,
     Done,
     Idle,
+    Hold,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -113,6 +114,7 @@ fn moving_screen_is_busy(prev: Option<Status>, awaiting: bool) -> bool {
 pub fn running_since_for(prev_running: Option<u64>, phase: Phase, now: u64) -> Option<u64> {
     match phase {
         Phase::Busy | Phase::Service => Some(prev_running.unwrap_or(now)),
+        Phase::Hold => prev_running,
         Phase::Blocked | Phase::Done | Phase::Idle => None,
     }
 }
@@ -129,6 +131,7 @@ pub fn status_for(prev: Status, phase: Phase) -> Status {
         Phase::Blocked => Status::NeedsYou,
         Phase::Busy => Status::Working,
         Phase::Service => Status::Service,
+        Phase::Hold => prev,
         Phase::Done => {
             if prev == Status::Acknowledged {
                 Status::Acknowledged
