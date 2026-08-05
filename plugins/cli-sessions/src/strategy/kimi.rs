@@ -9,7 +9,7 @@ impl Strategy for Kimi {
     }
 
     fn working(&self, ctx: &Ctx) -> bool {
-        ctx.screen.is_some_and(kimi_working)
+        ctx.screen.is_some_and(kimi_working) && ctx.screen_changed
     }
 
     fn awaiting(&self, ctx: &Ctx) -> bool {

@@ -5,5 +5,5 @@
     "kimi"
   ],
   "expect": "Working",
-  "screen_changed": false
+  "screen_changed": true
 }

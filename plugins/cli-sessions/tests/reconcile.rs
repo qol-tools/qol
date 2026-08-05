@@ -189,6 +189,8 @@ const KIMI_WORKING: &str =
     "Collected your answers\nQ  Which repair?\n\u{2192} Repair now\n\n\u{280B} thinking...";
 const KIMI_EDITING_QUESTIONNAIRE: &str =
     include_str!("fixtures/kimi_real/questionnaire_editing.txt");
+const KIMI_STALE_LINE: &str =
+    "\u{280B} working... \u{00B7} Tip: ask Kimi to schedule tasks\n\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]";
 
 #[test]
 fn subscribed_screens_cache_after_active_sessions_settle() {
@@ -417,6 +419,27 @@ fn kimi_questionnaire_enters_and_keeps_attention_while_editing() {
     );
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
     assert_eq!(host.reads.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn kimi_stale_spinner_line_settles_to_your_turn() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(1, "project", false, &["zsh", "kimi"], "kimi")],
+        screen: KIMI_STALE_LINE.into(),
+    };
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Working,
+        "a first sighting of a spinner line is still conservative"
+    );
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::YourTurn,
+        "a settled screen with a stale spinner line is your-turn, not working"
+    );
 }
 
 #[test]
