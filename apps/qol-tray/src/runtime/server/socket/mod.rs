@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use super::state_store::SharedState;
 
-pub(crate) use platform::Listener;
+pub(crate) use platform::{BindOutcome, Listener};
 
 pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
     platform::run_at(shared, path);
 }
 
-pub(crate) fn bind_at(path: &Path) -> Option<Listener> {
+pub(crate) fn bind_at(path: &Path) -> BindOutcome {
     platform::bind_at(path)
 }
 

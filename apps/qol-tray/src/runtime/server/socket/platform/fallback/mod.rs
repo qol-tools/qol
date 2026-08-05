@@ -12,8 +12,8 @@ pub(super) fn run_at(_shared: Arc<SharedState>, path: &Path) {
     );
 }
 
-pub(super) fn bind_at(_path: &Path) -> Option<Listener> {
-    None
+pub(super) fn bind_at(_path: &Path) -> super::BindOutcome {
+    super::BindOutcome::Unsupported
 }
 
 pub(super) fn run_listener(_shared: Arc<SharedState>, _listener: Listener) {}

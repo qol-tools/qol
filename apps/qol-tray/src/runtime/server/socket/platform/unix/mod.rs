@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use super::BindOutcome;
 use crate::runtime::server::state_store::SharedState;
 use io::{prepare_stream, read_request};
 use requests::{handle_request, request_is_long_lived};
@@ -19,19 +20,24 @@ const MAX_LONG_LIVED_CONNECTIONS: usize = 64;
 pub(crate) type Listener = std::os::unix::net::UnixListener;
 
 pub(super) fn run_at(shared: Arc<SharedState>, path: &Path) {
-    let Some(listener) = bind_at(path) else {
+    let BindOutcome::Bound(listener) = bind_at(path) else {
         return;
     };
 
     run_listener(shared, listener);
 }
 
-pub(super) fn bind_at(path: &Path) -> Option<Listener> {
+pub(super) fn bind_at(path: &Path) -> BindOutcome {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = std::fs::remove_file(path);
 
-    let listener = bind_listener(path)?;
+    let Some(listener) = bind_listener(path) else {
+        return BindOutcome::Failed;
+    };
     log::info!("Runtime socket listening on {}", path.display());
-    Some(listener)
+    BindOutcome::Bound(listener)
 }
 
 pub(super) fn run_listener(shared: Arc<SharedState>, listener: Listener) {

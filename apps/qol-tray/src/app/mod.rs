@@ -444,7 +444,13 @@ async fn async_init_inner(
         Some(tokio::spawn(check_for_updates()))
     };
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
-    let _state_server = qol_tray::runtime::RuntimeServer::start();
+    let state_server = qol_tray::runtime::RuntimeServer::start();
+    if shadow_generation && state_server.state_socket().blocks_generation_handoff() {
+        anyhow::bail!(
+            "shadow dev generation cannot serve platform state: the runtime state socket at {} did not bind",
+            qol_tray::dev_generation::state_socket_path().display()
+        );
+    }
     qol_tray::settings_surface::prewarm();
     qol_tray::doctor::spawn_gpu_driver_sync_watch();
     qol_tray::doctor::spawn_target_cache_watch();

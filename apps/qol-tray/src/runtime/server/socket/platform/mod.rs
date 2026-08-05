@@ -15,11 +15,20 @@ use unix as active;
 
 pub(crate) use active::Listener;
 
+pub(crate) enum BindOutcome {
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Bound(Listener),
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Failed,
+    #[cfg_attr(unix, allow(dead_code))]
+    Unsupported,
+}
+
 pub(super) fn run_at(shared: Arc<SharedState>, path: &Path) {
     active::run_at(shared, path);
 }
 
-pub(super) fn bind_at(path: &Path) -> Option<Listener> {
+pub(super) fn bind_at(path: &Path) -> BindOutcome {
     active::bind_at(path)
 }
 
