@@ -8,7 +8,8 @@ use serde::Deserialize;
 
 use crate::{SessionBinding, SessionFacts};
 
-use super::environment::{KimiEnvironment, KimiSessionLocation};
+use super::environment::{newest_write, KimiEnvironment, KimiSessionLocation};
+use crate::cli::activity::recently_active;
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const NEW_SESSION_TITLE: &str = "New Session";
@@ -45,7 +46,7 @@ struct FileSignature {
 struct CachedFacts {
     signature: FileSignature,
     session_name: Option<String>,
-    has_activity: bool,
+    has_prompt: bool,
 }
 
 impl KimiMetadataResolver {
@@ -66,10 +67,21 @@ impl KimiMetadataResolver {
                 .as_ref()
                 .and_then(|l| cached_facts(&l.state_path, cache))
         });
+        let has_activity = match (facts.as_ref(), location.as_ref()) {
+            (Some(facts), Some(location)) => {
+                let recent = location
+                    .state_path
+                    .parent()
+                    .and_then(newest_write)
+                    .is_some_and(|write| recently_active(Some(write)) == Some(true));
+                Some(facts.has_prompt && recent)
+            }
+            _ => None,
+        };
         KimiMetadata {
             session_name: facts.as_ref().and_then(|f| f.session_name.clone()),
             external_id: location.as_ref().map(|l| l.session_id.clone()),
-            has_activity: facts.map(|f| f.has_activity),
+            has_activity,
         }
     }
 
@@ -129,7 +141,7 @@ fn cached_facts(path: &Path, cache: &mut KimiCache) -> Option<CachedFacts> {
     let facts = parse_state(path).map(|parsed| CachedFacts {
         signature,
         session_name: parsed.session_name,
-        has_activity: parsed.has_activity,
+        has_prompt: parsed.has_prompt,
     })?;
     cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
     Some(facts)
@@ -139,7 +151,7 @@ fn clone_facts(facts: &CachedFacts) -> CachedFacts {
     CachedFacts {
         signature: facts.signature,
         session_name: facts.session_name.clone(),
-        has_activity: facts.has_activity,
+        has_prompt: facts.has_prompt,
     }
 }
 
@@ -153,7 +165,7 @@ fn file_signature(path: &Path) -> Option<FileSignature> {
 
 struct ParsedState {
     session_name: Option<String>,
-    has_activity: bool,
+    has_prompt: bool,
 }
 
 fn parse_state(path: &Path) -> Option<ParsedState> {
@@ -162,12 +174,12 @@ fn parse_state(path: &Path) -> Option<ParsedState> {
         .title
         .map(|title| title.trim().to_owned())
         .filter(|title| !title.is_empty() && title != NEW_SESSION_TITLE);
-    let has_activity = record
+    let has_prompt = record
         .last_prompt
         .is_some_and(|prompt| !prompt.trim().is_empty());
     Some(ParsedState {
         session_name,
-        has_activity,
+        has_prompt,
     })
 }
 

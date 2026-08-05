@@ -10,21 +10,61 @@ use qol_terminal_sessions::{
 };
 use serde::Serialize;
 
+mod contract;
+mod export;
+mod last_send;
 mod mcp;
 
-pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
-    let subcommand = args
+pub(crate) struct SessionSubcommand {
+    pub(crate) name: &'static str,
+    run: fn(&[OsString], OutputFormat) -> Result<()>,
+}
+
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
+    SessionSubcommand {
+        name: "list",
+        run: |_rest, format| list(format),
+    },
+    SessionSubcommand {
+        name: "send",
+        run: |rest, _format| send(rest),
+    },
+    SessionSubcommand {
+        name: "read",
+        run: |rest, _format| read_screen(rest),
+    },
+    SessionSubcommand {
+        name: "wait",
+        run: |rest, _format| wait(rest),
+    },
+    SessionSubcommand {
+        name: "focus",
+        run: |rest, _format| focus(rest),
+    },
+    SessionSubcommand {
+        name: "mcp",
+        run: |_rest, _format| mcp::run(),
+    },
+    SessionSubcommand {
+        name: "export",
+        run: |rest, _format| export::run(rest),
+    },
+];
+
+fn split_subcommand(args: &[OsString]) -> (&str, &[OsString]) {
+    let name = args
         .first()
         .and_then(|argument| argument.to_str())
-        .unwrap_or("list");
-    let rest = &args[1..];
+        .unwrap_or(SUBCOMMANDS[0].name);
+    (name, args.get(1..).unwrap_or_default())
+}
+
+pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
+    let (subcommand, rest) = split_subcommand(args);
+    if let Some(subcommand) = SUBCOMMANDS.iter().find(|entry| entry.name == subcommand) {
+        return (subcommand.run)(rest, output_format);
+    }
     match subcommand {
-        "list" => list(output_format),
-        "send" => send(rest),
-        "read" => read_screen(rest),
-        "focus" => focus(rest),
-        "wait" => wait(rest),
-        "mcp" => mcp::run(),
         "help" | "-h" | "--help" => {
             print!("{}", help_text());
             Ok(())
@@ -37,7 +77,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or contains the\n  expected text, then prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus). Delivery is a bounded per-session\n  FIFO queue; send reports its queue position, wait_output blocks until\n  the screen settles or an expected substring appears.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
+    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or shows the\n  expected text outside the echo of the last send and settles again, then\n  prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus). Delivery is a bounded per-session\n  FIFO queue; send reports its queue position, wait_output blocks until\n  the screen settles or an expected substring appears outside the echo of\n  the last send and the screen settles again.\n  export renders a per-client agent surface from the shared tool contract\n  in sessions/contract.rs; qol sessions export pi prints the pi extension\n  source, qol sessions export with no client lists the available clients.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
 }
 
 fn service() -> Result<TerminalSessionService> {
@@ -106,6 +146,9 @@ fn send(args: &[OsString]) -> Result<()> {
     service()?
         .send_text(&binding, &text, mode)
         .context("text delivery failed")?;
+    if let Some(store) = last_send::LastSendStore::system() {
+        store.record(&binding, &text);
+    }
     println!("delivered {} to {}", mode_label(mode), binding);
     Ok(())
 }
@@ -165,11 +208,13 @@ fn wait(args: &[OsString]) -> Result<()> {
         .unwrap_or(mcp::WAIT_TIMEOUT_DEFAULT_MS)
         .clamp(1_000, mcp::WAIT_TIMEOUT_MAX_MS);
     let expect = expect.filter(|pattern| !pattern.is_empty());
+    let last_sent = last_send::LastSendStore::system().and_then(|store| store.last_sent(&binding));
     let (settled, screen, polls, started) = mcp::poll_until_settled(
         &service()?,
         &binding,
         std::time::Duration::from_millis(timeout_ms),
         expect.as_deref(),
+        last_sent.as_deref(),
     )
     .map_err(|error| anyhow!(error))?;
     let elapsed_ms = started.elapsed().as_millis();
@@ -291,6 +336,26 @@ mod tests {
         assert!(capability_names(&caps).is_empty());
         caps = SessionCapabilities::SCREEN_READING | SessionCapabilities::TEXT_INPUT;
         assert_eq!(capability_names(&caps), ["read", "input"]);
+    }
+
+    #[test]
+    fn bare_invocation_defaults_to_the_first_subcommand_without_slicing_past_the_end() {
+        let cases: [(&[&str], &str, &[&str]); 4] = [
+            (&[], "list", &[]),
+            (&["list"], "list", &[]),
+            (
+                &["send", "v1:kitty:1:42", "hello"],
+                "send",
+                &["v1:kitty:1:42", "hello"],
+            ),
+            (&["nonsense"], "nonsense", &[]),
+        ];
+        for (input, expected_name, expected_rest) in cases {
+            let args: Vec<OsString> = input.iter().map(OsString::from).collect();
+            let (name, rest) = split_subcommand(&args);
+            assert_eq!(name, expected_name, "input: {input:?}");
+            assert_eq!(rest, expected_rest, "input: {input:?}");
+        }
     }
 
     #[test]

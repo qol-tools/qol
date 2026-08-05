@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::SessionFacts;
 
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
+use crate::cli::activity::file_activity;
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
@@ -17,6 +18,7 @@ const REVERSE_READ_CHUNK: u64 = 64 * 1024;
 pub(super) struct ClaudeMetadata {
     pub custom_title: Option<String>,
     pub external_id: Option<String>,
+    pub has_activity: Option<bool>,
 }
 
 pub(super) struct ClaudeMetadataResolver {
@@ -27,7 +29,7 @@ pub(super) struct ClaudeMetadataResolver {
 #[derive(Default)]
 struct ClaudeCache {
     sessions: HashMap<i32, Timed<Option<ClaudeSessionLocation>>>,
-    titles: HashMap<PathBuf, CachedTitle>,
+    facts: HashMap<PathBuf, CachedFacts>,
 }
 
 struct Timed<T> {
@@ -41,10 +43,11 @@ struct FileSignature {
     length: u64,
 }
 
-struct CachedTitle {
+struct CachedFacts {
     signature: FileSignature,
     scanned_length: u64,
-    value: Option<String>,
+    title: Option<String>,
+    has_message: bool,
 }
 
 impl ClaudeMetadataResolver {
@@ -60,14 +63,17 @@ impl ClaudeMetadataResolver {
         let location = cache
             .as_mut()
             .and_then(|cache| session_location(session, self.environment.as_ref(), cache));
-        let custom_title = cache.as_mut().and_then(|cache| {
+        let facts = cache.as_mut().and_then(|cache| {
             location
                 .as_ref()
-                .and_then(|location| cached_title(&location.transcript_path, cache))
+                .and_then(|location| cached_facts(&location.transcript_path, cache))
         });
         ClaudeMetadata {
-            custom_title,
+            custom_title: facts.as_ref().and_then(|facts| facts.title.clone()),
             external_id: location.map(|location| location.external_id),
+            has_activity: facts
+                .as_ref()
+                .and_then(|facts| file_activity(facts.signature.modified, facts.has_message)),
         }
     }
 
@@ -110,38 +116,78 @@ fn cached_session(
     value
 }
 
-fn cached_title(path: &Path, cache: &mut ClaudeCache) -> Option<String> {
+fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
     let signature = file_signature(path)?;
-    if let Some(entry) = cache.titles.get(path) {
+    if let Some(entry) = cache.facts.get(path) {
         if entry.signature == signature {
-            return entry.value.clone();
+            return Some(clone_facts(entry));
         }
         if signature.length > entry.signature.length
             && entry.scanned_length == entry.signature.length
         {
-            let value = latest_custom_title_since(path, entry.scanned_length)
-                .or_else(|| entry.value.clone());
-            cache.titles.insert(
-                path.to_path_buf(),
-                CachedTitle {
-                    signature,
-                    scanned_length: complete_length(path, signature.length),
-                    value: value.clone(),
-                },
-            );
-            return value;
+            let title = latest_custom_title_since(path, entry.scanned_length)
+                .or_else(|| entry.title.clone());
+            let has_message = entry.has_message || any_message_since(path, entry.scanned_length);
+            let facts = CachedFacts {
+                signature,
+                scanned_length: complete_length(path, signature.length),
+                title,
+                has_message,
+            };
+            cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
+            return Some(facts);
         }
     }
-    let value = latest_custom_title(path);
-    cache.titles.insert(
-        path.to_path_buf(),
-        CachedTitle {
-            signature,
-            scanned_length: complete_length(path, signature.length),
-            value: value.clone(),
-        },
-    );
-    value
+    let facts = CachedFacts {
+        signature,
+        scanned_length: complete_length(path, signature.length),
+        title: latest_custom_title(path),
+        has_message: any_message(path),
+    };
+    cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
+    Some(facts)
+}
+
+fn clone_facts(facts: &CachedFacts) -> CachedFacts {
+    CachedFacts {
+        signature: facts.signature,
+        scanned_length: facts.scanned_length,
+        title: facts.title.clone(),
+        has_message: facts.has_message,
+    }
+}
+
+fn any_message(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    std::io::BufRead::lines(std::io::BufReader::new(file))
+        .map_while(Result::ok)
+        .any(|line| is_message(line.as_bytes()))
+}
+
+fn any_message_since(path: &Path, offset: u64) -> bool {
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return false;
+    }
+    let mut appended = Vec::new();
+    if file.read_to_end(&mut appended).is_err() {
+        return false;
+    }
+    appended.split(|byte| *byte == b'\n').any(is_message)
+}
+
+fn is_message(line: &[u8]) -> bool {
+    contains_bytes(line, b"\"type\":\"user\"") || contains_bytes(line, b"\"type\":\"assistant\"")
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn file_signature(path: &Path) -> Option<FileSignature> {

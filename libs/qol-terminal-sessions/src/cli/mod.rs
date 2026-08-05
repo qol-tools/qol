@@ -1,3 +1,4 @@
+mod activity;
 mod builtins;
 mod interpreter;
 mod model;

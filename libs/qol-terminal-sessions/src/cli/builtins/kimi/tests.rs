@@ -48,6 +48,32 @@ fn fresh_session_reads_idle_until_a_prompt_is_sent() {
 }
 
 #[test]
+fn activity_goes_idle_when_the_session_stops_being_written() {
+    let root = TempDir::new().unwrap();
+    let state = root.path().join("state.json");
+    std::fs::write(
+        &state,
+        r#"{"createdAt":"2026-08-03T09:06:52.000Z","updatedAt":"2026-08-03T09:15:00.000Z","title":"Refactor auth module","isCustomTitle":false,"workDir":"/work/proj","lastPrompt":"refactor auth"}"#,
+    )
+    .unwrap();
+    let strategy = strategy(state.clone(), "session_abc-123");
+
+    let active = strategy.describe(&session());
+    assert_eq!(active.has_activity, Some(true));
+
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&state)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+
+    let idle = strategy.describe(&session());
+    assert_eq!(idle.has_activity, Some(false));
+}
+
+#[test]
 fn session_name_is_none_when_state_is_missing() {
     let root = TempDir::new().unwrap();
     let strategy = strategy(root.path().join("missing.json"), "session_x");

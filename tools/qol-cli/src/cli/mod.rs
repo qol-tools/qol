@@ -228,4 +228,20 @@ mod tests {
             assert!(contract_execution(&args).unwrap().is_none());
         }
     }
+
+    #[test]
+    fn sessions_help_lists_every_subcommand() {
+        let args = parse_cli(vec!["help".into(), "sessions".into()]);
+        let execution = contract_execution(&args).unwrap().unwrap();
+        assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
+        let usage = format!(
+            "qol sessions <{}>",
+            crate::commands::sessions::SUBCOMMANDS
+                .iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        assert!(execution.stdout.contains(&usage));
+    }
 }

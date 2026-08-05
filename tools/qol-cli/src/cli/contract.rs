@@ -2,6 +2,8 @@ use super::CliArgs;
 use anyhow::{anyhow, Result};
 use qol_headless::{Command, Execution, HeadlessApp};
 
+use crate::commands::sessions;
+
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     let has_help = args.values.iter().any(|value| {
         value
@@ -187,14 +189,22 @@ fn app() -> HeadlessApp {
             command(
                 "sessions",
                 "Discover live terminal sessions and deliver text into them.",
-                "qol sessions <list|send|read|wait|focus|mcp>",
+                &format!(
+                    "qol sessions <{}>",
+                    sessions::SUBCOMMANDS
+                        .iter()
+                        .map(|entry| entry.name)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
                 "Sessions come from the shared terminal-sessions backends (kitty remote control).",
                 "Session rows, delivery confirmation, or wait JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when discovery, identity, capability, or delivery fails.",
             )
             .detail("list --json emits structured rows; send delivers text (--submit appends Enter).")
             .detail("wait polls until the screen settles or contains --expect text, then prints JSON.")
-            .detail("mcp serves the session tools over stdio."),
+            .detail("mcp serves the session tools over stdio.")
+            .detail("export renders a per-client agent surface from the shared tool contract."),
         )
         .command(command(
             "trace",

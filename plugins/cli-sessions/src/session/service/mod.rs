@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::host::Pane;
 
 mod platform;
+
+const SNAPSHOT_TTL: Duration = Duration::from_secs(30);
 
 pub trait ServiceProbe {
     fn is_service(&self, pane: &Pane) -> bool;
@@ -20,36 +22,48 @@ impl ServiceProbe for NoServiceProbe {
 
 pub struct SystemServiceProbe {
     declared: Vec<String>,
-    snapshot: OnceLock<CachedProcessSnapshot>,
     load: fn() -> Option<ProcessSnapshot>,
+    shared: SharedSnapshotCache,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ProcessSnapshot {
     listeners: HashSet<i32>,
     children: HashMap<i32, Vec<i32>>,
 }
 
-struct CachedProcessSnapshot {
-    value: Option<ProcessSnapshot>,
+#[derive(Default)]
+pub(crate) struct CachedProcessSnapshot {
+    value: Option<Arc<ProcessSnapshot>>,
     loaded_at: Option<Instant>,
 }
 
+pub(crate) type SharedSnapshotCache = Arc<Mutex<CachedProcessSnapshot>>;
+
 impl SystemServiceProbe {
-    pub fn snapshot(declared: Vec<String>) -> Self {
+    pub(crate) fn with_shared_cache(declared: Vec<String>, shared: SharedSnapshotCache) -> Self {
         Self {
             declared,
-            snapshot: OnceLock::new(),
             load: platform::process_snapshot,
+            shared,
         }
     }
 
     #[cfg(test)]
     fn with_loader(declared: Vec<String>, load: fn() -> Option<ProcessSnapshot>) -> Self {
+        Self::with_loader_and_cache(declared, load, SharedSnapshotCache::default())
+    }
+
+    #[cfg(test)]
+    fn with_loader_and_cache(
+        declared: Vec<String>,
+        load: fn() -> Option<ProcessSnapshot>,
+        shared: SharedSnapshotCache,
+    ) -> Self {
         Self {
             declared,
-            snapshot: OnceLock::new(),
             load,
+            shared,
         }
     }
 
@@ -70,8 +84,7 @@ impl SystemServiceProbe {
     }
 
     fn subtree_listens(&self, pane: &Pane) -> bool {
-        let snapshot = self.process_snapshot();
-        let Some(snapshot) = snapshot.value.as_ref() else {
+        let Some(snapshot) = self.process_snapshot() else {
             return false;
         };
         let mut stack: Vec<i32> = pane.foreground_pids.clone();
@@ -91,61 +104,44 @@ impl SystemServiceProbe {
         false
     }
 
-    fn process_snapshot(&self) -> &CachedProcessSnapshot {
-        #[cfg(debug_assertions)]
-        let was_cached = self.snapshot.get().is_some();
-        let snapshot = self.snapshot.get_or_init(|| {
-            let value = (self.load)();
-            #[cfg(debug_assertions)]
-            let outcome = if value.is_some() {
-                "available"
-            } else {
-                "transient_failure"
-            };
-            #[cfg(not(debug_assertions))]
-            let outcome = "unavailable";
+    fn process_snapshot(&self) -> Option<Arc<ProcessSnapshot>> {
+        let mut cache = self
+            .shared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if snapshot_fresh(cache.loaded_at, Instant::now()) {
             qol_runtime::probe!(
                 "CLI_SESSIONS_RECON",
-                "phase=service_probe cache=load outcome={outcome} age_ms=0"
-            );
-            CachedProcessSnapshot {
-                value,
-                loaded_at: {
-                    #[cfg(debug_assertions)]
-                    {
-                        Some(Instant::now())
-                    }
-                    #[cfg(not(debug_assertions))]
-                    {
-                        None
-                    }
+                "phase=service_probe cache=hit outcome={} age_ms={}",
+                if cache.value.is_some() {
+                    "available"
+                } else {
+                    "unavailable"
                 },
-            }
-        });
-        #[cfg(debug_assertions)]
-        if was_cached {
-            let outcome = if snapshot.value.is_some() {
-                "available"
-            } else {
-                "transient_failure"
-            };
-            let age_ms = snapshot
-                .loaded_at
-                .map_or(0, |loaded_at| loaded_at.elapsed().as_millis());
-            qol_runtime::probe!(
-                "CLI_SESSIONS_RECON",
-                "phase=service_probe cache=hit outcome={outcome} age_ms={age_ms}"
+                cache
+                    .loaded_at
+                    .map_or(0_u128, |loaded_at| loaded_at.elapsed().as_millis()),
             );
+            return cache.value.clone();
         }
-        #[cfg(not(debug_assertions))]
+        let fresh = (self.load)();
+        let outcome = if fresh.is_some() {
+            cache.value = fresh.map(Arc::new);
+            cache.loaded_at = Some(Instant::now());
+            "available"
+        } else {
+            "transient_failure"
+        };
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=service_probe cache=hit outcome={} age_ms={}",
-            "unavailable",
-            snapshot.loaded_at.map_or(0_u128, |_| 0_u128)
+            "phase=service_probe cache=load outcome={outcome} age_ms=0"
         );
-        snapshot
+        cache.value.clone()
     }
+}
+
+fn snapshot_fresh(loaded_at: Option<Instant>, now: Instant) -> bool {
+    loaded_at.is_some_and(|at| now.saturating_duration_since(at) < SNAPSHOT_TTL)
 }
 
 impl ServiceProbe for SystemServiceProbe {
@@ -225,6 +221,56 @@ mod tests {
         let probe = SystemServiceProbe::with_loader(vec!["qol dev".into()], counted_snapshot);
         assert!(probe.is_service(&pane(10, "qol dev", Vec::new())));
         assert_eq!(load_count(), 0);
+    }
+
+    #[test]
+    fn shared_cache_reuses_fresh_snapshot_across_probes() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let shared = SharedSnapshotCache::default();
+        let first =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
+        let second =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
+        let pane = pane(10, "server", Vec::new());
+        assert!(first.is_service(&pane));
+        assert!(second.is_service(&pane));
+        assert_eq!(
+            load_count(),
+            1,
+            "second probe must reuse the fresh snapshot"
+        );
+    }
+
+    #[test]
+    fn shared_cache_retries_failed_load_on_next_probe() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let shared = SharedSnapshotCache::default();
+        let pane = pane(10, "server", Vec::new());
+        let failing = SystemServiceProbe::with_loader_and_cache(
+            Vec::new(),
+            transient_failure,
+            shared.clone(),
+        );
+        assert!(
+            !failing.is_service(&pane),
+            "failed load must not report a service"
+        );
+        let recovered =
+            SystemServiceProbe::with_loader_and_cache(Vec::new(), counted_snapshot, shared.clone());
+        assert!(
+            recovered.is_service(&pane),
+            "next probe must retry the load"
+        );
+    }
+
+    #[test]
+    fn snapshot_freshness_respects_ttl() {
+        let now = Instant::now();
+        assert!(!snapshot_fresh(None, now));
+        assert!(snapshot_fresh(Some(now - Duration::from_secs(29)), now));
+        assert!(!snapshot_fresh(Some(now - Duration::from_secs(31)), now));
     }
 
     #[test]

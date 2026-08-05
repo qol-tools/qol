@@ -61,7 +61,7 @@ impl CliSessionStrategy for ClaudeStrategy {
                 .or_else(|| clean_title(&session.title))
                 .or_else(|| project_name(&session.cwd)),
             external_id: metadata.external_id,
-            has_activity: None,
+            has_activity: metadata.has_activity,
         }
     }
 

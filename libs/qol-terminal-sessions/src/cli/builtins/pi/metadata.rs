@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::SessionFacts;
 
 use super::environment::PiEnvironment;
+use crate::cli::activity::file_activity;
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
@@ -46,7 +47,7 @@ struct CachedFacts {
     signature: FileSignature,
     scanned_length: u64,
     session_name: Option<String>,
-    has_activity: bool,
+    has_message: bool,
 }
 
 impl PiMetadataResolver {
@@ -66,9 +67,10 @@ impl PiMetadataResolver {
         let facts = cache
             .as_mut()
             .and_then(|cache| path.as_deref().and_then(|path| cached_facts(path, cache)));
-        let (session_name, has_activity) = facts
-            .map(|facts| (facts.session_name, Some(facts.has_activity)))
-            .unwrap_or((None, None));
+        let session_name = facts.as_ref().and_then(|facts| facts.session_name.clone());
+        let has_activity = facts
+            .as_ref()
+            .and_then(|facts| file_activity(facts.signature.modified, facts.has_message));
         PiMetadata {
             session_name,
             external_id,
@@ -128,12 +130,12 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
             return Some(clone_facts(entry));
         }
         if signature.length >= entry.scanned_length && entry.scanned_length > 0 {
-            let (name, activity) = scan_appended(path, entry.scanned_length);
+            let (name, message) = scan_appended(path, entry.scanned_length);
             let facts = CachedFacts {
                 signature,
                 scanned_length: complete_length(path, signature.length),
                 session_name: name.or_else(|| entry.session_name.clone()),
-                has_activity: entry.has_activity || activity,
+                has_message: entry.has_message || message,
             };
             cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
             return Some(facts);
@@ -143,7 +145,7 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
         signature,
         scanned_length: complete_length(path, signature.length),
         session_name: latest_session_name(path),
-        has_activity: any_message(path),
+        has_message: any_message(path),
     };
     cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
     Some(facts)
@@ -154,7 +156,7 @@ fn clone_facts(facts: &CachedFacts) -> CachedFacts {
         signature: facts.signature,
         scanned_length: facts.scanned_length,
         session_name: facts.session_name.clone(),
-        has_activity: facts.has_activity,
+        has_message: facts.has_message,
     }
 }
 
@@ -196,16 +198,16 @@ fn scan_appended(path: &Path, offset: u64) -> (Option<String>, bool) {
         return (None, false);
     }
     let mut name = None;
-    let mut activity = false;
+    let mut message = false;
     for line in appended.split(|byte| *byte == b'\n') {
         if let Some(found) = session_name(line) {
             name = Some(found);
         }
         if is_message(line) {
-            activity = true;
+            message = true;
         }
     }
-    (name, activity)
+    (name, message)
 }
 
 fn latest_session_name(path: &Path) -> Option<String> {

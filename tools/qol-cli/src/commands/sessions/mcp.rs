@@ -11,6 +11,8 @@ use qol_terminal_sessions::{
 };
 use serde_json::{json, Value};
 
+use super::last_send::LastSendStore;
+
 const PROTOCOL_VERSION: &str = "2025-03-26";
 const SERVER_NAME: &str = "qol-sessions-mcp";
 
@@ -170,6 +172,7 @@ pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
     queue: DeliveryQueue,
+    store: LastSendStore,
 }
 
 impl McpSessionServer {
@@ -180,17 +183,25 @@ impl McpSessionServer {
             terminals,
             interpreter: CliSessionInterpreter::system(),
             queue,
+            store: LastSendStore::system().unwrap_or_else(|| {
+                LastSendStore::with_dir(std::env::temp_dir().join("qol-sessions-last-send"))
+            }),
         }
     }
 
     #[cfg(test)]
-    fn with(terminals: TerminalSessionService, interpreter: CliSessionInterpreter) -> Self {
+    fn with(
+        terminals: TerminalSessionService,
+        interpreter: CliSessionInterpreter,
+        store: LastSendStore,
+    ) -> Self {
         let terminals = Arc::new(terminals);
         let queue = DeliveryQueue::new(Arc::clone(&terminals), false);
         Self {
             terminals,
             interpreter,
             queue,
+            store,
         }
     }
 
@@ -342,6 +353,7 @@ impl McpSessionServer {
             DeliveryMode::Insert
         };
         let position = self.queue.enqueue(binding.clone(), text.to_owned(), mode)?;
+        self.store.record(&binding, text);
         let verb = if submit { "submitted" } else { "inserted" };
         Ok(format!(
             "queued at {position} to {binding}; {verb} in flight"
@@ -364,11 +376,13 @@ impl McpSessionServer {
         if let Some(error) = self.queue.take_last_error(&binding) {
             return Err(format!("delivery failed: {error}"));
         }
+        let last_sent = self.store.last_sent(&binding);
         let (settled, screen, polls, started) = poll_until_settled(
             self.terminals.as_ref(),
             &binding,
             Duration::from_millis(timeout_ms),
             expect.as_deref(),
+            last_sent.as_deref(),
         )?;
         Ok(wait_result(settled, screen, polls, started))
     }
@@ -413,10 +427,12 @@ pub(super) fn poll_until_settled(
     binding: &SessionBinding,
     timeout: Duration,
     expect: Option<&str>,
+    last_sent: Option<&str>,
 ) -> Result<(bool, String, u64, Instant), String> {
     let started = Instant::now();
     let mut previous: Option<String> = None;
     let mut changed = false;
+    let mut matched = false;
     let mut polls = 0_u64;
     loop {
         let screen = terminals
@@ -424,7 +440,10 @@ pub(super) fn poll_until_settled(
             .map_err(|error| format!("screen read failed: {error}"))?;
         polls += 1;
         if let Some(pattern) = expect {
-            if screen.contains(pattern) {
+            if !matched && pattern_visible(&screen, pattern, last_sent) {
+                matched = true;
+            }
+            if matched && previous.as_deref() == Some(screen.as_str()) {
                 return Ok((true, screen, polls, started));
             }
         } else if let Some(last) = &previous {
@@ -442,6 +461,18 @@ pub(super) fn poll_until_settled(
     }
 }
 
+fn pattern_visible(screen: &str, pattern: &str, last_sent: Option<&str>) -> bool {
+    if !screen.contains(pattern) {
+        return false;
+    }
+    let Some(sent) = last_sent.filter(|text| !text.is_empty()) else {
+        return true;
+    };
+    screen
+        .lines()
+        .any(|line| line.contains(pattern) && !line.contains(sent))
+}
+
 fn wait_result(settled: bool, screen: String, polls: u64, started: Instant) -> String {
     let elapsed_ms = started.elapsed().as_millis();
     json!({ "settled": settled, "screen": screen, "polls": polls, "elapsed_ms": elapsed_ms })
@@ -449,57 +480,16 @@ fn wait_result(settled: bool, screen: String, polls: u64, started: Instant) -> S
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "sessions_list",
-            "description": "List live terminal sessions with their tool, activity hint, and capabilities. Session tokens are stable identifiers accepted by the other session tools.",
-            "inputSchema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "session_read_screen",
-            "description": "Read the current screen text of a live terminal session.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "session": { "type": "string", "description": "Session token from sessions_list" } },
-                "required": ["session"]
-            }
-        }),
-        json!({
-            "name": "session_send_text",
-            "description": "Deliver text into a live terminal session's CLI through a per-session FIFO queue. With submit=true an Enter keypress is appended so the CLI executes the text. Delivery is fire-and-forget typing; read the screen or call session_wait_output afterwards to see the result.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Session token from sessions_list" },
-                    "text": { "type": "string", "description": "Text to deliver" },
-                    "submit": { "type": "boolean", "description": "Append Enter after the text (default false)" }
-                },
-                "required": ["session", "text"]
-            }
-        }),
-        json!({
-            "name": "session_wait_output",
-            "description": "Block until the session's screen settles after activity, or until it contains an expected substring. With expect given, returns when the screen contains it. Without expect, returns when the screen changed from the first read and then stayed stable across two reads. Returns settled, the current screen, poll count, and elapsed milliseconds; settled=false means the timeout elapsed.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Session token from sessions_list" },
-                    "timeout_ms": { "type": "integer", "description": "Maximum wait in milliseconds (default 30000, max 600000)" },
-                    "expect": { "type": "string", "description": "Optional substring to wait for in the screen" }
-                },
-                "required": ["session"]
-            }
-        }),
-        json!({
-            "name": "session_focus",
-            "description": "Raise the window of a live terminal session.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "session": { "type": "string", "description": "Session token from sessions_list" } },
-                "required": ["session"]
-            }
-        }),
-    ]
+    super::contract::tool_specs()
+        .iter()
+        .map(|spec| {
+            json!({
+                "name": spec.name,
+                "description": spec.description,
+                "inputSchema": spec.input_schema,
+            })
+        })
+        .collect()
 }
 
 fn capability_names(capabilities: &SessionCapabilities) -> Vec<&'static str> {
@@ -540,6 +530,7 @@ mod tests {
     struct FakeBackend {
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         screens: Mutex<VecDeque<String>>,
+        last: Mutex<Option<String>>,
     }
 
     impl FakeBackend {
@@ -547,6 +538,7 @@ mod tests {
             Self {
                 sent: Mutex::new(Vec::new()),
                 screens: Mutex::new(screens.into()),
+                last: Mutex::new(None),
             }
         }
 
@@ -576,9 +568,15 @@ mod tests {
         fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             let mut screens = self.screens.lock().unwrap();
             if let Some(screen) = screens.pop_front() {
+                *self.last.lock().unwrap() = Some(screen.clone());
                 return Ok(screen);
             }
-            Ok(">>> ready".to_owned())
+            Ok(self
+                .last
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| ">>> ready".to_owned()))
         }
     }
 
@@ -628,8 +626,10 @@ mod tests {
         let service =
             TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
                 .expect("unique fake backend");
+        let store_dir = Box::leak(Box::new(tempfile::TempDir::new().unwrap()));
+        let store = LastSendStore::with_dir(store_dir.path().to_path_buf());
         (
-            McpSessionServer::with(service, CliSessionInterpreter::system()),
+            McpSessionServer::with(service, CliSessionInterpreter::system(), store),
             backend,
         )
     }
@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_the_four_tools() {
+    fn tools_list_exposes_the_five_tools() {
         let (server, _) = server();
         let response = server
             .handle_line(&serde_json::to_string(&request(2, "tools/list", json!({}))).unwrap())
@@ -918,6 +918,149 @@ mod tests {
                 .unwrap();
         assert_eq!(outcome["settled"], true);
         assert_eq!(outcome["screen"], ">>> done");
+    }
+
+    #[test]
+    fn wait_output_ignores_the_echo_of_the_last_sent_text_until_real_output_lands() {
+        let echo = "$ sleep 4; echo relay-slow-ok";
+        let (server, _) = server_with_screens(vec![
+            echo.to_owned(),
+            echo.to_owned(),
+            format!("{echo}\nrelay-slow-ok\n$"),
+            format!("{echo}\nrelay-slow-ok\n$"),
+        ]);
+        let send = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    40,
+                    "tools/call",
+                    json!({
+                        "name": "session_send_text",
+                        "arguments": { "session": token(), "text": "sleep 4; echo relay-slow-ok", "submit": true }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("send must answer");
+        assert_eq!(send["result"]["isError"], false);
+        server.queue.drain_manual();
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    41,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("wait must answer");
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], true);
+        assert!(outcome["polls"].as_u64().unwrap() >= 3);
+        assert!(outcome["screen"]
+            .as_str()
+            .unwrap()
+            .contains("relay-slow-ok"));
+    }
+
+    #[test]
+    fn wait_output_with_expect_confirms_stability_before_returning() {
+        let (server, _) = server_with_screens(vec![
+            ">>> idle".to_owned(),
+            ">>> idle\nrelay-slow-ok".to_owned(),
+            ">>> idle\nrelay-slow-ok".to_owned(),
+        ]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    42,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("wait must answer");
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], true);
+        assert_eq!(outcome["polls"], 3);
+        assert!(outcome["screen"]
+            .as_str()
+            .unwrap()
+            .contains("relay-slow-ok"));
+    }
+
+    #[test]
+    fn wait_output_does_not_settle_on_the_echo_alone() {
+        let echo = "$ echo relay-slow-ok";
+        let (server, _) = server_with_screens(vec![echo.to_owned(), echo.to_owned()]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    43,
+                    "tools/call",
+                    json!({
+                        "name": "session_send_text",
+                        "arguments": { "session": token(), "text": "echo relay-slow-ok", "submit": true }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("send must answer");
+        assert_eq!(response["result"]["isError"], false);
+        server.queue.drain_manual();
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    44,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 1100 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("wait must answer");
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], false);
+    }
+
+    #[test]
+    fn wait_output_matches_a_pattern_that_was_already_on_screen() {
+        let (server, _) = server_with_screens(vec![
+            ">>> relay-slow-ok already visible".to_owned(),
+            ">>> relay-slow-ok already visible".to_owned(),
+        ]);
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    45,
+                    "tools/call",
+                    json!({
+                        "name": "session_wait_output",
+                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("wait must answer");
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["settled"], true);
+        assert_eq!(outcome["polls"], 2);
     }
 
     #[test]
