@@ -146,3 +146,6 @@ opt-level = 2
 
 [profile.dev.package.pulp]
 opt-level = 2
+
+[profile.dev.package.qol-shot]
+opt-level = 2
