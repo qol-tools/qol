@@ -16,6 +16,15 @@ pub(crate) struct Claim {
     pub qol_combo: String,
     pub reach: BindingReach,
     pub recorded_at: SystemTime,
+    #[serde(default)]
+    pub custom_list: Option<CustomListClaim>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CustomListClaim {
+    pub key: String,
+    pub previous: String,
+    pub applied: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +139,7 @@ mod tests {
             qol_combo: "Shift+Super+S".into(),
             reach,
             recorded_at,
+            custom_list: None,
         }
     }
 

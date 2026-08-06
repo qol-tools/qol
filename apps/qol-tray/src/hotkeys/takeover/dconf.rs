@@ -28,6 +28,20 @@ pub(crate) fn full_key(dir: &str, key: &str) -> String {
     format!("{dir}{key}")
 }
 
+pub(crate) struct CustomEntry {
+    pub list_key: String,
+    pub name: String,
+}
+
+pub(crate) fn custom_entry(dir: &str) -> Option<CustomEntry> {
+    let (parent, name) = dir.trim_end_matches('/').rsplit_once('/')?;
+    let keybindings_root = parent.strip_suffix("custom-keybindings")?;
+    Some(CustomEntry {
+        list_key: format!("{keybindings_root}custom-list"),
+        name: name.to_string(),
+    })
+}
+
 pub(crate) fn parse_dump(root: &str, dump: &str) -> Vec<BindingEntry> {
     let mut entries = Vec::new();
     let mut dir = root.to_string();
