@@ -6,6 +6,7 @@ A portable quality-of-life layer for any computer you sit down at.
 
 [![CI](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
 [![Release](https://github.com/qol-tools/qol/actions/workflows/release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/release.yml)
+[![Versioning](https://github.com/qol-tools/qol/actions/workflows/plugin-version.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/plugin-version.yml)
 
 <!-- TODO: hero demo gif -->
 
