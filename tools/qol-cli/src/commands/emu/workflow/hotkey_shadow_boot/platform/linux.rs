@@ -20,6 +20,8 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(25);
 const CHORD_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 const KEY_SETTLE: Duration = Duration::from_millis(200);
 const POKE_SETTLE: Duration = Duration::from_secs(5);
+const ACTIVE_GRAB_WAIT: Duration = Duration::from_secs(120);
+const ACTIVE_GRAB_POLL: Duration = Duration::from_secs(3);
 const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
 const QOL_COMBO: &str = "Shift+Super+S";
 const GTK_COMBO: &str = "['<Shift><Super>s']";
@@ -104,6 +106,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 }
 
 fn stage_boot_scenario(guest: &mut GuestControlClient) -> Result<()> {
+    disarm_screensaver(guest)?;
     stage_watcher(guest)?;
     stage_key_eavesdrop(guest)?;
     let auth = launch_tray_and_wait_api(guest)?;
@@ -497,10 +500,15 @@ fn diagnose_chord_eaten(
     error: anyhow::Error,
 ) -> anyhow::Error {
     let mut observations = vec![];
-    let grab_before = grab_probe(guest);
-    let marker_before = marker_exists(guest);
-    observations.push(format!("grab-state before: {grab_before}"));
-    observations.push(format!("de-marker before: {marker_before}"));
+    let active_grab_before = active_grab_probe(guest);
+    observations.push(format!("grab-state before: {}", grab_probe(guest)));
+    observations.push(format!(
+        "active-keyboard-grab before: {active_grab_before} (an active grab silences every passive grab on the display, including the tray's, and leaves the passive probe reading free)"
+    ));
+    observations.push(format!(
+        "de-marker before, so the desktop shortcut ran its own command on the eaten chord: {}",
+        marker_exists(guest)
+    ));
     let mut dispatched = false;
     for attempt in 0..3 {
         let outcome = if attempt == 0 {
@@ -536,230 +544,345 @@ fn diagnose_chord_eaten(
             }
         }
     }
-    if !dispatched {
-        let poke_write = dconf_write(guest, MANAGED_KEY, GTK_COMBO);
-        let poke = match poke_write {
-            Ok(()) => {
-                thread::sleep(POKE_SETTLE);
-                observations.push(format!(
-                    "poke: wrote {MANAGED_KEY} = {GTK_COMBO} (grab-state now: {})",
-                    grab_probe(guest)
-                ));
-                match dconf_write(guest, MANAGED_KEY, CLEARED) {
-                    Ok(()) => {
-                        thread::sleep(POKE_SETTLE);
-                        observations.push(format!(
-                            "poke: cleared it to {CLEARED} (grab-state now: {})",
-                            grab_probe(guest)
-                        ));
-                        Ok(())
-                    }
-                    Err(clear_error) => Err(clear_error),
-                }
-            }
-            Err(write_error) => Err(write_error),
-        };
-        match poke {
-            Ok(()) => match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
-                Ok(true) => {
-                    dispatched = true;
-                    observations.push("chord after poke dispatched: true".to_string());
-                }
-                Ok(false) => observations.push("chord after poke dispatched: false".to_string()),
-                Err(poke_resend_error) => {
-                    observations.push(format!("chord after poke aborted: {poke_resend_error:#}"))
-                }
-            },
-            Err(poke_error) => {
-                observations.push(format!("poke write-then-clear failed: {poke_error:#}"))
-            }
-        }
-    }
-    let grab_after_poke = grab_probe(guest);
-    observations.push(format!("grab-state after poke: {grab_after_poke}"));
+    let mut grab_after_poke = None;
     let mut grab_after_csd_kill = None;
+    let mut dispatched_once_grab_cleared = None;
+    let mut stand_in_grabber_sees_chord = None;
     if !dispatched {
-        let pid = exec(
-            guest,
-            command(
-                "/usr/bin/bash",
-                &[
-                    "-lc",
-                    "ps -eo pid,args | grep -E '[c]sd-settings-remap|[c]sd-keyboard' | awk '{print $1}'",
-                ],
-            ),
-            COMMAND_TIMEOUT,
-        );
-        let pids = pid
-            .ok()
-            .map(|o| {
-                o.stdout
-                    .trim()
-                    .lines()
-                    .filter_map(|line| line.trim().parse::<u64>().ok())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let kill = exec(
-            guest,
-            command(
-                "/usr/bin/bash",
-                &[
-                    "-lc",
-                    &format!(
-                        "kill -9 {} 2>/dev/null; echo killed",
-                        pids.iter()
-                            .map(|p| p.to_string())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ),
-                ],
-            ),
-            COMMAND_TIMEOUT,
-        );
-        match kill {
-            Ok(_) => observations.push(format!("killed csd-keyboard/settings-remap pids={pids:?}")),
-            Err(kill_error) => {
-                observations.push(format!("settings-daemon kill aborted: {kill_error:#}"))
-            }
-        }
-        thread::sleep(Duration::from_millis(600));
-        let probe_dead = grab_probe(guest);
         observations.push(format!(
-            "grab-state 0.6s after the kill (before any respawn): {probe_dead}"
+            "desktop input state at the eat: {}",
+            desktop_input_state(guest)
         ));
-        if probe_dead == "free" {
-            observations.push("the settings daemon held the stale grab; it died with it and the X server released it".to_string());
-        }
-        match eavesdrop_chord(guest, qmp) {
-            Ok((true, events)) => {
-                dispatched = true;
-                let seen = if events.is_empty() {
-                    "none".to_string()
-                } else {
-                    events
-                };
-                observations.push(format!(
-                    "chord in the respawn window dispatched: true (root key events: {seen})"
-                ));
-            }
-            Ok((false, events)) => {
-                let seen = if events.is_empty() {
-                    "none".to_string()
-                } else {
-                    events
-                };
-                observations.push(format!(
-                    "chord in the respawn window dispatched: false (root key events: {seen})"
-                ))
-            }
-            Err(respawn_resend_error) => observations.push(format!(
-                "chord in the respawn window aborted: {respawn_resend_error:#}"
-            )),
-        }
-        thread::sleep(POKE_SETTLE);
-        let survivors = exec(
-            guest,
-            command(
-                "/usr/bin/bash",
-                &[
-                    "-lc",
-                    "ps -eo pid,ppid,lstart,args | grep -E '[c]sd-settings-remap|[c]sd-keyboard' | grep -v grep",
-                ],
-            ),
-            COMMAND_TIMEOUT,
-        );
-        match survivors {
-            Ok(outcome) => observations.push(format!(
-                "settings daemon after the kill: {}",
-                outcome.stdout.trim().replace('\n', " | ")
-            )),
-            Err(survivor_error) => observations.push(format!(
-                "settings daemon listing aborted: {survivor_error:#}"
-            )),
-        }
-        let probe = grab_probe(guest);
-        grab_after_csd_kill = Some(probe.clone());
-        observations.push(format!("grab-state after the respawn window: {probe}"));
-        let shell = exec(
-            guest,
-            command(
-                "/usr/bin/bash",
-                &[
-                    "-lc",
-                    "SHELL_PID=$(ps -eo pid,args | grep -E 'cinnamon --replace|cinnamon$' | grep -v grep | awk '{print $1}' | head -1); kill -9 $SHELL_PID 2>/dev/null; echo shell-killed=$SHELL_PID",
-                ],
-            ),
-            COMMAND_TIMEOUT,
-        );
-        match shell {
-            Ok(outcome) => observations.push(format!(
-                "shell kill: {}",
-                outcome.stdout.trim().replace('\n', " | ")
-            )),
-            Err(shell_error) => observations.push(format!("shell kill aborted: {shell_error:#}")),
-        }
-        thread::sleep(Duration::from_millis(600));
-        observations.push(format!(
-            "grab-state 0.6s after killing the shell: {}",
-            grab_probe(guest)
-        ));
-        for attempt in 0..2 {
-            match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
-                Ok(true) => {
-                    dispatched = true;
-                    observations.push(format!(
-                        "chord after settings-daemon kill {attempt} dispatched: true"
-                    ));
-                    break;
-                }
-                Ok(false) => observations.push(format!(
-                    "chord after settings-daemon kill {attempt} dispatched: false"
-                )),
-                Err(kill_resend_error) => observations.push(format!(
-                    "chord after settings-daemon kill aborted: {kill_resend_error:#}"
-                )),
-            }
+        if active_grab_before != "none" {
+            dispatched_once_grab_cleared = Some(chord_after_active_grab_clears(
+                guest,
+                qmp,
+                &mut observations,
+            ));
         }
     }
-    let marker_after = marker_exists(guest);
-    observations.push(format!("de-marker after: {marker_after}"));
+    if !dispatched && dispatched_once_grab_cleared != Some(true) {
+        observations.push(
+            "the tray holds this exact core grab on the root window, so every probe above reads held whoever else grabbed the chord; killing the tray (SIGKILL, so its takeover ledger does not restore the seeded binding) is what makes a later held reading evidence of a second holder, and it runs before any dconf poke so the reading is of the boot state the chord actually met"
+                .to_string(),
+        );
+        let probe_without_tray = kill_and_probe(
+            guest,
+            &mut observations,
+            "the tray",
+            "pkill -9 -f '/home/qol/.local/bin/qol-tray'",
+        );
+        observations.push(format!(
+            "active-keyboard-grab with the tray dead: {}",
+            active_grab_probe(guest)
+        ));
+        stand_in_grabber_sees_chord = Some(chord_reaches_a_stand_in_grabber(
+            guest,
+            qmp,
+            &mut observations,
+        ));
+        name_the_active_grab_owner(guest, &mut observations);
+        if probe_without_tray == "held" {
+            match poke_binding(guest) {
+                Ok(()) => {
+                    let probe = grab_probe(guest);
+                    observations.push(format!(
+                        "grab-state after the write-then-clear poke: {probe} (held here means the desktop keeps the grab even when it sees the value change)"
+                    ));
+                    grab_after_poke = Some(probe);
+                }
+                Err(poke_error) => {
+                    observations.push(format!("poke write-then-clear failed: {poke_error:#}"))
+                }
+            }
+            if grab_after_poke.as_deref() != Some("free") {
+                grab_after_csd_kill = Some(kill_and_probe(
+                    guest,
+                    &mut observations,
+                    "the settings daemon",
+                    "pkill -9 -f 'csd-media-keys|csd-keybindings|csd-settings-remap|csd-keyboard'",
+                ));
+            }
+        } else {
+            observations.push(
+                "no second holder at the moment of the eat, so the poke and the settings-daemon kill are skipped: they would only disturb the session that still has to answer for it"
+                    .to_string(),
+            );
+        }
+    }
+    observations.push(format!("de-marker after: {}", marker_exists(guest)));
+    let marker_at_eat = observations
+        .iter()
+        .any(|line| line.starts_with("de-marker before") && line.ends_with("true"));
+    if dispatched_once_grab_cleared == Some(true) {
+        return anyhow::anyhow!(
+            "{error}\n--- stale-grab experiment ---\n{}\nVERDICT: the chord was eaten for exactly as long as another client held an active keyboard grab and dispatched on the first resend after that grab cleared, with the tray's registration untouched throughout; an active grab silences every passive grab on the display, so this boot eat is not a desktop shortcut shadow and no takeover change can fix it. The owner of that grab, in the desktop input state above, is what has to be handled.",
+            observations.join("\n")
+        );
+    }
     let verdict = match (
         dispatched,
-        grab_after_poke.as_str(),
+        marker_at_eat,
+        stand_in_grabber_sees_chord,
+        grab_after_poke.as_deref(),
         grab_after_csd_kill.as_deref(),
     ) {
-        (true, _, _) => {
+        (true, _, _, _, _) => {
             "VERDICT: a resend dispatched after the failure, so the first chord lost an injection race and no stale desktop grab is proven; the shadow theory needs a run where no resend dispatches"
                 .to_string()
         }
-        (false, "free", _) => {
-            "VERDICT: the combo is not grabbed after the poke, yet the chord still does not dispatch; the failure is in the chord injection, not a desktop grab"
+        (false, true, _, _, _) => {
+            "VERDICT: the desktop ran the seeded shortcut's own command on the eaten chord, so it still held both the grab and the command the takeover was supposed to clear; the doctor's write of an empty value never reached the desktop's runtime. Note that the core passive probe cannot see this: the desktop grabs through XI2 and the X server tracks core and XI2 passive grabs separately, so a core probe reads free while the desktop is holding the chord. The fix must make the desktop re-read the binding, by removing the keybinding entry rather than emptying its value, or by re-applying the clear once the desktop has settled."
                 .to_string()
         }
-        (false, "held", Some("free")) => {
-            "VERDICT: killing the settings daemon freed the grab, so the daemon held a stale grab that even a write-then-clear re-poke did not release; the fix must make the daemon drop its grab (restart it or gate the takeover on it)"
+        (false, false, Some(false), _, _) => {
+            "VERDICT: with the tray dead and the desktop binding cleared, a fresh core grabber of the same chord never received the key either, and the desktop ran no command; something the core grab layer cannot see is intercepting the chord, which is the signature of a retained XI2 grab whose command the clear did empty. The fix is the same as the loud case: make the desktop drop the grab, not just blank the value."
                 .to_string()
         }
-        (false, "held", Some("held")) => {
-            "VERDICT: the combo stayed grabbed after killing the settings daemon, so the holder is not the desktop daemon; qol's own grab is held but its listener does not dispatch, pointing at the tray's hotkey listener, not a desktop shadow"
+        (false, false, Some(true), _, _) => {
+            "VERDICT: with the tray dead, a fresh core grabber of the same chord did receive the key, so nothing on the display is intercepting it and the desktop ran no command; the eat is inside the tray's own hotkey listener, which held a healthy registration and never dispatched"
                 .to_string()
         }
-        (false, "held", None) => {
-            "VERDICT: the combo is held, no resend dispatched, and the settings-daemon kill was not attempted; the eat is real but the holder is not yet pinned"
-                .to_string()
-        }
-        (false, other, Some(held)) => format!(
-            "VERDICT: grab-state after poke = {other:?}, after settings-daemon kill = {held:?}; the chord never dispatched, so the eat is real but its holder needs one more observation"
-        ),
-        (false, other, None) => format!(
-            "VERDICT: grab-state after poke = {other:?}; the chord never dispatched and the settings-daemon kill was not attempted"
+        (false, _, None, poke, after_kill) => format!(
+            "VERDICT: the stand-in grabber never ran, so the interception question is unanswered; poke = {poke:?}, settings-daemon kill = {after_kill:?}"
         ),
     };
     anyhow::anyhow!(
         "{error}\n--- stale-grab experiment ---\n{}\n{verdict}",
         observations.join("\n")
     )
+}
+
+fn name_the_active_grab_owner(guest: &mut GuestControlClient, observations: &mut Vec<String>) {
+    if active_grab_probe(guest) == "none" {
+        observations.push(
+            "the active keyboard grab was already gone before the owner ladder ran".to_string(),
+        );
+        return;
+    }
+    for (subject, kill_command) in [
+        ("qol's own plugin processes", "pkill -9 -f 'plugin-'"),
+        ("the cinnamon shell", "pkill -9 -f 'cinnamon --replace'"),
+    ] {
+        let killed = exec(
+            guest,
+            command(
+                "/usr/bin/bash",
+                &["-lc", &format!("{kill_command}; echo killed")],
+            ),
+            COMMAND_TIMEOUT,
+        );
+        if let Err(kill_error) = killed {
+            observations.push(format!("{subject} kill aborted: {kill_error:#}"));
+            continue;
+        }
+        thread::sleep(Duration::from_millis(800));
+        let state = active_grab_probe(guest);
+        observations.push(format!(
+            "active-keyboard-grab after killing {subject}: {state}"
+        ));
+        if state == "none" {
+            observations.push(format!(
+                "the active keyboard grab died with {subject}, which names its owner"
+            ));
+            return;
+        }
+    }
+}
+
+fn chord_reaches_a_stand_in_grabber(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    observations: &mut Vec<String>,
+) -> bool {
+    let script = r#"import os, time
+from Xlib import X, XK, display
+
+log = open("/home/qol/stand-in-grabber.log", "w")
+
+
+def say(line):
+    log.write(line + "\n")
+    log.flush()
+
+
+d = display.Display(os.environ.get("DISPLAY", ":0"))
+root = d.screen().root
+keycode = d.keysym_to_keycode(XK.string_to_keysym("s"))
+mods = X.ShiftMask | X.Mod4Mask
+for extra in (0, X.Mod2Mask, X.LockMask, X.Mod2Mask | X.LockMask):
+    root.grab_key(keycode, mods | extra, False, X.GrabModeAsync, X.GrabModeAsync)
+d.sync()
+say("grabbed keycode=%d" % keycode)
+deadline = time.time() + 14
+while time.time() < deadline:
+    while d.pending_events():
+        e = d.next_event()
+        if e.type == X.KeyPress:
+            say("received keycode=%d state=0x%x" % (e.detail, e.state))
+    time.sleep(0.02)
+say("window-closed")
+d.close()
+"#;
+    let pid = match write_and_spawn_python(guest, "stand-in-grabber.py", script) {
+        Ok(pid) => pid,
+        Err(spawn_error) => {
+            observations.push(format!("stand-in grabber failed to start: {spawn_error:#}"));
+            return false;
+        }
+    };
+    thread::sleep(Duration::from_millis(1200));
+    if let Err(key_error) = qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()]) {
+        observations.push(format!("stand-in grabber chord aborted: {key_error:#}"));
+        return false;
+    }
+    thread::sleep(Duration::from_secs(2));
+    let outcome = exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                &format!(
+                    "cat /home/qol/stand-in-grabber.log 2>/dev/null; echo ---runner---; cat /tmp/qol-guest-runner/{pid}/stderr 2>/dev/null | tail -4"
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    );
+    let report = match outcome {
+        Ok(outcome) => outcome.stdout.trim().replace('\n', " | "),
+        Err(read_error) => format!("stand-in grabber log unreadable: {read_error:#}"),
+    };
+    let received = report.contains("received keycode=");
+    observations.push(format!(
+        "a fresh core grabber, with the tray dead, {} the chord: {report}",
+        if received { "received" } else { "never saw" }
+    ));
+    observations.push(format!(
+        "de-marker right after that injection: {}",
+        marker_exists(guest)
+    ));
+    received
+}
+
+fn write_and_spawn_python(
+    guest: &mut GuestControlClient,
+    file_name: &str,
+    script: &str,
+) -> Result<u64> {
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/sh",
+            &[
+                "-c",
+                &format!("cat > /home/qol/{file_name} <<'PY'\n{script}PY"),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    spawn(
+        guest,
+        command("/usr/bin/python3", &[&format!("/home/qol/{file_name}")]),
+    )
+}
+
+fn desktop_input_state(guest: &mut GuestControlClient) -> String {
+    let outcome = exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                "echo focus=$(xdotool getwindowfocus getwindowname 2>&1); echo windows=$(wmctrl -l 2>&1 | tr '\\n' '/'); echo screensaver=$(cinnamon-screensaver-command -q 2>&1); echo grabbers=$(ps -eo pid,args | grep -E '[c]innamon|[p]lugin-|[q]ol-' | grep -v qol-guest-runner | tr '\\n' '/')",
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    );
+    match outcome {
+        Ok(outcome) => outcome.stdout.trim().replace('\n', " | "),
+        Err(state_error) => format!("state-error: {state_error:#}"),
+    }
+}
+
+fn chord_after_active_grab_clears(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    observations: &mut Vec<String>,
+) -> bool {
+    let deadline = std::time::Instant::now() + ACTIVE_GRAB_WAIT;
+    let mut samples = Vec::new();
+    loop {
+        let state = active_grab_probe(guest);
+        samples.push(state.clone());
+        if state == "none" {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            observations.push(format!(
+                "the active keyboard grab never cleared within {}s: {}",
+                ACTIVE_GRAB_WAIT.as_secs(),
+                samples.join(" -> ")
+            ));
+            return false;
+        }
+        thread::sleep(ACTIVE_GRAB_POLL);
+    }
+    observations.push(format!(
+        "the active keyboard grab cleared after {} samples: {}",
+        samples.len(),
+        samples.join(" -> ")
+    ));
+    observations.push(format!(
+        "desktop input state once the grab cleared: {}",
+        desktop_input_state(guest)
+    ));
+    match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
+        Ok(dispatched) => {
+            observations.push(format!(
+                "chord once the active grab cleared dispatched: {dispatched}"
+            ));
+            dispatched
+        }
+        Err(resend_error) => {
+            observations.push(format!(
+                "chord once the active grab cleared aborted: {resend_error:#}"
+            ));
+            false
+        }
+    }
+}
+
+fn kill_and_probe(
+    guest: &mut GuestControlClient,
+    observations: &mut Vec<String>,
+    subject: &str,
+    kill_command: &str,
+) -> String {
+    let listing = exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &["-lc", &format!("{kill_command}; echo killed")],
+        ),
+        COMMAND_TIMEOUT,
+    );
+    if let Err(kill_error) = listing {
+        observations.push(format!("{subject} kill aborted: {kill_error:#}"));
+    }
+    thread::sleep(Duration::from_millis(600));
+    let probe = grab_probe(guest);
+    observations.push(format!("grab-state with {subject} dead: {probe}"));
+    probe
+}
+
+fn poke_binding(guest: &mut GuestControlClient) -> Result<()> {
+    dconf_write(guest, MANAGED_KEY, GTK_COMBO)?;
+    thread::sleep(POKE_SETTLE);
+    dconf_write(guest, MANAGED_KEY, CLEARED)?;
+    thread::sleep(POKE_SETTLE);
+    Ok(())
 }
 
 fn resend_chord(
@@ -801,7 +924,7 @@ fn eavesdrop_chord(
             &[
                 "-lc",
                 &format!(
-                    "cat /tmp/qol-guest-runner/{pid}/stdout 2>/dev/null | grep -E 'press|release' || echo no-events-captured; echo ---stderr---; cat /tmp/qol-guest-runner/{pid}/stderr 2>/dev/null | tail -6"
+                    "cat /home/qol/key-eavesdrop.log 2>/dev/null | head -30 || true; echo ---runner---; cat /tmp/qol-guest-runner/{pid}/stderr 2>/dev/null | tail -6"
                 ),
             ],
         ),
@@ -811,6 +934,24 @@ fn eavesdrop_chord(
         .map(|outcome| outcome.stdout.trim().to_string())
         .unwrap_or_else(|_| "probe-error".to_string());
     Ok((dispatched, events))
+}
+
+fn active_grab_probe(guest: &mut GuestControlClient) -> String {
+    let script = r#"import os
+from Xlib import X, display
+
+d = display.Display(os.environ.get("DISPLAY", ":0"))
+root = d.screen().root
+status = root.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+code = getattr(status, "status", status)
+names = {0: "none", 1: "held-by-another-client", 2: "invalid-time", 3: "not-viewable", 4: "frozen"}
+if code == 0:
+    d.ungrab_keyboard(X.CurrentTime)
+    d.sync()
+print(names.get(code, "status-%s" % code))
+d.close()
+"#;
+    run_python_probe(guest, "active-grab-probe.py", script)
 }
 
 fn grab_probe(guest: &mut GuestControlClient) -> String {
@@ -841,6 +982,10 @@ except Exception as exc:
 d.close()
 print(result[0])
 "#;
+    run_python_probe(guest, "grab-probe.py", script)
+}
+
+fn run_python_probe(guest: &mut GuestControlClient, file_name: &str, script: &str) -> String {
     let outcome = exec(
         guest,
         command(
@@ -848,14 +993,14 @@ print(result[0])
             &[
                 "-c",
                 &format!(
-                    "cat > /home/qol/grab-probe.py <<'PY'\n{script}PY\n/usr/bin/python3 /home/qol/grab-probe.py 2>&1"
+                    "cat > /home/qol/{file_name} <<'PY'\n{script}PY\n/usr/bin/python3 /home/qol/{file_name} 2>&1"
                 ),
             ],
         ),
         COMMAND_TIMEOUT,
     );
     match outcome {
-        Ok(outcome) => outcome.stdout.trim().to_string(),
+        Ok(outcome) => outcome.stdout.trim().replace('\n', " | "),
         Err(probe_error) => format!("probe-error: {probe_error:#}"),
     }
 }
@@ -871,24 +1016,74 @@ fn marker_exists(guest: &mut GuestControlClient) -> bool {
 }
 
 fn stage_key_eavesdrop(guest: &mut GuestControlClient) -> Result<()> {
-    let script = r#"import os, time
+    let script = r#"import os, struct, time
 from Xlib import X, XK, display
+from Xlib.ext import xinput
+
+log = open("/home/qol/key-eavesdrop.log", "w")
+
+
+def say(line):
+    log.write(line + "\n")
+    log.flush()
+
+
 d = display.Display(os.environ.get("DISPLAY", ":0"))
 root = d.screen().root
+# A core selection on the root window never sees a key that another client
+# grabbed, so it cannot tell a stale grab apart from a chord that never
+# reached the server. XI2 raw events are reported before grab arbitration,
+# so they answer that question; keep both and label which saw what.
 root.change_attributes(event_mask=X.KeyPressMask | X.KeyReleaseMask)
+raw_press = getattr(xinput, "RawKeyPress", 13)
+raw_release = getattr(xinput, "RawKeyRelease", 14)
+raw = "on"
+try:
+    d.xinput_query_version()
+    root.xinput_select_events([
+        (xinput.AllMasterDevices, (1 << raw_press) | (1 << raw_release)),
+    ])
+except Exception as exc:
+    raw = "unavailable: %s: %s" % (type(exc).__name__, exc)
+say("raw-xi2=%s" % raw)
 d.sync()
-deadline = time.time() + 7
+
+
+def name_of(keycode):
+    return XK.keysym_to_string(d.keycode_to_keysym(keycode, 0)) or "?"
+
+
+def detail_of(data):
+    # python-xlib leaves the raw-event body unparsed on this server, so read
+    # deviceid/time/detail straight out of the xXIRawEvent bytes.
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 10:
+        return None
+    return struct.unpack_from("<I", data, 6)[0]
+
+
+deadline = time.time() + 12
 while time.time() < deadline:
     while d.pending_events():
         e = d.next_event()
-        if e.type in (X.KeyPress, X.KeyRelease):
-            keysym = d.keycode_to_keysym(e.detail, 0)
-            print("%s keycode=%d keysym=%s state=0x%x" % (
+        if getattr(e, "evtype", None) in (raw_press, raw_release):
+            keycode = getattr(getattr(e, "data", None), "detail", None)
+            if keycode is None:
+                keycode = detail_of(getattr(e, "data", None))
+            if keycode is None:
+                say("raw-event unparsed: %r" % (e,))
+            else:
+                say("raw-%s keycode=%d keysym=%s" % (
+                    "press" if e.evtype == raw_press else "release",
+                    keycode,
+                    name_of(keycode)))
+        elif e.type in (X.KeyPress, X.KeyRelease):
+            say("core-%s keycode=%d keysym=%s state=0x%x" % (
                 "press" if e.type == X.KeyPress else "release",
                 e.detail,
-                XK.keysym_to_string(keysym) or hex(keysym),
-                e.state), flush=True)
+                name_of(e.detail),
+                e.state))
     time.sleep(0.02)
+say("window-closed")
 d.close()
 "#;
     require_exec(
@@ -1130,6 +1325,39 @@ fn claim_markers(guest: &mut GuestControlClient) -> Result<Vec<String>> {
         .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+fn disarm_screensaver(guest: &mut GuestControlClient) -> Result<()> {
+    for (key, value) in [
+        ("/org/cinnamon/desktop/session/idle-delay", "uint32 0"),
+        ("/org/cinnamon/desktop/screensaver/lock-enabled", "false"),
+        (
+            "/org/cinnamon/desktop/screensaver/idle-activation-enabled",
+            "false",
+        ),
+    ] {
+        dconf_write(guest, key, value)?;
+    }
+    let hidden = "[Desktop Entry]\nType=Application\nName=cinnamon-screensaver\nHidden=true\n";
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/sh",
+            &[
+                "-c",
+                &format!(
+                    "install -d -m 0755 /home/qol/.config/autostart && printf '%s' '{hidden}' > /home/qol/.config/autostart/cinnamon-screensaver.desktop"
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    step_label(
+        "screensaver",
+        StepKind::Success,
+        "screensaver idle activation, locking and autostart disabled so it cannot grab the keyboard on the idle guest",
+    );
+    Ok(())
 }
 
 fn dconf_write(guest: &mut GuestControlClient, key: &str, value: &str) -> Result<()> {
