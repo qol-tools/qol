@@ -61,10 +61,7 @@ pub fn pre_create(
         config.display.ghost_debug_color.as_deref(),
     );
     let windows = crate::discovery::Platform
-        .visible_windows(
-            config.display.show_minimized,
-            &crate::config::SwitchablePanels::resolve(&config.switchable_panels),
-        )
+        .visible_windows(config.display.show_minimized, &config.switchable_panels)
         .unwrap_or_default();
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
     crate::picker::create::pre_create_ghost(

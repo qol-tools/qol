@@ -705,7 +705,7 @@ async fn refresh_data(
 ) {
     let config = crate::config::load_alt_tab_config();
     let show_minimized = config.display.show_minimized;
-    let switchable = crate::config::SwitchablePanels::resolve(&config.switchable_panels);
+    let switchable = config.switchable_panels.clone();
     let executor = cx.background_executor().clone();
     executor
         .timer(Duration::from_millis(DATA_REFRESH_DELAY_MS))

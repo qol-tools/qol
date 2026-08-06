@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 mod switchable;
 
-pub use switchable::{SwitchablePanelOverride, SwitchablePanels};
+pub use switchable::SwitchablePanelOverride;
 
 pub const DEFAULT_CARD_BACKGROUND_COLOR: &str = "#202322";
 

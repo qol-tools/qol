@@ -1,4 +1,4 @@
-use crate::config::SwitchablePanels;
+use crate::config::SwitchablePanelOverride;
 pub use qol_app_icon::RgbaImage;
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub trait WindowDiscovery {
     fn visible_windows(
         &self,
         include_minimized: bool,
-        switchable: &SwitchablePanels,
+        switchable: &[SwitchablePanelOverride],
     ) -> Result<Vec<WindowInfo>, DiscoveryError>;
 }
 

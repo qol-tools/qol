@@ -263,7 +263,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
-    let switchable = crate::config::SwitchablePanels::resolve(&config.switchable_panels);
+    let switchable = config.switchable_panels.clone();
 
     #[cfg(debug_assertions)]
     let t_query = std::time::Instant::now();

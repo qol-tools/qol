@@ -2,8 +2,8 @@ use super::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryGetValue, CFDictionaryRef,
     CFNumberGetValue, CFRelease,
 };
+use super::switchable::SwitchablePanels;
 use super::{parse_cg_window_list, CgWindow};
-use crate::config::SwitchablePanels;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::OnceLock;

@@ -1,5 +1,5 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
-use crate::config::SwitchablePanels;
+use crate::config::SwitchablePanelOverride;
 use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
@@ -8,6 +8,7 @@ use ffi::{
 use qol_conventions::launcher;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use switchable::SwitchablePanels;
 use window_enum::{
     collect_off_screen_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
 };
@@ -16,6 +17,7 @@ pub(crate) mod ax;
 pub(crate) mod ffi;
 mod process;
 mod spaces;
+mod switchable;
 pub(crate) mod window_enum;
 
 pub struct Platform;
@@ -24,7 +26,7 @@ impl WindowDiscovery for Platform {
     fn visible_windows(
         &self,
         include_minimized: bool,
-        switchable: &SwitchablePanels,
+        switchable: &[SwitchablePanelOverride],
     ) -> Result<Vec<WindowInfo>, DiscoveryError> {
         ax::init_messaging_timeout();
         Ok(discover_live_windows(include_minimized, switchable))
@@ -241,8 +243,9 @@ fn parse_cg_entry(
 
 pub(crate) fn discover_live_windows(
     include_minimized: bool,
-    switchable: &SwitchablePanels,
+    overrides: &[SwitchablePanelOverride],
 ) -> Vec<WindowInfo> {
+    let switchable = &SwitchablePanels::resolve(overrides);
     let own_pid = std::process::id() as i32;
 
     let on_screen_opts =
