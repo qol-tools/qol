@@ -1,4 +1,5 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
+use crate::config::SwitchablePanelOverride;
 use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
@@ -7,6 +8,7 @@ use ffi::{
 use qol_conventions::launcher;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use switchable::SwitchablePanels;
 use window_enum::{
     collect_off_screen_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
 };
@@ -15,14 +17,19 @@ pub(crate) mod ax;
 pub(crate) mod ffi;
 mod process;
 mod spaces;
+mod switchable;
 pub(crate) mod window_enum;
 
 pub struct Platform;
 
 impl WindowDiscovery for Platform {
-    fn visible_windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, DiscoveryError> {
+    fn visible_windows(
+        &self,
+        include_minimized: bool,
+        switchable: &[SwitchablePanelOverride],
+    ) -> Result<Vec<WindowInfo>, DiscoveryError> {
         ax::init_messaging_timeout();
-        Ok(discover_live_windows(include_minimized))
+        Ok(discover_live_windows(include_minimized, switchable))
     }
 }
 
@@ -30,6 +37,7 @@ pub(super) struct CgWindow {
     pub id: u32,
     pub pid: i32,
     pub layer: i32,
+    pub is_switchable_panel: bool,
     pub app_name: String,
     pub title: String,
     pub has_title: bool,
@@ -70,6 +78,17 @@ fn is_system_process(app_name: &str) -> bool {
     app.contains("screencapturekit")
         || app.contains("screensharingindicator")
         || app.contains("registerassistantservice")
+}
+
+fn admits_as_switchable_panel(
+    layer: i32,
+    app_name: &str,
+    title: &str,
+    switchable: &SwitchablePanels,
+) -> bool {
+    layer != K_CG_WINDOW_LAYER_NORMAL
+        && switchable.allows(app_name)
+        && !qol_gpui::keepalive::is_keepalive_title(title)
 }
 
 fn is_launcher_surface(title: &str) -> bool {
@@ -123,44 +142,45 @@ impl Drop for CgKeys {
     }
 }
 
-fn fetch_cg_windows(options: u32, own_pid: i32) -> Vec<CgWindow> {
+fn fetch_cg_windows(options: u32, own_pid: i32, switchable: &SwitchablePanels) -> Vec<CgWindow> {
     let list = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
     if list.is_null() {
         return Vec::new();
     }
-    let result = parse_cg_window_list(list, own_pid);
+    let result = parse_cg_window_list(list, own_pid, switchable);
     unsafe { CFRelease(list) };
     result
 }
 
-fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
+fn parse_cg_window_list(
+    list: *const c_void,
+    own_pid: i32,
+    switchable: &SwitchablePanels,
+) -> Vec<CgWindow> {
     let keys = CgKeys::new();
     let count = unsafe { CFArrayGetCount(list) };
     let mut result = Vec::with_capacity(count.max(0) as usize);
     for i in 0..count {
         let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
-        if let Some(win) = parse_cg_entry(dict, own_pid, &keys) {
+        if let Some(win) = parse_cg_entry(dict, own_pid, &keys, switchable) {
             result.push(win);
         }
     }
     result
 }
 
-fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<CgWindow> {
+fn parse_cg_entry(
+    dict: CFDictionaryRef,
+    own_pid: i32,
+    keys: &CgKeys,
+    switchable: &SwitchablePanels,
+) -> Option<CgWindow> {
     if dict.is_null() {
         return None;
     }
     let layer = ffi::dict_get_i32(dict, keys.layer)?;
     let pid = ffi::dict_get_i32(dict, keys.pid)?;
     if pid == own_pid {
-        return None;
-    }
-    if layer != K_CG_WINDOW_LAYER_NORMAL {
-        qol_runtime::probe!(
-            "FILTERED",
-            "reason=layer wid={:?} pid={pid} layer={layer}",
-            { ffi::dict_get_i32(dict, keys.number) }
-        );
         return None;
     }
     let app_name = ffi::dict_get_string(dict, keys.owner)
@@ -171,6 +191,15 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         .unwrap_or_default()
         .trim()
         .to_string();
+    let is_switchable_panel = admits_as_switchable_panel(layer, &app_name, &title, switchable);
+    if layer != K_CG_WINDOW_LAYER_NORMAL && !is_switchable_panel {
+        qol_runtime::probe!(
+            "FILTERED",
+            "reason=layer wid={:?} pid={pid} layer={layer} app={app_name:?}",
+            { ffi::dict_get_i32(dict, keys.number) }
+        );
+        return None;
+    }
     let id = ffi::dict_get_i32(dict, keys.number)?;
     if app_name.is_empty() && title.is_empty() {
         return None;
@@ -201,6 +230,7 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         id: id as u32,
         pid,
         layer,
+        is_switchable_panel,
         app_name,
         title: display_title,
         has_title,
@@ -211,22 +241,30 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
     })
 }
 
-pub(crate) fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
+pub(crate) fn discover_live_windows(
+    include_minimized: bool,
+    overrides: &[SwitchablePanelOverride],
+) -> Vec<WindowInfo> {
+    let switchable = &SwitchablePanels::resolve(overrides);
     let own_pid = std::process::id() as i32;
 
     let on_screen_opts =
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     #[cfg(debug_assertions)]
     let t_cg = std::time::Instant::now();
-    let on_screen = fetch_cg_windows(on_screen_opts, own_pid);
+    let on_screen = fetch_cg_windows(on_screen_opts, own_pid, switchable);
 
-    let mut all_windows = fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid);
+    let mut all_windows = fetch_cg_windows(
+        K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        own_pid,
+        switchable,
+    );
     let known_ids: HashSet<u32> = all_windows.iter().map(|w| w.id).collect();
     #[cfg(debug_assertions)]
     let cg_ms = t_cg.elapsed().as_millis();
     #[cfg(debug_assertions)]
     let t_sls = std::time::Instant::now();
-    let cross_space = spaces::cross_space_windows(own_pid, &known_ids);
+    let cross_space = spaces::cross_space_windows(own_pid, &known_ids, switchable);
     #[cfg(debug_assertions)]
     let sls_ms = t_sls.elapsed().as_millis();
     for window in &mut all_windows {
@@ -323,7 +361,50 @@ fn pids_with_multiple_windows(windows: &[CgWindow]) -> HashSet<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_launcher_surface, launcher};
+    use super::{
+        admits_as_switchable_panel, is_launcher_surface, launcher, SwitchablePanels,
+        K_CG_WINDOW_LAYER_NORMAL,
+    };
+
+    const PANEL_LAYER: i32 = 101;
+
+    #[test]
+    fn the_qol_panel_survives_the_layer_filter_but_its_keepalive_window_does_not() {
+        let switchable = SwitchablePanels::default();
+        let cases = [
+            (PANEL_LAYER, "cli-sessions", "cli-sessions-panel", true),
+            (
+                PANEL_LAYER,
+                "cli-sessions",
+                "plugin-cli-sessions-keepalive-61790",
+                false,
+            ),
+            (PANEL_LAYER, "Microsoft Teams", "Meeting controls", false),
+            (K_CG_WINDOW_LAYER_NORMAL, "cli-sessions", "anything", false),
+        ];
+
+        for (layer, app_name, title, expected) in cases {
+            assert_eq!(
+                admits_as_switchable_panel(layer, app_name, title, &switchable),
+                expected,
+                "layer: {layer} app: {app_name} title: {title}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_the_user_removed_goes_back_to_being_filtered() {
+        let switchable = SwitchablePanels::resolve(&[crate::config::SwitchablePanelOverride {
+            app: "cli-sessions".to_string(),
+            switchable: false,
+        }]);
+        assert!(!admits_as_switchable_panel(
+            PANEL_LAYER,
+            "cli-sessions",
+            "cli-sessions-panel",
+            &switchable
+        ));
+    }
 
     #[test]
     fn launcher_surfaces_are_never_switcher_candidates() {

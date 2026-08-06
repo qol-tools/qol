@@ -265,10 +265,15 @@ pub(super) fn prefetch_ax_parallel(pids: HashSet<i32>) -> HashMap<i32, AxWindows
 }
 
 fn ax_windows_compute(pid: i32) -> AxWindowsResult {
-    #[cfg(debug_assertions)]
     let t_open = std::time::Instant::now();
     let wins_val = unsafe { ax_open_window_list(pid) };
     if wins_val.is_null() {
+        qol_runtime::probe!(
+            "AX_WINDOWS",
+            "pid={pid} result=unanswered open_ms={} timeout_ms={}",
+            t_open.elapsed().as_millis(),
+            (AX_MESSAGING_TIMEOUT_SECONDS * 1000.0) as u32
+        );
         #[cfg(debug_assertions)]
         {
             let open_ms = t_open.elapsed().as_millis();
@@ -305,6 +310,12 @@ fn ax_windows_compute(pid: i32) -> AxWindowsResult {
             );
         }
     }
+    qol_runtime::probe!(
+        "AX_WINDOWS",
+        "pid={pid} result=answered open_ms={} ax_count={count} id_map={} accepted={accepted}",
+        t_open.elapsed().as_millis(),
+        id_map.len()
+    );
     #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab/ax] ax_windows pid={} id_map={} all_meta={} accepted={}",
@@ -425,10 +436,14 @@ fn emit_deduped(windows: Vec<CgWindow>, dedup_info: &HashMap<i32, PidDedup>) -> 
 
 fn should_keep(win: &CgWindow, dedup: &PidDedup, emitted: usize) -> bool {
     if emitted >= dedup.budget {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/ax] DEDUP budget exhausted: wid={} app={:?} budget={}",
-            win.id, win.app_name, dedup.budget
+        qol_runtime::probe!(
+            "FILTERED",
+            "reason=ax-budget wid={} pid={} app={:?} budget={} ax_ids={}",
+            win.id,
+            win.pid,
+            win.app_name,
+            dedup.budget,
+            dedup.ax_ids.len()
         );
         return false;
     }
@@ -622,6 +637,7 @@ mod dedup_tests {
             id,
             pid: 100,
             layer: 0,
+            is_switchable_panel: false,
             app_name: "foo".to_string(),
             title: "bar".to_string(),
             has_title: true,
@@ -630,6 +646,19 @@ mod dedup_tests {
             w: 800.0,
             h: 600.0,
         }
+    }
+
+    #[test]
+    fn an_unanswered_ax_query_discards_every_window_of_that_pid_but_one() {
+        let dedup = pid_dedup_from_ax(&None);
+        assert_eq!(dedup.budget, 1);
+
+        let mut info = HashMap::new();
+        info.insert(100, dedup);
+        let out = emit_deduped(vec![window(10), window(11)], &info);
+
+        let ids: Vec<u32> = out.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![10]);
     }
 
     #[test]

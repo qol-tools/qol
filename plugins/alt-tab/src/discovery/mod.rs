@@ -1,3 +1,4 @@
+use crate::config::SwitchablePanelOverride;
 pub use qol_app_icon::RgbaImage;
 
 #[derive(Debug, Clone)]
@@ -21,7 +22,11 @@ pub trait WindowDiscovery {
     ///
     /// Must return `Err` only when the OS is genuinely unsupported, not for
     /// transient failures (transient failures return an empty Vec).
-    fn visible_windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, DiscoveryError>;
+    fn visible_windows(
+        &self,
+        include_minimized: bool,
+        switchable: &[SwitchablePanelOverride],
+    ) -> Result<Vec<WindowInfo>, DiscoveryError>;
 }
 
 #[derive(Debug)]

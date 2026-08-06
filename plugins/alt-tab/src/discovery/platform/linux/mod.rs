@@ -1,4 +1,5 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
+use crate::config::SwitchablePanelOverride;
 use qol_app_icon::RgbaImage;
 use qol_windowing::WindowRect;
 use std::collections::HashMap;
@@ -11,7 +12,11 @@ use x11rb::rust_connection::RustConnection;
 pub struct Platform;
 
 impl WindowDiscovery for Platform {
-    fn visible_windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, DiscoveryError> {
+    fn visible_windows(
+        &self,
+        include_minimized: bool,
+        _switchable: &[SwitchablePanelOverride],
+    ) -> Result<Vec<WindowInfo>, DiscoveryError> {
         let mut windows = get_open_windows();
         if !include_minimized {
             windows.retain(|w| !w.is_minimized);
