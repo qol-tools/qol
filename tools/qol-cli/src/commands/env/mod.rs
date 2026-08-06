@@ -24,6 +24,7 @@ const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TYPED_WORKER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const UP_USAGE: &str =
     "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--usb-host PATH] [--force]";
+const SWEEP_FIELD: &str = "stale_launch_sweep";
 const IMAGE_IMPORT_USAGE: &str =
     "qol env image import <environment> <source> --worktree <absolute-path> [--run-id ID]";
 
@@ -459,6 +460,7 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
     match action {
         DoctorAction::Inspect => {}
         DoctorAction::Repair => {
+            let swept = sweep_stale_launch_lanes(&environments)?;
             let mut cleanup = repair_legacy_cleanup_reports(&environments)?;
             reconcile_for_admission()?;
             flow::reconcile_all()?;
@@ -469,7 +471,8 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
                 reserved.lanes, reserved.memory_mb, reserved.cpus
             );
             println!(
-                "Cleanup reports: {} legacy proof record(s) upgraded, {} warning(s) remain.",
+                "Cleanup reports: {} legacy proof record(s) upgraded, {swept} stale launch(es) \
+                 swept, {} warning(s) remain.",
                 cleanup.repaired, cleanup.remaining
             );
         }
@@ -626,6 +629,107 @@ fn repair_legacy_cleanup_reports(
         repaired,
         remaining: 0,
     })
+}
+
+fn sweep_stale_launch_lanes(environments: &[ResolvedEnvironment]) -> Result<usize> {
+    let roots = environments
+        .iter()
+        .filter_map(|environment| environment.run_root.clone())
+        .collect::<Vec<_>>();
+    let live = emu::live_runs_in_roots(&roots)
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect::<BTreeSet<_>>();
+    let swept_at_unix_ms = qol_dev_env::unix_millis()?;
+    let mut swept = 0;
+    for root in BTreeSet::from_iter(roots.iter().map(PathBuf::as_path)) {
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", root.display()))
+            }
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                continue;
+            }
+            let path = entry.path().join("report.json");
+            swept += sweep_stale_launch_report(&path, root, &live, swept_at_unix_ms)
+                .with_context(|| format!("failed to sweep {}", path.display()))?;
+        }
+    }
+    Ok(swept)
+}
+
+fn sweep_stale_launch_report(
+    path: &Path,
+    run_root: &Path,
+    live: &BTreeSet<String>,
+    swept_at_unix_ms: u64,
+) -> Result<usize> {
+    let Some(run_dir) = path.parent() else {
+        return Ok(0);
+    };
+    let _lock = lock_batch_run(run_dir)?;
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).context("failed to read the environment batch report"),
+    };
+    let mut report: Value =
+        serde_json::from_str(&content).context("failed to parse the environment batch report")?;
+    if report.get("kind").and_then(Value::as_str) != Some("environment-batch")
+        || batch_owner_active(&report)
+    {
+        return Ok(0);
+    }
+    let mut swept = 0;
+    for run in report
+        .get_mut("runs")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if !stale_launch_is_swept(run_root, run, live) {
+            continue;
+        }
+        let Some(run_object) = run.as_object_mut() else {
+            continue;
+        };
+        run_object.insert(
+            SWEEP_FIELD.to_string(),
+            json!({
+                "swept_at_unix_ms": swept_at_unix_ms,
+                "evidence": "the batch owner is gone, the lane run directory no longer exists, and no live run claims the lane",
+            }),
+        );
+        swept += 1;
+    }
+    if swept > 0 {
+        write_json(path, &report)?;
+    }
+    Ok(swept)
+}
+
+fn stale_launch_is_swept(run_root: &Path, run: &Value, live: &BTreeSet<String>) -> bool {
+    if run.get(SWEEP_FIELD).is_some_and(|sweep| !sweep.is_null())
+        || run.get("phase").and_then(Value::as_str) == Some(LanePhase::Attempting.as_str())
+    {
+        return false;
+    }
+    let Some(run_id) = run.get("run_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if live.contains(run_id) || !matches!(recorded_lane_lifecycle(run_root, run), Ok(None)) {
+        return false;
+    }
+    let recorded_run_dir = run
+        .get("run_dir")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+    !run_root.join("cases").join(run_id).exists()
+        && recorded_run_dir.is_none_or(|run_dir| !run_dir.exists())
 }
 
 fn cleanup_warning_count(environments: &[ResolvedEnvironment]) -> usize {
@@ -2434,7 +2538,14 @@ fn reconciled_batch_report(
             let planned_not_started = owner_inactive
                 && lifecycle.is_none()
                 && phase == Some(LanePhase::Attempting.as_str());
-            let uncertain_launch = owner_inactive && lifecycle.is_none() && !planned_not_started;
+            let swept_stale_launch = owner_inactive
+                && lifecycle.is_none()
+                && !planned_not_started
+                && run.get(SWEEP_FIELD).is_some_and(|sweep| !sweep.is_null());
+            let uncertain_launch = owner_inactive
+                && lifecycle.is_none()
+                && !planned_not_started
+                && !swept_stale_launch;
             let mut state = lifecycle.as_ref().map(|lifecycle| lifecycle.status.clone());
             let mut cleanup_complete = lifecycle
                 .as_ref()
@@ -2444,6 +2555,10 @@ fn reconciled_batch_report(
             });
             if planned_not_started {
                 state = Some("not-started".to_string());
+                cleanup_complete = true;
+                child_abandoned = true;
+            }
+            if swept_stale_launch {
                 cleanup_complete = true;
                 child_abandoned = true;
             }
@@ -2460,6 +2575,7 @@ fn reconciled_batch_report(
             }
             let lane_active = !planned_not_started
                 && !uncertain_launch
+                && !swept_stale_launch
                 && lifecycle
                     .as_ref()
                     .is_none_or(|lifecycle| lifecycle.cleanup == CleanupVerification::Pending);
@@ -2486,6 +2602,8 @@ fn reconciled_batch_report(
             };
             let verification = if planned_not_started {
                 "not-started"
+            } else if swept_stale_launch {
+                "swept-stale-launch"
             } else if cleanup_incomplete {
                 "cleanup-incomplete"
             } else if cleanup_complete {
@@ -3403,6 +3521,71 @@ mod tests {
         assert_eq!(result.repaired, 1);
         assert_eq!(cleanup_warning_count(&environments), 0);
         assert!(run_dir.join("report.legacy-cleanup.json").is_file());
+    }
+
+    fn stale_launch_batch(root: &Path, lane_run_id: &str) -> PathBuf {
+        let run_dir = root.join("linux-debian-batch-1");
+        let lane_dir = root.join("cases").join(lane_run_id);
+        let report_path = run_dir.join("report.json");
+        write_json(
+            &report_path,
+            &json!({
+                "kind": "environment-batch",
+                "run_id": "linux-debian-batch-1",
+                "status": "rollback-incomplete",
+                "error": "timed out waiting for the emu to report running",
+                "owner": { "pid": 1, "state": "released" },
+                "launch": { "count": 1 },
+                "runs": [{
+                    "run_id": lane_run_id,
+                    "run_dir": lane_dir,
+                    "report": lane_dir.join("report.json"),
+                    "phase": "spawned",
+                    "status": null,
+                }],
+                "teardown": {
+                    "status": "incomplete",
+                    "lanes": [{
+                        "run_id": lane_run_id,
+                        "status": "failed",
+                        "verification": "cleanup-incomplete",
+                        "report_status": null,
+                        "stop_error": null,
+                    }],
+                },
+            }),
+        )
+        .unwrap();
+        report_path
+    }
+
+    #[test]
+    fn doctor_repair_sweeps_a_stale_launch_whose_lane_left_nothing_behind() {
+        let temp = tempdir().unwrap();
+        let report_path = stale_launch_batch(temp.path(), "linux-debian-run-1");
+        let environments = vec![resolved_environment(temp.path())];
+        assert_eq!(cleanup_warning_count(&environments), 1);
+
+        assert_eq!(sweep_stale_launch_lanes(&environments).unwrap(), 1);
+        reconcile_batch_report_file(&report_path, &BTreeMap::new(), false).unwrap();
+
+        assert_eq!(cleanup_warning_count(&environments), 0);
+        assert_eq!(
+            sweep_stale_launch_lanes(&environments).unwrap(),
+            0,
+            "a settled batch must not be swept twice"
+        );
+    }
+
+    #[test]
+    fn a_lane_that_still_owns_a_run_directory_is_never_swept() {
+        let temp = tempdir().unwrap();
+        let environments = vec![resolved_environment(temp.path())];
+        stale_launch_batch(temp.path(), "linux-debian-run-1");
+        fs::create_dir_all(temp.path().join("cases/linux-debian-run-1")).unwrap();
+
+        assert_eq!(sweep_stale_launch_lanes(&environments).unwrap(), 0);
+        assert_eq!(cleanup_warning_count(&environments), 1);
     }
 
     #[test]
