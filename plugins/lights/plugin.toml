@@ -3,7 +3,7 @@ id = "plugin-lights"
 uid = "368871df-de60-4a7a-ab7c-8d33fcd22511"
 name = "Lights"
 description = "Control lights through backend adapters"
-version = "1.25.4"
+version = "1.26.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
