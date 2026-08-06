@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::desktop::{
-    command, connect_desktop_guest, exec, install_payload, launch_tray_and_wait_api, require_exec,
-    spawn, wait_for_command,
+    command, connect_desktop_guest, current_trace_cursor, exec, install_payload,
+    launch_tray_and_wait_api, require_exec, spawn, wait_for_command, wait_for_probe_line,
 };
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::Verdict;
 use crate::commands::emu::{qmp, BootedVm};
@@ -35,10 +35,8 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
     install_payload(&mut guest)?;
     stage_boot_scenario(&mut guest)?;
-
-    let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
+    reboot_guest_cleanly(&mut guest)?;
     drop(guest);
-    qmp.system_reset()?;
     step_label(
         "reboot",
         StepKind::Pending,
@@ -46,9 +44,19 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     );
     thread::sleep(BOOT_SETTLE);
 
-    let mut guest = connect_desktop_guest(vm)?;
-    let auth = wait_for_autostart_tray(&mut guest)
-        .map_err(|error| boot_diagnostics(&mut guest, "", error))?;
+    let mut guest = connect_after_reboot(vm)?;
+    let mut auth = match wait_for_autostart_tray(&mut guest) {
+        Ok(auth) => auth,
+        Err(error) if error.to_string().contains("duplicate hello") => {
+            drop(guest);
+            guest = connect_after_reboot(vm)?;
+            match wait_for_autostart_tray(&mut guest) {
+                Ok(auth) => auth,
+                Err(error) => return Err(boot_diagnostics(&mut guest, "", error)),
+            }
+        }
+        Err(error) => return Err(boot_diagnostics(&mut guest, "", error)),
+    };
 
     require_binding(
         &mut guest,
@@ -58,8 +66,11 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     )
     .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
     require_boot_claim(&mut guest)?;
-    require_chord_reaches_qol(&mut guest, &mut qmp)?;
-    require_de_stays_quiet(&mut guest)?;
+    let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
+    require_chord_reaches_qol(&mut guest, &mut qmp)
+        .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
+    require_de_stays_quiet(&mut guest)
+        .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
 
     let artifacts = write_artifacts(vm, &mut guest, &auth)?;
     step_label(
@@ -78,19 +89,149 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 }
 
 fn stage_boot_scenario(guest: &mut GuestControlClient) -> Result<()> {
+    stage_watcher(guest)?;
     let auth = launch_tray_and_wait_api(guest)?;
     set_hotkeys(guest, &auth, &hotkey_config())?;
     let reloaded = require_status(request(guest, &auth, "GET", "/api/hotkeys", None)?, 200)?;
     if !reloaded.contains("Shift+Super+S") {
         bail!("staged hotkey config did not round-trip: {reloaded}");
     }
+    harvest_staging_tray_stderr(guest)?;
     seed_de_conflict(guest)?;
     write_autostart(guest)?;
+    thread::sleep(Duration::from_secs(8));
+    harvest_watch_transitions(guest)?;
+    let pre_reboot = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &["-lc", "stat -c '%y %s' /home/qol/.config/qol-tray/profile/default/os/linux/hotkeys.json 2>&1"],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    step_label(
+        "pre-reboot",
+        StepKind::Success,
+        &format!("hotkeys file before reboot: {}", pre_reboot.stdout.trim()),
+    );
     step_label(
         "stage",
         StepKind::Success,
         "hotkeys configured through the app API; desktop conflict and tray autostart staged",
     );
+    Ok(())
+}
+
+fn stage_watcher(guest: &mut GuestControlClient) -> Result<()> {
+    let script_b64 = "aW1wb3J0IG9zCmltcG9ydCB0aW1lCgpwYXRoID0gIi9ob21lL3FvbC8uY29uZmlnL3FvbC10cmF5L3Byb2ZpbGUvZGVmYXVsdC9vcy9saW51eC9ob3RrZXlzLmpzb24iCm91dCA9IG9wZW4oIi9ob21lL3FvbC9ob3RrZXlzLXdhdGNoLmxvZyIsICJhIikKbGFzdCA9IE5vbmUKd2hpbGUgVHJ1ZToKICAgIHRyeToKICAgICAgICBzdCA9IG9zLnN0YXQocGF0aCkKICAgICAgICBzaXplLCBtdGltZSA9IHN0LnN0X3NpemUsIGludChzdC5zdF9tdGltZSAqIDEwMDApCiAgICBleGNlcHQgT1NFcnJvcjoKICAgICAgICBzaXplLCBtdGltZSA9IC0xLCAwCiAgICBrZXkgPSAoc2l6ZSwgbXRpbWUpCiAgICBpZiBrZXkgIT0gbGFzdDoKICAgICAgICBvdXQud3JpdGUoIiVkICVkICVkXG4iICUgKGludCh0aW1lLnRpbWUoKSAqIDEwMDApLCBzaXplLCBtdGltZSkpCiAgICAgICAgb3V0LmZsdXNoKCkKICAgICAgICBsYXN0ID0ga2V5CiAgICB0aW1lLnNsZWVwKDAuMDEpCg==";
+    let desktop = "[Desktop Entry]\nType=Application\nName=qol-hotkeys-watch\nExec=/usr/bin/python3 /home/qol/hotkeys-watch.py\nX-GNOME-Autostart-enabled=true\n";
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/sh",
+            &[
+                "-c",
+                &format!(
+                    "echo {} | base64 -d > /home/qol/hotkeys-watch.py && printf '%s' '{}' > /home/qol/.config/autostart/00-hotkeys-watch.desktop",
+                    script_b64, desktop
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    let pid = spawn(
+        guest,
+        command("/usr/bin/python3", &["/home/qol/hotkeys-watch.py"]),
+    )?;
+    thread::sleep(Duration::from_secs(2));
+    let health = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                &format!(
+                    "wc -l < /home/qol/hotkeys-watch.log 2>/dev/null || echo missing; echo ---stderr---; cat /tmp/qol-guest-runner/{pid}/stderr 2>/dev/null | tail -20",
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    step_label(
+        "watcher",
+        StepKind::Success,
+        &format!("sampler health: {}", health.stdout.replace('\n', " | ")),
+    );
+    Ok(())
+}
+
+fn harvest_watch_transitions(guest: &mut GuestControlClient) -> Result<()> {
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                "cat /home/qol/hotkeys-watch.log 2>/dev/null | tail -40 || true",
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    step_label(
+        "watch-transitions",
+        StepKind::Success,
+        &format!(
+            "hotkeys file transitions: {}",
+            outcome.stdout.replace('\n', " | ")
+        ),
+    );
+    Ok(())
+}
+
+fn harvest_staging_tray_stderr(guest: &mut GuestControlClient) -> Result<()> {
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                "cat /tmp/qol-guest-runner/*/stderr 2>/dev/null | grep -E 'hotkey|shortcut|doctor|error|panic|save|load|material|config' | tail -25",
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    step_label(
+        "staging-stderr",
+        StepKind::Success,
+        &format!(
+            "staging tray stderr: {}",
+            outcome.stdout.replace('\n', " | ")
+        ),
+    );
+    Ok(())
+}
+
+fn connect_after_reboot(vm: &BootedVm) -> Result<GuestControlClient> {
+    let deadline = std::time::Instant::now() + BOOT_READY_TIMEOUT;
+    loop {
+        match connect_desktop_guest(vm) {
+            Ok(guest) => return Ok(guest),
+            Err(error) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(error);
+                }
+                thread::sleep(Duration::from_secs(10));
+            }
+        }
+    }
+}
+
+fn reboot_guest_cleanly(guest: &mut GuestControlClient) -> Result<()> {
+    require_exec(
+        guest,
+        command("/usr/bin/systemctl", &["reboot"]),
+        COMMAND_TIMEOUT,
+    )?;
     Ok(())
 }
 
@@ -273,8 +414,17 @@ fn require_chord_reaches_qol(
     guest: &mut GuestControlClient,
     qmp: &mut qmp::QmpClient,
 ) -> Result<()> {
+    let cursor = current_trace_cursor(guest)?;
     qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
     thread::sleep(KEY_SETTLE);
+    wait_for_probe_line(
+        guest,
+        cursor,
+        "HOTKEY_DISPATCH",
+        "uid=e8208e3e-58b3-4f8c-ad4b-ddbecafa3375 action=open",
+        ACTION_TIMEOUT,
+    )
+    .context("the chord was not dispatched by the tray's hotkey listener")?;
     wait_for_command(
         guest,
         command("/usr/bin/xdotool", &["search", "--name", "^qol-launcher@"]),
@@ -287,7 +437,7 @@ fn require_chord_reaches_qol(
     step_label(
         "chord",
         StepKind::Success,
-        "Shift+Super+S reached qol on the fresh boot",
+        "Shift+Super+S dispatched to the launcher on the fresh boot",
     );
     Ok(())
 }
@@ -316,6 +466,13 @@ fn boot_diagnostics(
 ) -> anyhow::Error {
     let mut detail = Vec::new();
     for (label, spec) in [
+        (
+            "de-marker",
+            command(
+                "/usr/bin/bash",
+                &["-lc", "ls -la /tmp/de-shadow-evidence 2>&1 || true"],
+            ),
+        ),
         (
             "binding",
             command(
@@ -358,6 +515,20 @@ fn boot_diagnostics(
                     "-lc",
                     "stat -c '%y %s %n' /home/qol/.config/qol-tray/profile/default/os/linux/hotkeys.json 2>&1; cat /home/qol/.config/qol-tray/profile/default/os/linux/hotkeys.json 2>/dev/null || true",
                 ],
+            ),
+        ),
+        (
+            "watch",
+            command(
+                "/usr/bin/bash",
+                &["-lc", "cat /home/qol/hotkeys-watch.log 2>/dev/null | tail -300 || true"],
+            ),
+        ),
+        (
+            "runner-dir",
+            command(
+                "/usr/bin/bash",
+                &["-lc", "ls -la /tmp/qol-guest-runner/ 2>/dev/null; for f in /tmp/qol-guest-runner/*/stderr; do echo \"== $f: $(wc -c < $f 2>/dev/null)\"; tail -5 \"$f\" 2>/dev/null; done"],
             ),
         ),
         (
