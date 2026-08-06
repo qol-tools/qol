@@ -307,6 +307,8 @@ mod tests {
 
     #[test]
     fn runtime_command_arms_host_death_watchdog_via_state_socket() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
         let command = runtime_command(&resolved(), Path::new("/bin/true"));
         let entry = command
             .get_envs()

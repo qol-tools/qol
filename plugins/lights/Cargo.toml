@@ -1,6 +1,6 @@
 [package]
 name = "plugin-lights"
-version = "1.25.2"
+version = "1.25.3"
 edition = "2021"
 
 [dependencies]
