@@ -449,6 +449,17 @@ impl PinnedView {
         }
         qol_runtime::probe!(
             "SHOT_PIN_REVEAL",
+            "title={} generation={generation} state=parked-mapped",
+            self.title
+        );
+        if super::schedule_parked_reveal(&self.title, cx) {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_generation(generation);
+            });
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_PIN_REVEAL",
             "title={} generation={generation} state=parked-deferred",
             self.title
         );

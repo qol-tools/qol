@@ -30,6 +30,7 @@ const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 const BLUR_GUARD: Duration = Duration::from_millis(400);
+const PARKED_REVEAL_GUARD: Duration = Duration::from_millis(5000);
 pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
 pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
@@ -108,6 +109,14 @@ fn preview_control_for_keystroke(
     preview_controls(default_copy_action)
         .into_iter()
         .find(|control| control.accel() == accel)
+}
+
+fn reveal_blur_guard(parked: bool) -> Duration {
+    if parked {
+        PARKED_REVEAL_GUARD
+    } else {
+        BLUR_GUARD
+    }
 }
 
 fn control_count() -> usize {
@@ -215,7 +224,6 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
             &title,
             &placement,
             GhostOpenMode::Hidden,
-            None,
         ) else {
             continue;
         };
@@ -467,20 +475,23 @@ fn create_and_show(
         &title,
         placement,
         GhostOpenMode::Interactive,
-        Some(reveal),
     ) else {
         eprintln!("[qol-shot] preview window open failed");
         return false;
     };
+    let open_ms = opened_at.elapsed().as_millis();
     windows.borrow_mut().insert(target, handle);
     configure_popup_window(&title);
     hide_invisible(&title);
+    let park_ms = opened_at.elapsed().as_millis() - open_ms;
     if handle
         .update(cx, |view, window, cx| {
             view.set_showing(true);
+            view.pending_reveal = Some(reveal);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
+            view.schedule_reveal_after_present(window, cx);
         })
         .is_err()
     {
@@ -489,7 +500,7 @@ fn create_and_show(
     }
     qol_runtime::probe!(
         "SHOT_WINDOW_OPEN",
-        "ms={} seq={seq} path=create",
+        "ms={} open_ms={open_ms} park_ms={park_ms} seq={seq} path=create",
         opened_at.elapsed().as_millis()
     );
     cx.activate(true);
@@ -505,15 +516,13 @@ fn open_ghost_window(
     title: &str,
     placement: &WindowPlacement,
     mode: GhostOpenMode,
-    reveal: Option<PreviewReveal>,
 ) -> Option<WindowHandle<PreviewView>> {
     let options = ghost_window_options(placement, mode);
     let title = title.to_string();
     let origin = placement.bounds.origin;
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&title);
-        let view =
-            cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, reveal, cx));
+        let view = cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx));
         if mode.requests_focus() {
             window.focus(&view.focus_handle(cx));
             window.activate_window();
@@ -667,6 +676,7 @@ pub struct PreviewView {
     action_pending: bool,
     scheduled_reveal_seq: Option<u64>,
     pending_reveal: Option<PreviewReveal>,
+    parked_reveal: bool,
     focus_handle: FocusHandle,
 }
 
@@ -675,18 +685,12 @@ struct PreviewReveal {
     all_titles: Vec<String>,
 }
 
-struct PreviewPresentation {
-    seq: u64,
-    reveal: Option<PreviewReveal>,
-}
-
 impl PreviewView {
     fn new_ghost(
         content: GhostContent,
         seq: u64,
         title: String,
         origin: Point<Pixels>,
-        reveal: Option<PreviewReveal>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new(
@@ -694,7 +698,7 @@ impl PreviewView {
             DismissMode::Ghost,
             title,
             Arc::default(),
-            PreviewPresentation { seq, reveal },
+            seq,
             origin,
             cx,
         )
@@ -711,7 +715,7 @@ impl PreviewView {
             DismissMode::Quit,
             String::new(),
             completion,
-            PreviewPresentation { seq, reveal: None },
+            seq,
             point(px(0.0), px(0.0)),
             cx,
         )
@@ -722,7 +726,7 @@ impl PreviewView {
         mode: DismissMode,
         title: String,
         completion: Completion,
-        presentation: PreviewPresentation,
+        seq: u64,
         origin: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -738,7 +742,7 @@ impl PreviewView {
             title,
             completion,
             selected: 0,
-            seq: presentation.seq,
+            seq,
             first_paint: true,
             is_showing: content.ready,
             blur_guard_until: Instant::now() + BLUR_GUARD,
@@ -748,7 +752,8 @@ impl PreviewView {
             saved_completion: content.saved_completion,
             action_pending: false,
             scheduled_reveal_seq: None,
-            pending_reveal: presentation.reveal,
+            pending_reveal: None,
+            parked_reveal: false,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -777,6 +782,7 @@ impl PreviewView {
         self.action_pending = false;
         self.scheduled_reveal_seq = None;
         self.pending_reveal = Some(reveal);
+        self.parked_reveal = false;
         if let Ok(mut slot) = self.completion.lock() {
             *slot = None;
         }
@@ -791,6 +797,14 @@ impl PreviewView {
         self.scheduled_reveal_seq = Some(seq);
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_seq(seq);
+            });
+            return;
+        }
+        self.parked_reveal = true;
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-mapped");
+        if super::schedule_parked_reveal(&self.title, cx) {
             cx.on_next_frame(window, move |view, _window, _cx| {
                 view.reveal_presented_seq(seq);
             });
@@ -820,12 +834,14 @@ impl PreviewView {
         let Some(reveal) = self.pending_reveal.take() else {
             return;
         };
+        let parked = self.parked_reveal;
+        self.parked_reveal = false;
         qol_runtime::probe!(
             "SHOT_PREVIEW_REVEAL",
             "seq={seq} state=presented preview_ms={}",
             self.preview_started_at.elapsed().as_millis()
         );
-        self.blur_guard_until = Instant::now() + BLUR_GUARD;
+        self.blur_guard_until = Instant::now() + reveal_blur_guard(parked);
         show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
         self.file_start.start();
         FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
@@ -1280,8 +1296,9 @@ mod tests {
 
     use super::{
         circles_total_width, combine_focus_truth, preview_control_for_keystroke, preview_controls,
-        preview_window_reuse, read_render_image, thumbnail_size, window_dims, GhostOpenMode,
-        PreviewControl, PreviewWindowReuse, MAX_THUMB_H, MAX_THUMB_W,
+        preview_window_reuse, read_render_image, reveal_blur_guard, thumbnail_size, window_dims,
+        GhostOpenMode, PreviewControl, PreviewWindowReuse, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W,
+        PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1403,6 +1420,12 @@ mod tests {
                 "window: {window:?} process: {process:?}"
             );
         }
+    }
+
+    #[test]
+    fn parked_reveals_extend_the_blur_guard() {
+        assert_eq!(reveal_blur_guard(true), PARKED_REVEAL_GUARD);
+        assert_eq!(reveal_blur_guard(false), BLUR_GUARD);
     }
 
     #[test]

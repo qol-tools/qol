@@ -434,9 +434,14 @@ struct SelectionCompletion {
     tx: mpsc::Sender<Option<Rect>>,
     rect: Option<Rect>,
     quit_on_finish: bool,
+    frozen_capture: bool,
 }
 
 impl SelectionCompletion {
+    fn skips_hide_barrier(&self) -> bool {
+        self.rect.is_some() && self.frozen_capture && !self.quit_on_finish
+    }
+
     fn finish(self, cx: &mut App) {
         let quit_on_finish = self.quit_on_finish;
         let sent = self.tx.send(self.rect).is_ok();
@@ -528,6 +533,17 @@ impl RegionSelector {
             self.title
         );
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            cx.on_next_frame(window, move |view, _window, _cx| {
+                view.reveal_presented_generation(generation);
+            });
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_SELECT_REVEAL",
+            "title={} generation={generation} state=parked-mapped",
+            self.title
+        );
+        if super::schedule_parked_reveal(&self.title, cx) {
             cx.on_next_frame(window, move |view, _window, _cx| {
                 view.reveal_presented_generation(generation);
             });
@@ -837,6 +853,7 @@ impl RegionSelector {
             tx,
             rect,
             quit_on_finish: self.quit_on_finish,
+            frozen_capture: self.frozen_image.is_some(),
         })
     }
 
@@ -1006,12 +1023,23 @@ fn schedule_completion(completion: SelectionCompletion, cx: &mut Context<RegionS
         move |_this: WeakEntity<RegionSelector>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                wait_for_selector_hide_barrier(&mut cx).await;
-                let _ = cx.update(move |cx| cx.defer(move |cx| completion.finish(cx)));
+                finish_after_selector_hide(completion, &mut cx).await;
             }
         },
     )
     .detach();
+}
+
+async fn finish_after_selector_hide(completion: SelectionCompletion, cx: &mut AsyncApp) {
+    if completion.skips_hide_barrier() {
+        qol_runtime::probe!(
+            "SHOT_SELECT_BARRIER",
+            "result=skipped reason=frozen-capture"
+        );
+    } else {
+        wait_for_selector_hide_barrier(cx).await;
+    }
+    let _ = cx.update(move |cx| cx.defer(move |cx| completion.finish(cx)));
 }
 
 async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -> bool {
@@ -1031,8 +1059,7 @@ async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -
                     }
                 });
             }
-            wait_for_selector_hide_barrier(cx).await;
-            let _ = cx.update(move |cx| cx.defer(move |cx| completion.finish(cx)));
+            finish_after_selector_hide(completion, cx).await;
             false
         }
     }
