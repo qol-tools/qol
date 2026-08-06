@@ -307,8 +307,8 @@ impl FrontState {
     }
 }
 
-fn classify_front_state(present_on_screen: bool, front_among_normal: bool) -> FrontState {
-    match (present_on_screen, front_among_normal) {
+fn classify_front_state(present_on_screen: bool, front_in_stack: bool) -> FrontState {
+    match (present_on_screen, front_in_stack) {
         (false, false) => FrontState::Gone,
         (false, true) => FrontState::Gone,
         (true, true) => FrontState::Front,
@@ -340,16 +340,20 @@ fn target_front_state(window_id: u32, pid: i32) -> FrontState {
         let Some(wid) = ffi::dict_get_i32(dict, key_num) else {
             continue;
         };
-        if wid as u32 == window_id {
+        let wid = wid as u32;
+        if wid == window_id {
             present = true;
         }
-        if ffi::dict_get_i32(dict, key_layer) != Some(K_CG_WINDOW_LAYER_NORMAL) {
+        let Some(layer) = ffi::dict_get_i32(dict, key_layer) else {
+            continue;
+        };
+        if !front_stack_entry(window_id, wid, layer) {
             continue;
         }
         let Some(owner) = ffi::dict_get_i32(dict, key_pid) else {
             continue;
         };
-        stack.push((wid as u32, owner));
+        stack.push((wid, owner));
     }
 
     unsafe {
@@ -359,6 +363,10 @@ fn target_front_state(window_id: u32, pid: i32) -> FrontState {
         CFRelease(list);
     }
     classify_front_state(present, front_before_other_apps(window_id, pid, &stack))
+}
+
+fn front_stack_entry(target_window_id: u32, window_id: u32, layer: i32) -> bool {
+    window_id == target_window_id || layer == K_CG_WINDOW_LAYER_NORMAL
 }
 
 fn front_before_other_apps(window_id: u32, pid: i32, stack: &[(u32, i32)]) -> bool {
@@ -699,7 +707,8 @@ fn pid_has_on_screen_normal_window(pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_front_state, front_before_other_apps, should_quit_on_close_fallback, FrontState,
+        classify_front_state, front_before_other_apps, front_stack_entry,
+        should_quit_on_close_fallback, FrontState,
     };
     use crate::discovery::platform::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
     use qol_gpui::platform::ReassertStep;
@@ -758,6 +767,41 @@ mod tests {
                 state.step(seen_on_screen),
                 expected,
                 "state: {state:?} seen_on_screen: {seen_on_screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn front_stack_keeps_the_selected_popup_alongside_normal_windows() {
+        let cases = [
+            (
+                "selected popup",
+                10,
+                10,
+                K_CG_WINDOW_LAYER_NORMAL + 101,
+                true,
+            ),
+            (
+                "selected normal window",
+                10,
+                10,
+                K_CG_WINDOW_LAYER_NORMAL,
+                true,
+            ),
+            (
+                "other normal window",
+                10,
+                20,
+                K_CG_WINDOW_LAYER_NORMAL,
+                true,
+            ),
+            ("other popup", 10, 20, K_CG_WINDOW_LAYER_NORMAL + 101, false),
+        ];
+        for (name, target, window, layer, expected) in cases {
+            assert_eq!(
+                front_stack_entry(target, window, layer),
+                expected,
+                "case: {name}"
             );
         }
     }
