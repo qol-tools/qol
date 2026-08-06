@@ -1,8 +1,8 @@
 use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
-    CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
-    K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
+    K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use qol_conventions::launcher;
 use std::collections::HashSet;
@@ -153,6 +153,14 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
     let layer = ffi::dict_get_i32(dict, keys.layer)?;
     let pid = ffi::dict_get_i32(dict, keys.pid)?;
     if pid == own_pid {
+        return None;
+    }
+    if layer != K_CG_WINDOW_LAYER_NORMAL {
+        qol_runtime::probe!(
+            "FILTERED",
+            "reason=layer wid={:?} pid={pid} layer={layer}",
+            { ffi::dict_get_i32(dict, keys.number) }
+        );
         return None;
     }
     let app_name = ffi::dict_get_string(dict, keys.owner)

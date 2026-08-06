@@ -236,6 +236,7 @@ fn merge_stable_keys(
     current: &[StableWindowKey],
 ) -> Vec<StableWindowKey> {
     let current_set = current.iter().copied().collect::<HashSet<_>>();
+    let known = previous.iter().copied().collect::<HashSet<_>>();
     let mut result = Vec::with_capacity(current.len());
     let mut seen = HashSet::new();
 
@@ -248,8 +249,11 @@ fn merge_stable_keys(
         }
         push_unique_key(&mut result, &mut seen, key);
     }
-    for &key in current {
-        push_unique_key(&mut result, &mut seen, key);
+    for (position, &key) in current.iter().enumerate() {
+        if known.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        result.insert(position.min(result.len()), key);
     }
     result
 }
@@ -1029,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_stable_keys_appends_new_windows_after_known_ones() {
+    fn merge_stable_keys_places_new_windows_at_their_window_server_position() {
         let a1 = key(10, 1, 101);
         let b1 = key(20, 2, 201);
         let c1 = key(30, 3, 301);
@@ -1040,7 +1044,24 @@ mod tests {
 
         assert_eq!(
             merge_stable_keys(Some(b1), &previous, &current),
-            vec![b1, a1, c1, d1]
+            vec![b1, c1, a1, d1]
+        );
+    }
+
+    #[test]
+    fn a_relaunched_app_lands_next_to_the_focused_window() {
+        let cli = key(10, 1, 101);
+        let firefox = key(20, 2, 201);
+        let teams = key(30, 3, 301);
+        let signal_relaunched = key(40, 4, 401);
+
+        let previous = vec![cli, firefox, teams];
+        let current = vec![cli, signal_relaunched, firefox, teams];
+
+        assert_eq!(
+            merge_stable_keys(Some(cli), &previous, &current),
+            vec![cli, signal_relaunched, firefox, teams],
+            "a window seen for the first time must not sort last"
         );
     }
 
