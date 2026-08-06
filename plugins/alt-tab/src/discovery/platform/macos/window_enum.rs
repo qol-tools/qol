@@ -215,6 +215,19 @@ fn current_stable_keys(
         .collect()
 }
 
+pub(crate) fn promote_focused_window(window_id: u32) {
+    let Ok(mut order) = stable_window_order().lock() else {
+        return;
+    };
+    let Some(index) = order.iter().position(|key| key.window_id == window_id) else {
+        return;
+    };
+    if index == 0 {
+        return;
+    }
+    order[..=index].rotate_right(1);
+}
+
 fn read_stable_window_order() -> Vec<StableWindowKey> {
     stable_window_order()
         .lock()

@@ -10,6 +10,7 @@ const MIN_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) struct FocusChannel {
     platform: SharedPlatform,
     bounds: Option<MonitorBounds>,
+    window_id: Option<u32>,
     poll_allowed: bool,
 }
 
@@ -19,12 +20,17 @@ impl FocusChannel {
         Self {
             platform,
             bounds: None,
+            window_id: None,
             poll_allowed,
         }
     }
 
     pub(crate) fn bounds(&self) -> Option<MonitorBounds> {
         self.bounds
+    }
+
+    pub(crate) fn window_id(&self) -> Option<u32> {
+        self.window_id
     }
 }
 
@@ -33,17 +39,29 @@ impl Channel for FocusChannel {
         if !self.poll_allowed {
             return false;
         }
-        let fresh = self.platform.focused_window_bounds();
-        if fresh.is_some() && fresh != self.bounds {
-            log::debug!(
-                "[runtime/focus_ch] CHANGED old={:?} new={:?}",
-                self.bounds.map(|b| (b.x, b.y, b.width, b.height)),
-                fresh.map(|b| (b.x, b.y, b.width, b.height))
-            );
-            self.bounds = fresh;
-            return true;
+        let Some(fresh) = self.platform.focused_window() else {
+            return false;
+        };
+        let moved = Some(fresh.monitor) != self.bounds;
+        let raised = fresh.id.is_some() && fresh.id != self.window_id;
+        if !moved && !raised {
+            return false;
         }
-        false
+        log::debug!(
+            "[runtime/focus_ch] CHANGED old={:?} new={:?} wid {:?} -> {:?}",
+            self.bounds.map(|b| (b.x, b.y, b.width, b.height)),
+            Some((
+                fresh.monitor.x,
+                fresh.monitor.y,
+                fresh.monitor.width,
+                fresh.monitor.height
+            )),
+            self.window_id,
+            fresh.id
+        );
+        self.bounds = Some(fresh.monitor);
+        self.window_id = fresh.id;
+        true
     }
 
     fn min_interval(&self) -> Duration {

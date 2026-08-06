@@ -7,6 +7,7 @@ use crate::runtime::state::{self, InputState};
 pub(super) struct EventTracker {
     prev_active_idx: Option<usize>,
     prev_focus_idx: Option<usize>,
+    prev_focus_window: Option<u32>,
 }
 
 impl EventTracker {
@@ -14,6 +15,7 @@ impl EventTracker {
         Self {
             prev_active_idx: None,
             prev_focus_idx: None,
+            prev_focus_window: None,
         }
     }
 
@@ -23,6 +25,7 @@ impl EventTracker {
         monitors: &[MonitorBounds],
         monitors_changed: bool,
         cursor_moved: bool,
+        focus_window_id: Option<u32>,
     ) -> Vec<RuntimeEvent> {
         let input = shared.input();
         let current_active_idx = active_monitor_idx(&input, monitors);
@@ -38,7 +41,7 @@ impl EventTracker {
         if let Some(event) = cursor_moved_event(shared, cursor_moved) {
             events.push(event);
         }
-        if let Some(event) = self.focus_event(monitors, current_focus_idx) {
+        if let Some(event) = self.focus_event(monitors, current_focus_idx, focus_window_id) {
             events.push(event);
         }
 
@@ -71,15 +74,19 @@ impl EventTracker {
         &mut self,
         monitors: &[MonitorBounds],
         current_idx: Option<usize>,
+        window_id: Option<u32>,
     ) -> Option<RuntimeEvent> {
-        if current_idx == self.prev_focus_idx {
+        let raised = window_id.is_some() && window_id != self.prev_focus_window;
+        if current_idx == self.prev_focus_idx && !raised {
             return None;
         }
 
         self.prev_focus_idx = current_idx;
+        self.prev_focus_window = window_id;
         Some(RuntimeEvent::FocusChanged {
             monitor_idx: current_idx,
             monitor: monitor_at(monitors, current_idx),
+            window_id,
         })
     }
 }
@@ -167,7 +174,7 @@ mod tests {
         let mut tracker = EventTracker::new();
         // First call: prev_active_idx = None -> Some(0) (via fallback monitor), emit
         // ActiveMonitorChanged once. No focus, no cursor pos, no monitors-changed flag.
-        let first = tracker.build(&shared, &[mon(0.0, 0.0)], false, false);
+        let first = tracker.build(&shared, &[mon(0.0, 0.0)], false, false, None);
         assert_eq!(
             first.len(),
             1,
@@ -181,10 +188,44 @@ mod tests {
             }
         ));
         // Second call with no state changes: nothing should fire.
-        let second = tracker.build(&shared, &[mon(0.0, 0.0)], false, false);
+        let second = tracker.build(&shared, &[mon(0.0, 0.0)], false, false, None);
         assert!(
             second.is_empty(),
             "idle settled state emits nothing: {second:?}"
+        );
+    }
+
+    #[test]
+    fn focus_changed_fires_when_the_window_changes_on_one_monitor() {
+        let monitors = vec![mon(0.0, 0.0)];
+        let shared = shared_with(monitors.clone());
+        set_cursor_focus(&shared, None, Some(monitors[0]), Instant::now());
+        let mut tracker = EventTracker::new();
+
+        let focus_events = |events: Vec<RuntimeEvent>| {
+            events
+                .into_iter()
+                .filter_map(|event| match event {
+                    RuntimeEvent::FocusChanged { window_id, .. } => Some(window_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            focus_events(tracker.build(&shared, &monitors, false, false, Some(10))),
+            vec![Some(10)],
+            "first focus settles"
+        );
+        assert_eq!(
+            focus_events(tracker.build(&shared, &monitors, false, false, Some(10))),
+            Vec::new(),
+            "same window emits nothing"
+        );
+        assert_eq!(
+            focus_events(tracker.build(&shared, &monitors, false, false, Some(20))),
+            vec![Some(20)],
+            "a different window on the same monitor must still emit"
         );
     }
 
@@ -195,7 +236,7 @@ mod tests {
         set_cursor_focus(&shared, Some(monitors[0]), None, Instant::now());
 
         let mut tracker = EventTracker::new();
-        let first = tracker.build(&shared, &monitors, false, false);
+        let first = tracker.build(&shared, &monitors, false, false, None);
         assert!(
             first.iter().any(|event| matches!(
                 event,
@@ -207,7 +248,7 @@ mod tests {
             "first build emits initial active=Some(0): {first:?}",
         );
 
-        let again = tracker.build(&shared, &monitors, false, false);
+        let again = tracker.build(&shared, &monitors, false, false, None);
         assert!(
             !again
                 .iter()
@@ -216,7 +257,7 @@ mod tests {
         );
 
         set_cursor_focus(&shared, Some(monitors[1]), None, Instant::now());
-        let after = tracker.build(&shared, &monitors, false, false);
+        let after = tracker.build(&shared, &monitors, false, false, None);
         assert!(
             after.iter().any(|event| matches!(
                 event,
@@ -236,14 +277,14 @@ mod tests {
         set_cursor_focus(&shared, None, Some(monitors[0]), Instant::now());
         let mut tracker = EventTracker::new();
 
-        let first = tracker.build(&shared, &monitors, false, false);
+        let first = tracker.build(&shared, &monitors, false, false, None);
         let focus_events: Vec<_> = first
             .iter()
             .filter(|event| matches!(event, RuntimeEvent::FocusChanged { .. }))
             .collect();
         assert_eq!(focus_events.len(), 1, "first build emits FocusChanged");
 
-        let again = tracker.build(&shared, &monitors, false, false);
+        let again = tracker.build(&shared, &monitors, false, false, None);
         let focus_events: Vec<_> = again
             .iter()
             .filter(|event| matches!(event, RuntimeEvent::FocusChanged { .. }))
@@ -256,7 +297,7 @@ mod tests {
         let shared = shared_with(vec![mon(0.0, 0.0)]);
         let mut tracker = EventTracker::new();
         // moved=true but no cursor pos: no event.
-        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, true);
+        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, true, None);
         assert!(
             !events
                 .iter()
@@ -265,7 +306,7 @@ mod tests {
         );
 
         shared.set_cursor_pos(Some((123.0, 456.0)));
-        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, true);
+        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, true, None);
         let cursor_events: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -275,7 +316,7 @@ mod tests {
             .collect();
         assert_eq!(cursor_events, vec![(123.0, 456.0)]);
 
-        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, false);
+        let events = tracker.build(&shared, &[mon(0.0, 0.0)], false, false, None);
         assert!(
             !events
                 .iter()
@@ -290,7 +331,7 @@ mod tests {
         let shared = shared_with(monitors.clone());
         let mut tracker = EventTracker::new();
 
-        let events = tracker.build(&shared, &monitors, false, false);
+        let events = tracker.build(&shared, &monitors, false, false, None);
         assert!(
             !events
                 .iter()
@@ -298,7 +339,7 @@ mod tests {
             "no flag: no event",
         );
 
-        let events = tracker.build(&shared, &monitors, true, false);
+        let events = tracker.build(&shared, &monitors, true, false, None);
         assert!(
             events
                 .iter()

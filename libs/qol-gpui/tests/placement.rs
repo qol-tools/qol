@@ -29,6 +29,7 @@ fn from_event_resolves_monitor_only_for_carrying_events() {
         ),
         (
             RuntimeEvent::FocusChanged {
+                window_id: None,
                 monitor_idx: Some(1),
                 monitor: Some(m),
             },

@@ -7,10 +7,23 @@ mod platform;
 
 pub(crate) type SharedPlatform = Arc<dyn Platform>;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FocusedWindow {
+    pub id: Option<u32>,
+    pub monitor: MonitorBounds,
+}
+
 pub(crate) trait Platform: Send + Sync {
     fn cursor_position(&self) -> Option<(f32, f32)>;
     fn focused_window_bounds(&self) -> Option<MonitorBounds>;
     fn physical_monitors(&self) -> Vec<MonitorBounds>;
+
+    fn focused_window(&self) -> Option<FocusedWindow> {
+        Some(FocusedWindow {
+            id: None,
+            monitor: self.focused_window_bounds()?,
+        })
+    }
 
     fn poll_focused_window(&self) -> bool {
         true

@@ -135,6 +135,8 @@ pub enum RuntimeEvent {
     FocusChanged {
         monitor_idx: Option<usize>,
         monitor: Option<MonitorBounds>,
+        #[serde(default)]
+        window_id: Option<u32>,
     },
     LauncherAppsSynced {
         #[serde(default)]
