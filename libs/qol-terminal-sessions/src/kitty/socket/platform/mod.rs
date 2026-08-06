@@ -1,0 +1,15 @@
+use std::path::Path;
+
+#[cfg(not(unix))]
+mod fallback;
+#[cfg(unix)]
+mod unix;
+
+#[cfg(not(unix))]
+use fallback as active;
+#[cfg(unix)]
+use unix as active;
+
+pub(super) fn exchange(path: &Path, request: &[u8], terminator: &[u8]) -> std::io::Result<Vec<u8>> {
+    active::exchange(path, request, terminator)
+}
