@@ -190,6 +190,7 @@ fn take_over_in(
         .find(|claim| claim.dir == mutation.dir && claim.key == mutation.key)
         .map_or(current, |claim| claim.previous);
 
+    let custom_list = withdrawn_custom_list(store, &mutation.dir);
     let claim = ledger::Claim {
         dir: mutation.dir.clone(),
         key: mutation.key.clone(),
@@ -198,13 +199,44 @@ fn take_over_in(
         qol_combo: mutation.qol_combo.clone(),
         reach: mutation.reach,
         recorded_at: SystemTime::now(),
+        custom_list: custom_list.clone(),
     };
     ledger::record(root, &claim).map_err(|error| TakeoverError::Ledger(error.to_string()))?;
     if let Err(error) = store.write(&full_key, &mutation.next) {
         let _ = ledger::clear(root, &claim);
         return Err(error);
     }
+    if let Some(list) = custom_list {
+        if let Err(error) = store.write(&list.key, &list.applied) {
+            log::warn!(
+                "hotkey takeover: {} kept its entry in {}: {error}",
+                mutation.qol_combo,
+                list.key
+            );
+        }
+    }
     Ok(())
+}
+
+fn withdrawn_custom_list(
+    store: &mut dyn BindingStore,
+    dir: &str,
+) -> Option<ledger::CustomListClaim> {
+    let entry = dconf::custom_entry(dir)?;
+    let previous = store.read(&entry.list_key).ok()?;
+    let names = dconf::parse_string_array(&previous)?;
+    if !names.iter().any(|name| name == &entry.name) {
+        return None;
+    }
+    let remaining: Vec<String> = names
+        .into_iter()
+        .filter(|name| name != &entry.name)
+        .collect();
+    Some(ledger::CustomListClaim {
+        key: entry.list_key,
+        applied: dconf::serialize_string_array(&remaining),
+        previous,
+    })
 }
 
 fn restore_all_in(
@@ -226,6 +258,11 @@ fn restore_all_in(
                 if let Err(error) = store.write(&full_key, &claim.previous) {
                     summary.failures.push(format!("{full_key}: {error}"));
                     continue;
+                }
+                if let Some(list) = &claim.custom_list {
+                    if let Err(error) = store.write(&list.key, &list.previous) {
+                        summary.failures.push(format!("{}: {error}", list.key));
+                    }
                 }
                 summary.restored += 1;
                 true
@@ -391,6 +428,66 @@ mod tests {
             RestoreSummary::default(),
             "a second restore must be a no-op, not a second rewrite"
         );
+    }
+
+    const CUSTOM_DIR: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/";
+    const CUSTOM_LIST: &str = "/org/cinnamon/desktop/keybindings/custom-list";
+
+    fn custom_mutation() -> BindingMutation {
+        BindingMutation {
+            dir: CUSTOM_DIR.into(),
+            ..managed_mutation()
+        }
+    }
+
+    fn custom_store() -> FakeStore {
+        let mut store = FakeStore::with(&dconf::full_key(CUSTOM_DIR, "binding"), ORIGINAL);
+        store
+            .values
+            .insert(CUSTOM_LIST.to_string(), "['custom4', 'custom9']".into());
+        store
+    }
+
+    #[test]
+    fn a_custom_shortcut_is_withdrawn_from_the_list_so_the_desktop_re_reads_it_and_drops_the_grab()
+    {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = custom_store();
+
+        take_over_in(root.path(), &mut store, &custom_mutation()).expect("take over");
+
+        assert_eq!(
+            store.get(CUSTOM_LIST),
+            Some("['custom4']"),
+            "emptying the binding alone leaves the entry in the list the desktop iterates, and it keeps the grab"
+        );
+    }
+
+    #[test]
+    fn restoring_a_custom_shortcut_puts_its_entry_back_in_the_list() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = custom_store();
+
+        take_over_in(root.path(), &mut store, &custom_mutation()).expect("take over");
+        let summary = restore_all_in(root.path(), &mut store, None);
+
+        assert_eq!(summary.restored, 1);
+        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+        assert_eq!(store.get(CUSTOM_LIST), Some("['custom4', 'custom9']"));
+        assert_eq!(
+            store.get(&dconf::full_key(CUSTOM_DIR, "binding")),
+            Some(ORIGINAL)
+        );
+    }
+
+    #[test]
+    fn a_binding_outside_the_custom_keybindings_tree_never_touches_a_list() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
+
+        assert_eq!(store.get(CUSTOM_LIST), None);
     }
 
     #[test]
