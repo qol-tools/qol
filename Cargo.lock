@@ -62,7 +62,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.58.5"
+version = "0.58.6"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -4286,7 +4286,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "launcher"
-version = "1.47.3"
+version = "1.47.4"
 dependencies = [
  "anyhow",
  "block2",
@@ -5753,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-bluetooth"
-version = "0.20.3"
+version = "0.20.4"
 dependencies = [
  "anyhow",
  "bluer",
@@ -5775,7 +5775,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.37.2"
+version = "0.37.3"
 dependencies = [
  "anyhow",
  "gpui",
@@ -5858,7 +5858,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-removeapp"
-version = "0.34.3"
+version = "0.34.4"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -6550,7 +6550,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.47.3"
+version = "1.47.4"
 dependencies = [
  "anyhow",
  "block2",
@@ -6603,7 +6603,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.48.5"
+version = "3.48.6"
 dependencies = [
  "anyhow",
  "axum",
