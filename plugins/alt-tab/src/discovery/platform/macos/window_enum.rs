@@ -147,11 +147,10 @@ fn move_true_focus_to_front(mut windows: Vec<CgWindow>) -> Vec<CgWindow> {
 }
 
 fn window_server_front_index(windows: &[CgWindow]) -> Option<usize> {
-    windows.iter().position(counts_as_a_real_window)
-}
-
-fn counts_as_a_real_window(window: &CgWindow) -> bool {
-    window.layer == K_CG_WINDOW_LAYER_NORMAL || window.is_switchable_panel
+    windows
+        .iter()
+        .position(|window| window.layer == K_CG_WINDOW_LAYER_NORMAL)
+        .or_else(|| windows.iter().position(|window| window.is_switchable_panel))
 }
 
 fn stabilize_on_screen_order(
@@ -1123,13 +1122,13 @@ mod tests {
     }
 
     #[test]
-    fn window_server_front_index_treats_a_switchable_panel_as_a_real_window() {
+    fn window_server_front_index_prefers_a_normal_window_over_a_switchable_panel() {
         let cases: [(Vec<CgWindow>, Option<usize>); 3] = [
             (vec![cg_switchable_panel(10, 1)], Some(0)),
-            (vec![cg_switchable_panel(10, 1), cg(20, 2)], Some(0)),
+            (vec![cg_switchable_panel(10, 1), cg(20, 2)], Some(1)),
             (
                 vec![cg_panel(10, 1), cg_switchable_panel(20, 2), cg(30, 3)],
-                Some(1),
+                Some(2),
             ),
         ];
         for (windows, expected) in cases {
@@ -1174,6 +1173,14 @@ mod tests {
     #[test]
     fn a_panel_never_outranks_the_front_normal_window() {
         let windows = vec![cg_panel(90, 9), cg(10, 1), cg(20, 2)];
+        let ordered = move_true_focus_to_front(windows);
+        let ids: Vec<u32> = ordered.iter().map(|window| window.id).collect();
+        assert_eq!(ids, vec![10, 90, 20]);
+    }
+
+    #[test]
+    fn a_switchable_panel_never_outranks_the_front_normal_window() {
+        let windows = vec![cg_switchable_panel(90, 9), cg(10, 1), cg(20, 2)];
         let ordered = move_true_focus_to_front(windows);
         let ids: Vec<u32> = ordered.iter().map(|window| window.id).collect();
         assert_eq!(ids, vec![10, 90, 20]);
