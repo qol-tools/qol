@@ -1,4 +1,4 @@
-name: Version and Release Plugins
+name: Versioning
 run-name: ${{ inputs.plugin_id && format('Version plugin {0}', inputs.plugin_id) || 'Version changed release units' }}
 
 on:
