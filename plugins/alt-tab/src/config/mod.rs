@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+mod switchable;
+
+pub use switchable::{SwitchablePanelOverride, SwitchablePanels};
+
 pub const DEFAULT_CARD_BACKGROUND_COLOR: &str = "#202322";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +126,8 @@ pub struct AltTabConfig {
     pub open_behavior: OpenBehavior,
     #[serde(default)]
     pub label: LabelConfig,
+    #[serde(default)]
+    pub switchable_panels: Vec<SwitchablePanelOverride>,
 }
 
 impl Default for AltTabConfig {
@@ -132,6 +138,7 @@ impl Default for AltTabConfig {
             reset_selection_on_open: default_reset_selection_on_open(),
             open_behavior: OpenBehavior::default(),
             label: LabelConfig::default(),
+            switchable_panels: Vec::new(),
         }
     }
 }

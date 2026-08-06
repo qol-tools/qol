@@ -263,11 +263,16 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
+    let switchable = crate::config::SwitchablePanels::resolve(&config.switchable_panels);
 
     #[cfg(debug_assertions)]
     let t_query = std::time::Instant::now();
     let windows = executor
-        .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
+        .spawn(async move {
+            Platform
+                .visible_windows(show_minimized, &switchable)
+                .unwrap_or_default()
+        })
         .await;
     let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]

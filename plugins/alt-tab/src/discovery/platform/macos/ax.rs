@@ -622,6 +622,7 @@ mod dedup_tests {
             id,
             pid: 100,
             layer: 0,
+            is_switchable_panel: false,
             app_name: "foo".to_string(),
             title: "bar".to_string(),
             has_title: true,

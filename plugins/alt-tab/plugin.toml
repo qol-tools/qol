@@ -7,6 +7,9 @@ version = "0.58.9"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
+[config.scope]
+switchable_panels = "os"
+
 [runtime]
 command = "alt-tab"
 

@@ -35,6 +35,22 @@ label = "Reset Selection On Open"
 section = "behavior"
 default = true
 
+[section.windows]
+label = "Windows"
+description = "Which windows the picker is allowed to list."
+actions = ["open", "open-reverse"]
+
+[field.switchable_panels]
+type = "object_array"
+label = "Switchable Panels"
+description = "Overrides for always-on-top panels, which the picker hides by default. Add an app with the toggle on to make it switchable, or add one qol already includes with the toggle off to hide it again."
+section = "windows"
+default = []
+
+[field.switchable_panels.item.fields]
+app = "string"
+switchable = "boolean"
+
 [section.layout]
 label = "Layout"
 description = "Display tuning for the window picker."

@@ -3,6 +3,7 @@ use super::ffi::{
     CFNumberGetValue, CFRelease,
 };
 use super::{parse_cg_window_list, CgWindow};
+use crate::config::SwitchablePanels;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -92,7 +93,11 @@ impl CrossSpaceWindows {
     }
 }
 
-pub(super) fn cross_space_windows(own_pid: i32, known_ids: &HashSet<u32>) -> CrossSpaceWindows {
+pub(super) fn cross_space_windows(
+    own_pid: i32,
+    known_ids: &HashSet<u32>,
+    switchable: &SwitchablePanels,
+) -> CrossSpaceWindows {
     let Some(api) = space_api() else {
         return CrossSpaceWindows::empty();
     };
@@ -126,7 +131,7 @@ pub(super) fn cross_space_windows(own_pid: i32, known_ids: &HashSet<u32>) -> Cro
     let hydrated = if unknown.is_empty() {
         Vec::new()
     } else {
-        describe_windows(&unknown, own_pid)
+        describe_windows(&unknown, own_pid, switchable)
     };
     CrossSpaceWindows { ids, hydrated }
 }
@@ -242,7 +247,7 @@ fn windows_in_spaces(api: &SpaceApi, cid: u32, space_ids: &[i64]) -> Vec<u32> {
     wids
 }
 
-fn describe_windows(wids: &[u32], own_pid: i32) -> Vec<CgWindow> {
+fn describe_windows(wids: &[u32], own_pid: i32, switchable: &SwitchablePanels) -> Vec<CgWindow> {
     let raw: Vec<*const c_void> = wids
         .iter()
         .map(|wid| *wid as usize as *const c_void)
@@ -263,7 +268,7 @@ fn describe_windows(wids: &[u32], own_pid: i32) -> Vec<CgWindow> {
     if descriptions.is_null() {
         return Vec::new();
     }
-    let mut result = parse_cg_window_list(descriptions, own_pid);
+    let mut result = parse_cg_window_list(descriptions, own_pid, switchable);
     unsafe { CFRelease(descriptions) };
     for window in &mut result {
         window.is_cross_space = true;

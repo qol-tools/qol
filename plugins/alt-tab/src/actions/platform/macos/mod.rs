@@ -14,8 +14,10 @@ pub struct Platform;
 
 impl WindowOps for Platform {
     fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
+        let config = crate::config::load_alt_tab_config();
+        let switchable = crate::config::SwitchablePanels::resolve(&config.switchable_panels);
         Ok(
-            crate::discovery::platform::macos::discover_live_windows(true)
+            crate::discovery::platform::macos::discover_live_windows(true, &switchable)
                 .into_iter()
                 .map(|window| WindowId::from_u32(window.id))
                 .collect(),

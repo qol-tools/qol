@@ -705,6 +705,7 @@ async fn refresh_data(
 ) {
     let config = crate::config::load_alt_tab_config();
     let show_minimized = config.display.show_minimized;
+    let switchable = crate::config::SwitchablePanels::resolve(&config.switchable_panels);
     let executor = cx.background_executor().clone();
     executor
         .timer(Duration::from_millis(DATA_REFRESH_DELAY_MS))
@@ -713,7 +714,11 @@ async fn refresh_data(
         return;
     }
     let windows = executor
-        .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
+        .spawn(async move {
+            Platform
+                .visible_windows(show_minimized, &switchable)
+                .unwrap_or_default()
+        })
         .await;
     if reconcile_stale_refresh(&inputs, generation, request, show_id, "superseded") {
         return;
