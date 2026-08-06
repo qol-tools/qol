@@ -172,7 +172,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         &[
             "phase=after",
             "title=qol-shot-preview",
-            "target_active=true",
+            "clear_opacity=true",
             "map=viewable",
         ],
         CAPTURE_TIMEOUT,
