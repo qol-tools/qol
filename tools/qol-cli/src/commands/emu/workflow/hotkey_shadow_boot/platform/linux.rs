@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::desktop::{
     command, connect_desktop_guest, exec, install_payload, launch_tray_and_wait_api, require_exec,
-    wait_for_command,
+    spawn, wait_for_command,
 };
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::Verdict;
 use crate::commands::emu::{qmp, BootedVm};
@@ -47,7 +47,8 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     thread::sleep(BOOT_SETTLE);
 
     let mut guest = connect_desktop_guest(vm)?;
-    let auth = wait_for_autostart_tray(&mut guest)?;
+    let auth = wait_for_autostart_tray(&mut guest)
+        .map_err(|error| boot_diagnostics(&mut guest, "", error))?;
 
     require_binding(
         &mut guest,
@@ -356,6 +357,36 @@ fn boot_diagnostics(
                 &[
                     "-lc",
                     "stat -c '%y %s %n' /home/qol/.config/qol-tray/profile/default/os/linux/hotkeys.json 2>&1; cat /home/qol/.config/qol-tray/profile/default/os/linux/hotkeys.json 2>/dev/null || true",
+                ],
+            ),
+        ),
+        (
+            "staging-trace",
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    &format!("grep -E 'PROFILE_CONFIG_MATERIALIZE|HOTKEY_|SHORTCUTS|SHORT' {TRACE_LOG_PATH} 2>/dev/null | head -40 || true"),
+                ],
+            ),
+        ),
+        (
+            "sync-state",
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "find /home/qol/.config/qol-tray/profile/default/sync /home/qol/.config/qol-tray/profile/default/device -type f 2>/dev/null | head -12; echo ---; cat /home/qol/.config/qol-tray/profile/default/manifest.json 2>/dev/null; echo; ls -la /home/qol/.config/qol-tray/profile/default/sync/ 2>/dev/null | head -10; ls -la /home/qol/.config/qol-tray/profile/default/os/linux/ 2>/dev/null",
+                ],
+            ),
+        ),
+        (
+            "profile-tree",
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "find /home/qol/.config/qol-tray/profile -maxdepth 4 2>/dev/null | head -40; echo ---; ls -la /home/qol/.config/qol-tray/profile/default/ 2>/dev/null | head -12",
                 ],
             ),
         ),
