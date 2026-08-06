@@ -52,6 +52,13 @@ pub(crate) fn run() {
                 eprintln!("[keyremap] kill received, shutting down");
                 break;
             }
+            daemon::Command::Settings => {
+                if let Err(error) =
+                    qol_apps::desktop_integration::open_plugin_settings(crate::cli::PLUGIN_ID)
+                {
+                    eprintln!("[keyremap] failed to open settings page: {error}");
+                }
+            }
         }
     }
 

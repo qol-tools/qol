@@ -4,6 +4,7 @@ version = "1.21.4"
 edition = "2021"
 
 [dependencies]
+qol-apps.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true

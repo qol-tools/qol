@@ -11,6 +11,10 @@ pub(crate) fn is_executable(path: &std::path::Path) -> bool {
     platform::is_executable(path)
 }
 
+pub(crate) fn open_settings() -> std::io::Result<()> {
+    qol_apps::desktop_integration::open_plugin_settings(env!("QOL_PLUGIN_ID"))
+}
+
 pub fn run() -> u8 {
     platform::spawn_host_death_watchdog();
     let config = config::Config::load();

@@ -100,6 +100,7 @@ label = "Reconnect"
 args = ["reload"]
 
 [capabilities]
+gpui = true
 doctor = true
 serial = true
 

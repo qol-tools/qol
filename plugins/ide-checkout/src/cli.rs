@@ -42,7 +42,24 @@ where
                 .exit_behavior("Exits zero after reporting whether the daemon answered.")
                 .run_result(move |_| Ok(CommandResult::new("", "", status()))),
         )
+        .command(settings_command())
         .doctor_checks(crate::doctor::checks())
+}
+
+fn settings_command() -> Command {
+    Command::new("settings")
+        .about("Open the Task Runner settings page in qol-tray.")
+        .usage(format!("{BINARY_NAME} settings"))
+        .output("No stdout on success; opens the settings URL through the platform launcher.")
+        .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
+        .run_result(move |_| Ok(result_for(crate::daemon::open_settings())))
+}
+
+fn result_for(result: std::io::Result<()>) -> CommandResult {
+    match result {
+        Ok(()) => CommandResult::success(""),
+        Err(error) => CommandResult::new("", format!("{error}\n"), 1),
+    }
 }
 
 fn run_status() -> u8 {
@@ -104,7 +121,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use qol_headless::{DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{CommandResult, DoctorReport, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_plugin_api::manifest::PluginManifest;
 
     use super::*;
 
@@ -148,8 +166,41 @@ mod tests {
     }
 
     #[test]
+    fn manifest_actions_have_contextual_cli_help() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+
+        for action in manifest.executable_actions() {
+            let args = manifest
+                .catalog_runtime_args(&action.id)
+                .expect("executable action must have runtime args");
+            let command = args.first().expect("runtime args must name a command");
+            let execution = app().execute(["help".to_string(), command.clone()]);
+
+            assert_eq!(
+                execution.exit_code, EXIT_SUCCESS,
+                "action={} stderr={}",
+                action.id, execution.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn result_for_maps_launch_results_without_spawning() {
+        assert_eq!(result_for(Ok(())), CommandResult::success(""));
+
+        let failure = result_for(Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no desktop opener",
+        )));
+        assert_eq!(failure.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(failure.stdout.is_empty());
+        assert!(failure.stderr.contains("no desktop opener"));
+    }
+
+    #[test]
     fn command_help_is_equivalent_in_both_positions() {
-        for command in ["daemon", "status", "doctor"] {
+        for command in ["daemon", "status", "settings", "doctor"] {
             let first = app().execute(["help".to_string(), command.to_string()]);
             let final_token = app().execute([command.to_string(), "help".to_string()]);
 
