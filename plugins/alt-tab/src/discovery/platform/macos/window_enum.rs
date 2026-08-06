@@ -139,39 +139,17 @@ pub(super) fn collect_on_screen_windows(
 }
 
 fn move_true_focus_to_front(mut windows: Vec<CgWindow>) -> Vec<CgWindow> {
-    let Some(index) = true_focus_index(&windows, frontmost_app_pid()).filter(|index| *index != 0)
-    else {
+    let Some(index) = window_server_front_index(&windows).filter(|index| *index != 0) else {
         return windows;
     };
     windows[..=index].rotate_right(1);
     windows
 }
 
-fn true_focus_index(windows: &[CgWindow], frontmost_pid: Option<i32>) -> Option<usize> {
+fn window_server_front_index(windows: &[CgWindow]) -> Option<usize> {
     windows
         .iter()
-        .position(|window| {
-            window.layer == K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
-        })
-        .or_else(|| {
-            windows.iter().position(|window| {
-                window.layer != K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
-            })
-        })
-        .or_else(|| {
-            windows
-                .iter()
-                .position(|window| window.layer == K_CG_WINDOW_LAYER_NORMAL)
-        })
-}
-
-fn frontmost_app_pid() -> Option<i32> {
-    objc2::rc::autoreleasepool(|_| {
-        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
-        workspace
-            .frontmostApplication()
-            .map(|app| app.processIdentifier())
-    })
+        .position(|window| window.layer == K_CG_WINDOW_LAYER_NORMAL)
 }
 
 fn stabilize_on_screen_order(
@@ -1101,27 +1079,39 @@ mod tests {
     }
 
     #[test]
-    fn true_focus_index_prefers_frontmost_app_normal_window_then_panel() {
-        let cases: [(Vec<CgWindow>, Option<i32>, Option<usize>); 5] = [
-            (vec![], Some(1), None),
-            (vec![cg(10, 1), cg(20, 2)], Some(2), Some(1)),
-            (vec![cg(10, 1), cg_panel(20, 2)], Some(2), Some(1)),
-            (vec![cg(10, 1), cg_panel(20, 2)], Some(1), Some(0)),
-            (vec![cg_panel(10, 1)], Some(2), None),
+    fn window_server_front_index_skips_panels_to_the_first_normal_window() {
+        let cases: [(Vec<CgWindow>, Option<usize>); 5] = [
+            (vec![], None),
+            (vec![cg(10, 1), cg(20, 2)], Some(0)),
+            (vec![cg(10, 1), cg_panel(20, 2)], Some(0)),
+            (vec![cg_panel(10, 1)], None),
+            (vec![cg_panel(10, 2), cg(20, 2)], Some(1)),
         ];
-        for (windows, frontmost_pid, expected) in cases {
+        for (windows, expected) in cases {
+            let ids: Vec<u32> = windows.iter().map(|window| window.id).collect();
             assert_eq!(
-                true_focus_index(&windows, frontmost_pid),
+                window_server_front_index(&windows),
                 expected,
-                "frontmost_pid: {frontmost_pid:?}"
+                "windows: {ids:?}"
             );
         }
+    }
 
-        let windows = vec![cg_panel(10, 2), cg(20, 2)];
+    #[test]
+    fn index_zero_follows_the_window_server_front_window() {
+        let windows = vec![cg(10, 1), cg(20, 2)];
         assert_eq!(
-            true_focus_index(&windows, Some(2)),
-            Some(1),
-            "a frontmost app's normal window outranks its auxiliary panel"
+            move_true_focus_to_front(windows)[0].id,
+            10,
+            "a background app must never be rotated to index 0"
         );
+    }
+
+    #[test]
+    fn a_panel_never_outranks_the_front_normal_window() {
+        let windows = vec![cg_panel(90, 9), cg(10, 1), cg(20, 2)];
+        let ordered = move_true_focus_to_front(windows);
+        let ids: Vec<u32> = ordered.iter().map(|window| window.id).collect();
+        assert_eq!(ids, vec![10, 90, 20]);
     }
 }
