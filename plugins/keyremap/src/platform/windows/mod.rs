@@ -41,7 +41,3 @@ fn unsupported() -> CommandResult {
         "keyremap: only macOS is supported (requires CGEventTap and Accessibility APIs)",
     )
 }
-
-pub(crate) fn open_settings() -> Result<(), String> {
-    Err("opening Key Remap settings is only supported on macOS".to_string())
-}

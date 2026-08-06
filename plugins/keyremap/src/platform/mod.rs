@@ -11,13 +11,13 @@ mod macos;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(crate) use fallback::{open_settings, Adapter as Platform};
+pub(crate) use fallback::Adapter as Platform;
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{open_settings, Adapter as Platform};
+pub(crate) use linux::Adapter as Platform;
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{open_settings, Adapter as Platform};
+pub(crate) use macos::Adapter as Platform;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{open_settings, Adapter as Platform};
+pub(crate) use windows::Adapter as Platform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrustStatus {

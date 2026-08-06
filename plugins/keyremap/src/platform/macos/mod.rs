@@ -2,8 +2,6 @@ mod app;
 mod app_tracker;
 mod tap;
 
-use std::process::Command;
-
 use anyhow::Result;
 use qol_headless::CommandResult;
 
@@ -65,13 +63,4 @@ impl PlatformAdapter for Adapter {
 fn action_result(sent: bool, success: &str, missing: &str) -> CommandResult {
     let message = if sent { success } else { missing };
     CommandResult::new("", format!("[keyremap] {message}\n"), 0)
-}
-
-pub(crate) fn open_settings() -> Result<(), String> {
-    let url = qol_conventions::settings_url(crate::cli::PLUGIN_ID);
-    Command::new("open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Failed to open settings page: {error}"))
 }

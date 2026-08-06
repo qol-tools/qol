@@ -60,6 +60,7 @@ struct Runtime {
     glide: Option<GlideController>,
     glide_speed: f64,
     store: FileMinimizedStateStore,
+    open_settings: fn() -> std::io::Result<()>,
 }
 
 impl Runtime {
@@ -68,6 +69,7 @@ impl Runtime {
             glide: None,
             glide_speed: 1200.0,
             store: FileMinimizedStateStore::new(crate::platform::state_file_path()),
+            open_settings: open_settings_page,
         }
     }
 
@@ -97,8 +99,8 @@ impl Runtime {
                 true
             }
             Command::Settings => {
-                if let Err(error) = crate::platform::open_settings() {
-                    eprintln!("{error}");
+                if let Err(error) = (self.open_settings)() {
+                    eprintln!("[window-actions] failed to open settings page: {error}");
                 }
                 true
             }
@@ -159,6 +161,10 @@ pub(crate) fn run() -> Result<(), String> {
     core_daemon::cleanup(&CONFIG);
     trace_daemon_lifecycle("stop");
     Ok(())
+}
+
+fn open_settings_page() -> std::io::Result<()> {
+    qol_apps::desktop_integration::open_plugin_settings(crate::cli::PLUGIN_ID)
 }
 
 fn receive_command(rx: &Receiver<Command>, glide_is_active: bool) -> Result<Option<Command>, ()> {
@@ -271,7 +277,7 @@ fn trace_glide_watchdog(outcome: &Result<(), String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_request, should_trace_glide, Command, TraceContext};
+    use super::{parse_request, should_trace_glide, Command, Runtime, TraceContext};
     use crate::glide::{Direction, Phase};
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
@@ -350,6 +356,46 @@ mod tests {
             parse_request(&request("nope", serde_json::Value::Null)),
             ReadResult::Fallback
         ));
+    }
+
+    #[test]
+    fn settings_arm_keeps_the_daemon_alive_without_spawning() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static OPENS: AtomicUsize = AtomicUsize::new(0);
+        fn sentinel_opener() -> std::io::Result<()> {
+            OPENS.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        let mut runtime = Runtime {
+            open_settings: sentinel_opener,
+            ..Runtime::new()
+        };
+        assert!(runtime.handle(Command::Settings));
+        assert_eq!(OPENS.load(Ordering::SeqCst), 1);
+
+        assert!(
+            runtime.handle(Command::Settings),
+            "the settings arm must never stop the daemon loop"
+        );
+        assert_eq!(OPENS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn settings_arm_keeps_the_daemon_alive_even_when_launch_fails() {
+        fn failing_opener() -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no desktop opener",
+            ))
+        }
+
+        let mut runtime = Runtime {
+            open_settings: failing_opener,
+            ..Runtime::new()
+        };
+        assert!(runtime.handle(Command::Settings));
     }
 
     #[test]

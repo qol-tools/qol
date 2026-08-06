@@ -6,7 +6,6 @@ mod system;
 
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::WindowActionsConfig;
 use crate::restore;
@@ -16,15 +15,6 @@ use system::{run_cinnamon_eval, X11WindowSystem};
 
 pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
 pub(crate) use glide::GlideController;
-
-pub(crate) fn open_settings() -> Result<(), String> {
-    let url = qol_conventions::settings_url(crate::cli::PLUGIN_ID);
-    Command::new("xdg-open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Failed to open settings page: {error}"))
-}
 
 pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
 

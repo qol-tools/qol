@@ -118,8 +118,13 @@ fn settings_command() -> Command {
         .about("Open the Window Actions settings page in qol-tray.")
         .usage(format!("{BINARY_NAME} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
-        .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
-        .run_result(move |_| Ok(result_for(crate::platform::open_settings())))
+        .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
+        .run_result(move |_| {
+            Ok(result_for(
+                qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+                    .map_err(|error| format!("failed to open settings URL: {error}")),
+            ))
+        })
 }
 
 fn run_daemon() -> CommandResult {

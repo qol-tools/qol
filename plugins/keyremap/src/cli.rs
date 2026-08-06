@@ -19,6 +19,14 @@ fn app<A>(adapter: A) -> HeadlessApp
 where
     A: PlatformAdapter,
 {
+    app_with_handlers(adapter, launch_settings_page)
+}
+
+fn app_with_handlers<A, Settings>(adapter: A, settings: Settings) -> HeadlessApp
+where
+    A: PlatformAdapter,
+    Settings: Fn() -> std::io::Result<()> + Send + Sync + 'static,
+{
     let launch = adapter.clone();
     let reload = adapter.clone();
     let kill = adapter.clone();
@@ -63,18 +71,22 @@ where
                     kill.kill()
                 }),
         )
-        .command(settings_command())
+        .command(settings_command(settings))
         .doctor_checks(doctor_checks(adapter))
 }
 
-fn settings_command() -> Command {
+fn launch_settings_page() -> std::io::Result<()> {
+    qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+}
+
+fn settings_command(settings: impl Fn() -> std::io::Result<()> + Send + Sync + 'static) -> Command {
     Command::new("settings")
         .alias("--settings")
         .about("Open the Key Remap settings page in qol-tray.")
         .usage(format!("{BINARY_NAME} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
-        .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
-        .run_result(move |_| Ok(result_for(crate::platform::open_settings())))
+        .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
+        .run_result(move |_| Ok(result_for(settings())))
 }
 
 fn no_args(context: &CommandContext) -> Result<()> {
@@ -84,7 +96,7 @@ fn no_args(context: &CommandContext) -> Result<()> {
     Ok(())
 }
 
-fn result_for(result: Result<(), String>) -> CommandResult {
+fn result_for(result: std::io::Result<()>) -> CommandResult {
     match result {
         Ok(()) => CommandResult::success(""),
         Err(error) => CommandResult::new("", format!("{error}\n"), 1),
@@ -240,7 +252,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use qol_headless::{CommandResult, DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{CommandResult, DoctorReport, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
 
     use super::*;
 
@@ -249,6 +261,7 @@ mod tests {
         launch: AtomicUsize,
         reload: AtomicUsize,
         kill: AtomicUsize,
+        settings: AtomicUsize,
         config: AtomicUsize,
         trust: AtomicUsize,
     }
@@ -304,12 +317,75 @@ mod tests {
 
     fn sentinel() -> (HeadlessApp, Arc<Calls>) {
         let calls = Arc::new(Calls::default());
+        let settings_calls = Arc::clone(&calls);
         (
-            app(SentinelAdapter {
-                calls: Arc::clone(&calls),
-            }),
+            app_with_handlers(
+                SentinelAdapter {
+                    calls: Arc::clone(&calls),
+                },
+                move || {
+                    settings_calls.settings.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ),
             calls,
         )
+    }
+
+    #[test]
+    fn settings_alias_executes_the_manifest_dispatch_route() {
+        let (app, calls) = sentinel();
+        let execution = app.execute(["--settings".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(calls.launch.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.settings.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn settings_failure_exits_nonzero_with_a_stderr_message() {
+        let calls = Arc::new(Calls::default());
+        let app = app_with_handlers(
+            SentinelAdapter {
+                calls: Arc::clone(&calls),
+            },
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no desktop opener",
+                ))
+            },
+        );
+        let execution = app.execute(["--settings".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(execution.stderr.contains("no desktop opener"));
+    }
+
+    #[test]
+    fn result_for_maps_launch_results_without_spawning() {
+        assert_eq!(result_for(Ok(())), CommandResult::success(""));
+
+        let failure = result_for(Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no desktop opener",
+        )));
+        assert_eq!(failure.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(failure.stdout.is_empty());
+        assert!(failure.stderr.contains("no desktop opener"));
+    }
+
+    #[test]
+    fn settings_alias_resolves_in_help_without_launching() {
+        let (app, calls) = sentinel();
+        let first = app.execute(["help".to_string(), "settings".to_string()]);
+        let final_token = app.execute(["--settings".to_string(), "help".to_string()]);
+
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(final_token.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        assert!(first.stdout.contains("settings page in qol-tray"));
+        assert_eq!(calls.settings.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -352,6 +428,8 @@ mod tests {
             vec!["--reload", "help"],
             vec!["help", "kill"],
             vec!["--kill", "help"],
+            vec!["help", "settings"],
+            vec!["--settings", "help"],
             vec!["doctor"],
             vec!["--json", "doctor"],
             vec!["doctor", "--json"],
@@ -367,6 +445,7 @@ mod tests {
             assert_eq!(calls.launch.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.reload.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.kill.load(Ordering::SeqCst), 0, "{args:?}");
+            assert_eq!(calls.settings.load(Ordering::SeqCst), 0, "{args:?}");
         }
     }
 
