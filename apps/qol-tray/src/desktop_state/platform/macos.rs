@@ -1,7 +1,7 @@
 use qol_runtime::MonitorBounds;
 use std::ffi::c_void;
 
-use crate::desktop_state::Platform;
+use crate::desktop_state::{FocusedWindow, Platform};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -220,10 +220,22 @@ impl Platform for MacQueries {
     }
 
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+        self.focused_window().map(|focused| focused.monitor)
+    }
+
+    fn focused_window(&self) -> Option<FocusedWindow> {
         #[cfg(debug_assertions)]
         focus_probe::log_focus_change(self.own_pid);
-        focus_probe::frontmost_window_bounds(self.own_pid)
-            .or_else(|| focused_window_bounds_ax(self.own_pid))
+        if let Some((id, monitor)) = focus_probe::frontmost_window(self.own_pid) {
+            return Some(FocusedWindow {
+                id: Some(id),
+                monitor,
+            });
+        }
+        Some(FocusedWindow {
+            id: None,
+            monitor: focused_window_bounds_ax(self.own_pid)?,
+        })
     }
 
     fn physical_monitors(&self) -> Vec<MonitorBounds> {
@@ -353,18 +365,21 @@ mod focus_probe {
         );
     }
 
-    pub(super) fn frontmost_window_bounds(own_pid: i32) -> Option<MonitorBounds> {
+    pub(super) fn frontmost_window(own_pid: i32) -> Option<(u32, MonitorBounds)> {
         let win = frontmost_normal_window()?;
         if win.pid == own_pid || crate::desktop_state::is_ignored_pid(win.pid as u32) {
             return None;
         }
         let rect = win.bounds?;
-        Some(MonitorBounds {
-            x: rect.origin.x as f32,
-            y: rect.origin.y as f32,
-            width: rect.size.width as f32,
-            height: rect.size.height as f32,
-        })
+        Some((
+            win.wid,
+            MonitorBounds {
+                x: rect.origin.x as f32,
+                y: rect.origin.y as f32,
+                width: rect.size.width as f32,
+                height: rect.size.height as f32,
+            },
+        ))
     }
 
     fn frontmost_normal_window() -> Option<FrontWindow> {

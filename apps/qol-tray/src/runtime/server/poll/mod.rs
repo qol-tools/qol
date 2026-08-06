@@ -94,9 +94,13 @@ impl PollRuntime {
             return;
         }
 
-        let events =
-            self.event_tracker
-                .build(&self.shared, mon_list, monitors_changed, cursor_moved);
+        let events = self.event_tracker.build(
+            &self.shared,
+            mon_list,
+            monitors_changed,
+            cursor_moved,
+            self.focus.window_id(),
+        );
         if events.is_empty() {
             return;
         }
@@ -640,7 +644,7 @@ mod tests {
         let rx = subscribe_all(&shared);
         let _ = runtime
             .event_tracker
-            .build(&shared, &monitors, false, false);
+            .build(&shared, &monitors, false, false, None);
         runtime.emit_events(&monitors, false, false);
         assert!(
             drain(&rx).is_empty(),

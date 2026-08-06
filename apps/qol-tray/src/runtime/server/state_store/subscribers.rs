@@ -180,6 +180,7 @@ mod tests {
         RuntimeEvent::FocusChanged {
             monitor_idx: Some(1),
             monitor: None,
+            window_id: None,
         }
     }
 

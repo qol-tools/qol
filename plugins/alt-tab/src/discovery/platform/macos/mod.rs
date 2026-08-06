@@ -15,7 +15,7 @@ pub(crate) mod ax;
 pub(crate) mod ffi;
 mod process;
 mod spaces;
-mod window_enum;
+pub(crate) mod window_enum;
 
 pub struct Platform;
 
