@@ -17,10 +17,13 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const BOOT_READY_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const BOOT_SETTLE: Duration = Duration::from_secs(150);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(25);
+const CHORD_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 const KEY_SETTLE: Duration = Duration::from_millis(200);
+const POKE_SETTLE: Duration = Duration::from_secs(5);
 const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
 const QOL_COMBO: &str = "Shift+Super+S";
 const GTK_COMBO: &str = "['<Shift><Super>s']";
+const DISPATCH_NEEDLE: &str = "uid=e8208e3e-58b3-4f8c-ad4b-ddbecafa3375 action=open";
 const MANAGED_KEY: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/binding";
 const MANAGED_COMMAND: &str =
     "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/command";
@@ -45,18 +48,28 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     thread::sleep(BOOT_SETTLE);
 
     let mut guest = connect_after_reboot(vm)?;
-    let mut auth = match wait_for_autostart_tray(&mut guest) {
-        Ok(auth) => auth,
-        Err(error) if error.to_string().contains("duplicate hello") => {
-            drop(guest);
-            guest = connect_after_reboot(vm)?;
-            match wait_for_autostart_tray(&mut guest) {
-                Ok(auth) => auth,
-                Err(error) => return Err(boot_diagnostics(&mut guest, "", error)),
+    let mut auth = String::new();
+    for attempt in 0..6 {
+        match wait_for_autostart_tray(&mut guest) {
+            Ok(authed) => {
+                auth = authed;
+                break;
             }
+            Err(error) if is_connection_error(&error) && attempt < 5 => {
+                step_label(
+                    "tray",
+                    StepKind::Pending,
+                    &format!(
+                        "guest-control dropped during the boot wait; reconnecting (attempt {})",
+                        attempt + 2
+                    ),
+                );
+                drop(guest);
+                guest = connect_after_reboot(vm)?;
+            }
+            Err(error) => return Err(boot_diagnostics(&mut guest, "", error)),
         }
-        Err(error) => return Err(boot_diagnostics(&mut guest, "", error)),
-    };
+    }
 
     require_binding(
         &mut guest,
@@ -67,8 +80,10 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
     require_boot_claim(&mut guest)?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
-    require_chord_reaches_qol(&mut guest, &mut qmp)
-        .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
+    require_chord_reaches_qol(&mut guest, &mut qmp).map_err(|error| {
+        let error = diagnose_chord_eaten(&mut guest, &mut qmp, error);
+        boot_diagnostics(&mut guest, &auth, error)
+    })?;
     require_de_stays_quiet(&mut guest)
         .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
 
@@ -90,6 +105,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 
 fn stage_boot_scenario(guest: &mut GuestControlClient) -> Result<()> {
     stage_watcher(guest)?;
+    stage_key_eavesdrop(guest)?;
     let auth = launch_tray_and_wait_api(guest)?;
     set_hotkeys(guest, &auth, &hotkey_config())?;
     let reloaded = require_status(request(guest, &auth, "GET", "/api/hotkeys", None)?, 200)?;
@@ -227,12 +243,45 @@ fn connect_after_reboot(vm: &BootedVm) -> Result<GuestControlClient> {
 }
 
 fn reboot_guest_cleanly(guest: &mut GuestControlClient) -> Result<()> {
-    require_exec(
+    match exec(
         guest,
         command("/usr/bin/systemctl", &["reboot"]),
         COMMAND_TIMEOUT,
-    )?;
-    Ok(())
+    ) {
+        Ok(outcome) if outcome.exit_code == Some(0) => Ok(()),
+        Ok(outcome) => bail!(
+            "systemctl reboot failed: exit={:?}, stderr={}",
+            outcome.exit_code,
+            outcome.stderr.trim()
+        ),
+        Err(error) if is_connection_error(&error) => {
+            step_label(
+                "reboot",
+                StepKind::Pending,
+                "the guest dropped the control connection during shutdown; reboot accepted",
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn is_connection_error(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}");
+    [
+        "guest sent a duplicate hello frame",
+        "guest-control connection closed",
+        "guest-control response timed out",
+        "failed to read guest-control frame",
+        "failed to write guest-control frame",
+        "guest-control connection cancelled",
+        "broken pipe",
+        "connection reset",
+        "connection closed",
+        "operation timed out",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 fn set_hotkeys(guest: &mut GuestControlClient, auth: &str, body: &str) -> Result<()> {
@@ -421,7 +470,7 @@ fn require_chord_reaches_qol(
         guest,
         cursor,
         "HOTKEY_DISPATCH",
-        "uid=e8208e3e-58b3-4f8c-ad4b-ddbecafa3375 action=open",
+        DISPATCH_NEEDLE,
         ACTION_TIMEOUT,
     )
     .context("the chord was not dispatched by the tray's hotkey listener")?;
@@ -439,6 +488,420 @@ fn require_chord_reaches_qol(
         StepKind::Success,
         "Shift+Super+S dispatched to the launcher on the fresh boot",
     );
+    Ok(())
+}
+
+fn diagnose_chord_eaten(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let mut observations = vec![];
+    let grab_before = grab_probe(guest);
+    let marker_before = marker_exists(guest);
+    observations.push(format!("grab-state before: {grab_before}"));
+    observations.push(format!("de-marker before: {marker_before}"));
+    let mut dispatched = false;
+    for attempt in 0..3 {
+        let outcome = if attempt == 0 {
+            eavesdrop_chord(guest, qmp)
+        } else {
+            resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT)
+                .map(|dispatched| (dispatched, String::new()))
+        };
+        match outcome {
+            Ok((true, events)) => {
+                dispatched = true;
+                observations.push(format!(
+                    "chord resend {attempt} dispatched: true{} (the first chord likely lost an injection race)",
+                    if events.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\ninjected key events: {events}")
+                    }
+                ));
+                break;
+            }
+            Ok((false, events)) => {
+                observations.push(format!("chord resend {attempt} dispatched: false"));
+                if !events.is_empty() {
+                    observations.push(format!("injected key events: {events}"));
+                }
+            }
+            Err(resend_error) => {
+                return anyhow::anyhow!(
+                    "{error}\n--- stale-grab experiment (aborted) ---\n{}\nchord resend aborted: {resend_error:#}",
+                    observations.join("\n")
+                )
+            }
+        }
+    }
+    if !dispatched {
+        let poke_write = dconf_write(guest, MANAGED_KEY, GTK_COMBO);
+        let poke = match poke_write {
+            Ok(()) => {
+                thread::sleep(POKE_SETTLE);
+                observations.push(format!(
+                    "poke: wrote {MANAGED_KEY} = {GTK_COMBO} (grab-state now: {})",
+                    grab_probe(guest)
+                ));
+                match dconf_write(guest, MANAGED_KEY, CLEARED) {
+                    Ok(()) => {
+                        thread::sleep(POKE_SETTLE);
+                        observations.push(format!(
+                            "poke: cleared it to {CLEARED} (grab-state now: {})",
+                            grab_probe(guest)
+                        ));
+                        Ok(())
+                    }
+                    Err(clear_error) => Err(clear_error),
+                }
+            }
+            Err(write_error) => Err(write_error),
+        };
+        match poke {
+            Ok(()) => match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
+                Ok(true) => {
+                    dispatched = true;
+                    observations.push("chord after poke dispatched: true".to_string());
+                }
+                Ok(false) => observations.push("chord after poke dispatched: false".to_string()),
+                Err(poke_resend_error) => {
+                    observations.push(format!("chord after poke aborted: {poke_resend_error:#}"))
+                }
+            },
+            Err(poke_error) => {
+                observations.push(format!("poke write-then-clear failed: {poke_error:#}"))
+            }
+        }
+    }
+    let grab_after_poke = grab_probe(guest);
+    observations.push(format!("grab-state after poke: {grab_after_poke}"));
+    let mut grab_after_csd_kill = None;
+    if !dispatched {
+        let pid = exec(
+            guest,
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "ps -eo pid,args | grep -E '[c]sd-settings-remap|[c]sd-keyboard' | awk '{print $1}'",
+                ],
+            ),
+            COMMAND_TIMEOUT,
+        );
+        let pids = pid
+            .ok()
+            .map(|o| {
+                o.stdout
+                    .trim()
+                    .lines()
+                    .filter_map(|line| line.trim().parse::<u64>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let kill = exec(
+            guest,
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    &format!(
+                        "kill -9 {} 2>/dev/null; echo killed",
+                        pids.iter()
+                            .map(|p| p.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ),
+                ],
+            ),
+            COMMAND_TIMEOUT,
+        );
+        match kill {
+            Ok(_) => observations.push(format!("killed csd-keyboard/settings-remap pids={pids:?}")),
+            Err(kill_error) => {
+                observations.push(format!("settings-daemon kill aborted: {kill_error:#}"))
+            }
+        }
+        thread::sleep(Duration::from_millis(600));
+        let probe_dead = grab_probe(guest);
+        observations.push(format!(
+            "grab-state 0.6s after the kill (before any respawn): {probe_dead}"
+        ));
+        if probe_dead == "free" {
+            observations.push("the settings daemon held the stale grab; it died with it and the X server released it".to_string());
+        }
+        match eavesdrop_chord(guest, qmp) {
+            Ok((true, events)) => {
+                dispatched = true;
+                let seen = if events.is_empty() {
+                    "none".to_string()
+                } else {
+                    events
+                };
+                observations.push(format!(
+                    "chord in the respawn window dispatched: true (root key events: {seen})"
+                ));
+            }
+            Ok((false, events)) => {
+                let seen = if events.is_empty() {
+                    "none".to_string()
+                } else {
+                    events
+                };
+                observations.push(format!(
+                    "chord in the respawn window dispatched: false (root key events: {seen})"
+                ))
+            }
+            Err(respawn_resend_error) => observations.push(format!(
+                "chord in the respawn window aborted: {respawn_resend_error:#}"
+            )),
+        }
+        thread::sleep(POKE_SETTLE);
+        let survivors = exec(
+            guest,
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "ps -eo pid,ppid,lstart,args | grep -E '[c]sd-settings-remap|[c]sd-keyboard' | grep -v grep",
+                ],
+            ),
+            COMMAND_TIMEOUT,
+        );
+        match survivors {
+            Ok(outcome) => observations.push(format!(
+                "settings daemon after the kill: {}",
+                outcome.stdout.trim().replace('\n', " | ")
+            )),
+            Err(survivor_error) => observations.push(format!(
+                "settings daemon listing aborted: {survivor_error:#}"
+            )),
+        }
+        let probe = grab_probe(guest);
+        grab_after_csd_kill = Some(probe.clone());
+        observations.push(format!("grab-state after the respawn window: {probe}"));
+        let shell = exec(
+            guest,
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "SHELL_PID=$(ps -eo pid,args | grep -E 'cinnamon --replace|cinnamon$' | grep -v grep | awk '{print $1}' | head -1); kill -9 $SHELL_PID 2>/dev/null; echo shell-killed=$SHELL_PID",
+                ],
+            ),
+            COMMAND_TIMEOUT,
+        );
+        match shell {
+            Ok(outcome) => observations.push(format!(
+                "shell kill: {}",
+                outcome.stdout.trim().replace('\n', " | ")
+            )),
+            Err(shell_error) => observations.push(format!("shell kill aborted: {shell_error:#}")),
+        }
+        thread::sleep(Duration::from_millis(600));
+        observations.push(format!(
+            "grab-state 0.6s after killing the shell: {}",
+            grab_probe(guest)
+        ));
+        for attempt in 0..2 {
+            match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
+                Ok(true) => {
+                    dispatched = true;
+                    observations.push(format!(
+                        "chord after settings-daemon kill {attempt} dispatched: true"
+                    ));
+                    break;
+                }
+                Ok(false) => observations.push(format!(
+                    "chord after settings-daemon kill {attempt} dispatched: false"
+                )),
+                Err(kill_resend_error) => observations.push(format!(
+                    "chord after settings-daemon kill aborted: {kill_resend_error:#}"
+                )),
+            }
+        }
+    }
+    let marker_after = marker_exists(guest);
+    observations.push(format!("de-marker after: {marker_after}"));
+    let verdict = match (
+        dispatched,
+        grab_after_poke.as_str(),
+        grab_after_csd_kill.as_deref(),
+    ) {
+        (true, _, _) => {
+            "VERDICT: a resend dispatched after the failure, so the first chord lost an injection race and no stale desktop grab is proven; the shadow theory needs a run where no resend dispatches"
+                .to_string()
+        }
+        (false, "free", _) => {
+            "VERDICT: the combo is not grabbed after the poke, yet the chord still does not dispatch; the failure is in the chord injection, not a desktop grab"
+                .to_string()
+        }
+        (false, "held", Some("free")) => {
+            "VERDICT: killing the settings daemon freed the grab, so the daemon held a stale grab that even a write-then-clear re-poke did not release; the fix must make the daemon drop its grab (restart it or gate the takeover on it)"
+                .to_string()
+        }
+        (false, "held", Some("held")) => {
+            "VERDICT: the combo stayed grabbed after killing the settings daemon, so the holder is not the desktop daemon; qol's own grab is held but its listener does not dispatch, pointing at the tray's hotkey listener, not a desktop shadow"
+                .to_string()
+        }
+        (false, "held", None) => {
+            "VERDICT: the combo is held, no resend dispatched, and the settings-daemon kill was not attempted; the eat is real but the holder is not yet pinned"
+                .to_string()
+        }
+        (false, other, Some(held)) => format!(
+            "VERDICT: grab-state after poke = {other:?}, after settings-daemon kill = {held:?}; the chord never dispatched, so the eat is real but its holder needs one more observation"
+        ),
+        (false, other, None) => format!(
+            "VERDICT: grab-state after poke = {other:?}; the chord never dispatched and the settings-daemon kill was not attempted"
+        ),
+    };
+    anyhow::anyhow!(
+        "{error}\n--- stale-grab experiment ---\n{}\n{verdict}",
+        observations.join("\n")
+    )
+}
+
+fn resend_chord(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    timeout: Duration,
+) -> Result<bool> {
+    let cursor = current_trace_cursor(guest)?;
+    qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
+    thread::sleep(KEY_SETTLE);
+    Ok(wait_for_probe_line(guest, cursor, "HOTKEY_DISPATCH", DISPATCH_NEEDLE, timeout).is_ok())
+}
+
+fn eavesdrop_chord(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+) -> Result<(bool, String)> {
+    let pid = spawn(
+        guest,
+        command("/usr/bin/python3", &["/home/qol/key-eavesdrop.py"]),
+    )?;
+    thread::sleep(Duration::from_millis(700));
+    let cursor = current_trace_cursor(guest)?;
+    qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
+    thread::sleep(KEY_SETTLE);
+    let dispatched = wait_for_probe_line(
+        guest,
+        cursor,
+        "HOTKEY_DISPATCH",
+        DISPATCH_NEEDLE,
+        CHORD_RETRY_TIMEOUT,
+    )
+    .is_ok();
+    thread::sleep(Duration::from_millis(700));
+    let outcome = exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                &format!(
+                    "cat /tmp/qol-guest-runner/{pid}/stdout 2>/dev/null | grep -E 'press|release' || echo no-events-captured; echo ---stderr---; cat /tmp/qol-guest-runner/{pid}/stderr 2>/dev/null | tail -6"
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    );
+    let events = outcome
+        .map(|outcome| outcome.stdout.trim().to_string())
+        .unwrap_or_else(|_| "probe-error".to_string());
+    Ok((dispatched, events))
+}
+
+fn grab_probe(guest: &mut GuestControlClient) -> String {
+    let script = r#"import os
+from Xlib import X, XK, display
+from Xlib.error import BadAccess
+
+result = ["free"]
+
+def handler(error, request):
+    if isinstance(error, BadAccess):
+        result[0] = "held"
+    else:
+        result[0] = "probe-error: %s" % error
+
+d = display.Display(os.environ.get("DISPLAY", ":0"))
+d.set_error_handler(handler)
+root = d.screen().root
+keycode = d.keysym_to_keycode(XK.string_to_keysym("s"))
+mods = X.ShiftMask | X.Mod4Mask
+try:
+    root.grab_key(keycode, mods, False, X.GrabModeAsync, X.GrabModeAsync)
+    d.sync()
+    root.ungrab_key(keycode, mods)
+    d.sync()
+except Exception as exc:
+    result[0] = "probe-error: %s: %s" % (type(exc).__name__, exc)
+d.close()
+print(result[0])
+"#;
+    let outcome = exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-c",
+                &format!(
+                    "cat > /home/qol/grab-probe.py <<'PY'\n{script}PY\n/usr/bin/python3 /home/qol/grab-probe.py 2>&1"
+                ),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    );
+    match outcome {
+        Ok(outcome) => outcome.stdout.trim().to_string(),
+        Err(probe_error) => format!("probe-error: {probe_error:#}"),
+    }
+}
+
+fn marker_exists(guest: &mut GuestControlClient) -> bool {
+    exec(
+        guest,
+        command("/usr/bin/test", &["-e", DE_MARKER]),
+        COMMAND_TIMEOUT,
+    )
+    .map(|outcome| outcome.exit_code == Some(0))
+    .unwrap_or(false)
+}
+
+fn stage_key_eavesdrop(guest: &mut GuestControlClient) -> Result<()> {
+    let script = r#"import os, time
+from Xlib import X, XK, display
+d = display.Display(os.environ.get("DISPLAY", ":0"))
+root = d.screen().root
+root.change_attributes(event_mask=X.KeyPressMask | X.KeyReleaseMask)
+d.sync()
+deadline = time.time() + 7
+while time.time() < deadline:
+    while d.pending_events():
+        e = d.next_event()
+        if e.type in (X.KeyPress, X.KeyRelease):
+            keysym = d.keycode_to_keysym(e.detail, 0)
+            print("%s keycode=%d keysym=%s state=0x%x" % (
+                "press" if e.type == X.KeyPress else "release",
+                e.detail,
+                XK.keysym_to_string(keysym) or hex(keysym),
+                e.state), flush=True)
+    time.sleep(0.02)
+d.close()
+"#;
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/sh",
+            &[
+                "-c",
+                &format!("cat > /home/qol/key-eavesdrop.py <<'PY'\n{script}PY"),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
     Ok(())
 }
 
@@ -470,7 +933,27 @@ fn boot_diagnostics(
             "de-marker",
             command(
                 "/usr/bin/bash",
-                &["-lc", "ls -la /tmp/de-shadow-evidence 2>&1 || true"],
+                &["-lc", "stat -c '%y %s %n' /tmp/de-shadow-evidence 2>&1 || true"],
+            ),
+        ),
+        (
+            "xmodmap",
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "xmodmap -pm 2>&1 | head -14; echo ---; xmodmap -pke 2>&1 | grep -iE 'super|shift|s ' | head -12",
+                ],
+            ),
+        ),
+        (
+            "csd",
+            command(
+                "/usr/bin/bash",
+                &[
+                    "-lc",
+                    "ps -eo pid,lstart,args | grep -iE 'csd|settings-daemon' | grep -v grep | head -15; echo ---; pgrep -a -f 'csd|cinnamon' | head -10",
+                ],
             ),
         ),
         (
@@ -493,7 +976,7 @@ fn boot_diagnostics(
                 "/bin/sh",
                 &[
                     "-c",
-                    "ls -la /home/qol/.local/share/qol-tray/host-takeover/qol-tray-hotkeys/ 2>&1 || true",
+                    "ls -la /home/qol/.local/share/qol-tray/host-takeover/qol-tray-hotkeys/ 2>&1 || true; stat -c '%y %n' /home/qol/.local/share/qol-tray/host-takeover/qol-tray-hotkeys/takeover-* 2>/dev/null || true",
                 ],
             ),
         ),
