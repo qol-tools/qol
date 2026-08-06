@@ -1,4 +1,5 @@
 mod parse;
+mod socket;
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -226,6 +227,15 @@ struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput> {
+        if let Some(output) = socket::try_run(args, stdin) {
+            return Ok(output);
+        }
+        Self::spawn_kitten(args, stdin)
+    }
+}
+
+impl SystemCommandRunner {
+    fn spawn_kitten(args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput> {
         let mut command = Command::new("kitten");
         command.args(args);
         if stdin.is_some() {
