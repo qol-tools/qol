@@ -2842,7 +2842,10 @@ fn payload_build_label(recipe: DesktopPayloadRecipe) -> String {
 }
 
 fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
-    if matches!(workflow_id, "hotkey-shadow" | "hotkey-storm") {
+    if matches!(
+        workflow_id,
+        "hotkey-shadow" | "hotkey-shadow-boot" | "hotkey-storm"
+    ) {
         return Some(DesktopPayloadRecipe {
             companion: Some(DesktopCompanionRecipe {
                 package: "launcher",
@@ -4613,6 +4616,18 @@ mod tests {
                         plugin_id: "plugin-bluetooth",
                     }),
                     tray_features: None,
+                },
+            ),
+            (
+                "hotkey-shadow-boot",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "launcher",
+                        binary: "launcher",
+                        plugin_dir: "launcher",
+                        plugin_id: "plugin-launcher",
+                    }),
+                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
