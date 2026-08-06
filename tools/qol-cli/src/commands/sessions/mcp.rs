@@ -1,13 +1,12 @@
-use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufWriter, Write};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities, SessionFocus,
-    SessionInventory, TerminalSessionService, TextInput,
+    DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
+    TerminalSessionService, TextInput,
 };
 use serde_json::{json, Value};
 
@@ -21,168 +20,22 @@ const ERROR_INVALID_REQUEST: i64 = -32600;
 const ERROR_METHOD_NOT_FOUND: i64 = -32601;
 const ERROR_INVALID_PARAMS: i64 = -32602;
 
-const QUEUE_CAPACITY_PER_SESSION: usize = 8;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+pub(super) const WAIT_TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const WAIT_TIMEOUT_DEFAULT_MS: u64 = 30_000;
 pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
-
-struct QueueState {
-    queues: HashMap<SessionBinding, VecDeque<(String, DeliveryMode)>>,
-    last_error: HashMap<SessionBinding, String>,
-}
-
-struct DeliveryQueue {
-    terminals: Arc<TerminalSessionService>,
-    state: Arc<Mutex<QueueState>>,
-    wake: Arc<Condvar>,
-}
-
-impl DeliveryQueue {
-    fn new(terminals: Arc<TerminalSessionService>, worker: bool) -> Self {
-        let queue = Self {
-            terminals,
-            state: Arc::new(Mutex::new(QueueState {
-                queues: HashMap::new(),
-                last_error: HashMap::new(),
-            })),
-            wake: Arc::new(Condvar::new()),
-        };
-        if worker {
-            queue.spawn_worker();
-        }
-        queue
-    }
-
-    fn spawn_worker(&self) {
-        let terminals = Arc::clone(&self.terminals);
-        let state = Arc::clone(&self.state);
-        let wake = Arc::clone(&self.wake);
-        std::thread::spawn(move || loop {
-            let item = {
-                let mut state = state.lock().unwrap();
-                loop {
-                    let take = {
-                        let mut take = None;
-                        for (binding, queue) in state.queues.iter_mut() {
-                            if let Some(item) = queue.pop_front() {
-                                take = Some((binding.clone(), item));
-                                break;
-                            }
-                        }
-                        take
-                    };
-                    if let Some(item) = take {
-                        break Some(item);
-                    }
-                    if state.queues.is_empty() {
-                        state = wake.wait(state).unwrap();
-                    } else {
-                        state.queues.retain(|_, queue| !queue.is_empty());
-                        break None;
-                    }
-                }
-            };
-            let Some((binding, (text, mode))) = item else {
-                continue;
-            };
-            if let Err(error) = terminals.send_text(&binding, &text, mode) {
-                state
-                    .lock()
-                    .unwrap()
-                    .last_error
-                    .insert(binding, error.to_string());
-            }
-        });
-    }
-
-    fn enqueue(
-        &self,
-        binding: SessionBinding,
-        text: String,
-        mode: DeliveryMode,
-    ) -> Result<usize, String> {
-        let mut state = self.state.lock().unwrap();
-        let queue = state.queues.entry(binding).or_default();
-        if queue.len() >= QUEUE_CAPACITY_PER_SESSION {
-            return Err(format!(
-                "delivery queue full ({QUEUE_CAPACITY_PER_SESSION} pending for this session)"
-            ));
-        }
-        queue.push_back((text, mode));
-        self.wake.notify_all();
-        Ok(queue.len())
-    }
-
-    fn pending(&self, binding: &SessionBinding) -> usize {
-        self.state
-            .lock()
-            .unwrap()
-            .queues
-            .get(binding)
-            .map_or(0, VecDeque::len)
-    }
-
-    fn take_last_error(&self, binding: &SessionBinding) -> Option<String> {
-        self.state.lock().unwrap().last_error.remove(binding)
-    }
-
-    fn wait_for_empty(&self, binding: &SessionBinding) {
-        let mut state = self.state.lock().unwrap();
-        while state
-            .queues
-            .get(binding)
-            .is_some_and(|queue| !queue.is_empty())
-        {
-            state = self.wake.wait(state).unwrap();
-        }
-    }
-
-    #[cfg(test)]
-    fn drain_manual(&self) {
-        loop {
-            let item = {
-                let mut state = self.state.lock().unwrap();
-                let mut take = None;
-                for (binding, queue) in state.queues.iter_mut() {
-                    if let Some(item) = queue.pop_front() {
-                        take = Some((binding.clone(), item));
-                        break;
-                    }
-                }
-                if take.is_none() {
-                    state.queues.retain(|_, queue| !queue.is_empty());
-                }
-                take
-            };
-            let Some((binding, (text, mode))) = item else {
-                break;
-            };
-            if let Err(error) = self.terminals.send_text(&binding, &text, mode) {
-                self.state
-                    .lock()
-                    .unwrap()
-                    .last_error
-                    .insert(binding, error.to_string());
-            }
-        }
-    }
-}
 
 pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
-    queue: DeliveryQueue,
     store: LastSendStore,
 }
 
 impl McpSessionServer {
     pub(crate) fn system() -> Self {
-        let terminals = Arc::new(TerminalSessionService::system());
-        let queue = DeliveryQueue::new(Arc::clone(&terminals), true);
         Self {
-            terminals,
+            terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
-            queue,
             store: LastSendStore::system().unwrap_or_else(|| {
                 LastSendStore::with_dir(std::env::temp_dir().join("qol-sessions-last-send"))
             }),
@@ -195,12 +48,9 @@ impl McpSessionServer {
         interpreter: CliSessionInterpreter,
         store: LastSendStore,
     ) -> Self {
-        let terminals = Arc::new(terminals);
-        let queue = DeliveryQueue::new(Arc::clone(&terminals), false);
         Self {
-            terminals,
+            terminals: Arc::new(terminals),
             interpreter,
-            queue,
             store,
         }
     }
@@ -310,20 +160,7 @@ impl McpSessionServer {
             .filter_map(|session| {
                 let binding = session.binding().ok()?;
                 let descriptor = self.interpreter.describe(session);
-                Some(json!({
-                    "session": binding.token(),
-                    "backend": session.id.backend().to_string(),
-                    "native": session.id.native(),
-                    "root_pid": session.root_pid,
-                    "tool": descriptor.tool.id.to_string(),
-                    "display_name": descriptor.display_name,
-                    "title": session.title,
-                    "cwd": session.cwd,
-                    "at_prompt": session.at_prompt,
-                    "activity": descriptor.has_activity,
-                    "pending_input": self.queue.pending(&binding),
-                    "capabilities": capability_names(&session.capabilities),
-                }))
+                Some(super::contract::session_row(session, &binding, &descriptor))
             })
             .collect::<Vec<_>>();
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
@@ -352,11 +189,13 @@ impl McpSessionServer {
         } else {
             DeliveryMode::Insert
         };
-        let position = self.queue.enqueue(binding.clone(), text.to_owned(), mode)?;
+        self.terminals
+            .send_text(&binding, text, mode)
+            .map_err(|error| format!("text delivery failed: {error}"))?;
         self.store.record(&binding, text);
-        let verb = if submit { "submitted" } else { "inserted" };
         Ok(format!(
-            "queued at {position} to {binding}; {verb} in flight"
+            "delivered {} to {binding}",
+            super::mode_label(mode)
         ))
     }
 
@@ -366,16 +205,12 @@ impl McpSessionServer {
             .get("timeout_ms")
             .and_then(Value::as_u64)
             .unwrap_or(WAIT_TIMEOUT_DEFAULT_MS)
-            .clamp(1_000, WAIT_TIMEOUT_MAX_MS);
+            .clamp(WAIT_TIMEOUT_MIN_MS, WAIT_TIMEOUT_MAX_MS);
         let expect = arguments
             .get("expect")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .filter(|pattern| !pattern.is_empty());
-        self.queue.wait_for_empty(&binding);
-        if let Some(error) = self.queue.take_last_error(&binding) {
-            return Err(format!("delivery failed: {error}"));
-        }
         let last_sent = self.store.last_sent(&binding);
         let (settled, screen, polls, started) = poll_until_settled(
             self.terminals.as_ref(),
@@ -396,7 +231,18 @@ impl McpSessionServer {
     }
 }
 
-pub(crate) fn run() -> Result<()> {
+pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
+    if args
+        .first()
+        .and_then(|argument| argument.to_str())
+        .is_some_and(|argument| matches!(argument, "help" | "-h" | "--help"))
+    {
+        print!("{}", help_text());
+        return Ok(());
+    }
+    if !args.is_empty() {
+        bail!("usage: {}", help_text().trim_end());
+    }
     let server = McpSessionServer::system();
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -412,6 +258,9 @@ pub(crate) fn run() -> Result<()> {
     Ok(())
 }
 
+fn help_text() -> &'static str {
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). Delivery is\n  synchronous: session_send_text returns after the text is delivered.\n\nExit:\n  Exits zero on EOF.\n"
+}
 fn binding_argument(arguments: &Value, name: &str) -> Result<SessionBinding, String> {
     let value = arguments
         .get(name)
@@ -492,20 +341,6 @@ fn tool_definitions() -> Vec<Value> {
         .collect()
 }
 
-fn capability_names(capabilities: &SessionCapabilities) -> Vec<&'static str> {
-    let mut names = Vec::new();
-    if capabilities.contains(SessionCapabilities::SCREEN_READING) {
-        names.push("read");
-    }
-    if capabilities.contains(SessionCapabilities::FOCUS) {
-        names.push("focus");
-    }
-    if capabilities.contains(SessionCapabilities::TEXT_INPUT) {
-        names.push("input");
-    }
-    names
-}
-
 fn result(id: Value, value: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": value })
 }
@@ -522,15 +357,16 @@ fn error(id: Option<Value>, code: i64, message: impl Into<String>) -> Value {
 mod tests {
     use super::*;
     use qol_terminal_sessions::{
-        SessionFacts, SessionFocus, SessionId, TerminalBackend, TerminalError,
+        SessionCapabilities, SessionFacts, SessionFocus, SessionId, TerminalBackend, TerminalError,
     };
-    use std::str::FromStr;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     struct FakeBackend {
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
+        fail_send: Mutex<bool>,
     }
 
     impl FakeBackend {
@@ -539,6 +375,7 @@ mod tests {
                 sent: Mutex::new(Vec::new()),
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
+                fail_send: Mutex::new(false),
             }
         }
 
@@ -593,6 +430,9 @@ mod tests {
             text: &str,
             mode: DeliveryMode,
         ) -> Result<(), TerminalError> {
+            if *self.fail_send.lock().unwrap() {
+                return Err(TerminalError::TargetMissing(target.clone()));
+            }
             self.sent
                 .lock()
                 .unwrap()
@@ -703,8 +543,39 @@ mod tests {
         let rows: Vec<Value> = serde_json::from_str(text).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["session"], token());
+        assert_eq!(rows[0]["backend"], "fake");
+        assert_eq!(rows[0]["native"], "7");
+        assert_eq!(rows[0]["root_pid"], 123);
         assert_eq!(rows[0]["tool"], "generic");
+        assert_eq!(rows[0]["display_name"], "python3");
+        assert_eq!(rows[0]["activity"], Value::Null);
+        assert!(rows[0].get("pending_input").is_none());
+        assert!(rows[0].get("reported_cmd").is_none());
         assert!(rows[0]["capabilities"].as_array().unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn send_text_tool_surfaces_delivery_failures() {
+        let (server, backend) = server();
+        *backend.fail_send.lock().unwrap() = true;
+        let response = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    5,
+                    "tools/call",
+                    json!({
+                        "name": "session_send_text",
+                        "arguments": { "session": token(), "text": "hello" }
+                    }),
+                ))
+                .unwrap(),
+            )
+            .expect("tools/call must answer");
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("text delivery failed"));
     }
 
     #[test]
@@ -727,8 +598,7 @@ mod tests {
         assert!(response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("submitted"));
-        server.queue.drain_manual();
+            .contains("delivered submitted"));
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].1, "print(6*7)");
@@ -736,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn send_text_tool_queues_in_fifo_order() {
+    fn send_text_tool_delivers_in_request_order() {
         let (server, backend) = server();
         let call = |text: &str| {
             server
@@ -756,90 +626,15 @@ mod tests {
         assert!(call("first")["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("queued at 1"));
+            .contains("delivered submitted"));
         assert!(call("second")["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("queued at 2"));
-        assert_eq!(
-            server
-                .queue
-                .pending(&SessionBinding::from_str(&token()).unwrap()),
-            2
-        );
-        assert!(backend.sent.lock().unwrap().is_empty());
-        server.queue.drain_manual();
+            .contains("delivered submitted"));
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[0].1, "first");
         assert_eq!(sent[1].1, "second");
-    }
-
-    #[test]
-    fn delivery_queue_worker_delivers_in_background_in_order() {
-        let backend = Arc::new(FakeBackend::with_screens(Vec::new()));
-        let service =
-            TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
-                .expect("unique fake backend");
-        let queue = DeliveryQueue::new(Arc::new(service), true);
-        let binding = FakeBackend::session().binding().unwrap();
-        queue
-            .enqueue(binding.clone(), "first".to_owned(), DeliveryMode::Submit)
-            .unwrap();
-        queue
-            .enqueue(binding, "second".to_owned(), DeliveryMode::Submit)
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let sent = backend.sent.lock().unwrap();
-            if sent.len() == 2 {
-                assert_eq!(sent[0].1, "first");
-                assert_eq!(sent[1].1, "second");
-                break;
-            }
-            drop(sent);
-            assert!(Instant::now() < deadline, "worker never delivered");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    #[test]
-    fn send_text_tool_rejects_when_queue_is_full() {
-        let (server, _) = server();
-        for index in 0..QUEUE_CAPACITY_PER_SESSION {
-            let response = server
-                .handle_line(
-                    &serde_json::to_string(&request(
-                        20,
-                        "tools/call",
-                        json!({
-                            "name": "session_send_text",
-                            "arguments": { "session": token(), "text": format!("item {index}") }
-                        }),
-                    ))
-                    .unwrap(),
-                )
-                .unwrap();
-            assert_eq!(response["result"]["isError"], false);
-        }
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    21,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": token(), "text": "overflow" }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("queue full"));
     }
 
     #[test]
@@ -943,7 +738,6 @@ mod tests {
             )
             .expect("send must answer");
         assert_eq!(send["result"]["isError"], false);
-        server.queue.drain_manual();
         let response = server
             .handle_line(
                 &serde_json::to_string(&request(
@@ -1017,7 +811,6 @@ mod tests {
             )
             .expect("send must answer");
         assert_eq!(response["result"]["isError"], false);
-        server.queue.drain_manual();
         let response = server
             .handle_line(
                 &serde_json::to_string(&request(
@@ -1152,5 +945,15 @@ mod tests {
             .handle_line(&serde_json::to_string(&request(9, "ping", json!({}))).unwrap())
             .unwrap();
         assert_eq!(response["result"], json!({}));
+    }
+
+    #[test]
+    fn run_rejects_unknown_arguments_instead_of_blocking() {
+        let error = run(&[
+            std::ffi::OsString::from("--port"),
+            std::ffi::OsString::from("9999"),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("usage"));
     }
 }
