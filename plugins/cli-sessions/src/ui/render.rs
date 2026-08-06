@@ -2,9 +2,10 @@ use std::sync::LazyLock;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, MouseButton,
-    SharedString, Window,
+    div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, SharedString,
+    Window,
 };
+use qol_gpui::surface::PanelDragArea;
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 
 use crate::session::registry::SessionState;
@@ -119,9 +120,7 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
         .border_b_1()
         .border_color(rgb(palette.divider))
         .cursor(CursorStyle::OpenHand)
-        .on_mouse_down(MouseButton::Left, |_event, window, _cx| {
-            window.start_window_move();
-        })
+        .panel_drag_area()
         .child(
             div()
                 .text_color(rgb(palette.text_heading))

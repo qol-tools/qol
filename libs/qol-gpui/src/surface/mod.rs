@@ -31,7 +31,7 @@ pub enum SurfaceKind {
 pub trait PanelDragArea: InteractiveElement + Sized {
     fn panel_drag_area(self) -> Self {
         self.on_mouse_down(MouseButton::Left, |_, window, _| {
-            window.start_window_move();
+            crate::platform::start_window_move(window);
         })
     }
 }
