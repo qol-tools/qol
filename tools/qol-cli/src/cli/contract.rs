@@ -204,7 +204,27 @@ fn app() -> HeadlessApp {
             .detail("list --json emits structured rows; send delivers text (--submit appends Enter).")
             .detail("wait polls until the screen settles or contains --expect text, then prints JSON.")
             .detail("mcp serves the session tools over stdio.")
-            .detail("export renders a per-client agent surface from the shared tool contract."),
+            .detail("export renders a per-client agent surface from the shared tool contract.")
+            .subcommand(
+                command(
+                    "mcp",
+                    "Serve the session tools over stdio as a Model Context Protocol server.",
+                    "qol sessions mcp",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_read_screen, session_send_text, session_wait_output, session_focus. Delivery is synchronous.",
+                    "Protocol responses on stdout.",
+                    "Exits zero on EOF.",
+                )
+                .run_plain_text(|context| {
+                    let mut args = Vec::with_capacity(context.args().len() + 1);
+                    args.push(std::ffi::OsString::from("mcp"));
+                    args.extend(context.args().iter().map(std::ffi::OsString::from));
+                    crate::commands::sessions::run(
+                        &args,
+                        qol_headless::OutputFormat::PlainText,
+                    )?;
+                    Ok(qol_headless::PlainTextOutput::empty())
+                }),
+            ),
         )
         .command(command(
             "trace",

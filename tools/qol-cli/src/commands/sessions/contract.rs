@@ -1,4 +1,58 @@
+use qol_terminal_sessions::cli::CliSessionDescriptor;
+use qol_terminal_sessions::{SessionBinding, SessionCapabilities, SessionFacts};
+use serde::Serialize;
 use serde_json::{json, Value};
+
+#[derive(Serialize)]
+pub(crate) struct SessionRow {
+    pub(crate) session: String,
+    pub(crate) backend: String,
+    pub(crate) native: String,
+    pub(crate) root_pid: i32,
+    pub(crate) cwd: String,
+    pub(crate) title: String,
+    pub(crate) at_prompt: bool,
+    pub(crate) tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) activity: Option<bool>,
+    pub(crate) capabilities: Vec<String>,
+}
+
+pub(crate) fn session_row(
+    session: &SessionFacts,
+    binding: &SessionBinding,
+    descriptor: &CliSessionDescriptor,
+) -> SessionRow {
+    SessionRow {
+        session: binding.token(),
+        backend: session.id.backend().to_string(),
+        native: session.id.native().to_owned(),
+        root_pid: session.root_pid,
+        cwd: session.cwd.clone(),
+        title: session.title.clone(),
+        at_prompt: session.at_prompt,
+        tool: descriptor.tool.id.to_string(),
+        display_name: descriptor.display_name.clone(),
+        activity: descriptor.has_activity,
+        capabilities: capability_names(&session.capabilities),
+    }
+}
+
+pub(crate) fn capability_names(capabilities: &SessionCapabilities) -> Vec<String> {
+    let mut names = Vec::new();
+    if capabilities.contains(SessionCapabilities::SCREEN_READING) {
+        names.push("read".to_owned());
+    }
+    if capabilities.contains(SessionCapabilities::FOCUS) {
+        names.push("focus".to_owned());
+    }
+    if capabilities.contains(SessionCapabilities::TEXT_INPUT) {
+        names.push("input".to_owned());
+    }
+    names
+}
 
 pub(crate) struct ToolSpec {
     pub(crate) name: &'static str,

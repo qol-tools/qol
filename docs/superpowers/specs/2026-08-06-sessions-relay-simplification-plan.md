@@ -1,7 +1,71 @@
 # Sessions relay: submit fix and surface simplification — plan
 
 Date: 2026-08-06
-Status: plan (research complete, no code changed)
+Status: executed on branch `relay-simplify` (worktree); reviewed; pending merge
+
+## Review round (2026-08-06, qol-code-review board, verdict conditional)
+
+Six-reviewer board (correctness, security, tests-qa, architecture primaries;
+adversarial + quick-wins passes) over `main...relay-simplify` in both repos.
+No blockers or highs after the adversarial pass. Must-fix items landed as
+commits `37434ad7`, `f7cab7e5`, `f9d753ac` (qol-monorepo) and `5f0d4e0`
+(qol-skills):
+
+- Two-write submit: `--bracketed-paste=auto` payload, target re-validation,
+  then `--bracketed-paste=disable` carriage-return write. Restores kitty's
+  paste sanitization for bracketed-paste-enabled targets (nvim/readline),
+  narrows the process-change gap between writes (a TOCTOU window remains
+  between the second `@ ls` and the `\r`), and restores paste semantics
+  for multi-line payloads on paste-aware targets.
+- Bounded kitty wait: the backend kills the kitten child after 30s instead of
+  blocking callers forever on a wedged control socket.
+- Verify node: failure branch reachable (exec capture inside an if), headless
+  count asserted zero, run-id hex sequence, real inspect command on failure.
+- Tests: stale-token submit test, failing-send isError test, row-shape
+  pinning (backend/native present, pending_input/reported_cmd absent).
+- mcp args rejected with usage; mode_label reused; WAIT_TIMEOUT_MIN_MS const.
+- qol-skills: kimi stays manual MCP registration (no mcpServers in its
+  manifest); skill states failed sends error the tool.
+
+Deferred (tracked): security-2 /tmp last-send fallback hardening; client-side
+qol-terminal-telepathy prune after merge+push (arch-1); plan-log completeness
+fix applied here; trailing-\r payload normalization (correctness-5).
+
+Re-verification after fixes: guest node pass on kitty 0.32.2
+(`verify/reports/linux-mint-cinnamon-18c929dcff86171a-c95a8-1/report.json`):
+zero qol processes, submit into the unfocused python window executed
+(py settled True, 451ms), echo-exclusion settled (sh settled True).
+
+## Execution log (2026-08-06)
+
+- Commit `a4c104b1` (qol-monorepo): submit fix in
+  `libs/qol-terminal-sessions/src/kitty/mod.rs` — `DeliveryMode::Submit` is now
+  one `send-text --bracketed-paste=disable` write carrying the payload plus a
+  trailing carriage return; the intermediate re-validation discovery and the
+  `send-key` step are gone. Insert mode unchanged. `validate_target` removed
+  (Submit-only). Tests: `submit_writes_text_with_carriage_return_unbracketed`
+  and `insert_stays_bracketed_without_submit`; 47 lib tests green, clippy and
+  fmt clean.
+- Commit `f2f7f63c` (qol-monorepo): MCP delivery is synchronous — the
+  per-session `DeliveryQueue` (worker thread, cap 8, `pending_input`,
+  `last_error`) is deleted; CLI and MCP list rows come from one builder in
+  `contract.rs` (drops the drifted `reported_cmd`/`pending_input` fields,
+  adds `backend`/`native`); `qol sessions mcp --help` / `-h` / `help` print
+  the server usage instead of hanging or failing as an unknown help topic.
+  Net -217 lines. 34 sessions tests green, clippy and fmt clean; pi export
+  byte-identical to the checked-in hooks.ts.
+- Commit `a358cb4` (qol-skills): telepathy merged into the qol-sessions skill
+  (one relay doc, unioned triggers, drift fixes: `qol sessions mcp --help`
+  advice replaced with `qol sessions mcp help`, `pending_input` claims
+  dropped, codex registration wording softened); telepathy plugin deleted;
+  manifests resynced; qol-sessions bumped to 0.2.0. Sync tests 35/35.
+- Guest verification (this branch adds `verify/sessions-relay-verify.sh`, a
+  repeatable node: worktree in, verdict report out):
+  `verify/reports/linux-mint-cinnamon-18c92824e03f3d8e-a0bb4-1/report.json`
+  status pass. On kitty 0.32.2 with two windows: zero qol processes (no tray,
+  no cli-sessions daemon, no socket), submit into the UNFOCUSED python window
+  executed (`print(6*7)` -> 42, wait settled in ~315ms), echo-exclusion wait
+  on bash settled (`echo telepathy-ok`).
 
 ## Context
 

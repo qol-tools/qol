@@ -5,10 +5,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities, SessionFocus,
-    SessionInventory, TerminalSessionService, TextInput,
+    DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
+    TerminalSessionService, TextInput,
 };
-use serde::Serialize;
 
 mod contract;
 mod export;
@@ -43,7 +42,7 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
     },
     SessionSubcommand {
         name: "mcp",
-        run: |_rest, _format| mcp::run(),
+        run: |rest, _format| mcp::run(rest),
     },
     SessionSubcommand {
         name: "export",
@@ -77,7 +76,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or shows the\n  expected text outside the echo of the last send and settles again, then\n  prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus). Delivery is a bounded per-session\n  FIFO queue; send reports its queue position, wait_output blocks until\n  the screen settles or an expected substring appears outside the echo of\n  the last send and the screen settles again.\n  export renders a per-client agent surface from the shared tool contract\n  in sessions/contract.rs; qol sessions export pi prints the pi extension\n  source, qol sessions export with no client lists the available clients.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
+    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or shows the\n  expected text outside the echo of the last send and settles again, then\n  prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus); qol sessions mcp --help prints its\n  usage. Delivery is synchronous: send returns after the text is delivered,\n  wait_output blocks until the screen settles or an expected substring\n  appears outside the echo of the last send and the screen settles again.\n  export renders a per-client agent surface from the shared tool contract\n  in sessions/contract.rs; qol sessions export pi prints the pi extension\n  source, qol sessions export with no client lists the available clients.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
 }
 
 fn service() -> Result<TerminalSessionService> {
@@ -92,18 +91,7 @@ fn list(output_format: OutputFormat) -> Result<()> {
         .filter_map(|session| {
             let binding = session.binding().ok()?;
             let descriptor = interpreter.describe(session);
-            Some(SessionRow {
-                session: binding.token(),
-                root_pid: session.root_pid,
-                cwd: session.cwd.clone(),
-                title: session.title.clone(),
-                at_prompt: session.at_prompt,
-                tool: Some(descriptor.tool.id.to_string()),
-                display_name: descriptor.display_name,
-                activity: descriptor.has_activity,
-                reported_cmd: session.reported_cmd.clone(),
-                capabilities: capability_names(&session.capabilities),
-            })
+            Some(contract::session_row(session, &binding, &descriptor))
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.session.cmp(&right.session));
@@ -122,7 +110,7 @@ fn list(output_format: OutputFormat) -> Result<()> {
                 println!(
                     "{}\t{}\t{}\t{}\t{}\t{}",
                     row.session,
-                    row.tool.as_deref().unwrap_or("-"),
+                    row.tool,
                     row.title,
                     row.cwd,
                     if caps.is_empty() { "-" } else { &caps },
@@ -206,7 +194,7 @@ fn wait(args: &[OsString]) -> Result<()> {
         .map_err(|_| anyhow!("invalid session token"))?;
     let timeout_ms = timeout_ms
         .unwrap_or(mcp::WAIT_TIMEOUT_DEFAULT_MS)
-        .clamp(1_000, mcp::WAIT_TIMEOUT_MAX_MS);
+        .clamp(mcp::WAIT_TIMEOUT_MIN_MS, mcp::WAIT_TIMEOUT_MAX_MS);
     let expect = expect.filter(|pattern| !pattern.is_empty());
     let last_sent = last_send::LastSendStore::system().and_then(|store| store.last_sent(&binding));
     let (settled, screen, polls, started) = mcp::poll_until_settled(
@@ -288,20 +276,6 @@ fn single_binding(args: &[OsString], usage: &str) -> Result<SessionBinding> {
         .map_err(|error| anyhow!("invalid session token `{value}`: {error}"))
 }
 
-fn capability_names(capabilities: &SessionCapabilities) -> Vec<String> {
-    let mut names = Vec::new();
-    if capabilities.contains(SessionCapabilities::SCREEN_READING) {
-        names.push("read".to_owned());
-    }
-    if capabilities.contains(SessionCapabilities::FOCUS) {
-        names.push("focus".to_owned());
-    }
-    if capabilities.contains(SessionCapabilities::TEXT_INPUT) {
-        names.push("input".to_owned());
-    }
-    names
-}
-
 fn mode_label(mode: DeliveryMode) -> &'static str {
     match mode {
         DeliveryMode::Insert => "inserted",
@@ -309,33 +283,17 @@ fn mode_label(mode: DeliveryMode) -> &'static str {
     }
 }
 
-#[derive(Serialize)]
-struct SessionRow {
-    session: String,
-    root_pid: i32,
-    cwd: String,
-    title: String,
-    at_prompt: bool,
-    tool: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    display_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    activity: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reported_cmd: Option<String>,
-    capabilities: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_terminal_sessions::SessionCapabilities;
 
     #[test]
     fn capability_names_reflect_flags() {
         let mut caps = SessionCapabilities::NONE;
-        assert!(capability_names(&caps).is_empty());
+        assert!(contract::capability_names(&caps).is_empty());
         caps = SessionCapabilities::SCREEN_READING | SessionCapabilities::TEXT_INPUT;
-        assert_eq!(capability_names(&caps), ["read", "input"]);
+        assert_eq!(contract::capability_names(&caps), ["read", "input"]);
     }
 
     #[test]
@@ -375,7 +333,7 @@ mod tests {
         let (_, timeout_ms, _) = parse_wait_args(&[std::ffi::OsString::from("t")]).unwrap();
         let clamped = timeout_ms
             .unwrap_or(mcp::WAIT_TIMEOUT_DEFAULT_MS)
-            .clamp(1_000, mcp::WAIT_TIMEOUT_MAX_MS);
+            .clamp(mcp::WAIT_TIMEOUT_MIN_MS, mcp::WAIT_TIMEOUT_MAX_MS);
         assert_eq!(clamped, mcp::WAIT_TIMEOUT_DEFAULT_MS);
 
         let (_, timeout_ms, _) = parse_wait_args(&[
@@ -385,7 +343,9 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            timeout_ms.unwrap().clamp(1_000, mcp::WAIT_TIMEOUT_MAX_MS),
+            timeout_ms
+                .unwrap()
+                .clamp(mcp::WAIT_TIMEOUT_MIN_MS, mcp::WAIT_TIMEOUT_MAX_MS),
             mcp::WAIT_TIMEOUT_MAX_MS
         );
     }
