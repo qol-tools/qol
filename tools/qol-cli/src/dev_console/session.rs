@@ -24,8 +24,8 @@ use super::doctor::{
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
     act_emu, drain_emu_runs, emu_detail_ring, emu_detail_scroll_len, emu_env_count, open_emu,
-    open_emu_detail, open_emu_dir, run_selected_flow, stop_emu_runs, verify_selected_image,
-    EmuState,
+    open_emu_detail, open_emu_dir, repair_sandbox_cleanup, run_selected_flow, stop_emu_runs,
+    verify_selected_image, EmuState,
 };
 use super::filters::{line_matches_filters, FilterState};
 use super::key_bindings::{
@@ -655,6 +655,11 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::VerifySandboxImage => {
             if dash.view == View::Emu {
                 verify_selected_image(dash);
+            }
+        }
+        Action::RepairSandboxCleanup => {
+            if dash.view == View::Emu {
+                repair_sandbox_cleanup(dash);
             }
         }
         Action::Quit | Action::Ignore => {}

@@ -835,6 +835,22 @@ pub(super) fn open_emu_dir(dash: &mut Dash) {
     dash.notice = Some((Instant::now(), message));
 }
 
+pub(super) fn repair_sandbox_cleanup(dash: &mut Dash) {
+    let message = match crate::commands::env::repair_cleanup() {
+        Ok(summary) if summary.remaining == 0 => format!(
+            "swept {} stale launch(es); every cleanup report is verified",
+            summary.swept
+        ),
+        Ok(summary) => format!(
+            "swept {} stale launch(es); {} warning(s) still lack cleanup proof",
+            summary.swept, summary.remaining
+        ),
+        Err(error) => format!("cleanup repair failed: {error:#}"),
+    };
+    dash.notice = Some((Instant::now(), message));
+    dash.pokes.emu = true;
+}
+
 pub(super) fn verify_selected_image(dash: &mut Dash) {
     let target = match &dash.emu {
         EmuState::Done(inventory) => {
@@ -1481,7 +1497,7 @@ fn emu_info_lines(snapshot: &EnvironmentSnapshot) -> Vec<Line<'static>> {
                 .fg(Color::Yellow)
                 .bold(),
         ]));
-        lines.push(info_row("repair", "qol env doctor --repair"));
+        lines.push(info_row("repair", "press c to sweep and re-verify"));
     }
     lines
 }
@@ -2874,7 +2890,7 @@ mod tests {
         assert!(detail
             .info
             .iter()
-            .any(|line| { span_text(&line.spans).contains("qol env doctor --repair") }));
+            .any(|line| { span_text(&line.spans).contains("press c to sweep and re-verify") }));
     }
 
     #[test]

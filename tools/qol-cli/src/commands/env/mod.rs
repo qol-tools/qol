@@ -50,9 +50,10 @@ struct ImageImportArgs {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct CleanupRepairSummary {
-    repaired: usize,
-    remaining: usize,
+pub(crate) struct CleanupRepairSummary {
+    pub(crate) repaired: usize,
+    pub(crate) swept: usize,
+    pub(crate) remaining: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -460,20 +461,15 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
     match action {
         DoctorAction::Inspect => {}
         DoctorAction::Repair => {
-            let swept = sweep_stale_launch_lanes(&environments)?;
-            let mut cleanup = repair_legacy_cleanup_reports(&environments)?;
-            reconcile_for_admission()?;
-            flow::reconcile_all()?;
-            let reserved = dev_env::reconcile_resources()?;
-            cleanup.remaining = cleanup_warning_count(&environments);
+            let (cleanup, reserved) = repair_cleanup_reports(&environments)?;
             println!(
                 "Repair complete: {} lane(s), {} MiB, {} CPU(s) remain reserved.",
                 reserved.lanes, reserved.memory_mb, reserved.cpus
             );
             println!(
-                "Cleanup reports: {} legacy proof record(s) upgraded, {swept} stale launch(es) \
+                "Cleanup reports: {} legacy proof record(s) upgraded, {} stale launch(es) \
                  swept, {} warning(s) remain.",
-                cleanup.repaired, cleanup.remaining
+                cleanup.repaired, cleanup.swept, cleanup.remaining
             );
         }
         DoctorAction::Clear(selection) => {
@@ -627,8 +623,26 @@ fn repair_legacy_cleanup_reports(
     }
     Ok(CleanupRepairSummary {
         repaired,
-        remaining: 0,
+        ..CleanupRepairSummary::default()
     })
+}
+
+pub(crate) fn repair_cleanup() -> Result<CleanupRepairSummary> {
+    let environments = dev_env::discover()?;
+    repair_cleanup_reports(&environments).map(|(cleanup, _)| cleanup)
+}
+
+fn repair_cleanup_reports(
+    environments: &[ResolvedEnvironment],
+) -> Result<(CleanupRepairSummary, dev_resources::ReservedResources)> {
+    let swept = sweep_stale_launch_lanes(environments)?;
+    let mut cleanup = repair_legacy_cleanup_reports(environments)?;
+    reconcile_for_admission()?;
+    flow::reconcile_all()?;
+    let reserved = dev_env::reconcile_resources()?;
+    cleanup.swept = swept;
+    cleanup.remaining = cleanup_warning_count(environments);
+    Ok((cleanup, reserved))
 }
 
 fn sweep_stale_launch_lanes(environments: &[ResolvedEnvironment]) -> Result<usize> {
