@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use qol_headless::{Command, CommandResult, HeadlessApp};
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const BINARY_NAME: &str = "window-actions";
 const ACTIONS: [ActionSpec; 13] = [
     ActionSpec::ordinary("snap-left", "Snap the focused window to the left."),
@@ -79,7 +79,7 @@ where
     for spec in crate::platform::DIAGNOSTIC_ACTIONS {
         app = app.command(action_command(*spec, Arc::clone(&action)));
     }
-    app
+    app.command(settings_command())
 }
 
 fn daemon_command<Daemon>(handler: Arc<Daemon>) -> Command
@@ -111,6 +111,20 @@ where
         );
     }
     command.run_result(move |_| Ok(handler(spec.name)))
+}
+
+fn settings_command() -> Command {
+    Command::new("settings")
+        .about("Open the Window Actions settings page in qol-tray.")
+        .usage(format!("{BINARY_NAME} settings"))
+        .output("No stdout on success; opens the settings URL through the platform launcher.")
+        .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
+        .run_result(move |_| {
+            Ok(result_for(
+                qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+                    .map_err(|error| format!("failed to open settings URL: {error}")),
+            ))
+        })
 }
 
 fn run_daemon() -> CommandResult {
@@ -222,7 +236,7 @@ mod tests {
 
     #[test]
     fn contextual_help_is_equivalent_in_both_positions() {
-        for command in ["daemon", "snap-left", "glide-left", "doctor"] {
+        for command in ["daemon", "snap-left", "glide-left", "settings", "doctor"] {
             let first = app().execute(["help".to_string(), command.to_string()]);
             let final_token = app().execute([command.to_string(), "help".to_string()]);
 

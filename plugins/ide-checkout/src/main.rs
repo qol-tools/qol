@@ -30,4 +30,25 @@ mod tests {
             Some(vec!["status".to_string()])
         );
     }
+
+    #[test]
+    fn live_manifest_declares_the_native_settings_action() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let settings = manifest
+            .actions
+            .get("settings")
+            .expect("settings action must be declared");
+
+        assert!(manifest.capabilities.gpui);
+        assert_eq!(
+            settings.kind,
+            qol_plugin_api::manifest::ActionType::Settings
+        );
+        assert_eq!(settings.label, "Settings");
+        assert_eq!(
+            manifest.catalog_runtime_args("settings"),
+            Some(vec!["settings".to_string()])
+        );
+    }
 }

@@ -38,5 +38,10 @@ mod tests {
             manifest.catalog_runtime_args("glide-left"),
             Some(vec!["glide-left".to_string()])
         );
+        assert_eq!(
+            manifest.catalog_runtime_args("settings"),
+            Some(vec!["settings".to_string()])
+        );
+        assert!(manifest.capabilities.gpui);
     }
 }

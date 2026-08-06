@@ -16,6 +16,7 @@ kind = "settings"
 args = ["--action", "settings"]
 
 [capabilities]
+gpui = true
 doctor = true
 
 [menu]

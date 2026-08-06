@@ -14,12 +14,18 @@ command = "keyremap"
 label = "Reload Config"
 args = ["--reload"]
 
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["--settings"]
+
 [daemon]
 enabled = true
 command = "keyremap"
 socket = "/tmp/qol-keyremap.sock"
 
 [capabilities]
+gpui = true
 doctor = true
 
 [menu]
