@@ -782,7 +782,7 @@ fn environment_teardown_lane_verified(lane: &Value) -> bool {
         return false;
     }
     match lane.get("verification").and_then(Value::as_str) {
-        Some("not-started") => lane
+        Some("not-started" | "swept-stale-launch") => lane
             .get("report_status")
             .is_none_or(|status| status.is_null()),
         Some("verified-cleanup") => lane

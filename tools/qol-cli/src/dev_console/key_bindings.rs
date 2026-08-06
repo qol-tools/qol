@@ -32,6 +32,7 @@ pub(super) enum Action {
     OpenCurrentLogEditor,
     OpenCurrentLogRaw,
     VerifySandboxImage,
+    RepairSandboxCleanup,
     Ignore,
 }
 
@@ -251,6 +252,12 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
             char_binding("a", "verify image", Action::VerifySandboxImage, 'a'),
+            char_binding(
+                "c",
+                "clear cleanup warnings",
+                Action::RepairSandboxCleanup,
+                'c',
+            ),
             binding(
                 "←",
                 "back",
@@ -606,6 +613,7 @@ mod tests {
             (KeyCode::Char('+'), Action::IncreaseSandboxFlowLanes),
             (KeyCode::Char('='), Action::IncreaseSandboxFlowLanes),
             (KeyCode::Char('a'), Action::VerifySandboxImage),
+            (KeyCode::Char('c'), Action::RepairSandboxCleanup),
         ];
         for (code, expected) in cases {
             assert_eq!(
