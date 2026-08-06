@@ -192,6 +192,7 @@ def build_commands(
         "cargo",
         "run",
         "--quiet",
+        "--locked",
         "-p",
         "qol-build-identity",
         "--bin",
@@ -201,13 +202,14 @@ def build_commands(
         "production",
     ]
     if kind == "qol-tray-linux":
-        return [["cargo", "deb", "-p", "qol-tray"], verify]
+        return [["cargo", "deb", "-p", "qol-tray", "--locked"], verify]
     if kind == "qol-tray-macos":
         return [
             [
                 "cargo",
                 "build",
                 "--release",
+                "--locked",
                 "--target",
                 "aarch64-apple-darwin",
                 "--bin",
@@ -217,6 +219,7 @@ def build_commands(
                 "cargo",
                 "build",
                 "--release",
+                "--locked",
                 "--target",
                 "x86_64-apple-darwin",
                 "--bin",
@@ -234,6 +237,7 @@ def build_commands(
         "cargo",
         "build",
         "--release",
+        "--locked",
         "-p",
         package,
         "--target",
