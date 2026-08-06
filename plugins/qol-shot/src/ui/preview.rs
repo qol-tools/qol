@@ -479,9 +479,11 @@ fn create_and_show(
         eprintln!("[qol-shot] preview window open failed");
         return false;
     };
+    let open_ms = opened_at.elapsed().as_millis();
     windows.borrow_mut().insert(target, handle);
     configure_popup_window(&title);
     hide_invisible(&title);
+    let park_ms = opened_at.elapsed().as_millis() - open_ms;
     if handle
         .update(cx, |view, window, cx| {
             view.set_showing(true);
@@ -498,7 +500,7 @@ fn create_and_show(
     }
     qol_runtime::probe!(
         "SHOT_WINDOW_OPEN",
-        "ms={} seq={seq} path=create",
+        "ms={} open_ms={open_ms} park_ms={park_ms} seq={seq} path=create",
         opened_at.elapsed().as_millis()
     );
     cx.activate(true);

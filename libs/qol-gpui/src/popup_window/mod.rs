@@ -27,9 +27,6 @@ pub async fn wait_for_hidden_windows(
     let mut clear_samples = 0;
 
     loop {
-        cx.background_executor()
-            .timer(COMPOSITOR_SAMPLE_INTERVAL)
-            .await;
         let visible = cx
             .update(|_| visible_windows_by_title_prefix(title_prefix))
             .unwrap_or(usize::MAX);
@@ -56,6 +53,9 @@ pub async fn wait_for_hidden_windows(
                 elapsed,
             };
         }
+        cx.background_executor()
+            .timer(COMPOSITOR_SAMPLE_INTERVAL)
+            .await;
     }
 }
 
