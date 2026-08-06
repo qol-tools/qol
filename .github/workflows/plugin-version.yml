@@ -39,6 +39,7 @@ jobs:
     outputs:
       should_release: ${{ steps.version.outputs.should_release }}
       candidate_sha: ${{ steps.candidate.outputs.sha }}
+      superseded: ${{ steps.candidate.outputs.superseded }}
       tags: ${{ steps.version.outputs.tags }}
       plugin_matrix: ${{ steps.plan.outputs.plugin_matrix }}
       has_plugins: ${{ steps.plan.outputs.has_plugins }}
@@ -115,13 +116,26 @@ jobs:
           git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml apps/qol-tray/Cargo.toml
           if ! git diff --cached --quiet; then
             git commit -m "chore(plugins): bump plugin versions"
-            git push origin "HEAD:main"
+            if ! git push origin "HEAD:main"; then
+              git fetch origin main
+              if [[ "$(git rev-parse FETCH_HEAD)" != "${SOURCE_SHA}" ]]; then
+                # A newer push advanced main while this run was versioning the
+                # old head. That push's own CI -> Versioning chain covers the
+                # same history, so end green and let it take over.
+                echo "superseded=true" >> "${GITHUB_OUTPUT}"
+                echo "::notice::main moved past ${SOURCE_SHA}; the newer push's versioning run takes over"
+                exit 0
+              fi
+              exit 1
+            fi
           fi
           echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Plan candidate builds
         id: plan
-        if: steps.version.outputs.should_release == 'true'
+        if: >-
+          ${{ steps.version.outputs.should_release == 'true' &&
+          steps.candidate.outputs.superseded != 'true' }}
         env:
           RELEASE_TAGS: ${{ steps.version.outputs.tags }}
         run: |
@@ -130,7 +144,9 @@ jobs:
             --report "${RUNNER_TEMP}/release-candidate-report.json"
 
       - name: Upload candidate plan
-        if: steps.version.outputs.should_release == 'true'
+        if: >-
+          ${{ steps.version.outputs.should_release == 'true' &&
+          steps.candidate.outputs.superseded != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-candidate-plan-${{ steps.candidate.outputs.sha }}
@@ -279,6 +295,7 @@ jobs:
         always() &&
         needs.prepare.result == 'success' &&
         needs.prepare.outputs.should_release == 'true' &&
+        needs.prepare.outputs.superseded != 'true' &&
         (needs.plugin_candidate.result == 'success' ||
          needs.plugin_candidate.result == 'skipped') &&
         (needs.qol_tray_linux_candidate.result == 'success' ||
