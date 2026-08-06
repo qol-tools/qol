@@ -1,6 +1,6 @@
 [package]
 name = "window-actions"
-version = "2.22.4"
+version = "2.23.0"
 edition = "2021"
 
 [dependencies]

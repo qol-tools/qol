@@ -1,6 +1,6 @@
 [package]
 name = "plugin-cli-sessions"
-version = "0.38.0"
+version = "0.39.0"
 edition = "2021"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command) for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
