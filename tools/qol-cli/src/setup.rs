@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Value as TomlValue;
 
 const CARGO_LOCK_DRIVER_CMD: &str = ".githooks/cargo-lock-merge %O %A %B %P";
+const GIT_HOOKS_PATH: &str = ".githooks";
 
 pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     if !args.is_empty() {
@@ -31,6 +32,8 @@ pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
     print_hint(verbose);
     register_cargo_lock_driver(root).context("failed to configure Cargo.lock merge driver")?;
     step_label("merge", StepKind::Success, "Cargo.lock auto-resolve");
+    register_git_hooks(root).context("failed to configure Git hooks")?;
+    step_label("hooks", StepKind::Success, GIT_HOOKS_PATH);
     let target_display = target.display().to_string();
     if install_is_current(root, &package, &target, &version)? {
         step_label("current", StepKind::Success, &target_display);
@@ -68,6 +71,10 @@ fn register_cargo_lock_driver(root: &Path) -> Result<()> {
     git_config_unset(root, "merge.lockfile.driver");
     git_config_unset(root, "merge.lockfile.name");
     Ok(())
+}
+
+fn register_git_hooks(root: &Path) -> Result<()> {
+    git_config(root, "core.hooksPath", GIT_HOOKS_PATH)
 }
 
 fn git_config(root: &Path, key: &str, value: &str) -> Result<()> {
@@ -213,6 +220,45 @@ fn normalized_path(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} exited with {status}");
+    }
+
+    fn configured_hooks_path(root: &Path) -> String {
+        let configured = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["config", "--get", "core.hooksPath"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&configured.stdout)
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn setup_registers_the_repository_hooks_before_any_install_work_can_fail() {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "--quiet"]);
+        let package = repo.path().join("tools/qol-cli");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            "[package]\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+
+        let _ = run_setup(repo.path(), false);
+
+        assert_eq!(configured_hooks_path(repo.path()), GIT_HOOKS_PATH);
+    }
 
     #[test]
     fn setup_fails_when_lockfile_merge_driver_cannot_be_registered() {

@@ -38,6 +38,15 @@ qol doctor [step]
 
 `qol sync` is intentionally not implemented yet; use `make sync` when needed.
 
+`qol setup` owns the repository's Git configuration, and `qol dev` runs it on
+every boot, so both settings self-heal without anyone editing `.git/config` by
+hand: `merge.cargo-lock.*` (the `Cargo.lock` auto-resolve driver) and
+`core.hooksPath=.githooks`, which is what makes `.githooks/pre-commit` and
+`.githooks/commit-msg` run at all. Both are registered before the install work,
+so they land even when the install is already current or fails. `core.hooksPath`
+is shared by every linked worktree, and a relative path resolves against each
+worktree's own root, so one registration in the main clone covers them all.
+
 Global flags:
 
 ```bash
