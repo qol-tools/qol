@@ -100,6 +100,42 @@ query = "stt_providers"
 [field.stt_provider.option_labels]
 auto = "Automatic"
 
+[field.stt_model_dir]
+type = "string"
+config_key = "recognition.model_dir"
+label = "Model Directory"
+description = "Required when the Sherpa ONNX provider is selected. Point it at any downloaded model folder."
+section = "recognition"
+default = ""
+
+[field.stt_model_kind]
+type = "select"
+config_key = "recognition.model_kind"
+label = "Model Family"
+description = "Automatic reads the family from the model directory."
+section = "recognition"
+default = "auto"
+options = [
+    "auto",
+    "transducer",
+    "nemo-transducer",
+    "whisper",
+    "sense-voice",
+    "paraformer",
+    "nemo-ctc",
+    "moonshine",
+]
+
+[field.stt_model_kind.option_labels]
+auto = "Automatic"
+transducer = "Zipformer Transducer"
+nemo-transducer = "NeMo Transducer (Parakeet)"
+whisper = "Whisper"
+sense-voice = "SenseVoice"
+paraformer = "Paraformer"
+nemo-ctc = "NeMo CTC"
+moonshine = "Moonshine"
+
 [field.websocket_endpoint]
 type = "string"
 config_key = "recognition.websocket_endpoint"

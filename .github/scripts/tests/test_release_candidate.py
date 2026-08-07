@@ -401,6 +401,8 @@ class BuildNodeTests(unittest.TestCase):
                         "x86_64-unknown-linux-gnu",
                         "--features",
                         "local-stt",
+                        "--features",
+                        "sherpa-stt",
                     ]
                 ],
             ),

@@ -40,17 +40,16 @@ impl Config {
 
     pub fn transcriber_request(&self) -> Option<TranscriberRequest> {
         self.recognition.enabled.then(|| {
-            let options = if self.recognition.provider == "websocket" {
-                [
+            let options = match self.recognition.provider.as_str() {
+                "websocket" => provider_options(&[
                     ("endpoint", self.recognition.websocket_endpoint.as_str()),
                     ("engine", self.recognition.websocket_engine.as_str()),
-                ]
-                .into_iter()
-                .filter(|(_, value)| !value.trim().is_empty())
-                .map(|(key, value)| (key.to_owned(), value.to_owned()))
-                .collect()
-            } else {
-                BTreeMap::new()
+                ]),
+                "sherpa-onnx" => provider_options(&[
+                    ("model_dir", self.recognition.model_dir.as_str()),
+                    ("model_kind", self.recognition.model_kind.as_str()),
+                ]),
+                _ => BTreeMap::new(),
             };
             TranscriberRequest {
                 provider: self.recognition.provider.clone(),
@@ -58,6 +57,14 @@ impl Config {
             }
         })
     }
+}
+
+fn provider_options(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .filter(|(_, value)| !value.trim().is_empty())
+        .map(|(key, value)| ((*key).to_owned(), (*value).trim().to_owned()))
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -90,6 +97,10 @@ pub struct RecognitionConfig {
     pub websocket_endpoint: String,
     #[serde(default)]
     pub websocket_engine: String,
+    #[serde(default)]
+    pub model_dir: String,
+    #[serde(default = "default_model_kind")]
+    pub model_kind: String,
 }
 
 impl Default for RecognitionConfig {
@@ -99,6 +110,8 @@ impl Default for RecognitionConfig {
             provider: default_provider(),
             websocket_endpoint: String::new(),
             websocket_engine: String::new(),
+            model_dir: String::new(),
+            model_kind: default_model_kind(),
         }
     }
 }
@@ -164,6 +177,10 @@ fn default_input_device() -> String {
 }
 
 fn default_provider() -> String {
+    "auto".to_owned()
+}
+
+fn default_model_kind() -> String {
     "auto".to_owned()
 }
 
