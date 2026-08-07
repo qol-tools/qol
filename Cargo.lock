@@ -4217,6 +4217,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "proptest",
+ "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-headless",
@@ -8446,6 +8447,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 name = "task-runner"
 version = "1.22.0"
 dependencies = [
+ "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-headless",
@@ -9926,6 +9928,7 @@ name = "window-actions"
 version = "2.23.0"
 dependencies = [
  "proptest",
+ "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-fs",
