@@ -9,8 +9,8 @@ use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    cargo_build_command, dev_repo_root, display_name, repo_root, scan_buildable_plugins,
-    BuildablePlugin,
+    cargo_build_command, dev_repo_root, display_name, qualified_plugin_build_features, repo_root,
+    scan_buildable_plugins, BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
@@ -561,18 +561,30 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
         .map(|p| display_name(&p.dir))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut command = Command::new("cargo");
-    command.current_dir(root).arg("build");
+    let mut features = Vec::new();
     for plugin in plugins {
-        command.arg("-p").arg(&plugin.package_name);
+        features.extend(qualified_plugin_build_features(&plugin.dir)?);
     }
-    qol_dev_build::configure_dev_cargo(&mut command);
+    let mut command = plugin_batch_command(root, plugins, &features);
     let result = run_dev_step("build", StepKind::Pending, &label, &mut command, verbose);
     if result.is_err() {
         eprintln!("qol dev: plugin batch build failed");
         eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
     }
     Ok(())
+}
+
+fn plugin_batch_command(root: &Path, plugins: &[BuildablePlugin], features: &[String]) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(root).arg("build");
+    for plugin in plugins {
+        command.arg("-p").arg(&plugin.package_name);
+    }
+    for feature in features {
+        command.arg("--features").arg(feature);
+    }
+    qol_dev_build::configure_dev_cargo(&mut command);
+    command
 }
 
 fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
@@ -791,6 +803,36 @@ mod tests {
             assert_eq!(command.get_current_dir(), Some(root), "case: {label}");
             assert_eq!(command.get_program(), OsStr::new("cargo"), "case: {label}");
         }
+    }
+
+    #[test]
+    fn plugin_batch_build_carries_declared_features() {
+        let plugins = [
+            BuildablePlugin {
+                dir: PathBuf::from("/repo/qol/plugins/qol-voice"),
+                package_name: "qol-voice".to_string(),
+            },
+            BuildablePlugin {
+                dir: PathBuf::from("/repo/qol/plugins/alt-tab"),
+                package_name: "alt-tab".to_string(),
+            },
+        ];
+        let features = ["qol-voice/local-stt".to_string()];
+        let command = plugin_batch_command(Path::new("/repo/qol"), &plugins, &features);
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(
+            args[..6],
+            [
+                OsStr::new("build"),
+                OsStr::new("-p"),
+                OsStr::new("qol-voice"),
+                OsStr::new("-p"),
+                OsStr::new("alt-tab"),
+                OsStr::new("--features"),
+            ],
+            "the dev lane must build plugins with the features plugin.toml declares"
+        );
+        assert_eq!(args[6], OsStr::new("qol-voice/local-stt"));
     }
 
     #[test]
