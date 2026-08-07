@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fast pre-commit gates for the qol monorepo - mirror CI (.github/workflows/ci.yml).
-# Enable in a fresh clone with:  git config core.hooksPath .githooks
+# Registered by `qol setup`, which `qol dev` runs on every boot.
 # These checks are fast and deterministic, so they always run before a commit.
 # Compile/clippy/test stay out of the commit path - they run in `qol dev` and CI.
 set -u
@@ -12,11 +12,40 @@ node "$root/.githooks/single-source-guard.mjs" || exit 1
 
 command -v cargo >/dev/null 2>&1 || exit 0
 
-if ! cargo fmt --all -- --check >/dev/null 2>&1; then
-  printf '\n  pre-commit rejected: rustfmt check failed\n' >&2
-  printf '  fix    : cargo fmt --all\n' >&2
+reject() {
+  printf '\n  pre-commit rejected: %s\n' "$1" >&2
+  printf '  fix    : %s\n' "$2" >&2
   printf '  then re-stage the changes and commit again\n\n' >&2
   exit 1
+}
+
+staged_rust=()
+staged_manifest=0
+while IFS= read -r -d '' path; do
+  case "$path" in
+    Cargo.lock|Cargo.toml|*/Cargo.toml) staged_manifest=1 ;;
+  esac
+  case "$path" in
+    *.rs) [ -f "$path" ] && staged_rust+=("$path") ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+edition="$(sed -nE 's/^edition = "([0-9]{4})".*/\1/p' "$root/Cargo.toml" | head -n1)"
+[ -n "$edition" ] || edition=2021
+
+if [ "${#staged_rust[@]}" -gt 0 ] && command -v rustfmt >/dev/null 2>&1; then
+  if ! rustfmt --check --edition "$edition" "${staged_rust[@]}" >/dev/null 2>&1; then
+    cargo fmt --all -- --check >/dev/null 2>&1 \
+      || reject "rustfmt check failed" "cargo fmt --all"
+  fi
+fi
+
+if [ "$staged_manifest" = 1 ]; then
+  if ! lock_error="$(cargo metadata --locked --format-version 1 2>&1 >/dev/null)"; then
+    printf '\n%s\n' "$lock_error" >&2
+    reject "Cargo.lock does not match the workspace manifests" \
+      "cargo metadata >/dev/null && git add Cargo.lock"
+  fi
 fi
 
 exit 0
