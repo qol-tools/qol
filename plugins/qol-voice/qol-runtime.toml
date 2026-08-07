@@ -35,6 +35,10 @@ poll_interval_ms = 5000
 description = "Registered speech-recognition providers"
 poll_interval_ms = 30000
 
+[query.stt_models]
+description = "Speech-recognition models installed in this device's model directory"
+poll_interval_ms = 5000
+
 [query.terminal_targets]
 description = "Live terminal sessions eligible for voice text delivery"
 poll_interval_ms = 2000
