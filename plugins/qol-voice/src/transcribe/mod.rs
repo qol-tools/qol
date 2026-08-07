@@ -1,3 +1,4 @@
+mod models;
 mod platform;
 mod websocket;
 
@@ -11,6 +12,7 @@ use serde::Serialize;
 
 use crate::audio::{AudioFormat, AudioFrame};
 
+pub use models::{installed_models, models_root, InstalledModel};
 pub(crate) use websocket::probe_endpoint;
 pub use websocket::{WebSocketTranscriber, WebSocketTranscriberConfig};
 

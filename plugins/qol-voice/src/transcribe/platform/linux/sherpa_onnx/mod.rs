@@ -50,15 +50,14 @@ fn create_from_options(
     options: &BTreeMap<String, String>,
 ) -> Result<Box<dyn Transcriber>, TranscriptionError> {
     reject_unknown_options(options)?;
-    let model_dir = options
+    let model_dir = match options
         .get("model_dir")
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            TranscriptionError::InvalidConfiguration(
-                "the Sherpa ONNX provider requires a model directory".to_owned(),
-            )
-        })?;
+    {
+        Some(model_dir) => model_dir,
+        None => sole_installed_model()?,
+    };
     let model_kind = match options.get("model_kind").map(String::as_str) {
         None | Some("auto") => None,
         Some(value) => Some(ModelKind::parse(value).ok_or_else(|| {
@@ -88,6 +87,23 @@ fn create_from_options(
             threads,
         },
     }))
+}
+
+fn sole_installed_model() -> Result<String, TranscriptionError> {
+    let installed = crate::transcribe::installed_models();
+    let root = crate::transcribe::models_root()
+        .map(|root| root.display().to_string())
+        .unwrap_or_else(|| "the Voice model directory".to_owned());
+    match installed.len() {
+        0 => Err(TranscriptionError::ModelUnavailable(format!(
+            "no speech model is installed in {root}"
+        ))),
+        1 => Ok(installed[0].path.to_string_lossy().into_owned()),
+        _ => Err(TranscriptionError::InvalidConfiguration(format!(
+            "{} models are installed in {root}; choose one in settings",
+            installed.len()
+        ))),
+    }
 }
 
 fn default_threads() -> i32 {
@@ -303,10 +319,22 @@ mod tests {
     }
 
     #[test]
-    fn a_model_directory_is_required() {
-        assert!(create_from_options(&options(&[])).is_err());
-        assert!(create_from_options(&options(&[("model_dir", "   ")])).is_err());
+    fn a_configured_model_directory_is_taken_verbatim() {
         assert!(create_from_options(&options(&[("model_dir", "/models/parakeet")])).is_ok());
+    }
+
+    #[test]
+    fn a_blank_model_directory_falls_back_to_what_is_installed() {
+        let installed = crate::transcribe::installed_models().len();
+        let cases: [(&str, &[(&str, &str)]); 2] =
+            [("absent", &[]), ("blank", &[("model_dir", "   ")])];
+        for (label, pairs) in cases {
+            assert_eq!(
+                create_from_options(&options(pairs)).is_ok(),
+                installed == 1,
+                "case: {label}"
+            );
+        }
     }
 
     #[test]

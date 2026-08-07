@@ -101,12 +101,16 @@ query = "stt_providers"
 auto = "Automatic"
 
 [field.stt_model_dir]
-type = "string"
+type = "select"
 config_key = "recognition.model_dir"
-label = "Model Directory"
-description = "Required when the Sherpa ONNX provider is selected. Point it at any downloaded model folder."
+label = "Model"
+description = "Models found in this device's Voice model directory."
 section = "recognition"
 default = ""
+query = "stt_models"
+
+[field.stt_model_dir.option_labels]
+"" = "No model selected"
 
 [field.stt_model_kind]
 type = "select"

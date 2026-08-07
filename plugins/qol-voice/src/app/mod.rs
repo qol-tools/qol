@@ -60,6 +60,7 @@ fn handle_request(runtime: &mut SessionManager, request: &DaemonRequest) -> Read
         "session_transcripts" => runtime.transcripts().and_then(to_value),
         "audio_sources" => audio_sources(),
         "stt_providers" => stt_providers(),
+        "stt_models" => stt_models(),
         "terminal_targets" => runtime.terminal_targets().and_then(to_value),
         "set_activation" => set_activation(runtime, &request.input),
         "select_terminal_target" => select_terminal_target(runtime, &request.input),
@@ -116,6 +117,19 @@ fn audio_sources() -> Result<serde_json::Value> {
             serde_json::json!({
                 "value": device.id,
                 "label": device.label,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!(options))
+}
+
+fn stt_models() -> Result<serde_json::Value> {
+    let options = crate::transcribe::installed_models()
+        .into_iter()
+        .map(|model| {
+            serde_json::json!({
+                "value": model.path.to_string_lossy(),
+                "label": model.name,
             })
         })
         .collect::<Vec<_>>();
