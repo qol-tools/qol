@@ -8,7 +8,7 @@ author = "KMRH47"
 platforms = ["linux"]
 
 [build]
-features = ["local-stt"]
+features = ["local-stt", "sherpa-stt"]
 
 [config]
 default_scope = "os"
