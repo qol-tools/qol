@@ -99,6 +99,21 @@ jobs:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
 
+      # A manifest can declare a dependency Cargo.lock does not record. Cargo
+      # then rewrites the lockfile on every build, which dirties the tree
+      # mid-build and fails the --locked release pipeline after merge.
+      # `--no-deps` cannot stand in here: it skips resolution and exits 0
+      # against a stale lockfile.
+      - name: Lockfile is current
+        if: runner.os == 'Linux' && matrix.skip != 'true'
+        run: |
+          if error=$(cargo metadata --locked --format-version 1 2>&1 >/dev/null); then
+            exit 0
+          fi
+          printf '%s\n' "$error" >&2
+          echo "::error title=Stale Cargo.lock::Cargo.lock does not match the workspace manifests. Run 'cargo metadata', then commit the regenerated Cargo.lock."
+          exit 1
+
       - name: Format
         if: runner.os == 'Linux' && matrix.skip != 'true'
         run: cargo fmt --all -- --check
@@ -107,14 +122,14 @@ jobs:
         if: matrix.skip != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
-        run: cargo clippy $CLIPPY_ARGS -- -D warnings
+        run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
 
       - name: Release profile build
         if: matrix.skip != 'true'
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
-        run: cargo build --release $BUILD_ARGS
+        run: cargo build --release --locked $BUILD_ARGS
 
       - name: Test
         if: runner.os == 'Linux' && matrix.skip != 'true'
@@ -175,13 +190,13 @@ jobs:
           printf '%s\n' "$$" | sudo tee "$cgroup_root/cgroup.procs" >/dev/null
           export QOL_PROCESS_CGROUP_ROOT="$cgroup_root"
           export QOL_PROCESS_CGROUP_JOURNAL_ROOT="$journal_root"
-          cargo test $TEST_ARGS
+          cargo test --locked $TEST_ARGS
 
       - name: Test
         if: runner.os == 'macOS' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
-        run: cargo test $TEST_ARGS
+        run: cargo test --locked $TEST_ARGS
 
   process-windows:
     name: sandbox lifecycle (windows)
@@ -201,12 +216,12 @@ jobs:
 
       - name: Check production CLI
         if: ${{ fromJSON(needs.plan.outputs.windows_qol) }}
-        run: cargo check -p qol --bin qol --all-targets
+        run: cargo check --locked -p qol --bin qol --all-targets
 
       - name: Test development build crate
         if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}
-        run: cargo test -p qol-dev-build --all-targets
+        run: cargo test --locked -p qol-dev-build --all-targets
 
       - name: Test process containment
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
-        run: cargo test -p qol-process --all-targets
+        run: cargo test --locked -p qol-process --all-targets

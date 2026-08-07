@@ -164,6 +164,8 @@ fn build_release_binary(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
         .arg(&manifest_path);
     if dev {
         command.arg("--features").arg("dev");
+    } else {
+        command.arg("--locked");
     }
     let identity = if dev {
         qol_build_identity::BuildIdentityEnvironment::development(repo_root)?

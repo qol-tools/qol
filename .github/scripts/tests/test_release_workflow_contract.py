@@ -1,7 +1,9 @@
+import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check)\b")
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -42,10 +44,37 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 
-        self.assertIn("cargo build --release $BUILD_ARGS", workflow)
+        self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)
+
+    def test_ci_matches_the_release_pipeline_lockfile_strictness(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+
+        lenient = [
+            line.strip()
+            for line in workflow.splitlines()
+            if CARGO_GATE.search(line)
+            and not line.strip().startswith("#")
+            and "--locked" not in line
+        ]
+        self.assertEqual(
+            lenient,
+            [],
+            "every CI cargo gate must pass --locked so a stale Cargo.lock cannot "
+            "reach the --locked release pipeline",
+        )
+
+    def test_ci_asserts_lockfile_freshness_with_a_full_resolve(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+
+        self.assertIn("cargo metadata --locked --format-version 1", workflow)
+        self.assertNotIn(
+            "cargo metadata --locked --no-deps",
+            workflow,
+            "--no-deps skips resolution and exits 0 against a stale lockfile",
+        )
 
     def test_windows_dev_build_tests_follow_the_affected_plan(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -54,7 +83,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}",
             "fromJSON(needs.plan.outputs.windows_dev_build || 'false')",
             "if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}",
-            "run: cargo test -p qol-dev-build --all-targets",
+            "run: cargo test --locked -p qol-dev-build --all-targets",
         ]:
             self.assertIn(contract, workflow)
 

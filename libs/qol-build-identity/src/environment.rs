@@ -69,9 +69,9 @@ impl fmt::Display for BuildIdentityEnvironmentError {
             }
             Self::DirtySubmodule => formatter
                 .write_str("cannot identify a working tree with dirty submodule contents exactly"),
-            Self::SourceChanged => {
-                formatter.write_str("source identity changed while the build was running")
-            }
+            Self::SourceChanged => formatter.write_str(
+                "the build modified tracked files while it was running, so the source identity no longer matches; see `git status`",
+            ),
             Self::InvalidUtf8(error) => write!(formatter, "Git returned invalid UTF-8: {error}"),
             Self::EmptyGitValue(name) => write!(formatter, "Git returned an empty {name}"),
         }
@@ -145,12 +145,10 @@ impl BuildIdentityEnvironment {
     }
 
     pub fn verify_unchanged(&self, repo: &Path) -> Result<(), BuildIdentityEnvironmentError> {
-        let current = match self.intent {
-            BuildIntent::Production => Self::production(repo)?,
-            BuildIntent::Development => Self::development(repo)?,
-            BuildIntent::Sandbox => Self::sandbox(repo)?,
-            BuildIntent::Unspecified => return Err(BuildIdentityEnvironmentError::SourceChanged),
-        };
+        if self.intent == BuildIntent::Unspecified {
+            return Err(BuildIdentityEnvironmentError::SourceChanged);
+        }
+        let current = Self::resolve(repo, self.intent, false)?;
         if &current == self {
             return Ok(());
         }
@@ -419,6 +417,19 @@ mod tests {
         identity.verify_unchanged(repo.path()).unwrap();
 
         std::fs::write(repo.path().join("tracked.txt"), "changed\n").unwrap();
+
+        assert!(matches!(
+            identity.verify_unchanged(repo.path()),
+            Err(BuildIdentityEnvironmentError::SourceChanged)
+        ));
+    }
+
+    #[test]
+    fn unchanged_verification_blames_the_build_for_a_tree_it_dirtied() {
+        let repo = repo();
+        let identity = BuildIdentityEnvironment::production(repo.path()).unwrap();
+
+        std::fs::write(repo.path().join("Cargo.lock"), "rewritten mid-build\n").unwrap();
 
         assert!(matches!(
             identity.verify_unchanged(repo.path()),

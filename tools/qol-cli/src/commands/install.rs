@@ -22,7 +22,7 @@ pub(crate) fn run(verbose: bool) -> Result<()> {
     let mut build = Command::new("cargo");
     build
         .current_dir(&root)
-        .args(["build", "--release", "-p", "qol-tray"]);
+        .args(["build", "--release", "--locked", "-p", "qol-tray"]);
     for plugin in &scan.buildable {
         build.arg("-p").arg(&plugin.package_name);
         for feature in qualified_plugin_build_features(&plugin.dir)? {
