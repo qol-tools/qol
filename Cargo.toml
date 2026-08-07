@@ -22,6 +22,7 @@ qol-dev-orchestrator = { path = "libs/qol-dev-orchestrator" }
 qol-frecency = { path = "libs/qol-frecency" }
 qol-fs = { path = "libs/qol-fs" }
 qol-platform = { path = "libs/qol-platform" }
+qol-watch = { path = "libs/qol-watch" }
 qol-process = { path = "libs/qol-process" }
 qol-runtime = { path = "libs/qol-runtime" }
 qol-search = { path = "libs/qol-search" }

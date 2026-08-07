@@ -2,8 +2,6 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-
 use super::CliSessionChangeHandler;
 
 pub struct CliSessionSubscription {
@@ -21,56 +19,20 @@ impl CliSessionSubscription {
         path: impl AsRef<Path>,
         on_change: CliSessionChangeHandler,
     ) -> Result<Self, CliSessionSubscriptionError> {
-        let path = path.as_ref();
-        let file_name = path
-            .file_name()
-            .ok_or(CliSessionSubscriptionError::InvalidPath)?;
-        let watched_directory = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or(CliSessionSubscriptionError::InvalidPath)?;
-        let watched_directory = std::fs::canonicalize(watched_directory)
-            .unwrap_or_else(|_| watched_directory.to_path_buf());
-        let expected_path = watched_directory.join(file_name);
-        let mut watcher: RecommendedWatcher = notify::recommended_watcher(
-            move |result: notify::Result<notify::Event>| match result {
-                Ok(event)
-                    if relevant_kind(&event.kind)
-                        && event.paths.iter().any(|changed| changed == &expected_path) =>
-                {
-                    on_change();
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    qol_runtime::probe!(
-                        "CLI_SESSION_INTERPRETATION",
-                        "event=subscription_error source=file error={error}"
-                    );
-                }
-            },
-        )
-        .map_err(CliSessionSubscriptionError::Watcher)?;
-        watcher
-            .watch(&watched_directory, RecursiveMode::NonRecursive)
+        let watch = qol_watch::watch_file(path, move || on_change())
             .map_err(CliSessionSubscriptionError::Watcher)?;
-        Ok(Self::from_guard(watcher))
+        Ok(Self::from_guard(watch))
     }
-}
-
-fn relevant_kind(kind: &EventKind) -> bool {
-    kind.is_create() || kind.is_modify() || kind.is_remove()
 }
 
 #[derive(Debug)]
 pub enum CliSessionSubscriptionError {
-    InvalidPath,
-    Watcher(notify::Error),
+    Watcher(qol_watch::WatchError),
 }
 
 impl Display for CliSessionSubscriptionError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPath => write!(formatter, "CLI session metadata path has no parent"),
             Self::Watcher(error) => {
                 write!(formatter, "failed to watch CLI session metadata: {error}")
             }
@@ -81,7 +43,6 @@ impl Display for CliSessionSubscriptionError {
 impl Error for CliSessionSubscriptionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidPath => None,
             Self::Watcher(error) => Some(error),
         }
     }

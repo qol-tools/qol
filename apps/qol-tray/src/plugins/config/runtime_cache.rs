@@ -2,7 +2,7 @@ use crate::features::profile::scope_store::{PluginConfigSlicePaths, ProfileScope
 use crate::plugins::manifest::PluginManifest;
 use anyhow::{bail, Result};
 #[cfg(not(test))]
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use qol_watch::{Watch, WatchNotice, WatchRoot};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
@@ -107,7 +107,7 @@ struct MutationNotifier {
 #[derive(Debug)]
 struct WatcherState {
     root: PathBuf,
-    _watcher: RecommendedWatcher,
+    _watcher: Watch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -746,10 +746,10 @@ fn ensure_watcher(store: &ProfileScopeStore) {
     let active_marker = crate::paths::active_profile_marker_path().ok();
     let watcher_failed = Arc::new(AtomicBool::new(false));
     let watcher_failed_for_callback = Arc::clone(&watcher_failed);
-    let callback = move |result: notify::Result<notify::Event>| match result {
-        Ok(event) if relevant_event(&event.kind) => {
+    let callback = move |notice: WatchNotice| match notice {
+        WatchNotice::Changed(paths) => {
             if active_marker.as_ref().is_some_and(|marker| {
-                event.paths.iter().any(|path| {
+                paths.iter().any(|path| {
                     path == marker
                         || path.file_name() == marker.file_name()
                             && path.parent() == marker.parent()
@@ -760,8 +760,7 @@ fn ensure_watcher(store: &ProfileScopeStore) {
                 invalidate();
             }
         }
-        Ok(_) => {}
-        Err(error) => {
+        WatchNotice::Failed(error) => {
             log::warn!("profile config watcher failed: {error}");
             watcher_failed_for_callback.store(true, Ordering::Release);
             WATCHER_REARM.store(true, Ordering::Release);
@@ -769,24 +768,18 @@ fn ensure_watcher(store: &ProfileScopeStore) {
             invalidate();
         }
     };
-    let mut next = match notify::recommended_watcher(callback) {
+    let next = match qol_watch::watch(&[WatchRoot::deep(root.clone())], callback) {
         Ok(watcher) => watcher,
         Err(error) => {
-            log::warn!("failed to create profile config watcher: {error}");
+            log::warn!(
+                "failed to watch profile config root {}: {error}",
+                root.display()
+            );
             WATCHER_REARM.store(true, Ordering::Release);
             set_cache_available(false);
             return;
         }
     };
-    if let Err(error) = next.watch(&root, RecursiveMode::Recursive) {
-        log::warn!(
-            "failed to watch profile config root {}: {error}",
-            root.display()
-        );
-        WATCHER_REARM.store(true, Ordering::Release);
-        set_cache_available(false);
-        return;
-    }
     if watcher_failed.load(Ordering::Acquire) {
         WATCHER_REARM.store(true, Ordering::Release);
         set_cache_available(false);
@@ -807,11 +800,6 @@ fn ensure_watcher(store: &ProfileScopeStore) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
-}
-
-#[cfg(not(test))]
-fn relevant_event(kind: &EventKind) -> bool {
-    kind.is_create() || kind.is_modify() || kind.is_remove()
 }
 
 impl From<&PluginManifest> for ManifestIdentity {

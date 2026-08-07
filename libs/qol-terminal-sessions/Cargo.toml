@@ -6,10 +6,8 @@ license.workspace = true
 description = "Backend-neutral live terminal session discovery and interaction"
 
 [dependencies]
-notify = { version = "8", default-features = false, features = [
-  "macos_fsevent",
-] }
 qol-runtime.workspace = true
+qol-watch.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
