@@ -14,10 +14,8 @@ anyhow = "1"
 gpui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-notify = { version = "8", default-features = false, features = [
-  "macos_fsevent",
-] }
 qol-plugin-daemon.workspace = true
+qol-watch.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
 qol-runtime.workspace = true

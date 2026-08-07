@@ -11,16 +11,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use notify::event::EventKind;
-use notify::{RecursiveMode, Watcher};
 pub use qol_apps::AppEntry;
 use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_gpui::PlatformStateClient;
+use qol_watch::{WatchNotice, WatchRoot};
 
 use platform::AppRoot;
 
 enum WatchSignal {
-    FsEvent(notify::Result<notify::Event>),
+    FsPaths(Vec<PathBuf>),
+    FsFailed(String),
     HostHint(PathBuf),
 }
 
@@ -130,13 +130,6 @@ fn publish(entries: &SharedEntries, cache: &AppCache, file_entries: &Arc<Vec<Fil
     }
 }
 
-fn is_mutating_kind(kind: &EventKind) -> bool {
-    matches!(
-        kind,
-        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-    )
-}
-
 fn is_app_relevant(path: &Path) -> bool {
     match path.extension() {
         Some(ext) => ext == "desktop",
@@ -196,33 +189,41 @@ pub(crate) fn start(entries: SharedEntries) {
 
         let (tx, rx) = std::sync::mpsc::channel::<WatchSignal>();
         let fs_tx = tx.clone();
-        let Ok(mut watcher) = notify::recommended_watcher(move |e| {
-            let _ = fs_tx.send(WatchSignal::FsEvent(e));
-        }) else {
-            eprintln!("[launcher] index: failed to create watcher");
-            return;
-        };
-
-        for root in &roots {
-            let mode = if root.watch_recursive() {
-                RecursiveMode::Recursive
-            } else {
-                RecursiveMode::NonRecursive
+        let mut watch_roots = roots
+            .iter()
+            .map(|root| {
+                if root.watch_recursive() {
+                    WatchRoot::deep(root.path.clone())
+                } else {
+                    WatchRoot::shallow(root.path.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+        watch_roots.extend(
+            file_roots
+                .iter()
+                .filter(|root| root.is_dir())
+                .map(WatchRoot::deep),
+        );
+        let watcher = match qol_watch::watch(&watch_roots, move |notice| {
+            let signal = match notice {
+                WatchNotice::Changed(paths) => WatchSignal::FsPaths(paths),
+                WatchNotice::Failed(error) => WatchSignal::FsFailed(error),
             };
-            if let Err(e) = watcher.watch(&root.path, mode) {
-                eprintln!(
-                    "[launcher] index: watch failed for {}: {e}",
-                    root.path.display()
-                );
+            let _ = fs_tx.send(signal);
+        }) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                eprintln!("[launcher] index: failed to create watcher: {error}");
+                return;
             }
-        }
-        for root in file_roots.iter().filter(|root| root.is_dir()) {
-            if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
-                eprintln!(
-                    "[launcher] index: file watch failed for {}: {e}",
-                    root.display()
-                );
-            }
+        };
+        for rejected in watcher.rejected_roots() {
+            eprintln!(
+                "[launcher] index: watch failed for {}: {}",
+                rejected.path.display(),
+                rejected.reason
+            );
         }
 
         spawn_host_subscriber(tx);
@@ -236,11 +237,8 @@ pub(crate) fn start(entries: SharedEntries) {
                 RECV_TIMEOUT
             };
             match rx.recv_timeout(timeout) {
-                Ok(WatchSignal::FsEvent(Ok(event))) => {
-                    if !is_mutating_kind(&event.kind) {
-                        continue;
-                    }
-                    for path in &event.paths {
+                Ok(WatchSignal::FsPaths(paths)) => {
+                    for path in &paths {
                         if !is_app_relevant(path) {
                             if find_containing_file_root(path, &file_roots).is_some() {
                                 dirty_files.insert(path.clone());
@@ -256,7 +254,7 @@ pub(crate) fn start(entries: SharedEntries) {
                     }
                     continue;
                 }
-                Ok(WatchSignal::FsEvent(Err(e))) => {
+                Ok(WatchSignal::FsFailed(e)) => {
                     eprintln!("[launcher] index: watcher error: {e}");
                     continue;
                 }

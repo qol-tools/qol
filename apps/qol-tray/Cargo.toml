@@ -101,9 +101,7 @@ semver = "1"
 
 # Filesystem traversal
 walkdir = "2"
-notify = { version = "8", default-features = false, features = [
-  "macos_fsevent",
-] }
+qol-watch.workspace = true
 
 # Archive extraction for self-update
 flate2 = "1"
