@@ -4312,7 +4312,6 @@ dependencies = [
  "anyhow",
  "block2",
  "gpui",
- "notify",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -4329,6 +4328,7 @@ dependencies = [
  "qol-process",
  "qol-runtime",
  "qol-search",
+ "qol-watch",
  "serde",
  "serde_json",
  "tempfile",
@@ -6603,8 +6603,8 @@ dependencies = [
 name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
- "notify",
  "qol-runtime",
+ "qol-watch",
  "serde",
  "serde_json",
  "tempfile",
@@ -6645,7 +6645,6 @@ dependencies = [
  "libc",
  "log",
  "mach2 0.6.0",
- "notify",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -6670,6 +6669,7 @@ dependencies = [
  "qol-profile-sync",
  "qol-runtime",
  "qol-theme",
+ "qol-watch",
  "qol-workspace",
  "reqwest",
  "rust-embed",
@@ -6729,6 +6729,14 @@ dependencies = [
  "qol-search",
  "serde-wasm-bindgen",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "qol-watch"
+version = "1.0.0"
+dependencies = [
+ "notify",
+ "tempfile",
 ]
 
 [[package]]
