@@ -10,7 +10,7 @@
 # at runtime, so a new family (services/, daemons/, ...) needs no edit here.
 
 QOL_TYPES='feat|fix|refactor|chore|docs|test|perf|wip|style|ci|build|revert'
-QOL_UMBRELLA_EXTRA='workspace'   # root-level scope, owned by no member
+QOL_UMBRELLA_EXTRA='workspace build ci deps dev emu settings'
 
 # Singularize a family directory name by dropping one trailing 's'.
 #   plugins->plugin  libs->lib  apps->app  tools->tool  services->service
@@ -65,12 +65,14 @@ qol_derive_scopes() {
       fam="${pat%%/*}"
       printf '%s\n' "$fam"
       for dir in "$root/$fam"/*/; do
-        [ -d "$dir" ] || continue
-        qol_member_scope "$fam" "$(basename "$dir")"; printf '\n'
+        [ -f "$dir/Cargo.toml" ] || continue
+        scope="$(qol_member_scope "$fam" "$(basename "$dir")")"
+        printf '%s\n' "$scope"
+        case "$scope" in qol-?*) printf '%s\n' "${scope#qol-}" ;; esac
       done
     done
-    printf '%s\n' "$QOL_UMBRELLA_EXTRA"
-  } | sed '/^$/d' | sort -u
+    printf '%s\n' "$QOL_UMBRELLA_EXTRA" | tr ' ' '\n'
+  } | sed '/^$/d' | LC_ALL=C sort -u
 }
 
 # Echo the scope string inside the first (...) of a conventional subject; empty if none.

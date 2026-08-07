@@ -42,6 +42,12 @@ jobs:
       - name: Single source guard
         run: node .githooks/single-source-guard.mjs
 
+      # The commit-msg gate derives its scope vocabulary from the workspace
+      # layout, so a rename or a new family silently narrows what commits are
+      # allowed. These run in seconds and keep the local hook honest.
+      - name: Test commit-msg hook
+        run: bash .githooks/commit-msg.test.sh
+
       - name: Test QoL Tray UI
         working-directory: apps/qol-tray/ui
         run: |
