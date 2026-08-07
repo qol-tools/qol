@@ -1,0 +1,10 @@
+{
+  "title": "✳ macos qol-tray process multiple process with the same",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "claude"
+  ],
+  "prev": "Working",
+  "expect": "YourTurn",
+  "screen_changed": false
+}

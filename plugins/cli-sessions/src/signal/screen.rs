@@ -181,11 +181,26 @@ fn is_duration_token(tok: &str) -> bool {
 }
 
 pub fn claude_awaiting_choice(text: &str) -> bool {
-    text.lines().any(|l| {
-        let mut chars = l.trim_start().chars();
-        matches!(chars.next(), Some('\u{276F}') | Some('\u{203A}'))
-            && numbered_option(chars.as_str().trim_start())
-    })
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .any(|(index, line)| selected_option(line) && has_sibling_option(&lines, index))
+}
+
+fn selected_option(line: &str) -> bool {
+    let mut chars = line.trim_start().chars();
+    matches!(chars.next(), Some('\u{276F}') | Some('\u{203A}'))
+        && numbered_option(chars.as_str().trim_start())
+}
+
+fn has_sibling_option(lines: &[&str], index: usize) -> bool {
+    let previous = lines[..index].iter().rev().find(|l| !l.trim().is_empty());
+    let next = lines[index + 1..].iter().find(|l| !l.trim().is_empty());
+    [previous, next]
+        .into_iter()
+        .flatten()
+        .any(|line| numbered_option(line.trim()))
 }
 
 pub fn has_input_request(text: &str) -> bool {
