@@ -782,6 +782,14 @@ async fn await_reveal_readiness<V: Render + 'static>(
                 "title={title} phase=geometry-session attempt={attempt} connected={}",
                 geometry_session.is_some()
             );
+            if reveal_cancelled(dismiss_state, dismiss_generation) {
+                return RevealWait {
+                    readiness,
+                    attempts: attempt,
+                    geometry_session,
+                    cancelled: true,
+                };
+            }
         }
         readiness.moved |= reposition_reveal_window(geometry_session.as_ref(), title, origin);
         readiness.layout_confirmed = fresh_frame.layout_confirmed();
@@ -852,7 +860,11 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
         }
         if !self.visible.get() {
             if self.reveal_pending.get() {
-                return true;
+                self.dismisser
+                    .state
+                    .generation
+                    .set(self.dismisser.state.generation.get().wrapping_add(1));
+                self.reveal_pending.set(false);
             }
             let Some(monitor) = tracker.snapshot_monitor() else {
                 return false;
