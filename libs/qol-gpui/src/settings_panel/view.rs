@@ -379,7 +379,7 @@ impl SettingsPanelView {
         changed
     }
 
-    fn pause_runtime_poll(&mut self) {
+    pub(super) fn pause_runtime_poll(&mut self) {
         self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
         if let Some(stop) = self.sampler_stop.take() {
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1038,7 +1038,7 @@ impl SettingsPanelView {
         else {
             return false;
         };
-        *edit = stepped_number(edit, *value, *min, *max, *step, direction);
+        *edit = stepped_number(edit, *value, *min, *max, (*step).unwrap_or(1.0), direction);
         true
     }
 
@@ -1059,9 +1059,13 @@ impl SettingsPanelView {
                     .collect();
             }
             RowControl::Number {
-                value, min, max, ..
+                value,
+                min,
+                max,
+                step,
+                ..
             } => {
-                let Some(parsed) = parsed_number(&edit, *min, *max) else {
+                let Some(parsed) = parsed_number(&edit, *min, *max, *step) else {
                     return;
                 };
                 *value = parsed;
@@ -1224,8 +1228,12 @@ impl SettingsPanelView {
                 return self.render_select_value(index);
             }
             RowControl::Number {
-                value, min, max, ..
-            } => return self.render_number_value(index, *value, *min, *max),
+                value,
+                min,
+                max,
+                step,
+                ..
+            } => return self.render_number_value(index, *value, *min, *max, *step),
             RowControl::Action { active, .. }
                 if self.rows[index].variant.as_deref() == Some("toggle") =>
             {
@@ -1358,6 +1366,7 @@ impl SettingsPanelView {
         value: f64,
         min: Option<f64>,
         max: Option<f64>,
+        step: Option<f64>,
     ) -> Div {
         let mut cell = div().flex().flex_row().items_center().gap_2();
         if self.rows[index].variant.as_deref() == Some("slider") {
@@ -1369,7 +1378,8 @@ impl SettingsPanelView {
             } else {
                 None
             };
-            let fill = slider_fraction(number_preview(edit, value, min, max), min, max) * 72.0;
+            let fill =
+                slider_fraction(number_preview(edit, value, min, max, step), min, max) * 72.0;
             cell = cell.child(
                 div()
                     .relative()
@@ -2231,7 +2241,7 @@ fn dropdown_items(options: &[SelectOption]) -> Vec<DropdownItem> {
         .collect()
 }
 
-fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> {
+fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Option<f64> {
     let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
     if let Some(min) = min {
         value = value.max(min);
@@ -2239,7 +2249,36 @@ fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> 
     if let Some(max) = max {
         value = value.min(max);
     }
+    if let Some(step) = step {
+        value = align_to_step(value, min, max, step);
+    }
     Some(value)
+}
+
+fn align_to_step(value: f64, min: Option<f64>, max: Option<f64>, step: f64) -> f64 {
+    let origin = min.unwrap_or(0.0);
+    let steps = (value - origin) / step;
+    let rounded = steps.round();
+    if (steps - rounded).abs() <= 1e-9 {
+        return value;
+    }
+    for n in [rounded, rounded - 1.0, rounded + 1.0] {
+        let candidate = origin + n * step;
+        if min.is_none_or(|min| candidate >= min) && max.is_none_or(|max| candidate <= max) {
+            return round_to_step_precision(candidate, step);
+        }
+    }
+    value
+}
+
+fn round_to_step_precision(value: f64, step: f64) -> f64 {
+    let decimals = format!("{step}")
+        .split('.')
+        .nth(1)
+        .map(|fraction| fraction.len() as i32)
+        .unwrap_or(0);
+    let factor = 10f64.powi(decimals);
+    (value * factor).round() / factor
 }
 
 fn stepped_number(
@@ -2250,14 +2289,25 @@ fn stepped_number(
     step: f64,
     direction: f64,
 ) -> String {
-    let current = parsed_number(edit, min, max).unwrap_or(fallback);
-    let next =
-        parsed_number(&(current + direction * step).to_string(), min, max).unwrap_or(current);
+    let current = parsed_number(edit, min, max, Some(step)).unwrap_or(fallback);
+    let next = parsed_number(
+        &(current + direction * step).to_string(),
+        min,
+        max,
+        Some(step),
+    )
+    .unwrap_or(current);
     format_number(next)
 }
 
-fn number_preview(edit: Option<&str>, fallback: f64, min: Option<f64>, max: Option<f64>) -> f64 {
-    edit.and_then(|value| parsed_number(value, min, max))
+fn number_preview(
+    edit: Option<&str>,
+    fallback: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+) -> f64 {
+    edit.and_then(|value| parsed_number(value, min, max, step))
         .unwrap_or(fallback)
 }
 
@@ -2885,16 +2935,43 @@ default = "visible"
     #[test]
     fn parsed_number_parses_clamps_and_rejects() {
         let cases = [
-            ("18", None, None, Some(18.0)),
-            (" 23.5 ", None, None, Some(23.5)),
-            ("-4", Some(0.0), Some(51.0), Some(0.0)),
-            ("99", Some(0.0), Some(51.0), Some(51.0)),
-            ("abc", None, None, None),
-            ("", None, None, None),
-            ("inf", None, None, None),
+            ("18", None, None, None, Some(18.0)),
+            (" 23.5 ", None, None, None, Some(23.5)),
+            ("-4", Some(0.0), Some(51.0), None, Some(0.0)),
+            ("99", Some(0.0), Some(51.0), None, Some(51.0)),
+            ("abc", None, None, None, None),
+            ("", None, None, None, None),
+            ("inf", None, None, None, None),
         ];
-        for (edit, min, max, expected) in cases {
-            assert_eq!(parsed_number(edit, min, max), expected, "edit: {edit:?}");
+        for (edit, min, max, step, expected) in cases {
+            assert_eq!(
+                parsed_number(edit, min, max, step),
+                expected,
+                "edit: {edit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_numbers_align_to_the_contract_step() {
+        let cases = [
+            ("0.649", Some(0.1), Some(1.0), Some(0.01), Some(0.65)),
+            ("0.8", Some(0.1), Some(1.0), Some(0.05), Some(0.8)),
+            ("0.7", Some(0.1), Some(1.0), Some(0.05), Some(0.7)),
+            ("1250", Some(100.0), Some(4000.0), Some(100.0), Some(1300.0)),
+            ("1200", Some(100.0), Some(4000.0), Some(100.0), Some(1200.0)),
+            ("99", Some(0.0), Some(51.0), Some(2.0), Some(50.0)),
+            ("2.34", None, None, Some(1.0), Some(2.0)),
+            ("2.5", None, None, Some(1.0), Some(3.0)),
+            ("0.33", Some(0.0), Some(1.0), Some(0.1), Some(0.3)),
+            ("0.1", Some(0.1), Some(1.0), Some(0.01), Some(0.1)),
+        ];
+        for (edit, min, max, step, expected) in cases {
+            assert_eq!(
+                parsed_number(edit, min, max, step),
+                expected,
+                "edit: {edit:?} step: {step:?}"
+            );
         }
     }
 
@@ -2932,14 +3009,14 @@ default = "visible"
     #[test]
     fn active_number_edits_drive_the_slider_preview() {
         let cases = [
-            (Some("6"), 4.0, Some(0.0), Some(10.0), 6.0),
-            (Some("20"), 4.0, Some(0.0), Some(10.0), 10.0),
-            (Some("invalid"), 4.0, Some(0.0), Some(10.0), 4.0),
-            (None, 4.0, Some(0.0), Some(10.0), 4.0),
+            (Some("6"), 4.0, Some(0.0), Some(10.0), None, 6.0),
+            (Some("20"), 4.0, Some(0.0), Some(10.0), None, 10.0),
+            (Some("invalid"), 4.0, Some(0.0), Some(10.0), None, 4.0),
+            (None, 4.0, Some(0.0), Some(10.0), None, 4.0),
         ];
-        for (edit, fallback, min, max, expected) in cases {
+        for (edit, fallback, min, max, step, expected) in cases {
             assert_eq!(
-                number_preview(edit, fallback, min, max),
+                number_preview(edit, fallback, min, max, step),
                 expected,
                 "edit: {edit:?}"
             );

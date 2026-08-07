@@ -176,6 +176,7 @@ impl SettingsWindowHost {
         let visible = active.surface.is_visible();
         active.surface.resize(prepared.size, cx)?;
         active.surface.handle.update(cx, move |root, window, cx| {
+            root.inner.update(cx, |view, _| view.pause_runtime_poll());
             dismisser.retitle(window, heading);
             let inner =
                 cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));

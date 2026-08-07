@@ -74,7 +74,7 @@ pub(super) enum RowControl {
         value: f64,
         min: Option<f64>,
         max: Option<f64>,
-        step: f64,
+        step: Option<f64>,
     },
     Text(String),
     TextList(Vec<String>),
@@ -314,7 +314,7 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
                 value,
                 min: field.number.min,
                 max: field.number.max,
-                step: field.number.step.unwrap_or(1.0),
+                step: field.number.step,
             }),
             _ => None,
         },
@@ -985,7 +985,7 @@ default = "202322"
         }
         match &rows[2].control {
             RowControl::Number { value, step, .. } => {
-                assert_eq!((*value, *step), (18.0, 1.0));
+                assert_eq!((*value, *step), (18.0, Some(1.0)));
             }
             other => panic!("expected number, got {other:?}"),
         }
@@ -1433,7 +1433,7 @@ query = "managed_device_options"
                     value: 4.0,
                     min: None,
                     max: None,
-                    step: 1.0,
+                    step: Some(1.0),
                 },
             },
         ];
@@ -1459,7 +1459,7 @@ query = "managed_device_options"
                 value,
                 min: None,
                 max: None,
-                step: 1.0,
+                step: Some(1.0),
             };
             assert_eq!(row_value_json(&control), Some(expected), "value: {value}");
         }
