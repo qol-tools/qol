@@ -3,7 +3,9 @@ use super::{
     FixReport, Outcome, OutcomeStatus, Report,
 };
 use anyhow::{anyhow, Context, Result};
-use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_JSON, ARG_QUICK};
+use qol_conventions::doctor_cli::{
+    ARG_APPLY_MANUAL_FIXES, ARG_CHECK, ARG_FIX, ARG_ID, ARG_JSON, ARG_QUICK,
+};
 use serde::Serialize;
 use std::io::Write;
 
@@ -119,20 +121,29 @@ fn parse_check_flags(rest: &[String]) -> Result<CheckSelection> {
 fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
     let mut id = None;
     let mut host_fixes = false;
+    let mut manual_fixes = false;
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             ARG_ID => id = Some(take_id_value(&mut args)?),
             "--apply-host-fixes" | "--apply-de-fixes" => host_fixes = true,
+            ARG_APPLY_MANUAL_FIXES => manual_fixes = true,
             _ => {
                 return Err(usage_error(
-                    "fix [--id <CHECK_ID>] [--apply-host-fixes]",
+                    "fix [--id <CHECK_ID>] [--apply-host-fixes] [--apply-manual-fixes]",
                     rest,
                 ))
             }
         }
     }
-    let policy = if host_fixes {
+    if manual_fixes && id.is_none() {
+        return Err(anyhow!(
+            "{ARG_APPLY_MANUAL_FIXES} requires --id so manual repairs always name their check"
+        ));
+    }
+    let policy = if manual_fixes {
+        FixPolicy::manual()
+    } else if host_fixes {
         FixPolicy::with_host_fixes()
     } else {
         FixPolicy::safe()

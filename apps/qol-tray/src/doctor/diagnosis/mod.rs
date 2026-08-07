@@ -40,6 +40,11 @@ pub(super) enum FixAction {
         app_key: String,
         qol_combo: String,
     },
+    HoldNvidiaDriverPackages,
+    UnholdNvidiaDriverPackages,
+    ApplyHeldNvidiaDriverUpdate {
+        packages: Vec<String>,
+    },
     #[cfg(feature = "dev")]
     RelocateDevLink {
         plugin_id: String,
@@ -79,12 +84,12 @@ pub(super) enum FixAction {
     },
 }
 
-// Extend with ManualOnly / Destructive when a real FixAction first needs those tiers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum FixApplicability {
     #[default]
     SafeAutomatic,
     ReversibleHostMutation,
+    ManualOnly,
 }
 
 impl FixAction {
@@ -100,6 +105,9 @@ impl FixAction {
             FixAction::UnshadowDeBinding { .. }
             | FixAction::DisableSymbolicHotkey { .. }
             | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
+            FixAction::HoldNvidiaDriverPackages
+            | FixAction::UnholdNvidiaDriverPackages
+            | FixAction::ApplyHeldNvidiaDriverUpdate { .. } => FixApplicability::ManualOnly,
             #[cfg(feature = "dev")]
             FixAction::RelocateDevLink { .. }
             | FixAction::PruneOrphanFingerprints { .. }
@@ -175,6 +183,11 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         } => apply_disable_symbolic_hotkey(*hotkey_id, qol_combo, &mut platform::Platform),
         FixAction::ClearWindowsAppKey { app_key, qol_combo } => {
             apply_clear_windows_app_key(app_key, qol_combo, &mut platform::Platform)
+        }
+        FixAction::HoldNvidiaDriverPackages => super::checks::hold_nvidia_driver_packages(),
+        FixAction::UnholdNvidiaDriverPackages => super::checks::unhold_nvidia_driver_packages(),
+        FixAction::ApplyHeldNvidiaDriverUpdate { packages } => {
+            super::checks::apply_held_nvidia_driver_update(packages)
         }
         #[cfg(feature = "dev")]
         FixAction::RelocateDevLink { plugin_id, to } => {
@@ -664,6 +677,20 @@ mod tests {
                     qol_combo: "Win+E".into(),
                 },
                 FixApplicability::ReversibleHostMutation,
+            ),
+            (
+                FixAction::HoldNvidiaDriverPackages,
+                FixApplicability::ManualOnly,
+            ),
+            (
+                FixAction::UnholdNvidiaDriverPackages,
+                FixApplicability::ManualOnly,
+            ),
+            (
+                FixAction::ApplyHeldNvidiaDriverUpdate {
+                    packages: vec!["nvidia-driver-560".into()],
+                },
+                FixApplicability::ManualOnly,
             ),
         ];
         for (action, expected) in cases {

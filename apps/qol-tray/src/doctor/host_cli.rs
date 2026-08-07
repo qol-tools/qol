@@ -48,7 +48,7 @@ where
                 Command::new("fix")
                     .about("Run explicit legacy host repairs, then re-check.")
                     .usage(
-                        "qol-tray-doctor fix [--id <CHECK_ID>] [--apply-host-fixes] [--json]",
+                        "qol-tray-doctor fix [--id <CHECK_ID>] [--apply-host-fixes] [--apply-manual-fixes] [--json]",
                     )
                     .detail("Repairs are never run by the read-only `doctor` command.")
                     .output("Plain text by default; --json returns the legacy fix report.")

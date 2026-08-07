@@ -181,11 +181,14 @@ impl FixPolicy {
 |---|---|
 | SetActiveInstallId, WriteInstallMarker, WriteAutostartEntry, EnsurePluginsDir, KillPluginProcessLeaks, InstallShellHook, RelocateDevLink | `SafeAutomatic` |
 | UnshadowDeBinding, DisableSymbolicHotkey, ClearWindowsAppKey | `ReversibleHostMutation` |
+| HoldNvidiaDriverPackages, UnholdNvidiaDriverPackages, ApplyHeldNvidiaDriverUpdate (first `ManualOnly` consumer: `gpu_driver_sync`) | `ManualOnly` |
 | PruneOrphanFingerprints (new) | `SafeAutomatic` |
 
 `auto_fix_startup()` uses `FixPolicy::startup()` → DE fixes still applied silently
-(mission: take back the host surface silently + reversibly). `ManualOnly` /
-`Destructive` have no constructor that enables them → they only surface as `advice`.
+(mission: take back the host surface silently + reversibly). `Destructive` has no
+constructor that enables it; `ManualOnly` is enabled only via
+`qol-tray doctor fix --id <CHECK_ID> --apply-manual-fixes` (requires `--id` so
+manual repairs always name their check).
 
 **No fix-ordering field anywhere.** `apply_fixes()` already applies fixes in
 check-registry order (`CheckMeta.order` drives it transitively). Model a real

@@ -51,6 +51,13 @@ impl FixPolicy {
         }
     }
 
+    pub fn manual() -> Self {
+        Self {
+            max_applicability: FixApplicability::ManualOnly,
+            allow_workspace_fixes: true,
+        }
+    }
+
     fn allows(&self, action: &FixAction) -> bool {
         if !self.allow_workspace_fixes && action.requires_workspace_fix_window() {
             return false;
@@ -294,6 +301,18 @@ fn log_applied(action: &FixAction) {
         }
         FixAction::DrainOrphanPluginConfigs => {
             log::info!("doctor: drained orphan plugin config files into the host store");
+        }
+        FixAction::HoldNvidiaDriverPackages => {
+            log::info!("doctor: held NVIDIA driver packages against mid-session swaps");
+        }
+        FixAction::UnholdNvidiaDriverPackages => {
+            log::info!("doctor: released NVIDIA driver package holds");
+        }
+        FixAction::ApplyHeldNvidiaDriverUpdate { packages } => {
+            log::info!(
+                "doctor: applied held NVIDIA driver update ({}); reboot to load the new module",
+                packages.join(", ")
+            );
         }
         FixAction::SetActiveInstallId(_)
         | FixAction::WriteInstallMarker { .. }
@@ -619,6 +638,45 @@ mod tests {
                     rebuild_ids: vec!["qol-shot".into()],
                 },
                 FixPolicy::startup(),
+                false,
+            ),
+            (
+                FixAction::HoldNvidiaDriverPackages,
+                FixPolicy::safe(),
+                false,
+            ),
+            (
+                FixAction::HoldNvidiaDriverPackages,
+                FixPolicy::startup(),
+                false,
+            ),
+            (
+                FixAction::HoldNvidiaDriverPackages,
+                FixPolicy::with_host_fixes(),
+                false,
+            ),
+            (
+                FixAction::HoldNvidiaDriverPackages,
+                FixPolicy::manual(),
+                true,
+            ),
+            (
+                FixAction::UnholdNvidiaDriverPackages,
+                FixPolicy::manual(),
+                true,
+            ),
+            (
+                FixAction::ApplyHeldNvidiaDriverUpdate {
+                    packages: vec!["nvidia-driver-560".into()],
+                },
+                FixPolicy::manual(),
+                true,
+            ),
+            (
+                FixAction::ApplyHeldNvidiaDriverUpdate {
+                    packages: vec!["nvidia-driver-560".into()],
+                },
+                FixPolicy::safe(),
                 false,
             ),
         ];

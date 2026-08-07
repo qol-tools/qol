@@ -1,3 +1,5 @@
+use super::PendingUpdate;
+use anyhow::{bail, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -32,6 +34,130 @@ pub(crate) fn on_disk_version() -> Option<String> {
                 .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
         })
         .filter(|version| is_version_token(version))
+}
+
+fn package_pattern() -> String {
+    #[cfg(feature = "dev")]
+    if let Some(pattern) = std::env::var_os("QOL_NVIDIA_PACKAGE_PATTERN") {
+        return pattern.to_string_lossy().into_owned();
+    }
+    "*nvidia*".to_string()
+}
+
+fn matches_pattern(pattern: &str, name: &str) -> bool {
+    let core = pattern.trim_matches('*');
+    if core.is_empty() {
+        return false;
+    }
+    match (pattern.starts_with('*'), pattern.ends_with('*')) {
+        (true, true) => name.contains(core),
+        (false, true) => name.starts_with(core),
+        (true, false) => name.ends_with(core),
+        (false, false) => name == core,
+    }
+}
+
+pub(crate) fn guard_armed() -> bool {
+    !held_nvidia_packages().is_empty()
+}
+
+pub(crate) fn held_nvidia_packages() -> Vec<String> {
+    let pattern = package_pattern();
+    let Ok(output) = Command::new("apt-mark").arg("showhold").output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| matches_pattern(&pattern, line))
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn pending_nvidia_updates() -> Vec<PendingUpdate> {
+    let Ok(output) = Command::new("apt").args(["list", "--upgradable"]).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_upgradable(&String::from_utf8_lossy(&output.stdout), &package_pattern())
+}
+
+pub(crate) fn parse_upgradable(text: &str, pattern: &str) -> Vec<PendingUpdate> {
+    text.lines()
+        .filter(|line| !line.starts_with("Listing"))
+        .filter_map(|line| {
+            let (name, rest) = line.split_once('/')?;
+            if !matches_pattern(pattern, name) {
+                return None;
+            }
+            let new_version = rest.split_whitespace().nth(1)?;
+            Some(PendingUpdate {
+                name: name.to_string(),
+                new_version: new_version.to_string(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn hold_driver_packages() -> Result<()> {
+    run_apt_mark("hold")
+}
+
+pub(crate) fn unhold_driver_packages() -> Result<()> {
+    run_apt_mark("unhold")
+}
+
+fn run_apt_mark(verb: &str) -> Result<()> {
+    if !qol_host_fixes::elevation::available() {
+        bail!("holding NVIDIA packages needs polkit (pkexec) for the privileged apt-mark");
+    }
+    let pattern = package_pattern();
+    qol_host_fixes::elevation::run_privileged(
+        "qol-nvidia-guard",
+        &format!("apt-mark {verb} '{pattern}'"),
+        &[],
+    )
+}
+
+pub(crate) fn apply_held_update(packages: &[String]) -> Result<()> {
+    if packages.is_empty() {
+        bail!("no held NVIDIA updates to apply");
+    }
+    if !packages.iter().all(|name| is_package_token(name)) {
+        bail!("refusing to run apt against a malformed package name");
+    }
+    if !qol_host_fixes::elevation::available() {
+        bail!("applying a driver update needs polkit (pkexec)");
+    }
+    let joined = packages.join(" ");
+    let script = format!(
+        "rehold() {{ apt-mark hold {joined} || true; }}; trap rehold EXIT; \
+         apt-mark unhold {joined} && apt-get install --only-upgrade -y {joined}"
+    );
+    qol_host_fixes::elevation::run_privileged("qol-nvidia-guard-update", &script, &[])
+}
+
+fn is_package_token(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'+' | b':' | b'_'))
+}
+
+pub(crate) fn notify_held_updates(packages: &[String]) {
+    let message = format!(
+        "NVIDIA driver update held by the qol guard: {}. Apply with \
+         `qol-tray doctor fix --id gpu_driver_sync --apply-manual-fixes`, then reboot.",
+        packages.join(", ")
+    );
+    let _ = Command::new("notify-send")
+        .args(["--icon=qol-tray", "--urgency=normal", "QoL Tray", &message])
+        .status();
 }
 
 pub(crate) fn notify_mismatch(loaded: &str, on_disk: &str) {
