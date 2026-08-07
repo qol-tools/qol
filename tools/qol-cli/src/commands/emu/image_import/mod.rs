@@ -376,27 +376,36 @@ fn import_reserved(
         report: plan.report_path.clone(),
         provenance: VERIFIED_IMAGE_PROVENANCE.to_string(),
     };
-    if let Err(error) =
-        qol_dev_env::register_verified_image(&plan.config_path, &plan.environment.id, &registration)
-    {
-        report::terminalize_report(
-            plan,
-            "failed",
-            report::workflow_json(
+    let superseded = match qol_dev_env::register_verified_image(
+        &plan.config_path,
+        &plan.environment.id,
+        &registration,
+    ) {
+        Ok(superseded) => superseded,
+        Err(error) => {
+            report::terminalize_report(
                 plan,
-                &verification,
-                Some(&staged),
-                "published",
-                Some(&promotion),
-            ),
-            Some(&format!(
-                "failed to publish local image registration: {error:#}"
-            )),
-            true,
-            true,
-            &LifecycleCleanupProof::verified_vm(),
-        )?;
-        return Err(error).context("failed to publish verified image registration");
+                "failed",
+                report::workflow_json(
+                    plan,
+                    &verification,
+                    Some(&staged),
+                    "published",
+                    Some(&promotion),
+                ),
+                Some(&format!(
+                    "failed to publish local image registration: {error:#}"
+                )),
+                true,
+                true,
+                &LifecycleCleanupProof::verified_vm(),
+            )?;
+            return Err(error).context("failed to publish verified image registration");
+        }
+    };
+    let mut promotion = promotion;
+    if let Some(fields) = promotion.as_object_mut() {
+        fields.insert("superseded_removed".to_string(), json!(superseded));
     }
     report::terminalize_report(
         plan,

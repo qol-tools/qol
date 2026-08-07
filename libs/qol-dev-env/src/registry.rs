@@ -599,7 +599,7 @@ pub fn register_verified_image(
     config_path: &Path,
     environment_id: &str,
     registration: &VerifiedImageRegistration,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     if environment_id.trim().is_empty() {
         bail!("environment id must not be empty");
     }
@@ -661,7 +661,84 @@ pub fn register_verified_image(
         )
     })?;
     qol_fs::atomic_write_durable(config_path, rendered.as_bytes())
-        .with_context(|| format!("failed to write {}", config_path.display()))
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    prune_superseded_managed_images(&document, &registration.path)
+}
+
+fn prune_superseded_managed_images(
+    document: &DocumentMut,
+    registered_image: &Path,
+) -> Result<Vec<PathBuf>> {
+    let Some(images_dir) = registered_image.parent() else {
+        return Ok(Vec::new());
+    };
+    let referenced = referenced_image_paths(document);
+    let entries = match fs::read_dir(images_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", images_dir.display()))
+        }
+    };
+    let mut removed = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("failed to read an entry in {}", images_dir.display()))?
+            .path();
+        if !is_managed_image_name(&path) || referenced.contains(&path) {
+            continue;
+        }
+        remove_managed_image(&path)?;
+        removed.push(path);
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+fn referenced_image_paths(document: &DocumentMut) -> BTreeSet<PathBuf> {
+    document
+        .get("images")
+        .and_then(Item::as_table)
+        .into_iter()
+        .flat_map(Table::iter)
+        .filter_map(|(_, item)| item.get("path")?.as_str().map(PathBuf::from))
+        .collect()
+}
+
+fn is_managed_image_name(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "qcow2")
+        && path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| {
+                stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+}
+
+fn remove_managed_image(path: &Path) -> Result<()> {
+    let sidecars = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .zip(path.parent())
+        .map(|(name, dir)| {
+            let cache = dir.join(format!(".{name}.sha256-cache.json"));
+            let lock = cache.with_extension("json.lock");
+            vec![cache, lock]
+        })
+        .unwrap_or_default();
+    fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    for sidecar in sidecars {
+        match fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to remove {}", sidecar.display()))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn path_utf8(path: &Path, context: &str) -> Result<String> {
@@ -1384,6 +1461,56 @@ run_root = "/var/tmp/qol-runs"
             parsed.images["linux/mint"],
             LocalImage::Verified(registration)
         );
+    }
+
+    #[test]
+    fn verified_registration_removes_only_unreferenced_managed_images() {
+        let root = tempdir().unwrap();
+        let images_dir = root.path().join("verified/images");
+        fs::create_dir_all(&images_dir).unwrap();
+        let superseded = images_dir.join(format!("{}.qcow2", "a".repeat(64)));
+        let other_environment = images_dir.join(format!("{}.qcow2", "c".repeat(64)));
+        let registered = images_dir.join(format!("{}.qcow2", "b".repeat(64)));
+        let hand_placed = images_dir.join("linux-mint-cinnamon-source.qcow2");
+        let cache = images_dir.join(format!(".{}.qcow2.sha256-cache.json", "a".repeat(64)));
+        for path in [
+            &superseded,
+            &other_environment,
+            &registered,
+            &hand_placed,
+            &cache,
+        ] {
+            fs::write(path, b"x").unwrap();
+        }
+        let config_path = root.path().join("dev-envs.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "[images]\n[images.\"linux/other\"]\npath = \"{}\"\nrevision = \"r\"\nsha256 = \"{}\"\nsize_bytes = 1\nrun_id = \"image-import-000\"\nreport = \"{}\"\nprovenance = \"{VERIFIED_IMAGE_PROVENANCE}\"\n",
+                other_environment.display(),
+                "c".repeat(64),
+                root.path().join("report.json").display(),
+            ),
+        )
+        .unwrap();
+        let registration = VerifiedImageRegistration {
+            path: registered.clone(),
+            revision: "mint-22.3-qol-1".to_string(),
+            sha256: "b".repeat(64),
+            size_bytes: 1234,
+            run_id: "image-import-123".to_string(),
+            report: root.path().join("report.json"),
+            provenance: VERIFIED_IMAGE_PROVENANCE.to_string(),
+        };
+
+        let removed = register_verified_image(&config_path, "linux/mint", &registration).unwrap();
+
+        assert_eq!(removed, vec![superseded.clone()]);
+        assert!(!superseded.exists());
+        assert!(!cache.exists());
+        assert!(registered.exists());
+        assert!(other_environment.exists());
+        assert!(hand_placed.exists());
     }
 
     #[test]
