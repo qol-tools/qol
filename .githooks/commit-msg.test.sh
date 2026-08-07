@@ -76,7 +76,7 @@ test_derive_today() {
     libs/qol-color libs/qol-plugin-api apps/qol-tray tools/qol-cli
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
-  exp="alt-tab apps libs plugins qol-cli qol-color qol-plugin-api qol-tray template tools workspace "
+  exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins qol-cli qol-color qol-plugin-api qol-tray settings template tools tray workspace "
   eq "derive(today's layout)" "$exp" "$got"
   rm -rf "$root"
 }
@@ -87,9 +87,38 @@ test_derive_scales_to_new_family() {
   mk_fixture "$root" plugins/alt-tab services/service-sync services/qol-special
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
-  exp="alt-tab plugins qol-special services sync workspace "
+  exp="alt-tab build ci deps dev emu plugins qol-special services settings special sync workspace "
   eq "derive(new services/ family)" "$exp" "$got"
   rm -rf "$root"
+}
+
+test_derive_skips_dirs_without_a_manifest() {
+  local root; root="$(mktemp -d)"
+  mk_fixture "$root" tools/qol-cli
+  mkdir -p "$root/tools/__pycache__"
+  local got exp
+  got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
+  exp="build ci cli deps dev emu qol-cli settings tools workspace "
+  eq "derive(stray non-crate dir)" "$exp" "$got"
+  rm -rf "$root"
+}
+
+test_derive_accepts_the_repo_scopes_in_daily_use() {
+  local root; root="$(cd "$self_dir/.." && pwd -P)"
+  if [ ! -f "$root/Cargo.toml" ]; then
+    ok "derive(repo): no workspace manifest, skipped"
+    return 0
+  fi
+  local allowed; allowed="$(qol_derive_scopes "$root")"
+  local s
+  for s in qol-tray tray terminal-sessions build-identity config runtime alt-tab \
+           workspace build ci deps dev emu settings; do
+    if printf '%s\n' "$allowed" | grep -qxF "$s"; then
+      ok "repo scope: $s"
+    else
+      fail "repo scope: $s" "missing from the derived vocabulary"
+    fi
+  done
 }
 
 test_derive_no_workspace_is_empty() {
@@ -179,6 +208,8 @@ main() {
   test_member_scope
   test_derive_today
   test_derive_scales_to_new_family
+  test_derive_skips_dirs_without_a_manifest
+  test_derive_accepts_the_repo_scopes_in_daily_use
   test_derive_no_workspace_is_empty
   test_check_subject
   test_check_body
