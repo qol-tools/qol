@@ -3,7 +3,7 @@ id = "plugin-ide-checkout"
 uid = "b61195c4-a0a8-4be5-a507-9aeb45edb060"
 name = "IDE Checkout"
 description = "Local HTTP API for a browser extension to check out a git branch and open it in a configured app"
-version = "1.22.0"
+version = "1.23.0"
 author = "KMRH47"
 platforms = ["macos", "linux"]
 
