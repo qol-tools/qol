@@ -14,6 +14,7 @@ pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
 pub const RUNTIME_DIR_PATH: &str = "/tmp/qol-tray";
 pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
 pub const SETTINGS_SURFACE_SOCKET_FILE: &str = "settings-surface.sock";
+pub const SETTINGS_SURFACE_APP_ID: &str = "qol-settings-surface";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
 pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";

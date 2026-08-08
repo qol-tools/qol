@@ -41,6 +41,7 @@ impl<T: InteractiveElement> PanelDragArea for T {}
 pub struct Surface {
     kind: SurfaceKind,
     title: String,
+    app_id: Option<String>,
     placement: MonitorPlacement,
     timeout: Option<Duration>,
     size: Size<Pixels>,
@@ -154,6 +155,7 @@ impl Surface {
         Self {
             kind,
             title: "qol-surface".into(),
+            app_id: None,
             placement,
             timeout: None,
             size: size(px(320.0), px(72.0)),
@@ -163,6 +165,11 @@ impl Surface {
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
+        self
+    }
+
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = Some(app_id.into());
         self
     }
 
@@ -263,7 +270,7 @@ impl Surface {
             is_movable: true,
             is_resizable: !constrains_size,
             window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some(title.clone()),
+            app_id: Some(resolved_app_id(&self.app_id, &title)),
             ..Default::default()
         };
         let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
@@ -444,6 +451,10 @@ fn unique_surface_title(base: &str) -> String {
         "{base}-{}",
         SURFACE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+fn resolved_app_id(app_id: &Option<String>, title: &str) -> String {
+    app_id.clone().unwrap_or_else(|| title.to_owned())
 }
 
 fn supports_native_reveal_gate() -> bool {
@@ -1116,12 +1127,26 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 #[cfg(test)]
 mod tests {
     use super::{
-        reveal_cancelled, viewport_matches, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        resolved_app_id, reveal_cancelled, viewport_matches, RevealReadiness, Surface,
+        SurfaceDismisser, SurfaceKind,
     };
     use crate::placement::MonitorPlacement;
     use gpui::{px, size, WindowKind};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn surface_app_id_defaults_to_the_unique_title_and_accepts_a_stable_override() {
+        let title = super::unique_surface_title("QoL Shot Settings");
+        let stable = qol_conventions::SETTINGS_SURFACE_APP_ID;
+
+        assert_eq!(resolved_app_id(&None, &title), title);
+        assert_eq!(
+            resolved_app_id(&Some(stable.to_owned()), &title),
+            stable,
+            "an opted-in identity must not name the plugin that opened the surface"
+        );
+    }
 
     #[test]
     fn panel_surfaces_are_normal_focusable_windows() {

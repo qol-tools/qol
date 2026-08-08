@@ -6,6 +6,10 @@ use crate::ui::placement::Corner;
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<CliSessionsConfig>;
 
+pub fn contract() -> &'static str {
+    CONFIG_CONTRACT
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct CliSessionsConfig {

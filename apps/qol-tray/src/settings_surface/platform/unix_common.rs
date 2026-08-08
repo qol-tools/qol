@@ -58,14 +58,23 @@ pub(in crate::settings_surface) fn prewarm() {
         return;
     }
     std::thread::spawn(|| {
-        stop();
+        let mut handover_broken = stop();
         let deadline = std::time::Instant::now() + PREWARM_WATCH_WINDOW;
         loop {
             let token_ready =
                 crate::features::plugin_store::server::security::current_token().is_some();
-            if token_ready && !core_daemon::send_ping(&config()) {
+            if token_ready
+                && spawn_replacement_after_handover(
+                    core_daemon::send_ping(&config()),
+                    handover_broken,
+                )
+            {
                 let outcome = if spawn_host(None).is_ok() {
-                    "spawned"
+                    if handover_broken {
+                        "challenged"
+                    } else {
+                        "spawned"
+                    }
                 } else {
                     "spawn_failed"
                 };
@@ -75,6 +84,7 @@ pub(in crate::settings_surface) fn prewarm() {
                     "SURFACE_ACTIVATION",
                     "plugin=none phase=prewarm outcome={outcome}"
                 );
+                handover_broken = false;
             }
             if std::time::Instant::now() >= deadline {
                 return;
@@ -82,6 +92,10 @@ pub(in crate::settings_surface) fn prewarm() {
             std::thread::sleep(PREWARM_WATCH_INTERVAL);
         }
     });
+}
+
+fn spawn_replacement_after_handover(ping_alive: bool, handover_broken: bool) -> bool {
+    !ping_alive || handover_broken
 }
 
 fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
@@ -92,7 +106,10 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
         command.arg(plugin_id);
     }
     command
-        .env(qol_conventions::ENV_PLUGIN_ID, "qol-settings-surface")
+        .env(
+            qol_conventions::ENV_PLUGIN_ID,
+            qol_conventions::SETTINGS_SURFACE_APP_ID,
+        )
         .env(
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
@@ -107,16 +124,17 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(in crate::settings_surface) fn stop() {
+pub(in crate::settings_surface) fn stop() -> bool {
     let config = config();
     let stopped = core_daemon::send_kill(&config);
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
     while stopped && core_daemon::send_ping(&config) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let handover_broken = stopped && core_daemon::send_ping(&config);
     let outcome = if !stopped {
         "not_running"
-    } else if core_daemon::send_ping(&config) {
+    } else if handover_broken {
         "timeout"
     } else {
         "stopped"
@@ -127,11 +145,23 @@ pub(in crate::settings_surface) fn stop() {
         "SURFACE_ACTIVATION",
         "plugin=none phase=stop outcome={outcome}"
     );
+    handover_broken
 }
 
 pub(in crate::settings_surface) fn run(boot: HostBoot) -> anyhow::Result<()> {
     match boot {
-        HostBoot::Warm => run_host(None),
+        HostBoot::Warm => {
+            let result = run_host(None);
+            if let Err(error) = &result {
+                #[cfg(not(debug_assertions))]
+                let _ = error;
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin=none phase=host outcome=failed error={error}"
+                );
+            }
+            result
+        }
         HostBoot::Open(plugin_id) => {
             let result = run_host(Some(plugin_id.clone()));
             if let Err(error) = &result {
@@ -146,6 +176,25 @@ pub(in crate::settings_surface) fn run(boot: HostBoot) -> anyhow::Result<()> {
             result
         }
     }
+}
+
+const HOST_LISTENER_RETRIES: usize = 5;
+const HOST_LISTENER_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+fn start_listener_with_retry(config: &DaemonConfig, command_tx: &mpsc::Sender<Command>) -> bool {
+    for attempt in 1..=HOST_LISTENER_RETRIES {
+        if core_daemon::start_request_listener(config, command_tx.clone(), parse_request) {
+            return true;
+        }
+        if attempt < HOST_LISTENER_RETRIES {
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin=none phase=bind outcome=lost attempt={attempt}"
+            );
+            std::thread::sleep(HOST_LISTENER_RETRY_INTERVAL);
+        }
+    }
+    false
 }
 
 fn run_host(initial: Option<String>) -> anyhow::Result<()> {
@@ -171,7 +220,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
     qol_fs::create_private_dir(socket_parent)
         .context("failed to create the native settings socket directory")?;
     let (command_tx, command_rx) = mpsc::channel();
-    if !core_daemon::start_request_listener(&config, command_tx, parse_request) {
+    if !start_listener_with_retry(&config, &command_tx) {
         return match &initial {
             Some(plugin_id) => {
                 if forward_open(plugin_id) {
@@ -202,7 +251,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
     );
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();
-        qol_gpui::keepalive::open_keepalive(cx, Some("qol-settings-surface"));
+        qol_gpui::keepalive::open_keepalive(cx, Some(qol_conventions::SETTINGS_SURFACE_APP_ID));
         let tracker = MonitorTracker::start(cx);
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
         if let Some(plugin_id) = initial {
@@ -401,7 +450,7 @@ mod tests {
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 
-    use super::{config, parse_request, Command};
+    use super::{config, parse_request, spawn_replacement_after_handover, Command};
 
     #[test]
     fn settings_socket_lives_in_the_private_runtime_tree() {
@@ -438,5 +487,15 @@ mod tests {
                 "plugin_id={plugin_id:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_timed_out_handover_still_spawns_a_replacement() {
+        assert!(spawn_replacement_after_handover(false, false));
+        assert!(!spawn_replacement_after_handover(true, false));
+        assert!(
+            spawn_replacement_after_handover(true, true),
+            "a host that accepted the kill but never died must still get a challenger"
+        );
     }
 }
