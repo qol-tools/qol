@@ -8,7 +8,8 @@
 //! refuses any topic that is not declared, for both publish and
 //! subscribe.
 //!
-//! See docs/ecosystem-features.md (P0-6) and the broker ADR.
+//! See the broker ADR
+//! (docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md).
 
 /// Reason a topic-access check refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
