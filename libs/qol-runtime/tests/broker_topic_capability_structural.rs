@@ -6,7 +6,7 @@
 //! is no always-allowed set: nothing on the bus is implicitly public.
 //! These tests pin the gate's decision table and the error echo.
 //!
-//! Refs: docs/ecosystem-features.md (P0-6), the broker ADR
+//! Refs: the broker ADR
 //! (docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md).
 
 use qol_runtime::broker::{check_topic_access, TopicCheckError};

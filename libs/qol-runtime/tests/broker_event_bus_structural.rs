@@ -7,7 +7,6 @@
 //! manifest declaration of a connected plugin, and drains the queue,
 //! exactly as a connection writer task will.
 //!
-//! Refs: docs/ecosystem-features.md (P0-6).
 //! Closes: general inter-plugin event bus, V1 scope.
 
 use std::sync::mpsc::RecvTimeoutError;
