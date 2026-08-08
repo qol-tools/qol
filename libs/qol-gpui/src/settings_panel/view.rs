@@ -12,9 +12,10 @@ use super::object_array_row::{
 };
 use super::persistence::save_values;
 use super::rows::{
-    apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
-    primary_list_item_action, query_flag_value, row_action, row_streams, runtime_query_names,
-    section_label_for, stream_gated, Row, RowControl, RowSection, SelectOption,
+    apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
+    list_item_actions, merged_config, primary_list_item_action, query_flag_value, row_action,
+    row_streams, runtime_query_names, section_label_for, stream_gated, Row, RowControl, RowSection,
+    SelectOption,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
@@ -491,7 +492,7 @@ impl SettingsPanelView {
             return;
         }
         if matches!(self.active_control, Some(ActiveControl::List)) {
-            self.on_list_key(key, cx);
+            self.on_list_key(key, key_char, cx);
             return;
         }
         if matches!(self.active_control, Some(ActiveControl::ObjectArray)) {
@@ -692,7 +693,11 @@ impl SettingsPanelView {
         cx.notify();
     }
 
-    fn on_list_key(&mut self, key: &str, cx: &mut Context<Self>) {
+    fn on_list_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
+        if self.handle_list_filter_key(key, key_char) {
+            cx.notify();
+            return;
+        }
         let Some(intent) = list_intent(key) else {
             return;
         };
@@ -709,18 +714,89 @@ impl SettingsPanelView {
             self.active_control = None;
             return;
         };
-        let RowControl::List { items, list, .. } = &mut row.control else {
+        let RowControl::List {
+            actions,
+            items,
+            list,
+            filter,
+            ..
+        } = &mut row.control
+        else {
             self.active_control = None;
             return;
         };
+        let count = filtered_list_items(actions, items, filter).len();
         match intent {
             ListIntent::Up => list.move_up(),
-            ListIntent::Down => list.move_down(items.len()),
+            ListIntent::Down => list.move_down(count),
             ListIntent::Close => self.active_control = None,
             ListIntent::Activate | ListIntent::Actions => return,
         }
-        list.sync(items.len());
+        list.sync(count);
         cx.notify();
+    }
+
+    fn handle_list_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
+        let Some(RowControl::List {
+            searchable, filter, ..
+        }) = self.rows.get(self.selected).map(|row| &row.control)
+        else {
+            return false;
+        };
+        if !*searchable {
+            return false;
+        }
+        let next = match key {
+            "backspace" => {
+                if filter.is_empty() {
+                    return false;
+                }
+                let mut next = filter.clone();
+                next.pop();
+                next
+            }
+            "escape" => {
+                if filter.is_empty() {
+                    return false;
+                }
+                String::new()
+            }
+            "space" => {
+                if filter.is_empty() {
+                    return false;
+                }
+                let mut next = filter.clone();
+                next.push(' ');
+                next
+            }
+            _ => match key_char {
+                Some(character) => {
+                    let mut next = filter.clone();
+                    next.push_str(character);
+                    next
+                }
+                None => return false,
+            },
+        };
+        self.set_list_filter(next);
+        true
+    }
+
+    fn set_list_filter(&mut self, next: String) {
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        let RowControl::List {
+            actions,
+            items,
+            list,
+            filter,
+            ..
+        } = &mut row.control
+        else {
+            return;
+        };
+        apply_list_filter(actions, items, list, filter, next);
     }
 
     fn on_object_array_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
@@ -957,18 +1033,24 @@ impl SettingsPanelView {
         self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
     }
 
-    fn select_list_item(&mut self, row_index: usize, item_index: usize) {
-        let Some(RowControl::List { items, list, .. }) =
-            self.rows.get_mut(row_index).map(|row| &mut row.control)
+    fn select_list_item(&mut self, row_index: usize, slot: usize) {
+        let Some(RowControl::List {
+            actions,
+            items,
+            list,
+            filter,
+            ..
+        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
         else {
             return;
         };
-        if item_index >= items.len() {
+        let count = filtered_list_items(actions, items, filter).len();
+        if slot >= count {
             return;
         }
         self.selected = row_index;
-        list.selected = item_index;
-        list.sync(items.len());
+        list.selected = slot;
+        list.sync(count);
         self.active_control = Some(ActiveControl::List);
         self.sync_scroll();
     }
@@ -1289,11 +1371,20 @@ impl SettingsPanelView {
                     label.clone().unwrap_or_else(|| "loading...".into())
                 }
             }
-            RowControl::List { items, error, .. } => {
+            RowControl::List {
+                actions,
+                items,
+                filter,
+                error,
+                ..
+            } => {
                 if error.is_some() {
                     "unavailable".into()
-                } else {
+                } else if filter.trim().is_empty() {
                     format!("{} found", items.len())
+                } else {
+                    let visible = filtered_list_items(actions, items, filter).len();
+                    format!("{visible}/{}", items.len())
                 }
             }
             RowControl::ObjectArray(state) => item_count_label(state.entries.len()),
@@ -1960,17 +2051,15 @@ impl SettingsPanelView {
             empty_message,
             items,
             list,
+            filter,
+            actions,
             error,
             ..
         } = &row.control
         else {
             return div();
         };
-        let list_active = index == self.selected
-            && matches!(
-                self.active_control,
-                Some(ActiveControl::List) | Some(ActiveControl::ListActions(_))
-            );
+        let filtered = filtered_list_items(actions, items, filter);
         let mut header_status = div().flex().items_center().gap_2();
         if *runtime_active {
             header_status = header_status.child(
@@ -2024,7 +2113,11 @@ impl SettingsPanelView {
                                 .truncate()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(self.palette.section_text))
-                                .child(row.label.clone()),
+                                .child(if filter.trim().is_empty() {
+                                    row.label.clone()
+                                } else {
+                                    filter.clone()
+                                }),
                         )
                         .when_some(row.description.clone(), |group, description| {
                             group.child(
@@ -2055,8 +2148,18 @@ impl SettingsPanelView {
                     .child(empty_message.clone()),
             );
         }
-        for item_index in list.visible_range(items.len()) {
-            container = container.child(self.render_list_item(index, item_index, list_active, cx));
+        if filtered.is_empty() {
+            return container.child(
+                div()
+                    .py_2()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child("No matching results."),
+            );
+        }
+        for slot in list.visible_range(filtered.len()) {
+            let item_index = filtered[slot];
+            container = container.child(self.render_list_item(index, item_index, slot, cx));
         }
         container
     }
@@ -2611,29 +2714,35 @@ impl SettingsPanelView {
         self.sync_scroll();
     }
 
+    fn list_item_selected(&self, index: usize, slot: usize) -> bool {
+        if !matches!(
+            self.active_control,
+            Some(ActiveControl::List) | Some(ActiveControl::ListActions(_))
+        ) {
+            return false;
+        }
+        self.rows.get(index).is_some_and(
+            |row| matches!(&row.control, RowControl::List { list, .. } if list.selected == slot),
+        )
+    }
+
     fn render_list_item(
         &self,
         index: usize,
         item_index: usize,
-        list_active: bool,
+        slot: usize,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let RowControl::List {
-            actions,
-            items,
-            list,
-            ..
-        } = &self.rows[index].control
-        else {
+        let RowControl::List { actions, items, .. } = &self.rows[index].control else {
             return div().id((
                 "settings-list-item-empty",
                 ((index as u64) << 32) | item_index as u64,
             ));
         };
         let item = &items[item_index];
-        let selected = list_active && item_index == list.selected;
+        let selected = self.list_item_selected(index, slot);
         let action = primary_list_item_action(actions, item);
-        let title = self.render_list_item_title(index, item_index, selected, item, action, cx);
+        let title = self.render_list_item_title(index, item_index, slot, item, action, cx);
         let accent = item
             .accent
             .map(|tone| rgb(status_tone_color(self.palette, tone)))
@@ -2659,7 +2768,7 @@ impl SettingsPanelView {
             if !event.standard_click() {
                 return;
             }
-            this.select_list_item(index, item_index);
+            this.select_list_item(index, slot);
             cx.notify();
         }));
         if selected {
@@ -2684,11 +2793,12 @@ impl SettingsPanelView {
         &self,
         index: usize,
         item_index: usize,
-        selected: bool,
+        slot: usize,
         item: &super::rows::ListItem,
         action: Option<qol_config::contract::ResolvedRowAction>,
         cx: &mut Context<Self>,
     ) -> Div {
+        let selected = self.list_item_selected(index, slot);
         let badge = item.badge.as_ref().map(|label| {
             StatusIndicator::new(
                 (
@@ -2725,7 +2835,7 @@ impl SettingsPanelView {
                     .items_center()
                     .gap_2()
                     .children(badge)
-                    .child(self.render_list_action(index, item_index, selected, item, action, cx)),
+                    .child(self.render_list_action(index, item_index, slot, item, action, cx)),
             )
     }
 
@@ -2733,11 +2843,12 @@ impl SettingsPanelView {
         &self,
         index: usize,
         item_index: usize,
-        selected: bool,
+        slot: usize,
         item: &super::rows::ListItem,
         action: Option<qol_config::contract::ResolvedRowAction>,
         cx: &mut Context<Self>,
     ) -> Div {
+        let selected = self.list_item_selected(index, slot);
         let mut cell = div().flex().flex_none().flex_row().items_center().gap_2();
         if item.pending {
             cell = cell.child(Spinner::new(
@@ -2784,7 +2895,7 @@ impl SettingsPanelView {
                         return;
                     }
                     cx.stop_propagation();
-                    this.select_list_item(index, item_index);
+                    this.select_list_item(index, slot);
                     if action_count > 1 {
                         this.open_list_actions();
                         cx.notify();
@@ -3431,6 +3542,8 @@ mod tests {
             visibility: None,
             control: RowControl::List {
                 query: "items".into(),
+                searchable: false,
+                filter: String::new(),
                 active_query: None,
                 active_value_from: None,
                 active_label: None,

@@ -110,6 +110,8 @@ pub(super) enum RowControl {
     },
     List {
         query: String,
+        searchable: bool,
+        filter: String,
         active_query: Option<String>,
         active_value_from: Option<String>,
         active_label: Option<String>,
@@ -434,6 +436,8 @@ fn control_for(field: &ResolvedField) -> RowControl {
         FieldKind::List => match field.query.as_deref() {
             Some(query) => RowControl::List {
                 query: query.to_string(),
+                searchable: field.search == Some(true),
+                filter: String::new(),
                 active_query: field.active_query.clone(),
                 active_value_from: field.active_value_from.clone(),
                 active_label: field.active_label.clone(),
@@ -1023,6 +1027,54 @@ pub(super) fn begin_list_item_action(
     Some(action)
 }
 
+pub(super) fn filtered_list_items(
+    actions: &ListActions,
+    items: &[ListItem],
+    filter: &str,
+) -> Vec<usize> {
+    let normalized = filter.trim();
+    if normalized.is_empty() {
+        return (0..items.len()).collect();
+    }
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| list_matches_filter(actions, item, normalized))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+pub(super) fn list_matches_filter(actions: &ListActions, item: &ListItem, filter: &str) -> bool {
+    let filter = filter.to_lowercase();
+    if item.label.to_lowercase().contains(&filter) {
+        return true;
+    }
+    if item
+        .subtitle
+        .as_deref()
+        .is_some_and(|subtitle| subtitle.to_lowercase().contains(&filter))
+    {
+        return true;
+    }
+    list_item_actions(actions, item)
+        .iter()
+        .any(|action| action.label.to_lowercase().contains(&filter))
+}
+
+pub(super) fn apply_list_filter(
+    actions: &ListActions,
+    items: &[ListItem],
+    list: &mut ScrollList,
+    filter: &mut String,
+    next: String,
+) -> usize {
+    *filter = next;
+    let count = filtered_list_items(actions, items, filter).len();
+    list.reset();
+    list.sync(count);
+    count
+}
+
 fn render_template(template: &str, row: &serde_json::Value) -> String {
     let mut rendered = template.to_string();
     if let Some(fields) = row.as_object() {
@@ -1099,11 +1151,12 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
-        option_accent, primary_list_item_action, row_action, row_is_visible, row_streams,
-        row_value_json, rows_from_resolved, runtime_query_names, section_label_for,
-        sections_from_resolved, set_config_value, stream_gated, visible_row_indices, FieldDefault,
-        ResolvedConfig, Row, RowControl, SelectOption,
+        apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
+        list_item_actions, list_items, merged_config, option_accent, primary_list_item_action,
+        row_action, row_is_visible, row_streams, row_value_json, rows_from_resolved,
+        runtime_query_names, section_label_for, sections_from_resolved, set_config_value,
+        stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig,
+        Row, RowControl, SelectOption,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2575,5 +2628,89 @@ default = 5
         assert!(stream_gated(&danger));
         let errored = vec![status_row(StatusTone::Muted, Some("query failed"))];
         assert!(stream_gated(&errored));
+    }
+
+    #[test]
+    fn list_filter_matches_web_semantics() {
+        let actions = ListActions {
+            primary: Some(qol_config::contract::RowActionSpec {
+                action: "connect".into(),
+                input: None,
+                label: Some("Connect".into()),
+                key: None,
+                when: Some("can_connect".into()),
+            }),
+            additional: vec![qol_config::contract::RowActionSpec {
+                action: "remove".into(),
+                input: None,
+                label: Some("Remove".into()),
+                key: None,
+                when: None,
+            }],
+        };
+        let items = vec![
+            filter_item("WH-1000XM4", Some("AA:BB:CC:DD:EE:FF"), true),
+            filter_item("MX Master 3", Some("11:22:33:44:55:66"), false),
+            filter_item("Keyboard", None, true),
+        ];
+        let cases = [
+            ("", vec![0, 1, 2], "empty query keeps all"),
+            ("   ", vec![0, 1, 2], "whitespace query keeps all"),
+            ("wh-1000", vec![0], "case-insensitive label match"),
+            ("mx", vec![1], "label fragment match"),
+            ("55:66", vec![1], "subtitle match"),
+            ("connect", vec![0, 2], "when-gated action label match"),
+            ("remove", vec![0, 1, 2], "ungated action label match"),
+            ("zzz", vec![], "no match yields the empty set"),
+        ];
+        for (query, expected, label) in cases {
+            assert_eq!(
+                filtered_list_items(&actions, &items, query),
+                expected,
+                "{label}: query {query:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_filter_resets_selection_to_the_first_visible_item() {
+        let actions = ListActions {
+            primary: None,
+            additional: Vec::new(),
+        };
+        let items = (0..12)
+            .map(|index| filter_item(&format!("device {index}"), None, false))
+            .collect::<Vec<_>>();
+        let mut list = crate::scroll_list::ScrollList::new(super::LIST_MAX_VISIBLE);
+        list.selected = 9;
+        list.scroll_offset = 5;
+        let mut filter = String::new();
+
+        apply_list_filter(&actions, &items, &mut list, &mut filter, "device 1".into());
+
+        assert_eq!(filter, "device 1");
+        assert_eq!(filtered_list_items(&actions, &items, &filter), [1, 10, 11]);
+        assert_eq!(
+            (list.selected, list.scroll_offset),
+            (0, 0),
+            "selection lands on the first visible item"
+        );
+
+        apply_list_filter(&actions, &items, &mut list, &mut filter, String::new());
+        assert_eq!((list.selected, list.scroll_offset), (0, 0));
+    }
+
+    fn filter_item(label: &str, subtitle: Option<&str>, can_connect: bool) -> ListItem {
+        ListItem {
+            id: label.into(),
+            label: label.into(),
+            subtitle: subtitle.map(str::to_string),
+            accent: None,
+            badge: None,
+            badge_tone: None,
+            data: serde_json::json!({ "can_connect": can_connect }),
+            pending: false,
+            error: None,
+        }
     }
 }
