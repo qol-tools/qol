@@ -7,13 +7,13 @@ use axum::{
 };
 
 use crate::dev::state::DiscoveryStatus;
-use crate::dev::{normalize_ghost_debug_color, DevConfig, GpuiRuntimeConfig};
+use crate::dev::{normalize_ghost_debug_color, GpuiRuntimeConfig};
 
 use super::dev_services;
 use super::dev_validation::sanitize_monitored_plugin_ids;
 use super::types::{
     AppState, BuildStateResponse, DiscoveryStateResponse, RuntimeGpuiPayload,
-    SetPluginCpuMonitoringRequest, ToolingGhAccountPayload,
+    SetPluginCpuMonitoringRequest,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -34,10 +34,6 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             qol_conventions::dev_routes::PLUGIN_CPU_MONITORING,
             axum::routing::put(set_plugin_cpu_monitoring),
-        )
-        .route(
-            qol_conventions::dev_routes::TOOLING_GH_ACCOUNT,
-            get(get_tooling_gh_account).post(set_tooling_gh_account),
         )
         .route(
             qol_conventions::dev_routes::RUNTIME_GPUI,
@@ -120,39 +116,6 @@ fn clamp_payload_opacity(value: Option<f32>) -> Option<f32> {
     Some(raw.clamp(0.0, 1.0))
 }
 
-pub(super) async fn get_tooling_gh_account() -> Json<ToolingGhAccountPayload> {
-    let value = tokio::task::spawn_blocking(|| {
-        DevConfig::load()
-            .map(|c| c.tooling_gh_account)
-            .unwrap_or(None)
-    })
-    .await
-    .unwrap_or(None);
-    Json(ToolingGhAccountPayload { value })
-}
-
-pub(super) async fn set_tooling_gh_account(
-    Json(payload): Json<ToolingGhAccountPayload>,
-) -> impl IntoResponse {
-    let result =
-        tokio::task::spawn_blocking(move || DevConfig::set_tooling_gh_account(payload.value)).await;
-    match result {
-        Ok(Ok(())) => StatusCode::OK.into_response(),
-        Ok(Err(error)) => {
-            log::error!("Failed to write tooling_gh_account: {error:#}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to persist tooling gh account",
-            )
-                .into_response()
-        }
-        Err(error) => {
-            log::error!("set_tooling_gh_account join error: {}", error);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
-        }
-    }
-}
-
 pub(super) async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
@@ -219,94 +182,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path_guard = crate::paths::push_test_env_path_root(tmp.path());
         (guard, tmp, path_guard)
-    }
-
-    fn extract_status(response: axum::response::Response) -> StatusCode {
-        response.status()
-    }
-
-    #[tokio::test]
-    async fn get_returns_none_when_unset() {
-        let (_guard, _tmp, _path_guard) = isolated_env().await;
-
-        let Json(payload) = get_tooling_gh_account().await;
-        assert_eq!(payload.value, None);
-    }
-
-    #[tokio::test]
-    async fn post_then_get_round_trips_value() {
-        let (_guard, _tmp, _path_guard) = isolated_env().await;
-
-        let response = set_tooling_gh_account(Json(ToolingGhAccountPayload {
-            value: Some("KMRH47".to_string()),
-        }))
-        .await;
-        assert_eq!(extract_status(response.into_response()), StatusCode::OK);
-
-        let Json(payload) = get_tooling_gh_account().await;
-        assert_eq!(payload.value.as_deref(), Some("KMRH47"));
-    }
-
-    #[tokio::test]
-    async fn post_with_null_clears_value() {
-        let (_guard, _tmp, _path_guard) = isolated_env().await;
-
-        set_tooling_gh_account(Json(ToolingGhAccountPayload {
-            value: Some("KMRH47".to_string()),
-        }))
-        .await;
-
-        let response = set_tooling_gh_account(Json(ToolingGhAccountPayload { value: None })).await;
-        assert_eq!(extract_status(response.into_response()), StatusCode::OK);
-
-        let Json(payload) = get_tooling_gh_account().await;
-        assert_eq!(payload.value, None);
-    }
-
-    #[tokio::test]
-    async fn post_trims_and_normalizes_whitespace() {
-        let (_guard, _tmp, _path_guard) = isolated_env().await;
-
-        set_tooling_gh_account(Json(ToolingGhAccountPayload {
-            value: Some("  octocat  ".to_string()),
-        }))
-        .await;
-
-        let Json(payload) = get_tooling_gh_account().await;
-        assert_eq!(payload.value.as_deref(), Some("octocat"));
-    }
-
-    #[tokio::test]
-    async fn post_with_empty_string_clears() {
-        let (_guard, _tmp, _path_guard) = isolated_env().await;
-
-        set_tooling_gh_account(Json(ToolingGhAccountPayload {
-            value: Some("KMRH47".to_string()),
-        }))
-        .await;
-
-        set_tooling_gh_account(Json(ToolingGhAccountPayload {
-            value: Some(String::new()),
-        }))
-        .await;
-
-        let Json(payload) = get_tooling_gh_account().await;
-        assert_eq!(payload.value, None);
-    }
-
-    #[test]
-    fn payload_deserialization_table() {
-        let cases: &[(&str, Option<&str>)] = &[
-            (r#"{"value":"KMRH47"}"#, Some("KMRH47")),
-            (r#"{"value":null}"#, None),
-            (r#"{}"#, None),
-            (r#"{"value":"octocat"}"#, Some("octocat")),
-        ];
-        for (raw, expected) in cases {
-            let payload: ToolingGhAccountPayload =
-                serde_json::from_str(raw).unwrap_or_else(|e| panic!("failed to parse {raw}: {e}"));
-            assert_eq!(payload.value.as_deref(), *expected, "for input {raw}");
-        }
     }
 
     #[tokio::test]
@@ -402,18 +277,5 @@ mod tests {
                 "color for {raw}"
             );
         }
-    }
-
-    #[test]
-    fn payload_serializes_null_explicitly() {
-        let none_value = ToolingGhAccountPayload { value: None };
-        let serialized = serde_json::to_string(&none_value).unwrap();
-        assert_eq!(serialized, r#"{"value":null}"#);
-
-        let some_value = ToolingGhAccountPayload {
-            value: Some("KMRH47".to_string()),
-        };
-        let serialized = serde_json::to_string(&some_value).unwrap();
-        assert_eq!(serialized, r#"{"value":"KMRH47"}"#);
     }
 }

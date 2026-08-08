@@ -62,7 +62,6 @@ pub mod dev_routes {
     pub const BUILD_STATE: &str = "/dev/build-state";
     pub const PLUGIN_CPU: &str = "/dev/plugin-cpu";
     pub const PLUGIN_CPU_MONITORING: &str = "/dev/plugin-cpu/monitoring";
-    pub const TOOLING_GH_ACCOUNT: &str = "/dev/tooling-gh-account";
     pub const RUNTIME_GPUI: &str = "/dev/runtime/gpui";
     pub const MOCK_CHECK_UPDATE: &str = "/dev/mock-check-update";
     pub const MOCK_TARGETS: &str = "/dev/mock-targets";
