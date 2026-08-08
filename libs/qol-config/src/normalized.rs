@@ -107,14 +107,20 @@ pub fn resolve_config(
 
     for (id, field) in &spec.fields {
         let no_stored_value = !field.kind.has_stored_value();
-        let default = field
-            .default
-            .clone()
-            .unwrap_or(FieldDefault::String(String::new()));
+        let default = widen_to_kind(
+            field
+                .default
+                .clone()
+                .unwrap_or(FieldDefault::String(String::new())),
+            field.kind,
+        );
         let value = if no_stored_value {
             default.clone()
         } else {
-            resolve_field_value(id, field, &default, overrides, &mut errors)
+            widen_to_kind(
+                resolve_field_value(id, field, &default, overrides, &mut errors),
+                field.kind,
+            )
         };
         let resolved = ResolvedField {
             id: id.clone(),
@@ -178,6 +184,15 @@ pub fn resolve_config(
         fields: root_fields,
         sections,
     })
+}
+
+fn widen_to_kind(value: FieldDefault, kind: FieldKind) -> FieldDefault {
+    match (kind, &value) {
+        (FieldKind::ObjectArray, FieldDefault::StringArray(values)) if values.is_empty() => {
+            FieldDefault::ObjectArray(Vec::new())
+        }
+        _ => value,
+    }
 }
 
 fn resolve_item_spec(item: Option<&ItemSpec>) -> Option<ResolvedItemSpec> {
@@ -417,5 +432,42 @@ default = []
             FieldDefault::StringArray(Vec::new()),
             "an override that is not an array falls back to the contract default"
         );
+    }
+
+    #[test]
+    fn an_empty_object_array_default_keeps_its_declared_kind() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switchable_panels]
+type = "object_array"
+default = []
+
+[field.switchable_panels.item.fields]
+app = "string"
+switchable = "boolean"
+"#,
+        )
+        .unwrap();
+
+        for (label, overrides) in [
+            ("contract default", serde_json::json!({})),
+            (
+                "empty override",
+                serde_json::json!({ "switchable_panels": [] }),
+            ),
+        ] {
+            let resolved = resolve_config(&spec, &overrides).unwrap();
+            assert_eq!(
+                resolved.fields[0].value,
+                FieldDefault::ObjectArray(Vec::new()),
+                "{label} must stay an object array so renderers can build an editor"
+            );
+            assert_eq!(
+                resolved.fields[0].default,
+                FieldDefault::ObjectArray(Vec::new())
+            );
+        }
     }
 }
