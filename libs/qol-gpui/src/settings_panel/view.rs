@@ -3152,6 +3152,7 @@ mod tests {
                 placeholder: None,
                 variant: None,
                 config_key: "key".into(),
+                default: qol_config::contract::FieldDefault::String(String::new()),
                 visibility: None,
                 control: RowControl::Toggle(false),
             })
@@ -3168,6 +3169,7 @@ mod tests {
             placeholder: None,
             variant: None,
             config_key: "items".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
             visibility: None,
             control: RowControl::List {
                 query: "items".into(),

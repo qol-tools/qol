@@ -497,6 +497,7 @@ mod tests {
             placeholder: None,
             variant: None,
             config_key: "key".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
             visibility: None,
             control,
         }
