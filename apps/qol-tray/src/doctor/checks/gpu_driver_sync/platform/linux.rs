@@ -246,19 +246,61 @@ pub(crate) fn hold_driver_packages() -> Result<()> {
     if !targets.iter().all(|name| is_package_token(name)) {
         bail!("refusing to run apt against a malformed package name");
     }
-    let joined = targets.join(" ");
-    qol_host_fixes::elevation::run_privileged(
+    let already_held = held_among(&targets, &patterns);
+    let newly_held = new_holds(&targets, &already_held);
+    if newly_held.is_empty() {
+        super::super::trace::hold(&[], "done", Some("already_held"));
+        return Ok(());
+    }
+    let previous_record = read_guard_holds();
+    let record = merge_holds(&previous_record, &newly_held);
+    write_guard_holds(&record)?;
+    let joined = newly_held.join(" ");
+    if let Err(error) = qol_host_fixes::elevation::run_privileged(
         "qol-nvidia-guard",
         &format!("apt-mark hold {joined}"),
         &[],
-    )?;
-    let held = held_among(&targets, &patterns);
-    if held.is_empty() {
-        bail!("apt-mark hold did not hold any of the matched packages");
+    ) {
+        let _ = write_guard_holds(&previous_record);
+        super::super::trace::hold(&newly_held, "error", Some("hold_failed"));
+        return Err(error);
     }
-    write_guard_holds(&held)?;
-    super::super::trace::hold(&held, "done", None);
+    let actually_held = held_among(&newly_held, &patterns);
+    if actually_held.len() != newly_held.len() {
+        let missing: Vec<String> = newly_held
+            .iter()
+            .filter(|name| !actually_held.iter().any(|held| held == *name))
+            .cloned()
+            .collect();
+        let _ = qol_host_fixes::elevation::run_privileged(
+            "qol-nvidia-guard-rollback",
+            &format!("apt-mark unhold {}", actually_held.join(" ")),
+            &[],
+        );
+        let _ = write_guard_holds(&previous_record);
+        super::super::trace::hold(&missing, "error", Some("partial_hold"));
+        bail!("apt-mark hold did not hold: {}", missing.join(", "));
+    }
+    super::super::trace::hold(&newly_held, "done", None);
     Ok(())
+}
+
+fn new_holds(targets: &[String], already_held: &[String]) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|name| !already_held.iter().any(|held| held == *name))
+        .cloned()
+        .collect()
+}
+
+fn merge_holds(record: &[String], new_holds: &[String]) -> Vec<String> {
+    let mut merged = record.to_vec();
+    for name in new_holds {
+        if !merged.iter().any(|existing| existing == name) {
+            merged.push(name.clone());
+        }
+    }
+    merged
 }
 
 pub(crate) fn unhold_driver_packages() -> Result<()> {
@@ -365,7 +407,39 @@ fn is_version_token(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_version_token, parse_guard_holds, parse_proc_version, validate_pattern};
+    use super::{
+        is_version_token, merge_holds, new_holds, parse_guard_holds, parse_proc_version,
+        validate_pattern,
+    };
+
+    #[test]
+    fn new_holds_excludes_packages_already_held_by_the_operator() {
+        let targets = [
+            "nvidia-driver-550",
+            "nvidia-driver-560",
+            "nvidia-kernel-560",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let already_held = ["nvidia-driver-550"].map(str::to_string).to_vec();
+        assert_eq!(
+            new_holds(&targets, &already_held),
+            ["nvidia-driver-560", "nvidia-kernel-560"]
+        );
+        assert!(new_holds(&targets, &targets).is_empty());
+    }
+
+    #[test]
+    fn merge_holds_keeps_record_order_and_deduplicates() {
+        let record = ["nvidia-driver-560"].map(str::to_string).to_vec();
+        let new_holds = ["nvidia-driver-560", "nvidia-kernel-560"]
+            .map(str::to_string)
+            .to_vec();
+        assert_eq!(
+            merge_holds(&record, &new_holds),
+            ["nvidia-driver-560", "nvidia-kernel-560"]
+        );
+    }
 
     #[test]
     fn proc_version_parsing_extracts_module_version() {
