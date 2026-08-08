@@ -13,8 +13,8 @@ use super::object_array_row::{
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
-    primary_list_item_action, query_flag_value, runtime_query_names, section_label_for, Row,
-    RowControl, RowSection, SelectOption,
+    primary_list_item_action, query_flag_value, row_action, row_streams, runtime_query_names,
+    section_label_for, stream_gated, Row, RowControl, RowSection, SelectOption,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
@@ -96,6 +96,7 @@ pub(super) struct SettingsPanelView {
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
+    stream: super::stream::StreamClient,
     focus_handle: FocusHandle,
 }
 
@@ -107,6 +108,7 @@ pub(super) struct SettingsPanelState {
     pub(super) body_max: f32,
     pub(super) height_cap: f32,
     pub(super) runtime: SettingsRuntime,
+    pub(super) daemon_port: Option<u16>,
 }
 
 enum ActiveControl {
@@ -171,6 +173,11 @@ impl SettingsPanelView {
             sampler_stop: None,
             dismisser,
             palette: settings_panel_runtime(),
+            stream: super::stream::StreamClient::new(
+                state
+                    .daemon_port
+                    .map(|port| format!("ws://127.0.0.1:{port}")),
+            ),
             focus_handle: cx.focus_handle(),
         };
         view.selected = view.current_visible_rows().into_iter().next().unwrap_or(0);
@@ -500,7 +507,7 @@ impl SettingsPanelView {
                 return;
             }
             if matches!(key, "up" | "down") {
-                self.commit_edit();
+                self.commit_edit(cx);
             }
         }
         let Some(intent) = intent(key, key_char, editing) else {
@@ -524,18 +531,25 @@ impl SettingsPanelView {
                 }
             }
             Intent::Activate => self.activate(window, cx),
-            Intent::CommitEdit => self.commit_edit(),
+            Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
                 if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
                     edit.pop();
+                    self.stream_edit();
                 }
             }
             Intent::Insert(ch) => {
                 if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
                     edit.push_str(&ch);
+                    self.stream_edit();
                 }
             }
-            Intent::CancelEdit => self.active_control = None,
+            Intent::CancelEdit => {
+                if row_streams(&self.rows, self.selected) {
+                    self.stream.close();
+                }
+                self.active_control = None;
+            }
             Intent::Close => {
                 if self.sections.len() > 1 {
                     self.open_section_menu();
@@ -563,6 +577,9 @@ impl SettingsPanelView {
         let value = value.clone();
         self.close_wheel_popup(cx);
         self.selected = index;
+        if row_streams(&self.rows, index) && !stream_gated(&self.rows) {
+            self.stream.open();
+        }
         self.sync_scroll();
         self.wheel_generation = self.wheel_generation.wrapping_add(1);
         let generation = self.wheel_generation;
@@ -608,6 +625,11 @@ impl SettingsPanelView {
         if wheel.generation != generation {
             return;
         }
+        if row_streams(&self.rows, wheel.row) && !stream_gated(&self.rows) {
+            if let Some(frame) = super::stream::color_frame(&value) {
+                self.stream.send(frame);
+            }
+        }
         wheel.value = value;
         cx.notify();
     }
@@ -621,6 +643,8 @@ impl SettingsPanelView {
         }
         let row_index = wheel.row;
         self.active_control = None;
+        let streams = row_streams(&self.rows, row_index);
+        let action = row_action(&self.rows, row_index);
         let Some(row) = self.rows.get_mut(row_index) else {
             return;
         };
@@ -628,7 +652,13 @@ impl SettingsPanelView {
             return;
         };
         *row_value = value;
+        if streams {
+            self.stream.close();
+        }
         self.persist();
+        if let Some(action) = action {
+            self.dispatch_stream_action(&action, cx);
+        }
         cx.notify();
     }
 
@@ -639,6 +669,9 @@ impl SettingsPanelView {
         let Some(ActiveControl::Wheel(wheel)) = self.active_control.take() else {
             return;
         };
+        if row_streams(&self.rows, wheel.row) {
+            self.stream.close();
+        }
         let _ = wheel
             .popup
             .update(cx, |_, window, _| window.remove_window());
@@ -1056,6 +1089,9 @@ impl SettingsPanelView {
             | RowControl::Unsupported { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
+        if row_streams(&self.rows, self.selected) && !stream_gated(&self.rows) {
+            self.stream.open();
+        }
     }
 
     fn step_number_edit(&mut self, direction: f64) -> bool {
@@ -1072,13 +1108,16 @@ impl SettingsPanelView {
             return false;
         };
         *edit = stepped_number(edit, *value, *min, *max, (*step).unwrap_or(1.0), direction);
+        self.stream_edit();
         true
     }
 
-    fn commit_edit(&mut self) {
+    fn commit_edit(&mut self, cx: &mut Context<Self>) {
         let Some(ActiveControl::Edit(edit)) = self.active_control.take() else {
             return;
         };
+        let streams = row_streams(&self.rows, self.selected);
+        let action = row_action(&self.rows, self.selected);
         let Some(row) = self.rows.get_mut(self.selected) else {
             return;
         };
@@ -1102,6 +1141,9 @@ impl SettingsPanelView {
                     return;
                 };
                 *value = parsed;
+                if streams {
+                    self.stream.close();
+                }
             }
             RowControl::Toggle(_)
             | RowControl::Select { .. }
@@ -1116,6 +1158,55 @@ impl SettingsPanelView {
             | RowControl::Unsupported { .. } => return,
         }
         self.persist();
+        if let Some(action) = action {
+            self.dispatch_stream_action(&action, cx);
+        }
+    }
+
+    fn stream_edit(&mut self) {
+        let Some(ActiveControl::Edit(edit)) = self.active_control.as_ref() else {
+            return;
+        };
+        if !row_streams(&self.rows, self.selected) || stream_gated(&self.rows) {
+            return;
+        }
+        let Some(RowControl::Number { min, max, step, .. }) =
+            self.rows.get(self.selected).map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(value) = parsed_number(edit, *min, *max, *step) else {
+            return;
+        };
+        let level = value.clamp(0.0, 255.0) as u8;
+        let hex = self.stream_hex();
+        if let Some(frame) = super::stream::brightness_frame(level, &hex) {
+            self.stream.send(frame);
+        }
+    }
+
+    fn stream_hex(&self) -> String {
+        self.values
+            .get("live_color_hex")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
+    }
+
+    fn dispatch_stream_action(&self, action: &str, cx: &mut Context<Self>) {
+        let runtime = self.runtime.clone();
+        let action = action.to_string();
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let async_cx = cx.clone();
+            async move {
+                let _ = async_cx
+                    .background_spawn(async move {
+                        runtime.run_action(&action, serde_json::Value::Null)
+                    })
+                    .await;
+            }
+        })
+        .detach();
     }
 
     fn persist(&mut self) {
@@ -3316,6 +3407,8 @@ mod tests {
                 variant: None,
                 config_key: "key".into(),
                 default: qol_config::contract::FieldDefault::String(String::new()),
+                stream: None,
+                action: None,
                 visibility: None,
                 control: RowControl::Toggle(false),
             })
@@ -3333,6 +3426,8 @@ mod tests {
             variant: None,
             config_key: "items".into(),
             default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
             visibility: None,
             control: RowControl::List {
                 query: "items".into(),

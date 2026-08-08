@@ -143,6 +143,8 @@ pub(super) struct Row {
     pub(super) variant: Option<String>,
     pub(super) config_key: String,
     pub(super) default: FieldDefault,
+    pub(super) stream: Option<String>,
+    pub(super) action: Option<String>,
     pub(super) visibility: Option<RowVisibility>,
     pub(super) control: RowControl,
 }
@@ -265,9 +267,30 @@ fn push_row(
         variant: field.variant.clone(),
         config_key: field.config_key.clone(),
         default: field.default.clone(),
+        stream: field.stream.clone(),
+        action: field.action.clone(),
         visibility,
         control,
     });
+}
+
+pub(super) fn row_streams(rows: &[Row], index: usize) -> bool {
+    rows.get(index)
+        .and_then(|row| row.stream.as_deref())
+        .is_some_and(|stream| !stream.is_empty())
+}
+
+pub(super) fn row_action(rows: &[Row], index: usize) -> Option<String> {
+    rows.get(index)
+        .and_then(|row| row.action.as_deref())
+        .map(str::to_string)
+}
+
+pub(super) fn stream_gated(rows: &[Row]) -> bool {
+    rows.iter().any(|row| match &row.control {
+        RowControl::Status { tone, error, .. } => *tone == StatusTone::Danger || error.is_some(),
+        _ => false,
+    })
 }
 
 pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
@@ -1077,10 +1100,10 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 mod tests {
     use super::{
         apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
-        option_accent, primary_list_item_action, row_is_visible, row_value_json,
-        rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
-        set_config_value, visible_row_indices, FieldDefault, ResolvedConfig, Row, RowControl,
-        SelectOption,
+        option_accent, primary_list_item_action, row_action, row_is_visible, row_streams,
+        row_value_json, rows_from_resolved, runtime_query_names, section_label_for,
+        sections_from_resolved, set_config_value, stream_gated, visible_row_indices, FieldDefault,
+        ResolvedConfig, Row, RowControl, SelectOption,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -1701,6 +1724,8 @@ query = "managed_device_options"
                 variant: None,
                 config_key: "action_mode".into(),
                 default: FieldDefault::Boolean(false),
+                stream: None,
+                action: None,
                 visibility: None,
                 control: RowControl::Select {
                     options: vec![option("hold_to_switch", "Hold"), option("sticky", "Sticky")],
@@ -1718,6 +1743,8 @@ query = "managed_device_options"
                 variant: None,
                 config_key: "display.max_columns".into(),
                 default: FieldDefault::Boolean(false),
+                stream: None,
+                action: None,
                 visibility: None,
                 control: RowControl::Number {
                     value: 4.0,
@@ -2004,6 +2031,8 @@ tone_map = { light = "muted", dark = "accent" }
             variant: None,
             config_key: "search".into(),
             default: FieldDefault::Boolean(false),
+            stream: None,
+            action: None,
             visibility: None,
             control: RowControl::Action {
                 action: "start_search".into(),
@@ -2466,5 +2495,85 @@ value_from = "app_download_url"
             assert_eq!(rows.len(), 1, "{label}");
             assert_expected_control(&rows, &label, &expected);
         }
+    }
+
+    #[test]
+    fn stream_rows_report_streams_and_actions_from_the_contract() {
+        const STREAM_SPEC: &str = r##"
+schema_version = 1
+
+[field.live_color]
+type = "color"
+config_key = "live_color_hex"
+label = "Color"
+default = "#FFFFFF"
+stream = "live_color"
+action = "set_color_main"
+
+[field.live_brightness]
+type = "number"
+config_key = "live_brightness"
+label = "Brightness"
+default = 100
+min = 1
+max = 100
+step = 1
+variant = "slider"
+stream = "live_color"
+action = "set_brightness_main"
+
+[field.plain]
+type = "number"
+config_key = "plain"
+label = "Plain"
+default = 5
+"##;
+        let spec = qol_config::contract::parse_spec_str(STREAM_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+
+        assert!(row_streams(&rows, 0));
+        assert_eq!(row_action(&rows, 0).as_deref(), Some("set_color_main"));
+        assert!(row_streams(&rows, 1));
+        assert_eq!(row_action(&rows, 1).as_deref(), Some("set_brightness_main"));
+        assert!(!row_streams(&rows, 2));
+        assert_eq!(row_action(&rows, 2), None);
+    }
+
+    #[test]
+    fn stream_gating_follows_status_rows_reporting_danger_or_error() {
+        fn status_row(tone: StatusTone, error: Option<&str>) -> Row {
+            Row {
+                id: "status".into(),
+                section_id: None,
+                section_label: None,
+                label: "Status".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
+                config_key: "status".into(),
+                default: FieldDefault::Boolean(false),
+                stream: None,
+                action: None,
+                visibility: None,
+                control: RowControl::Status {
+                    query: "runtime".into(),
+                    value_from: None,
+                    label_map: std::collections::BTreeMap::new(),
+                    tone_map: std::collections::BTreeMap::new(),
+                    label: None,
+                    tone,
+                    error: error.map(str::to_string),
+                },
+            }
+        }
+
+        let neutral = vec![status_row(StatusTone::Muted, None)];
+        assert!(!stream_gated(&neutral));
+        let danger = vec![status_row(StatusTone::Danger, None)];
+        assert!(stream_gated(&danger));
+        let errored = vec![status_row(StatusTone::Muted, Some("query failed"))];
+        assert!(stream_gated(&errored));
     }
 }

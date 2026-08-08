@@ -1,6 +1,7 @@
 mod object_array_row;
 mod persistence;
 mod rows;
+mod stream;
 mod view;
 
 use std::cell::RefCell;
@@ -78,6 +79,7 @@ pub struct PreparedSettingsPanel {
     values: serde_json::Value,
     path: std::path::PathBuf,
     runtime: SettingsRuntime,
+    daemon_port: Option<u16>,
 }
 
 struct PreparedPanel {
@@ -388,6 +390,7 @@ fn prepare_panel(
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved);
     let sections = sections_from_resolved(&resolved, &rows);
+    let daemon_port = persistence::daemon_port(&panel.plugin_id);
     Ok(PreparedSettingsPanel {
         panel,
         rows,
@@ -395,6 +398,7 @@ fn prepare_panel(
         values,
         path,
         runtime,
+        daemon_port,
     })
 }
 
@@ -420,6 +424,7 @@ fn size_prepared_panel(
             body_max,
             height_cap: available,
             runtime: prepared.runtime,
+            daemon_port: prepared.daemon_port,
         },
         size: size(px(width), px(height)),
     })
@@ -500,6 +505,8 @@ mod tests {
             variant: None,
             config_key: "key".into(),
             default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
             visibility: None,
             control,
         }
