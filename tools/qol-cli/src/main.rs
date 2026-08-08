@@ -59,7 +59,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "build" => commands::build::run(rest, args.verbose),
         "check" => commands::check::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
-        "install" => commands::install::run(args.verbose),
+        "install" => commands::install::run(rest, args.verbose),
         "sessions" => commands::sessions::run(
             rest,
             if args.json {

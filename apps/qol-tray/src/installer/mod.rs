@@ -76,7 +76,7 @@ fn run_install(
 ) -> Result<()> {
     if dev_mode && !cfg!(feature = "dev") {
         return Err(anyhow!(
-            "--dev requires a binary built with --features dev. Use `make install-dev` or pass --features dev to cargo build."
+            "--dev requires a binary built with --features dev. Use `qol install --dev` or pass --features dev to cargo build."
         ));
     }
     println!("Installing QoL Tray...");

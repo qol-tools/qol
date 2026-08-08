@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC="assets/icon.png"
-OUT="assets/icons"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$SCRIPT_DIR/../assets/icon.png"
+OUT="$SCRIPT_DIR/../assets/icons"
 
 resize() {
     local src="$1" size="$2" dst="$3"
@@ -33,13 +34,13 @@ for size in 32 128 256 512; do
 done
 
 if command -v png2icns >/dev/null 2>&1; then
-    png2icns assets/qol-tray.icns \
+    png2icns -f "$SCRIPT_DIR/../assets/qol-tray.icns" \
         "$ICNS_DIR/32.png" \
         "$ICNS_DIR/128.png" \
         "$ICNS_DIR/256.png" \
         "$ICNS_DIR/512.png"
 elif command -v icnsutil >/dev/null 2>&1; then
-    icnsutil compose assets/qol-tray.icns \
+    icnsutil compose -f "$SCRIPT_DIR/../assets/qol-tray.icns" \
         "$ICNS_DIR/32.png" \
         "$ICNS_DIR/128.png" \
         "$ICNS_DIR/256.png" \
