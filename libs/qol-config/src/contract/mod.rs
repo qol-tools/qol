@@ -5,7 +5,7 @@ mod v1;
 
 pub use cross_validate::validate_contracts;
 pub use indexmap::IndexMap;
-pub use row_action::{resolve_row_actions, ResolvedRowAction};
+pub use row_action::{interpolate_row_template, resolve_row_actions, ResolvedRowAction};
 pub use runtime::{
     parse_runtime_spec, parse_runtime_spec_str, ActionSpec, ParseRuntimeSpecError, QuerySpec,
     RuntimeSpec, StreamSpec,

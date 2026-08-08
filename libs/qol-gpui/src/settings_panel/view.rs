@@ -30,6 +30,8 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
+const ROW_CHROME: f32 = 28.0;
 
 use std::sync::PoisonError;
 
@@ -1347,7 +1349,7 @@ impl SettingsPanelView {
             RowControl::TextList(values) => {
                 text_or_placeholder(&values.join(", "), self.rows[index].placeholder.as_deref())
             }
-            RowControl::Color(value) => value.clone(),
+            RowControl::Color(value) => color_display(value),
             RowControl::Action {
                 active_action,
                 active_query,
@@ -1781,7 +1783,6 @@ impl SettingsPanelView {
             .when_some(row.description.clone(), |group, description| {
                 group.child(
                     div()
-                        .truncate()
                         .text_xs()
                         .text_color(rgb(self.palette.label_text))
                         .child(description),
@@ -3150,7 +3151,15 @@ fn format_number(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
-        format!("{value}")
+        format!("{}", (value * 10_000.0).round() / 10_000.0)
+    }
+}
+
+fn color_display(value: &str) -> String {
+    if value.starts_with('#') {
+        value.to_string()
+    } else {
+        format!("#{value}")
     }
 }
 
@@ -3385,9 +3394,41 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
             };
     }
     if row.description.is_some() {
-        return super::PANEL_DESCRIBED_ROW_HEIGHT;
+        return super::PANEL_DESCRIBED_ROW_HEIGHT
+            + description_wrap_lines(row) as f32 * super::PANEL_DESCRIPTION_LINE_HEIGHT;
     }
     super::PANEL_ROW_HEIGHT
+}
+
+fn description_wrap_lines(row: &Row) -> usize {
+    let Some(description) = row.description.as_deref() else {
+        return 0;
+    };
+    let chars = description.chars().count();
+    if chars == 0 {
+        return 0;
+    }
+    let column = super::PANEL_WIDTH - ROW_CHROME - value_cell_width(&row.control);
+    let per_line = (column / DESCRIPTION_CHAR_WIDTH) as usize;
+    chars.div_ceil(per_line.max(1)) - 1
+}
+
+fn value_cell_width(control: &RowControl) -> f32 {
+    match control {
+        RowControl::Toggle(_) => 92.0,
+        RowControl::Number { .. } => 33.0,
+        RowControl::Color(_) => 76.0,
+        RowControl::Select { .. } | RowControl::MultiSelect { .. } => 96.0,
+        RowControl::Text(_) => 120.0,
+        RowControl::TextList(_) => 160.0,
+        RowControl::Action { .. } => 90.0,
+        RowControl::Status { .. } => 130.0,
+        RowControl::ObjectArray(_) => 60.0,
+        RowControl::List { .. } => 120.0,
+        RowControl::QrCode { .. } => 260.0,
+        RowControl::Unsupported { .. } => 200.0,
+        RowControl::Gamepad { .. } => 200.0,
+    }
 }
 
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
@@ -3497,10 +3538,11 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, horizontal_step_direction, initial_active_section, intent,
-        list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
-        parsed_number, row_body_height, scroll_offset_for, slider_fraction, stepped_number,
-        text_or_placeholder, visible_row_window, Intent, ListIntent, Row, RowControl,
+        binary_state_label, color_display, description_wrap_lines, format_number,
+        horizontal_step_direction, initial_active_section, intent, list_action_affordance,
+        list_intent, number_preview, number_unit, parsed_color, parsed_number, row_body_height,
+        scroll_offset_for, slider_fraction, stepped_number, text_or_placeholder,
+        visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -3524,6 +3566,109 @@ mod tests {
                 control: RowControl::Toggle(false),
             })
             .collect()
+    }
+
+    #[test]
+    fn description_wrap_lines_pin_the_observed_alt_tab_rows() {
+        let icon = Row {
+            id: "icon".into(),
+            section_id: None,
+            section_label: None,
+            label: "Icon".into(),
+            description: Some("Where the app icon appears over each window preview.".into()),
+            placeholder: None,
+            variant: None,
+            config_key: "display.icon_position".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Select {
+                options: vec![],
+                index: 0,
+                dynamic: None,
+            },
+        };
+        let card = Row {
+            id: "card".into(),
+            section_id: None,
+            section_label: None,
+            label: "Card".into(),
+            description: Some(
+                "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.card_scale".into(),
+            default: qol_config::contract::FieldDefault::Number(1.5),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Number {
+                value: 1.5,
+                min: None,
+                max: None,
+                step: None,
+            },
+        };
+        let dynamic = Row {
+            id: "dynamic".into(),
+            section_id: None,
+            section_label: None,
+            label: "Dynamic".into(),
+            description: Some(
+                "Grow window cards to fill free space when few windows are open; shrink to fit when many are."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.dynamic_card_scale".into(),
+            default: qol_config::contract::FieldDefault::Boolean(false),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Toggle(false),
+        };
+        assert_eq!(description_wrap_lines(&icon), 0);
+        assert_eq!(description_wrap_lines(&card), 0);
+        assert_eq!(description_wrap_lines(&dynamic), 1);
+        assert_eq!(
+            row_body_height(&dynamic),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
+        );
+        assert_eq!(
+            row_body_height(&card),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn color_display_normalizes_the_hash_prefix_like_the_web_save() {
+        let cases = [
+            ("ff0000", "#ff0000"),
+            ("#202322", "#202322"),
+            ("#FFFFFF", "#FFFFFF"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(color_display(value), expected, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn format_number_matches_the_web_value_formatting() {
+        let cases = [
+            (1.7000000000000002, "1.7"),
+            (1.5, "1.5"),
+            (0.65, "0.65"),
+            (1.85, "1.85"),
+            (6.0, "6"),
+            (1.234567, "1.2346"),
+            (2.5, "2.5"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(format_number(value), expected, "value: {value}");
+        }
     }
 
     fn list_row() -> Row {

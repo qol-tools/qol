@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
+use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp, PlainTextOutput};
 
 use crate::daemon::actions::CONFIG;
 use crate::storage::paths::PLUGIN_ID;
@@ -88,6 +88,19 @@ where
                     Ok(CommandResult::success(""))
                 }),
         )
+        .command(
+            Command::new("settings")
+                .about("Open the CLI Sessions settings panel.")
+                .usage(format!("{BINARY_NAME} settings"))
+                .detail("Runs the native settings panel, falling back to the browser.")
+                .output("No stdout on success.")
+                .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
+                .run_plain_text(|context| {
+                    reject_args(context.args())?;
+                    crate::show_settings()?;
+                    Ok(PlainTextOutput::empty())
+                }),
+        )
         .doctor_checks(doctor_checks)
 }
 
@@ -96,6 +109,13 @@ fn run_daemon(show_on_start: bool) -> CommandResult {
         Ok(()) => CommandResult::success(""),
         Err(error) => CommandResult::runtime_error(format!("plugin-cli-sessions: {error:#}")),
     }
+}
+
+fn reject_args(args: &[String]) -> anyhow::Result<()> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!("unexpected arguments: {}", args.join(" "))
 }
 
 fn send_action(action: &str) -> bool {

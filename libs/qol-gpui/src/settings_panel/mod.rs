@@ -20,6 +20,7 @@ const PANEL_WIDTH: f32 = 520.0;
 const PANEL_GAMEPAD_WIDTH: f32 = 820.0;
 const PANEL_ROW_HEIGHT: f32 = 40.0;
 const PANEL_DESCRIBED_ROW_HEIGHT: f32 = 56.0;
+const PANEL_DESCRIPTION_LINE_HEIGHT: f32 = 14.0;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
 const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 16.0;
 const PANEL_LIST_ITEM_HEIGHT: f32 = 48.0;
@@ -439,6 +440,7 @@ fn open_prepared(
     let title = prepared.panel.heading.clone();
     let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
+        .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
         .size(prepared.size)
         .retain_on_dismiss()
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
