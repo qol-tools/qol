@@ -196,6 +196,12 @@ impl ObjectArrayState {
         self.entries.len() + 1
     }
 
+    pub(super) fn item_window(&self) -> std::ops::Range<usize> {
+        let last_offset = self.entries.len().saturating_sub(self.list.max_visible);
+        let start = self.list.scroll_offset.min(last_offset);
+        start..(start + self.list.max_visible).min(self.entries.len())
+    }
+
     pub(super) fn add_entry_selected(&self) -> bool {
         self.list.selected >= self.entries.len()
     }
@@ -1066,5 +1072,54 @@ mod tests {
 
         select_field(draft, "from_mods");
         assert!(!draft.backspace());
+    }
+
+    #[test]
+    fn the_item_window_never_hides_a_row_to_make_space_for_the_add_entry() {
+        let mut state = ObjectArrayState::list(
+            vec![("app".to_string(), ItemFieldKind::Text)],
+            (0..OBJECT_ARRAY_MAX_VISIBLE)
+                .map(|n| {
+                    Item::from_iter([("app".to_string(), FieldDefault::String(n.to_string()))])
+                })
+                .collect(),
+        );
+
+        for _ in 0..OBJECT_ARRAY_MAX_VISIBLE {
+            state.move_down();
+        }
+
+        assert!(
+            state.add_entry_selected(),
+            "selection reached the add entry"
+        );
+        assert_eq!(
+            state.item_window(),
+            0..OBJECT_ARRAY_MAX_VISIBLE,
+            "a full page of items stays visible while the add entry is selected"
+        );
+    }
+
+    #[test]
+    fn the_item_window_follows_the_selection_past_a_full_page() {
+        let mut state = ObjectArrayState::list(
+            vec![("app".to_string(), ItemFieldKind::Text)],
+            (0..OBJECT_ARRAY_MAX_VISIBLE + 3)
+                .map(|n| {
+                    Item::from_iter([("app".to_string(), FieldDefault::String(n.to_string()))])
+                })
+                .collect(),
+        );
+
+        for _ in 0..OBJECT_ARRAY_MAX_VISIBLE + 1 {
+            state.move_down();
+        }
+
+        let window = state.item_window();
+        assert_eq!(window.len(), OBJECT_ARRAY_MAX_VISIBLE);
+        assert!(
+            window.contains(&state.list.selected),
+            "selection stays visible"
+        );
     }
 }

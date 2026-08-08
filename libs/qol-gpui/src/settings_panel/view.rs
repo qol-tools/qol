@@ -1950,10 +1950,11 @@ impl SettingsPanelView {
         };
         let mut container = self.render_block_frame(index, row, self.display_value(index));
         let Some(draft) = state.draft.as_ref() else {
-            for entry in state.list.visible_range(state.entry_count()) {
+            for entry in state.item_window() {
                 container = container.child(self.render_object_array_entry(index, entry, cx));
             }
-            return container;
+            let add = state.entries.len();
+            return container.child(self.render_object_array_entry(index, add, cx));
         };
         for (field_index, field) in draft.fields.iter().enumerate() {
             container = container.child(self.render_draft_field(index, field_index, field, cx));
@@ -2118,7 +2119,14 @@ impl SettingsPanelView {
     }
 
     fn render_chip_row(&self, chips: ItemChips) -> Div {
-        let mut row = div().flex().flex_row().items_center().gap_1().min_w_0();
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden();
         for chip in &chips.from {
             row = row.child(self.render_chip(chip.label.clone(), chip.tone));
         }
@@ -2196,7 +2204,15 @@ impl SettingsPanelView {
     }
 
     fn render_draft_value(&self, field: &DraftField, selected: bool) -> Div {
-        let mut value = div().flex().flex_row().items_center().gap_1().min_w_0();
+        let mut value = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .gap_1()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden();
         if let DraftValue::Mods {
             options,
             selected: flags,
@@ -3009,7 +3025,7 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
     let entries = match state.draft.as_ref() {
         Some(draft) => draft.entry_count(),
-        None => state.list.visible_range(state.entry_count()).len(),
+        None => state.item_window().len() + 1,
     };
     super::PANEL_LIST_PADDING_Y
         + list_header_height(row)
