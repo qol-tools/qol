@@ -22,11 +22,11 @@ where
     Status: Fn() -> u8 + Send + Sync + 'static,
 {
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
-        .about("Run the Task Runner checkout daemon and inspect its local runtime contract.")
+        .about("Run the IDE Checkout checkout daemon and inspect its local runtime contract.")
         .default_command(["daemon"])
         .command(
             Command::new("daemon")
-                .about("Run the loopback Task Runner checkout daemon.")
+                .about("Run the loopback IDE Checkout checkout daemon.")
                 .usage(format!("{BINARY_NAME} daemon"))
                 .detail("Loads the typed plugin config and serves checkout requests until stopped.")
                 .output("Runtime diagnostics are written to stderr.")
@@ -48,7 +48,7 @@ where
 
 fn settings_command() -> Command {
     Command::new("settings")
-        .about("Open the Task Runner settings page in qol-tray.")
+        .about("Open the IDE Checkout settings page in qol-tray.")
         .usage(format!("{BINARY_NAME} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
@@ -65,14 +65,14 @@ fn result_for(result: std::io::Result<()>) -> CommandResult {
 fn run_status() -> u8 {
     let message = if daemon_is_running() {
         format!(
-            "Task Runner daemon is running on port {}",
+            "IDE Checkout daemon is running on port {}",
             crate::daemon::daemon_port()
         )
     } else {
-        "Task Runner daemon is NOT running".to_string()
+        "IDE Checkout daemon is NOT running".to_string()
     };
 
-    qol_plugin_daemon::notification::send_notification("Task Runner", &message);
+    qol_plugin_daemon::notification::send_notification("IDE Checkout", &message);
     0
 }
 

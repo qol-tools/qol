@@ -18,7 +18,7 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
     vec![
         DoctorCheck::new(
             CHECK_IDS[0],
-            "Verify the current platform is declared by Task Runner.",
+            "Verify the current platform is declared by IDE Checkout.",
             || Ok(platform::platform_supported_check()),
         ),
         DoctorCheck::new(
