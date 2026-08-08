@@ -659,7 +659,7 @@ default = 3
             }],
             plugin_configs: Some(HashMap::from([(
                 "plugin-test".to_string(),
-                json!({"threshold": "3"}),
+                json!({"threshold": "three"}),
             )])),
             ..ProfileImportBundle::default()
         },
@@ -728,7 +728,7 @@ default = 3
             }],
             plugin_configs: Some(HashMap::from([(
                 "plugin-install".to_string(),
-                json!({"threshold": "3"}),
+                json!({"threshold": "three"}),
             )])),
             ..ProfileImportBundle::default()
         },
