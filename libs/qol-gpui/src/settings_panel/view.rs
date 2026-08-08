@@ -3150,7 +3150,7 @@ fn format_number(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
-        format!("{value}")
+        format!("{}", (value * 10_000.0).round() / 10_000.0)
     }
 }
 
@@ -3497,8 +3497,8 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, horizontal_step_direction, initial_active_section, intent,
-        list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
+        binary_state_label, format_number, horizontal_step_direction, initial_active_section,
+        intent, list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
         parsed_number, row_body_height, scroll_offset_for, slider_fraction, stepped_number,
         text_or_placeholder, visible_row_window, Intent, ListIntent, Row, RowControl,
     };
@@ -3524,6 +3524,22 @@ mod tests {
                 control: RowControl::Toggle(false),
             })
             .collect()
+    }
+
+    #[test]
+    fn format_number_matches_the_web_value_formatting() {
+        let cases = [
+            (1.7000000000000002, "1.7"),
+            (1.5, "1.5"),
+            (0.65, "0.65"),
+            (1.85, "1.85"),
+            (6.0, "6"),
+            (1.234567, "1.2346"),
+            (2.5, "2.5"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(format_number(value), expected, "value: {value}");
+        }
     }
 
     fn list_row() -> Row {
