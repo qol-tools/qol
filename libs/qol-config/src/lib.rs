@@ -2,12 +2,13 @@ pub mod contract;
 pub mod defaults;
 mod inspection;
 pub mod normalized;
+pub mod object_array;
 pub mod validation;
 
 pub use defaults::{
     defaults_json_from_contract, defaults_json_from_spec, deserialize_with_contract_defaults,
-    typed_defaults_from_contract, typed_defaults_from_spec, validate_contract_defaults_match_type,
-    validate_defaults_match_type,
+    field_default_to_json, typed_defaults_from_contract, typed_defaults_from_spec,
+    validate_contract_defaults_match_type, validate_defaults_match_type,
 };
 pub use inspection::{
     inspect_plugin_config_from_env_with_contract, PluginConfigInspection,

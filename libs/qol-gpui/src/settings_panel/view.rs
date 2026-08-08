@@ -5,7 +5,11 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_config::contract::ResolvedRowAction;
+use qol_config::object_array::pretty_label;
 
+use super::object_array_row::{
+    ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome, ObjectArrayState,
+};
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
@@ -110,6 +114,7 @@ enum ActiveControl {
     Dropdown(Dropdown),
     List,
     ListActions(ListActionMenu),
+    ObjectArray,
     Wheel(WheelControl),
 }
 
@@ -482,6 +487,10 @@ impl SettingsPanelView {
             self.on_list_key(key, cx);
             return;
         }
+        if matches!(self.active_control, Some(ActiveControl::ObjectArray)) {
+            self.on_object_array_key(key, key_char, cx);
+            return;
+        }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
         if editing {
             if horizontal_step_direction(key)
@@ -681,6 +690,21 @@ impl SettingsPanelView {
         cx.notify();
     }
 
+    fn on_object_array_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
+        let outcome = match self.rows.get_mut(self.selected).map(|row| &mut row.control) {
+            Some(RowControl::ObjectArray(state)) => state.handle_key(key, key_char),
+            _ => ObjectArrayOutcome::Close,
+        };
+        match outcome {
+            ObjectArrayOutcome::Ignored => return,
+            ObjectArrayOutcome::Handled => {}
+            ObjectArrayOutcome::Persist => self.persist(),
+            ObjectArrayOutcome::Close => self.active_control = None,
+        }
+        self.sync_scroll();
+        cx.notify();
+    }
+
     fn on_list_actions_key(&mut self, key: &str, cx: &mut Context<Self>) {
         let Some(ActiveControl::ListActions(menu)) = self.active_control.as_mut() else {
             return;
@@ -729,6 +753,7 @@ impl SettingsPanelView {
             | RowControl::Action { .. }
             | RowControl::Status { .. }
             | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. } => self.active_control = None,
         }
     }
@@ -766,6 +791,7 @@ impl SettingsPanelView {
                 self.active_control = Some(ActiveControl::List)
             }
             RowControl::List { .. } => {}
+            RowControl::ObjectArray(_) => self.active_control = Some(ActiveControl::ObjectArray),
             RowControl::Gamepad { .. } => self.select_next_gamepad(),
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
@@ -1020,6 +1046,7 @@ impl SettingsPanelView {
             | RowControl::Action { .. }
             | RowControl::Status { .. }
             | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
@@ -1077,6 +1104,7 @@ impl SettingsPanelView {
             | RowControl::Action { .. }
             | RowControl::Status { .. }
             | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. } => return,
         }
         self.persist();
@@ -1106,6 +1134,7 @@ impl SettingsPanelView {
                 Some(ActiveControl::Dropdown(_))
                 | Some(ActiveControl::List)
                 | Some(ActiveControl::ListActions(_))
+                | Some(ActiveControl::ObjectArray)
                 | None => {}
             }
         }
@@ -1168,6 +1197,7 @@ impl SettingsPanelView {
                     format!("{} found", items.len())
                 }
             }
+            RowControl::ObjectArray(state) => item_count_label(state.entries.len()),
             RowControl::Gamepad { monitor, .. } => monitor
                 .selected()
                 .map(|controller| controller.name.clone())
@@ -1187,7 +1217,10 @@ impl SettingsPanelView {
             | RowControl::Color(_) => self.palette.label_text,
             RowControl::Text(value) if value.is_empty() => self.palette.status_muted,
             RowControl::TextList(values) if values.is_empty() => self.palette.status_muted,
-            RowControl::Text(_) | RowControl::TextList(_) => self.palette.label_text,
+            RowControl::ObjectArray(state) if state.entries.is_empty() => self.palette.status_muted,
+            RowControl::Text(_) | RowControl::TextList(_) | RowControl::ObjectArray(_) => {
+                self.palette.label_text
+            }
             RowControl::Action { error: Some(_), .. }
             | RowControl::Status { error: Some(_), .. }
             | RowControl::List { error: Some(_), .. } => self.palette.state_off,
@@ -1245,6 +1278,7 @@ impl SettingsPanelView {
             | RowControl::Color(_)
             | RowControl::Status { .. }
             | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. } => {}
         }
         let mut cell = div().flex().flex_row().items_center().gap_2();
@@ -1481,6 +1515,7 @@ impl SettingsPanelView {
                 Some(ActiveControl::Dropdown(_))
                 | Some(ActiveControl::List)
                 | Some(ActiveControl::ListActions(_))
+                | Some(ActiveControl::ObjectArray)
                 | None => value,
             }
         } else {
@@ -1511,6 +1546,9 @@ impl SettingsPanelView {
         }
         if matches!(row.control, RowControl::List { .. }) {
             return container.child(self.render_list(index, cx));
+        }
+        if matches!(row.control, RowControl::ObjectArray(_)) {
+            return container.child(self.render_object_array(index, cx));
         }
         if matches!(row.control, RowControl::Gamepad { .. }) {
             return container.child(self.render_gamepad(index, cx));
@@ -1622,6 +1660,7 @@ impl SettingsPanelView {
                     | RowControl::Action { .. }
                     | RowControl::Status { .. }
                     | RowControl::List { .. }
+                    | RowControl::ObjectArray(_)
                     | RowControl::Gamepad { .. } => None,
                 };
                 if let Some(items) = items {
@@ -1902,6 +1941,365 @@ impl SettingsPanelView {
             container = container.child(self.render_list_item(index, item_index, list_active, cx));
         }
         container
+    }
+
+    fn render_object_array(&self, index: usize, cx: &mut Context<Self>) -> Div {
+        let row = &self.rows[index];
+        let RowControl::ObjectArray(state) = &row.control else {
+            return div();
+        };
+        let mut container = self.render_block_frame(index, row, self.display_value(index));
+        let Some(draft) = state.draft.as_ref() else {
+            for entry in state.list.visible_range(state.entry_count()) {
+                container = container.child(self.render_object_array_entry(index, entry, cx));
+            }
+            return container;
+        };
+        for (field_index, field) in draft.fields.iter().enumerate() {
+            container = container.child(self.render_draft_field(index, field_index, field, cx));
+        }
+        container.child(self.render_draft_save(index, draft.save_entry_selected(), cx))
+    }
+
+    fn render_block_frame(&self, index: usize, row: &Row, value: String) -> Div {
+        let mut container = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .h(px(row_body_height(row)))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .rounded_md();
+        if index == self.selected {
+            container = container
+                .bg(rgb(self.palette.row_bg_selected))
+                .border_1()
+                .border_color(rgb(self.palette.row_border_selected));
+        }
+        container.child(
+            div()
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .h(px(list_header_height(row)))
+                .justify_between()
+                .gap_3()
+                .text_sm()
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .flex_1()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.section_text))
+                                .child(row.label.clone()),
+                        )
+                        .when_some(row.description.clone(), |group, description| {
+                            group.child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(self.palette.label_text))
+                                    .child(description),
+                            )
+                        }),
+                )
+                .child(div().text_color(rgb(self.value_color(index))).child(value)),
+        )
+    }
+
+    fn object_array_is_active(&self, index: usize) -> bool {
+        index == self.selected && matches!(self.active_control, Some(ActiveControl::ObjectArray))
+    }
+
+    fn render_object_array_entry(
+        &self,
+        index: usize,
+        entry: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let RowControl::ObjectArray(state) = &self.rows[index].control else {
+            return div().id(("settings-object-empty", entry_id(index, entry)));
+        };
+        let active = self.object_array_is_active(index);
+        let selected = active && entry == state.list.selected;
+        let body = if entry < state.entries.len() {
+            self.render_chip_row(state.chips(entry))
+        } else {
+            div().flex().flex_row().items_center().child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(self.palette.state_on))
+                    .child("+ Add rule"),
+            )
+        };
+        self.object_array_line(index, entry, selected)
+            .child(body)
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.select_object_array_entry(index, entry, window, cx);
+                cx.notify();
+            }))
+    }
+
+    fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> Stateful<Div> {
+        let mut line = div()
+            .id(("settings-object-entry", entry_id(index, entry)))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .flex_none()
+            .h(px(super::PANEL_OBJECT_ROW_HEIGHT))
+            .overflow_hidden()
+            .px_2()
+            .rounded_sm()
+            .cursor(CursorStyle::PointingHand);
+        if selected {
+            line = line
+                .bg(rgb(self.palette.dropdown_bg))
+                .border_l_2()
+                .border_color(rgb(self.palette.row_border_selected));
+        }
+        line
+    }
+
+    fn render_chip_row(&self, chips: ItemChips) -> Div {
+        let mut row = div().flex().flex_row().items_center().gap_1().min_w_0();
+        for chip in &chips.from {
+            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+        }
+        for chip in &chips.rest {
+            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+        }
+        if chips.is_directional() {
+            row = row.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.label_text))
+                    .child("\u{2192}"),
+            );
+        }
+        for chip in &chips.to {
+            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+        }
+        for flag in &chips.flags {
+            row = row.child(self.render_chip(flag.clone(), ChipTone::Plain));
+        }
+        row
+    }
+
+    fn render_chip(&self, label: String, tone: ChipTone) -> Div {
+        let (text, background) = match tone {
+            ChipTone::Modifier => (self.palette.state_on, self.palette.dropdown_bg),
+            ChipTone::Key => (self.palette.section_text, self.palette.dropdown_bg),
+            ChipTone::Plain => (self.palette.label_text, self.palette.transparent_rgba),
+        };
+        div()
+            .flex_none()
+            .px_1p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(self.palette.panel_border))
+            .bg(match tone {
+                ChipTone::Plain => rgba(background),
+                _ => rgb(background),
+            })
+            .text_xs()
+            .text_color(rgb(text))
+            .child(label)
+    }
+
+    fn render_draft_field(
+        &self,
+        index: usize,
+        field_index: usize,
+        field: &DraftField,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let RowControl::ObjectArray(state) = &self.rows[index].control else {
+            return div().id(("settings-draft-empty", entry_id(index, field_index)));
+        };
+        let selected = state
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.selected == field_index);
+        self.object_array_line(index, field_index, selected)
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(pretty_label(&field.key)),
+            )
+            .child(self.render_draft_value(field, selected))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.select_draft_field(index, field_index);
+                cx.notify();
+            }))
+    }
+
+    fn render_draft_value(&self, field: &DraftField, selected: bool) -> Div {
+        let mut value = div().flex().flex_row().items_center().gap_1().min_w_0();
+        if let DraftValue::Mods {
+            options,
+            selected: flags,
+            cursor,
+        } = &field.value
+        {
+            for (option_index, option) in options.iter().enumerate() {
+                let on = flags.get(option_index).copied().unwrap_or(false);
+                let focused = selected && option_index == *cursor;
+                value = value.child(self.render_mod_chip(option.clone(), on, focused));
+            }
+            return value;
+        }
+        let text = match (&field.value, selected) {
+            (DraftValue::Text(text), true) => format!("{text}_"),
+            (DraftValue::Text(text), false) if text.is_empty() => {
+                pretty_label(&field.key).to_lowercase()
+            }
+            _ => field.display(),
+        };
+        value.child(
+            div()
+                .truncate()
+                .text_sm()
+                .text_color(rgb(match &field.value {
+                    DraftValue::Text(text) if text.is_empty() && !selected => {
+                        self.palette.status_muted
+                    }
+                    DraftValue::Boolean(true) => self.palette.state_on,
+                    _ => self.palette.label_text,
+                }))
+                .child(text),
+        )
+    }
+
+    fn render_mod_chip(&self, label: String, on: bool, focused: bool) -> Div {
+        div()
+            .flex_none()
+            .px_1p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(if focused {
+                self.palette.row_border_selected
+            } else {
+                self.palette.panel_border
+            }))
+            .bg(if on {
+                rgb(self.palette.dropdown_bg)
+            } else {
+                rgba(self.palette.transparent_rgba)
+            })
+            .text_xs()
+            .text_color(rgb(if on {
+                self.palette.state_on
+            } else {
+                self.palette.status_muted
+            }))
+            .child(label)
+    }
+
+    fn render_draft_save(
+        &self,
+        index: usize,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let entry = usize::MAX;
+        self.object_array_line(index, entry, selected)
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(self.palette.state_on))
+                    .child("Save rule"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.label_text))
+                    .child("enter"),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.commit_object_array_draft(index);
+                cx.notify();
+            }))
+    }
+
+    fn select_object_array_entry(
+        &mut self,
+        index: usize,
+        entry: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let reactivate = self.selected != index;
+        self.selected = index;
+        if reactivate {
+            self.activate(window, cx);
+        }
+        let already_selected = !reactivate && self.object_array_entry_selected(index, entry);
+        let Some(RowControl::ObjectArray(state)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        state.list.selected = entry;
+        state.list.sync(state.entry_count());
+        if already_selected {
+            state.open_draft();
+        }
+        self.active_control = Some(ActiveControl::ObjectArray);
+        self.sync_scroll();
+    }
+
+    fn object_array_entry_selected(&self, index: usize, entry: usize) -> bool {
+        let Some(RowControl::ObjectArray(state)) = self.rows.get(index).map(|row| &row.control)
+        else {
+            return false;
+        };
+        self.object_array_is_active(index) && state.list.selected == entry
+    }
+
+    fn select_draft_field(&mut self, index: usize, field_index: usize) {
+        let Some(RowControl::ObjectArray(state)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let Some(draft) = state.draft.as_mut() else {
+            return;
+        };
+        draft.selected = field_index;
+    }
+
+    fn commit_object_array_draft(&mut self, index: usize) {
+        let Some(RowControl::ObjectArray(state)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        if state.commit_draft() {
+            self.persist();
+        }
+        self.sync_scroll();
     }
 
     fn render_list_item(
@@ -2467,6 +2865,18 @@ fn list_intent(key: &str) -> Option<ListIntent> {
     }
 }
 
+fn entry_id(index: usize, entry: usize) -> u64 {
+    ((index as u64) << 32) | (entry as u32) as u64
+}
+
+fn item_count_label(count: usize) -> String {
+    match count {
+        0 => "none".to_string(),
+        1 => "1 rule".to_string(),
+        _ => format!("{count} rules"),
+    }
+}
+
 fn action_refresh_payload(
     result: &Result<Option<serde_json::Value>, String>,
     active_value_from: Option<&str>,
@@ -2536,6 +2946,9 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
     if matches!(row.control, RowControl::Gamepad { .. }) {
         return super::PANEL_GAMEPAD_HEIGHT;
     }
+    if let RowControl::ObjectArray(state) = &row.control {
+        return object_array_body_height(row, state);
+    }
     if matches!(row.control, RowControl::List { .. }) {
         return super::PANEL_LIST_HEIGHT
             + if row.description.is_some() {
@@ -2548,6 +2961,16 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
         return super::PANEL_DESCRIBED_ROW_HEIGHT;
     }
     super::PANEL_ROW_HEIGHT
+}
+
+fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
+    let entries = match state.draft.as_ref() {
+        Some(draft) => draft.entry_count(),
+        None => state.list.visible_range(state.entry_count()).len(),
+    };
+    super::PANEL_LIST_PADDING_Y
+        + list_header_height(row)
+        + entries as f32 * (super::PANEL_OBJECT_ROW_HEIGHT + super::PANEL_LIST_GAP)
 }
 
 fn list_header_height(row: &Row) -> f32 {

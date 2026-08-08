@@ -2,7 +2,9 @@ use qol_config::contract::{
     resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction, RowActionSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
+use qol_config::object_array::item_schema;
 
+use super::object_array_row::ObjectArrayState;
 use crate::gamepad::GamepadMonitor;
 use crate::scroll_list::ScrollList;
 use crate::status_indicator::StatusTone;
@@ -117,6 +119,7 @@ pub(super) enum RowControl {
         query: String,
         monitor: GamepadMonitor,
     },
+    ObjectArray(ObjectArrayState),
 }
 
 pub(super) struct Row {
@@ -403,8 +406,45 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
             query,
             monitor: GamepadMonitor::default(),
         }),
-        FieldKind::ObjectArray | FieldKind::ObjectMap | FieldKind::QrCode => None,
+        FieldKind::ObjectArray => match &field.value {
+            FieldDefault::ObjectArray(items) => Some(RowControl::ObjectArray(
+                ObjectArrayState::list(item_schema(field.item.as_ref(), items), items.clone()),
+            )),
+            _ => None,
+        },
+        FieldKind::ObjectMap => match &field.value {
+            FieldDefault::ObjectMap(entries) => {
+                Some(RowControl::ObjectArray(ObjectArrayState::map(
+                    field.key_label.clone().unwrap_or_else(|| "Key".into()),
+                    entry_field_schema(field, entries),
+                    entries
+                        .iter()
+                        .map(|(key, fields)| (key.clone(), fields.clone()))
+                        .collect(),
+                )))
+            }
+            _ => None,
+        },
+        FieldKind::QrCode => None,
     }
+}
+
+fn entry_field_schema(
+    field: &ResolvedField,
+    entries: &qol_config::contract::IndexMap<
+        String,
+        qol_config::contract::IndexMap<String, FieldDefault>,
+    >,
+) -> Vec<qol_config::object_array::ItemField> {
+    if field.entry_fields.is_empty() {
+        return item_schema(None, &entries.values().cloned().collect::<Vec<_>>());
+    }
+    item_schema(
+        Some(&qol_config::normalized::ResolvedItemSpec {
+            fields: field.entry_fields.clone(),
+        }),
+        &[],
+    )
 }
 
 fn field_options(
@@ -500,10 +540,20 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::Text(value) => Some(serde_json::json!(value)),
         RowControl::TextList(values) => Some(serde_json::json!(values)),
         RowControl::Color(value) => Some(serde_json::json!(value)),
+        RowControl::ObjectArray(state) => Some(qol_config::field_default_to_json(
+            &object_array_value(state),
+        )),
         RowControl::Action { .. }
         | RowControl::List { .. }
         | RowControl::Status { .. }
         | RowControl::Gamepad { .. } => None,
+    }
+}
+
+fn object_array_value(state: &ObjectArrayState) -> FieldDefault {
+    match state.key_label.is_some() {
+        true => FieldDefault::ObjectMap(state.keyed_items()),
+        false => FieldDefault::ObjectArray(state.items()),
     }
 }
 
@@ -529,6 +579,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
             Some(FieldDefault::String(value.clone()))
         }
         RowControl::TextList(values) => Some(FieldDefault::StringArray(values.clone())),
+        RowControl::ObjectArray(state) => Some(object_array_value(state)),
         RowControl::Action { .. }
         | RowControl::Status { .. }
         | RowControl::List { .. }
@@ -884,6 +935,7 @@ mod tests {
         set_config_value, visible_row_indices, ResolvedConfig, Row, RowControl, SelectOption,
     };
     use crate::status_indicator::StatusTone;
+    use qol_config::object_array::ItemFieldKind;
 
     const SPEC: &str = r#"
 schema_version = 1
@@ -1049,6 +1101,54 @@ query = "controller_input"
                 .selected()
                 .map(|controller| controller.name.as_str()),
             Some("foo pad")
+        );
+    }
+
+    #[test]
+    fn object_array_fields_become_editable_rows_that_round_trip_their_items() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.key_rules]
+type = "object_array"
+label = "Key Rules"
+default = [
+  { from_mods = ["ctrl"], to_mods = ["cmd"], keys = ["c", "v"] },
+]
+
+[field.key_rules.item.fields]
+from_mods = "string_array"
+to_mods = "string_array"
+keys = "string_array"
+global = "boolean"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+
+        let RowControl::ObjectArray(state) = &rows[0].control else {
+            panic!("expected an object array row, got {:?}", rows[0].control);
+        };
+        assert_eq!(
+            state.schema,
+            vec![
+                ("from_mods".to_string(), ItemFieldKind::Mods),
+                ("global".to_string(), ItemFieldKind::Boolean),
+                ("keys".to_string(), ItemFieldKind::StringArray),
+                ("to_mods".to_string(), ItemFieldKind::Mods),
+            ]
+        );
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows),
+            serde_json::json!({
+                "key_rules": [
+                    { "from_mods": ["ctrl"], "to_mods": ["cmd"], "keys": ["c", "v"] },
+                ]
+            })
         );
     }
 
