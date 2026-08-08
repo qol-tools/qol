@@ -182,12 +182,35 @@ impl PendingBridgeStore {
     }
 
     pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
+        let mut rounds = self
+            .open_checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| !checkpoint.session.is_empty())
+            .map(|checkpoint| PendingRound {
+                session: checkpoint.session,
+                completion_marker: checkpoint.completion_marker,
+                completed: checkpoint.completed,
+            })
+            .collect::<Vec<_>>();
+        rounds.sort_by(|left, right| left.session.cmp(&right.session));
+        Ok(rounds)
+    }
+
+    pub(super) fn legacy_open_rounds(&self) -> Result<usize> {
+        Ok(self
+            .open_checkpoints()?
+            .iter()
+            .filter(|checkpoint| checkpoint.session.is_empty())
+            .count())
+    }
+
+    fn open_checkpoints(&self) -> Result<Vec<PendingBridge>> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error).context("failed to read pending bridge directory"),
         };
-        let mut rounds = Vec::new();
+        let mut checkpoints = Vec::new();
         for entry in entries {
             let path = entry
                 .context("failed to read pending bridge directory")?
@@ -201,17 +224,12 @@ impl PendingBridgeStore {
             let Ok(checkpoint) = serde_json::from_str::<PendingBridge>(&encoded) else {
                 continue;
             };
-            if checkpoint.closed || checkpoint.session.is_empty() {
+            if checkpoint.closed {
                 continue;
             }
-            rounds.push(PendingRound {
-                session: checkpoint.session,
-                completion_marker: checkpoint.completion_marker,
-                completed: checkpoint.completed,
-            });
+            checkpoints.push(checkpoint);
         }
-        rounds.sort_by(|left, right| left.session.cmp(&right.session));
-        Ok(rounds)
+        Ok(checkpoints)
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
@@ -296,11 +314,29 @@ pub(super) fn execute(
     let target = resolve_target(terminals, binding)?;
     if let Some(marker) = acknowledge_marker {
         pending.acknowledge(binding, marker, true)?;
-    } else if pending
-        .load(binding)?
-        .is_some_and(|checkpoint| !checkpoint.closed)
-    {
-        return resume(terminals, interpreter, binding, timeout, pending, false);
+    } else if let Some(round) = pending.pending_round(binding)? {
+        let liveness = session_liveness(terminals, interpreter, binding);
+        let pre_screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        let alive = round.completed
+            || delivery_observed(
+                terminals,
+                binding,
+                "QOL_BRIDGE_DONE_",
+                &pre_screen,
+                &liveness,
+                DELIVERY_VERIFY_WINDOW,
+            )?;
+        if alive {
+            return resume(terminals, interpreter, binding, timeout, pending, false);
+        }
+        pending.acknowledge(binding, &round.completion_marker, false)?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=superseded_undelivered target_backend={}",
+            binding.session_id().backend()
+        );
     }
 
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
@@ -477,15 +513,12 @@ pub(super) fn delivery_observed(
     liveness: &dyn Fn() -> Option<bool>,
     window: Duration,
 ) -> Result<bool> {
-    if liveness().is_none() {
-        return Ok(true);
-    }
     let deadline = Instant::now() + window;
     loop {
         let screen = terminals
             .read_screen(binding)
             .context("bridge screen read failed")?;
-        if screen.contains(fragment) || screen != pre_screen {
+        if screen.contains(fragment) || screen != pre_screen || liveness() == Some(true) {
             return Ok(true);
         }
         if Instant::now() >= deadline {

@@ -478,6 +478,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((target.clone(), text.to_owned(), mode));
+            self.screens
+                .lock()
+                .unwrap()
+                .push_back(format!(">>> {text}"));
             Ok(())
         }
     }
@@ -654,6 +658,19 @@ mod tests {
             "QOL_BRIDGE_DONE_",
             &pre,
             &|| None,
+            window,
+        )
+        .unwrap();
+        assert!(!observed);
+
+        let terminals = quiet(vec!["prompt".to_owned(); 2]);
+        let pre = terminals.read_screen(&binding).unwrap();
+        let observed = super::super::bridge::delivery_observed(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_",
+            &pre,
+            &|| Some(true),
             window,
         )
         .unwrap();

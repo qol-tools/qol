@@ -329,6 +329,11 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
+    let legacy = if args.is_empty() {
+        pending.legacy_open_rounds()?
+    } else {
+        0
+    };
     let terminals = service()?;
     let interpreter = CliSessionInterpreter::system();
     let rows = rounds
@@ -379,6 +384,17 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
             }
         })
         .collect::<Vec<_>>();
+    let mut rows = rows;
+    if legacy > 0 {
+        rows.push(serde_json::json!({
+            "phase": "unknown",
+            "session": "",
+            "command": "qol sessions next <session>",
+            "instruction": format!(
+                "{legacy} open round(s) recorded by an older qol version carry no session token and cannot be listed here. Run the command once per candidate implementation session from `qol sessions list`."
+            ),
+        }));
+    }
     match output_format {
         OutputFormat::Json => println!(
             "{}",
