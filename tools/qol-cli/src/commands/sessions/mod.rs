@@ -97,7 +97,7 @@ Primary usage:
   qol sessions list [--json]
   qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
-  qol sessions resume <session> [--timeout-ms N]
+  qol sessions resume <session> [--timeout-ms N] [--kickstart]
 
 Diagnostics:
   qol sessions send <session> <text...> [--submit]
@@ -119,10 +119,14 @@ Details:
   to 1s..24h (default 1h).
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
-  command for each open round: resume while waiting, then a review
+  command for each open round: resume while waiting, resume --kickstart when
+  the target went idle without emitting its completion signal, then a review
   instruction with the acknowledge-marker bridge template once complete.
   resume re-attaches to the one pending round and waits for its completion
-  marker without submitting anything; its timeout defaults to 24h.
+  marker without submitting anything; its timeout defaults to 24h. With
+  --kickstart it first nudges the interrupted session to continue or emit
+  the signal. A wait that detects an idle target returns stalled=true
+  instead of blocking until timeout; rerun next when that happens.
   The MCP and generated agent surfaces expose sessions_list, session_bridge,
   and session_loop_close. The remaining commands are human diagnostics.
 
@@ -280,8 +284,17 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
 }
 
 fn run_resume(args: &[OsString]) -> Result<()> {
-    let usage = "qol sessions resume <session> [--timeout-ms N]";
-    let (mut positionals, timeout_ms, expect) = parse_wait_args(args)?;
+    let usage = "qol sessions resume <session> [--timeout-ms N] [--kickstart]";
+    let mut kickstart = false;
+    let mut rest = Vec::new();
+    for argument in args {
+        if argument.to_str() == Some("--kickstart") {
+            kickstart = true;
+        } else {
+            rest.push(argument.clone());
+        }
+    }
+    let (mut positionals, timeout_ms, expect) = parse_wait_args(&rest)?;
     if expect.is_some() || positionals.len() != 1 {
         bail!("usage: {usage}");
     }
@@ -299,6 +312,7 @@ fn run_resume(args: &[OsString]) -> Result<()> {
         &binding,
         std::time::Duration::from_millis(timeout_ms),
         &bridge::PendingBridgeStore::system()?,
+        kickstart,
     )?;
     println!(
         "{}",
@@ -315,11 +329,13 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
+    let terminals = service()?;
+    let interpreter = CliSessionInterpreter::system();
     let rows = rounds
         .iter()
         .map(|round| {
             if round.completed {
-                serde_json::json!({
+                return serde_json::json!({
                     "phase": "review",
                     "session": round.session,
                     "completion_marker": round.completion_marker,
@@ -328,6 +344,26 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
                         round.session, round.completion_marker
                     ),
                     "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
+                });
+            }
+            let stalled = round
+                .session
+                .parse::<SessionBinding>()
+                .ok()
+                .and_then(|binding| {
+                    bridge::session_liveness(&terminals, &interpreter, &binding)()
+                })
+                == Some(false);
+            if stalled {
+                serde_json::json!({
+                    "phase": "stalled",
+                    "session": round.session,
+                    "command": format!(
+                        "qol sessions resume {} --kickstart --timeout-ms {}",
+                        round.session,
+                        bridge::TIMEOUT_MAX_MS
+                    ),
+                    "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground.",
                 })
             } else {
                 serde_json::json!({

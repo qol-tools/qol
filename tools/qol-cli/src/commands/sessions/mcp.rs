@@ -560,6 +560,54 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_target_without_the_marker_returns_stalled_instead_of_blocking() {
+        use std::str::FromStr;
+        let backend = Arc::new(FakeBackend::new(
+            vec!["working prompt".to_owned(); 64],
+            false,
+            false,
+        ));
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        let binding = qol_terminal_sessions::SessionBinding::from_str(&token()).unwrap();
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        let outcome = super::super::bridge::wait_for_completion(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_never",
+            Duration::from_secs(30),
+            rx,
+            false,
+            true,
+            &|| Some(false),
+            Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(!outcome.completed);
+        assert!(outcome.stalled);
+        assert!(outcome.elapsed_ms < 10_000);
+
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        let backend = Arc::new(FakeBackend::new(vec!["busy".to_owned(); 8], false, false));
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        let outcome = super::super::bridge::wait_for_completion(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_never",
+            Duration::from_millis(1_500),
+            rx,
+            false,
+            true,
+            &|| Some(true),
+            Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(!outcome.completed);
+        assert!(!outcome.stalled);
+    }
+
+    #[test]
     fn initialize_handshake_echoes_version_and_advertises_tools() {
         let (server, _) = server(Vec::new(), false, false);
         let response = server

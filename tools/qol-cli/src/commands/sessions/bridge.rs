@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
 const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUBSCRIPTION_HEARTBEAT: Duration = Duration::from_secs(30);
+const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
@@ -30,6 +31,7 @@ static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub(super) struct BridgeOutcome {
     pub(super) completed: bool,
     pub(super) submitted: bool,
+    pub(super) stalled: bool,
     pub(super) session: String,
     pub(super) completion_marker: String,
     pub(super) screen: String,
@@ -263,6 +265,14 @@ impl CompletionMarker {
             right: nonce.to_owned(),
         }
     }
+
+    fn from_token(token: &str) -> Result<Self> {
+        let nonce = token
+            .strip_prefix("QOL_BRIDGE_DONE_")
+            .filter(|nonce| !nonce.is_empty())
+            .ok_or_else(|| anyhow!("pending bridge checkpoint has an invalid completion marker"))?;
+        Ok(Self::from_nonce(nonce))
+    }
 }
 
 pub(super) fn execute(
@@ -288,7 +298,7 @@ pub(super) fn execute(
         .load(binding)?
         .is_some_and(|checkpoint| !checkpoint.closed)
     {
-        return resume(terminals, interpreter, binding, timeout, pending);
+        return resume(terminals, interpreter, binding, timeout, pending, false);
     }
 
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
@@ -330,6 +340,8 @@ pub(super) fn execute(
         changed_rx,
         subscribed,
         true,
+        &session_liveness(terminals, interpreter, binding),
+        STALL_PROBE_AFTER,
     )?;
     pending.observe(binding, &marker.token, outcome.completed)?;
     qol_runtime::probe!(
@@ -355,6 +367,7 @@ pub(super) fn resume(
     binding: &SessionBinding,
     timeout: Duration,
     pending: &PendingBridgeStore,
+    kickstart: bool,
 ) -> Result<BridgeOutcome> {
     let round = pending.pending_round(binding)?.ok_or_else(|| {
         anyhow!("no pending bridge exists for `{binding}`; run `qol sessions next`")
@@ -366,6 +379,7 @@ pub(super) fn resume(
             .context("bridge screen read failed")?;
         return Ok(outcome(
             true,
+            false,
             false,
             binding,
             &round.completion_marker,
@@ -385,6 +399,17 @@ pub(super) fn resume(
         )
         .context("failed to subscribe to implementation-session changes")?;
     let subscribed = subscription.is_some();
+    if kickstart {
+        let marker = CompletionMarker::from_token(&round.completion_marker)?;
+        terminals
+            .send_text(binding, &kickstart_prompt(&marker), DeliveryMode::Submit)
+            .context("bridge kickstart delivery failed")?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=kickstarted target_backend={}",
+            binding.session_id().backend()
+        );
+    }
     let outcome = wait_for_completion(
         terminals,
         binding,
@@ -393,12 +418,28 @@ pub(super) fn resume(
         changed_rx,
         subscribed,
         false,
+        &session_liveness(terminals, interpreter, binding),
+        STALL_PROBE_AFTER,
     )?;
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
     }
     drop(subscription);
     Ok(outcome)
+}
+
+pub(super) fn session_liveness<'a>(
+    terminals: &'a TerminalSessionService,
+    interpreter: &'a CliSessionInterpreter,
+    binding: &'a SessionBinding,
+) -> impl Fn() -> Option<bool> + 'a {
+    move || {
+        let facts = terminals.discover().ok()?;
+        let session = facts
+            .into_iter()
+            .find(|session| session.id == *binding.session_id())?;
+        interpreter.describe(&session).has_activity
+    }
 }
 
 fn resolve_target(
@@ -419,7 +460,8 @@ fn resolve_target(
     Ok(target)
 }
 
-fn wait_for_completion(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn wait_for_completion(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
     marker: &str,
@@ -427,9 +469,13 @@ fn wait_for_completion(
     changed: mpsc::Receiver<()>,
     subscribed: bool,
     submitted: bool,
+    liveness: &dyn Fn() -> Option<bool>,
+    stall_after: Duration,
 ) -> Result<BridgeOutcome> {
     let started = Instant::now();
     let mut previous = None;
+    let mut last_change = Instant::now();
+    let mut last_probe: Option<Instant> = None;
     let mut reads = 0;
     loop {
         let screen = terminals
@@ -439,14 +485,28 @@ fn wait_for_completion(
         let matched = screen.contains(marker);
         if matched && previous.as_deref() == Some(screen.as_str()) {
             return Ok(outcome(
-                true, submitted, binding, marker, screen, reads, started,
+                true, submitted, false, binding, marker, screen, reads, started,
             ));
         }
+        if previous.as_deref() != Some(screen.as_str()) {
+            last_change = Instant::now();
+        }
         previous = Some(screen.clone());
+        if !matched
+            && last_change.elapsed() >= stall_after
+            && last_probe.is_none_or(|probed| probed.elapsed() >= stall_after)
+        {
+            last_probe = Some(Instant::now());
+            if liveness() == Some(false) {
+                return Ok(outcome(
+                    false, submitted, true, binding, marker, screen, reads, started,
+                ));
+            }
+        }
         let elapsed = started.elapsed();
         if elapsed >= timeout {
             return Ok(outcome(
-                false, submitted, binding, marker, screen, reads, started,
+                false, submitted, false, binding, marker, screen, reads, started,
             ));
         }
         let remaining = timeout.saturating_sub(elapsed);
@@ -471,9 +531,11 @@ fn wait_for_completion(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn outcome(
     completed: bool,
     submitted: bool,
+    stalled: bool,
     binding: &SessionBinding,
     marker: &str,
     screen: String,
@@ -483,12 +545,20 @@ fn outcome(
     BridgeOutcome {
         completed,
         submitted,
+        stalled,
         session: binding.token(),
         completion_marker: marker.to_owned(),
         screen,
         reads,
         elapsed_ms: started.elapsed().as_millis(),
     }
+}
+
+fn kickstart_prompt(marker: &CompletionMarker) -> String {
+    format!(
+        "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
+        marker.left, marker.right
+    )
 }
 
 fn bridge_prompt(task: &str, marker: &CompletionMarker) -> String {
@@ -527,6 +597,18 @@ mod tests {
         assert!(prompt.contains("QOL_BRIDGE_DONE_"));
         assert!(prompt.contains("abc123"));
         assert!(!prompt.contains(&marker.token));
+    }
+
+    #[test]
+    fn kickstart_prompt_reuses_the_checkpoint_marker_fragments() {
+        let marker = CompletionMarker::from_token("QOL_BRIDGE_DONE_abc123").unwrap();
+        let prompt = kickstart_prompt(&marker);
+
+        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+        assert!(prompt.contains("abc123"));
+        assert!(!prompt.contains(&marker.token));
+        assert!(CompletionMarker::from_token("unrelated").is_err());
+        assert!(CompletionMarker::from_token("QOL_BRIDGE_DONE_").is_err());
     }
 
     #[test]
