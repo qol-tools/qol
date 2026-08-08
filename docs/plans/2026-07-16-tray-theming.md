@@ -1,6 +1,6 @@
 # Tray Theming and Component Consolidation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task (user requires inline execution, no subagents). Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task inline, no subagents. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Switchable full dark theme palettes for the qol-tray web UI, every view built from gallery components with a CI guard, and a global depth/typography/density pass.
 

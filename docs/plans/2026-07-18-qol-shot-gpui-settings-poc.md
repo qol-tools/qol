@@ -1,6 +1,6 @@
 # qol-shot gpui Settings POC Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** The qol-shot `settings` action opens a native gpui settings panel (daemon-rendered) driven by the existing qol-config contract, with the browser page as headless fallback.
 
@@ -12,7 +12,7 @@ The daemon routes the `settings` action to the panel; every other path is unchan
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-18-qol-shot-gpui-settings-poc-design.md`.
+- Spec: `docs/specs/2026-07-18-qol-shot-gpui-settings-poc-design.md`.
 - No code comments.
 - Single source of truth: `qol-config.toml` via `qol_config`; values live in `config.json`; no new schema or store.
 - Field kinds implemented: `boolean`, `select`, `number`, `string`, `string_array` only; all other kinds are skipped when mapping rows.

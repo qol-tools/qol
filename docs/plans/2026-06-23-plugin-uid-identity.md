@@ -1,6 +1,6 @@
 # Plugin UID Identity Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make plugin identity an immutable, published `uid` so renames never strand durable/synced state.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `git2` (unrelated), `toml`, `serde`; crates `apps/qol-tray` and `libs/qol-migrations`.
 
-**Spec:** `docs/superpowers/specs/2026-06-23-plugin-uid-identity-design.md`
+**Spec:** `docs/specs/2026-06-23-plugin-uid-identity-design.md`
 
 ## Global Constraints
 

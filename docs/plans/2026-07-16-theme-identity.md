@@ -1,6 +1,6 @@
 # Theme Identity Axis Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Themes change identity (typography, casing, radius, glow, surface treatment), not just palette; retro terminal becomes the slate/graphite/void identity, midnight goes modern per the approved mocks.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (qol-theme, qol-theme-css generator), CSS custom properties, Preact, node:test, Playwright live verification.
 
-**Spec:** `docs/superpowers/specs/2026-07-16-theme-identity-design.md`. Mock target: `identity-mock-v6-minimap.png`.
+**Spec:** `docs/specs/2026-07-16-theme-identity-design.md`. Mock target: `identity-mock-v6-minimap.png`.
 
 ## Global Constraints
 

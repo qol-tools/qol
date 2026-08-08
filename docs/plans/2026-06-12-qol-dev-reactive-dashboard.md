@@ -1,6 +1,6 @@
 # Reactive qol dev Dashboard Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Divergences (stale plugins, doctor warnings) surface on the `qol dev` dashboard automatically, cheaply, with event-driven dirtiness plus decaying periodic fallback; the tracer runs from session start.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, std mpsc threads (no async), ratatui 0.30, serde/serde_json, raw-socket HTTP client already in `dev_server.rs`.
 
-**Spec:** `docs/superpowers/specs/2026-06-12-qol-dev-reactive-dashboard-design.md`
+**Spec:** `docs/specs/2026-06-12-qol-dev-reactive-dashboard-design.md`
 
 **Verification gate for every task:** `cargo test -p qol` and `cargo build -p qol` must pass before the task's commit. Final task runs the full workspace gate.
 

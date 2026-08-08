@@ -1,6 +1,6 @@
 # Production Logging (Phase 2) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add production file logging with rate-limited error deduplication, build info embedding, and daily rotation.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `chrono` (timestamps), `log` crate (existing), platform `dirs` crate (existing)
 
-**Spec:** `docs/superpowers/specs/2026-03-21-state-logging-design.md` (Phase 2)
+**Spec:** `apps/qol-tray/docs/specs/2026-03-21-state-logging-design.md` (Phase 2)
 
 **Out of scope (separate tasks):**
 - Plugin CI pipeline updates to emit `[build] commit` into `plugin.toml` — cross-repo work, not qol-tray code

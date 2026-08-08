@@ -6,7 +6,7 @@
 //! source of truth for what fields are accepted; runtime enforcement in
 //! qol-runtime relies on parsing through these types.
 //!
-//! Refs: workspace/docs/superpowers/specs/2026-05-12-terminal-workspace-restore-design.md
+//! Refs: workspace/docs/specs/2026-05-12-terminal-workspace-restore-design.md
 //! Closes: CONTRACT-2.
 
 use qol_plugin_api::capability::{LauncherProviderCapability, PaneField, RestoreRuleCapability};

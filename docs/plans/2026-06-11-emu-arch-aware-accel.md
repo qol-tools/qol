@@ -1,8 +1,8 @@
 # Emu Arch-Aware Binary And Acceleration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** Pick the QEMU binary, accelerator, machine type, and firmware from the guest architecture so hvf/kvm/whpx engage when host arch matches guest arch, completing M2 of `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`.
+**Goal:** Pick the QEMU binary, accelerator, machine type, and firmware from the guest architecture so hvf/kvm/whpx engage when host arch matches guest arch, completing M2 of `docs/specs/2026-06-10-emu-test-harness-design.md`.
 
 **Architecture:** A `GuestArch` enum is parsed at the discovery boundary (config may declare `arch` per image; libvirt/filesystem default to x86_64) and flows through `Environment` into resolution (`qemu-system-<arch>`, per-arch accel) and launch args (machine `q35` vs `virt`, `-cpu`, edk2 pflash for aarch64). Acceleration becomes a shared pure function `select(hypervisor, available, host_arch, guest)` with per-OS hypervisor facts.
 
@@ -378,7 +378,7 @@ Delete `~/VMs/scratch-arm.qcow2`, restore/remove `emu.toml`, confirm `qol emu li
 
 **Files:**
 - Modify: `apps/qol-tray/skills/qol-cli-commands/SKILL.md` (Emu section: arch-aware selection done, table config form, doctor rows)
-- Modify: `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md` (Status: M2 complete)
+- Modify: `docs/specs/2026-06-10-emu-test-harness-design.md` (Status: M2 complete)
 
 - [x] **Step 1: Update both docs, mark M2 complete, commit**
 

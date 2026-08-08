@@ -1,6 +1,6 @@
 # Event-Driven Picker Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the polling prewarm loop (3% idle CPU) with event-driven X11 property monitoring (0% idle CPU), and pre-create the picker window at daemon startup for instant (~1ms) open time.
 

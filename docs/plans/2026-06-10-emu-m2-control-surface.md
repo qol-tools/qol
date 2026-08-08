@@ -1,6 +1,6 @@
 # emu M2: QMP Control Surface Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Drive a running `qol emu up` VM from a second process: screenshot, send keys, attach/detach a USB stick, take a disk snapshot, and shut it down - all over the existing QMP loopback socket.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (std TcpStream, serde_json, anyhow), QEMU QMP (`screendump`, `send-key`, `blockdev-add`/`device_add`, `blockdev-snapshot-sync`, `quit`).
 
-**Spec:** `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md` (M2 milestone).
+**Spec:** `docs/specs/2026-06-10-emu-test-harness-design.md` (M2 milestone).
 
 **Out of scope (follow-up plan):** "Finish hvf and whpx" - arch-aware QEMU binary/accel selection and aarch64 guest wiring is an independent subsystem and ships as its own plan. No real guest OS is needed here; every verb works against a SeaBIOS screen.
 
@@ -973,7 +973,7 @@ git commit -m "feat(emu): disk snapshot verb and image-aware teardown"
 **Files:**
 - Modify: `tools/qol-cli/src/commands/emu.rs` (`emu_help_text`)
 - Modify: `apps/qol-tray/skills/qol-cli-commands/SKILL.md`
-- Modify: `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md` (status note)
+- Modify: `docs/specs/2026-06-10-emu-test-harness-design.md` (status note)
 
 - [ ] **Step 1: Update help text**
 
@@ -1039,6 +1039,6 @@ In the spec's `## Status` section add one line: "M2 control surface implemented 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tools/qol-cli/src/commands/emu.rs apps/qol-tray/skills/qol-cli-commands/SKILL.md docs/superpowers/specs/2026-06-10-emu-test-harness-design.md
+git add tools/qol-cli/src/commands/emu.rs apps/qol-tray/skills/qol-cli-commands/SKILL.md docs/specs/2026-06-10-emu-test-harness-design.md
 git commit -m "docs(emu): document m2 control verbs and verification findings"
 ```

@@ -71,7 +71,7 @@ courier. Missing but mission-relevant: `hotkeys list` / `shortcuts list`
 | Phase | Work | Criterion |
 |---|---|---|
 | 0 | Audit script + this doc (done) | measure exists, gateable exit code |
-| 0.5 | Contract freeze (`docs/superpowers/specs/2026-08-03-headless-cli-contract-freeze.md`): normalize exit codes, ship the executable gate + daemon-spawn regression test, fix the task-runner env gate, rename ide-checkout display name | freeze spec landed; gate green on the 13-unit guest set; inventory counts quoted with categories |
+| 0.5 | Contract freeze (`docs/specs/2026-08-03-headless-cli-contract-freeze.md`): normalize exit codes, ship the executable gate + daemon-spawn regression test, fix the task-runner env gate, rename ide-checkout display name | freeze spec landed; gate green on the 13-unit guest set; inventory counts quoted with categories |
 | 1 | Add 8 host-feature command surfaces on `qol-tray` / `qol` front door, qol-headless contract, order: plugin-store → profile export/import/backup → theme/mode → updates → task → auth → launcher-apps | 8/8 host features headless |
 | 2 | UI-adapter hardening: UI layers consume headless APIs only; extend gallery-parity rule to plugin surfaces | no domain logic behind UI boundary |
 | 3 | Grow audit.sh into CI gate + `qol doctor` "headless contract" check group (action→command mapping, `doctor --json` parses, `help` exit 0, host features covered) | gate fails on any regression |

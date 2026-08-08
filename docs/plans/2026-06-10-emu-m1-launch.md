@@ -1,6 +1,6 @@
 # emu M1: Launch Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `qol emu up <id>` boots the prepared qcow2 overlay in QEMU with per-host acceleration, proves control by negotiating a QMP socket, and on VM exit discards the overlay so no-trace holds by construction.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (std only: `TcpStream`/`TcpListener`, `process::Command`), `serde_json`, `anyhow`. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md` (Milestone M1).
+**Spec:** `docs/specs/2026-06-10-emu-test-harness-design.md` (Milestone M1).
 
 **Out of scope (explicitly):** snapshot/screendump/sendkey/USB hot-plug (M2), `Machine` trait extraction (premature with one impl), Ctrl+C cleanup of an interrupted run (stale run dirs stay; note in report `next`), headless mode.
 

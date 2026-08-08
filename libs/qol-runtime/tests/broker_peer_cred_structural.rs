@@ -7,7 +7,7 @@
 //! "only processes running as the same uid as the daemon", the
 //! structural collapse that replaces bearer-token-only auth.
 //!
-//! Refs: workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 06)
+//! Refs: workspace/docs/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 06)
 //! Closes: RUNTIME-1.4.
 
 #![cfg(unix)]

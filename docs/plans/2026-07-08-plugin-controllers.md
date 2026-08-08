@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-08-plugin-controllers-design.md`.
+- Spec: `docs/specs/2026-07-08-plugin-controllers-design.md`.
 - `platforms = ["linux"]` in plugin.toml; the crate must still compile on macOS/Windows (workspace glob), so no unix-only APIs outside what qol-plugin-daemon already gates.
 - No code comments. Table-driven tests with context in assertions. Conventional one-line commits, no attribution.
 - The daemon never writes system state and never prompts; privileged writes happen only inside the user-triggered `apply_fixes` action via pkexec.

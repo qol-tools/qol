@@ -1,6 +1,6 @@
 # qol-gpui Surface Toast POC Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `qol_gpui::surface` with a `Toast` kind and use it in qol-shot as an opt-in replacement for the OS "saved" notification.
 
@@ -11,7 +11,7 @@ qol-shot gains a `capture.saved_feedback` select; when set to `toast`, the daemo
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-18-qol-gpui-surface-toast-poc-design.md`.
+- Spec: `docs/specs/2026-07-18-qol-gpui-surface-toast-poc-design.md`.
 - No code comments anywhere.
 - Toast content is text-only (title + file name). No thumbnail.
 - The toast never takes focus; keyboard reveal stays on the notification path.

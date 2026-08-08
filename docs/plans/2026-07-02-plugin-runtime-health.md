@@ -1,6 +1,6 @@
 # Plugin Runtime Health Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Per-plugin daemon liveness on `qol dev`'s Plugins page, a crash-loop doctor check, and truthful supervisor semantics underneath both.
 
@@ -10,7 +10,7 @@ The reload handoff (P1) starts returning real errors so the client never misread
 
 **Tech Stack:** Rust, tokio (watch channel), axum (dev route), serde_json, ratatui (qol dev console).
 
-**Spec:** `docs/superpowers/specs/2026-07-02-plugin-runtime-health-design.md` - read it first; it defines all semantics referenced here.
+**Spec:** `docs/specs/2026-07-02-plugin-runtime-health-design.md` - read it first; it defines all semantics referenced here.
 
 ## Global Constraints
 

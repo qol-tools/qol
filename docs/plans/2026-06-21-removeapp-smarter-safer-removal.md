@@ -1,8 +1,8 @@
 # removeapp Smarter, Safer Removal Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Spec:** `docs/superpowers/specs/2026-06-21-removeapp-smarter-safer-removal-design.md`
+**Spec:** `docs/specs/2026-06-21-removeapp-smarter-safer-removal-design.md`
 
 **Goal:** Upgrade `plugin-removeapp`'s per-app removal to find owner-related leftovers (without sweeping a sibling's data), detect running and Homebrew-managed apps, and enforce one consent-gated guard contract in both the GPUI picker and the terminal CLI.
 

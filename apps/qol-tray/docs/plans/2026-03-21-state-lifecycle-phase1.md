@@ -1,6 +1,6 @@
 # State & Lifecycle (Phase 1) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Separate dev from prod state, move ephemeral runtime data to `/tmp/qol-tray/`, add lifecycle cleanup, and migrate legacy file locations.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, tokio (async fs ops), tempfile (already in dev-dependencies)
 
-**Spec:** `docs/superpowers/specs/2026-03-21-state-logging-design.md` (Phase 1)
+**Spec:** `apps/qol-tray/docs/specs/2026-03-21-state-logging-design.md` (Phase 1)
 
 **Spec deviations:**
 - Staging dirs remain in `plugins/` (not `/tmp/qol-tray/staging/`) because `tokio::fs::rename()` fails across filesystems (EXDEV). Cleanup contract still applies: clean on success AND failure, clean stale on startup. `init_runtime_dirs` does NOT create a `staging/` subdirectory.

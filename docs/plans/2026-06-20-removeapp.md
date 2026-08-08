@@ -1,6 +1,6 @@
 # removeapp Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `plugins/removeapp` - a qol-tray `window`-kind plugin that uninstalls an app and its leftovers, with a headless core, a CLI, and a gpui picker. macOS is iteration 1.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-06-20-removeapp-plugin-design.md` (source of truth).
+- Spec: `docs/specs/2026-06-20-removeapp-plugin-design.md` (source of truth).
 - No comments in code. Conventional commits, one-line messages, no co-authors, no AI attribution.
 - `qol-arch-code`: zero `#[cfg(target_os)]` outside `platform/mod.rs` re-exports; NEVER `compile_error!`; OS files only under `platform/`; stubs return typed `Err`, never `unimplemented!()`.
 - Verification gate before any "done": `cargo fmt --all --check`, `RUSTFLAGS="-D warnings" cargo clippy --all-targets --all-features --keep-going -- -D warnings`, `cargo build`, `cargo test`. (`make ci-local` runs these.)

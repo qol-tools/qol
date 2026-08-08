@@ -6,8 +6,8 @@
 //! directory is mode `0700`. The bind helper refuses to create the socket
 //! if the parent dir is world- or group-accessible.
 //!
-//! Refs: workspace/docs/superpowers/specs/2026-05-12-terminal-workspace-restore-design.md
-//! Refs: workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md (cards 06, 11)
+//! Refs: workspace/docs/specs/2026-05-12-terminal-workspace-restore-design.md
+//! Refs: workspace/docs/plans/2026-05-12-terminal-workspace-restore-security-plan.md (cards 06, 11)
 //! Closes: RUNTIME-1.1.
 
 #![cfg(unix)]

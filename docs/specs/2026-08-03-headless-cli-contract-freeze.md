@@ -34,7 +34,7 @@ classification (C.4) are resolved inline.
 ## A. Host command namespace, ownership, and transport model
 
 Scope: the 8 host-embedded features with 0 headless commands (roadmap table
-`docs/superpowers/plans/2026-08-03-headless-cli-audit-roadmap.md:28-40`). `qol-tray`'s argv
+`docs/plans/2026-08-03-headless-cli-audit-roadmap.md:28-40`). `qol-tray`'s argv
 classifier only knows daemon/help/version/`--write-mode=`/exec/open/`qol://`/doctor
 (`apps/qol-tray/src/app/host_cli.rs:19`); anything else exits rc=2 "Invalid qol-tray
 invocation" (`apps/qol-tray/src/app/mod.rs:204`). All 8 features sit behind the authenticated
@@ -223,8 +223,8 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
 ## B. Execution semantics
 
 Contract-freeze section for the headless CLI. Basis: spec
-`docs/superpowers/specs/2026-08-03-headless-cli-common-interface.md`, audit roadmap
-`docs/superpowers/plans/2026-08-03-headless-cli-audit-roadmap.md:69-77` (Phase 1 order:
+`docs/specs/2026-08-03-headless-cli-common-interface.md`, audit roadmap
+`docs/plans/2026-08-03-headless-cli-audit-roadmap.md:69-77` (Phase 1 order:
 plugin-store → profile → theme/mode → updates → task → auth → launcher-apps), and
 guest-VM execution evidence (confirmed). Existing-code claims cite path:line.
 
@@ -817,9 +817,9 @@ env exception.
 ## D. Daemon compatibility matrix
 
 Contract-freeze section for the headless CLI. Basis: spec
-`docs/superpowers/specs/2026-08-03-headless-cli-common-interface.md` (V2/V3 canonical
+`docs/specs/2026-08-03-headless-cli-common-interface.md` (V2/V3 canonical
 `daemon` start verb, `status`, `kill`, no-args=status-or-help), audit roadmap
-`docs/superpowers/plans/2026-08-03-headless-cli-audit-roadmap.md:14-32` (per-plugin daemon
+`docs/plans/2026-08-03-headless-cli-audit-roadmap.md:14-32` (per-plugin daemon
 yes/no + commands), host supervisor `apps/qol-tray/src/plugins/daemon_lifecycle/spawn.rs`,
 and guest-VM execution evidence (confirmed). Every cell was verified against source;
 nothing below is inferred. All 13 daemon plugins declare `[daemon] enabled = true`.

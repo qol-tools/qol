@@ -1,6 +1,6 @@
 # Profile Sync Conflict Resolver Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 ## Status (2026-06-23) — detection/merge core landed, all green & warning-free on `main`
 
@@ -56,7 +56,7 @@ Facts discovered during execution (supersede plan draft where they differ):
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-06-23-profile-sync-conflict-resolver-design.md`.
+- Spec: `docs/specs/2026-06-23-profile-sync-conflict-resolver-design.md`.
 - `RUSTFLAGS=-D warnings` on all three OSes; no `dead_code`/`unused_imports`. Check every backend symbol against what each platform consumes (`qol-arch-cross-platform`).
 - No code comments. Conventional commits, short imperative subject, no AI attribution, no `Co-Authored-By`.
 - Frontend is htm tagged templates from `lib/html.js`; no JSX. Keyboard-first is a hard rule. Token CSS per `ui/styles/STYLE_GUIDE.md`; compose `Surface`/`ListRow` (`qol-tray-ui-systems`).

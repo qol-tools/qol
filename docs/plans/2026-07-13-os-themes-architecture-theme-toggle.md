@@ -1,6 +1,6 @@
 # os-themes Linux Architecture Seams + Light/Dark Toggle Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give plugin-os-themes explicit Linux seams (display server, desktop environment) and ship a light/dark theme toggle with a Cinnamon backend.
 
@@ -17,7 +17,7 @@
 - Gate before every commit: `cargo fmt -p plugin-os-themes --check && cargo clippy -p plugin-os-themes --all-targets -- -D warnings && cargo test -p plugin-os-themes`. All must pass with real output.
 - No `#[cfg(target_os)]` outside `platform/mod.rs` wiring. No `_ =>` arms on enum matches (string matches may use catch-alls).
 - Table-driven tests with context in assertions; snake_case descriptive test names.
-- The spec is `docs/superpowers/specs/2026-07-13-os-themes-architecture-theme-toggle-design.md`. One amendment made during planning: the dark-name heuristic must validate candidates against installed themes, because the live machine's theme is `Mint-Y-Dark-Pink` (infix `-Dark-`, so a plain suffix swap is wrong). Commit sequencing is also revised to 4 commits so no commit ships dead code.
+- The spec is `docs/specs/2026-07-13-os-themes-architecture-theme-toggle-design.md`. One amendment made during planning: the dark-name heuristic must validate candidates against installed themes, because the live machine's theme is `Mint-Y-Dark-Pink` (infix `-Dark-`, so a plain suffix swap is wrong). Commit sequencing is also revised to 4 commits so no commit ships dead code.
 - Live machine facts (verified 2026-07-13): `XDG_CURRENT_DESKTOP=X-Cinnamon`, `XDG_SESSION_TYPE=x11`, `gsettings get org.cinnamon.desktop.interface gtk-theme` = `'Mint-Y-Dark-Pink'`, `gsettings get org.cinnamon.theme name` = `'Mint-Y-Dark-Pink'`.
 
 ---

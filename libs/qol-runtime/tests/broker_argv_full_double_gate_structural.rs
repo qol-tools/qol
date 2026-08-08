@@ -12,7 +12,7 @@
 //! `ForegroundArgvFull` alone is not enough. It is a separate test
 //! file so the invariant is visible on its own.
 //!
-//! Refs: workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 07, "Defense in depth")
+//! Refs: workspace/docs/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 07, "Defense in depth")
 //! Closes: RUNTIME-1.2 (argv-truncation sub-invariant).
 
 use qol_runtime::broker::{check_field_access, FieldCheckError, PaneField};

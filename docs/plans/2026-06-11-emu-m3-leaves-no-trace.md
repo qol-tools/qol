@@ -1,8 +1,8 @@
 # Emu M3 Leaves-No-Trace Workflow Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** M3 of `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`: one GuestOs adapter (Debian nocloud aarch64), the Run verb facade, and a `qol emu check <id>` command that runs the `leaves-no-trace` workflow end-to-end and writes a verdict into report.json.
+**Goal:** M3 of `docs/specs/2026-06-10-emu-test-harness-design.md`: one GuestOs adapter (Debian nocloud aarch64), the Run verb facade, and a `qol emu check <id>` command that runs the `leaves-no-trace` workflow end-to-end and writes a verdict into report.json.
 
 **Architecture:** The VM gains a second loopback socket (`-serial tcp`) carrying the guest console. A `SerialClient` drives it expect-style (wait for marker, send line, run command with an un-echoable rc marker). A `GuestOs` trait under `emu/guest/` seals Debian knowledge (root login, stick format/mount, stub provisioning, reboot, trace listing). `Run` exposes only verbs (insert/launch_qol/pull/reboot/list_traces) backed by QMP + serial; `leaves_no_trace` composes them into a Verdict. `cmd_check` reuses the boot pipeline extracted from `cmd_up`.
 
@@ -270,7 +270,7 @@ Verified 2026-06-11:
 
 **Files:**
 - Modify: `apps/qol-tray/skills/qol-cli-commands/SKILL.md` (sh/check verbs, M3 status, debian image setup, serial socket note)
-- Modify: `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md` (Status: M3 implemented + the four MVP deviations)
+- Modify: `docs/specs/2026-06-10-emu-test-harness-design.md` (Status: M3 implemented + the four MVP deviations)
 
 - [x] **Step 1: Update `qol-cli-commands` skill**
 - [x] **Step 2: Update emu design spec status**

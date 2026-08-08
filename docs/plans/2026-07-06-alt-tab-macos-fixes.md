@@ -1,6 +1,6 @@
 # Alt-Tab macOS Fixes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix four alt-tab annoyances on macOS: grid overshooting the monitor with many windows, occasional duplicate window cards, visible progressive UI build-in after open, and small cards when only a few windows are open (dynamic sizing, default on).
 
