@@ -105,7 +105,6 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
       const args = ["bridge", params.session];
-      if (params.timeout_ms != null) args.push("--timeout-ms", String(Math.round(params.timeout_ms)));
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
       args.push("--", params.task);
       setLoopPhase("waiting");
@@ -235,14 +234,15 @@ mod tests {
     }
 
     #[test]
-    fn pi_schema_maps_the_bridge_task_and_optional_timeout() {
+    fn pi_schema_maps_the_bridge_task_without_a_round_deadline() {
         let specs = tool_specs();
         let spec = specs
             .iter()
             .find(|spec| spec.name == "session_bridge")
             .expect("bridge in contract");
         let source = render_tool_block(spec).expect("render");
-        assert!(source.contains("timeout_ms: Type.Optional(Type.Integer({ description: \"Optional timeout in milliseconds, clamped 1000..86400000 (default 3600000)\" })),"));
+        assert!(!source.contains("timeout_ms"));
+        assert!(!EXECUTE_BRIDGE.contains("timeout_ms"));
         assert!(source.contains(
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));

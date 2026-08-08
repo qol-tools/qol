@@ -84,10 +84,6 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Bounded implementation task to submit exactly once after any pending response is acknowledged",
                     },
-                    "timeout_ms": {
-                        "type": "integer",
-                        "description": "Optional timeout in milliseconds, clamped 1000..86400000 (default 3600000)",
-                    },
                     "acknowledge_marker": {
                         "type": "string",
                         "description": "Completion marker from the last reviewed completed bridge; required to submit the next round instead of recovering the prior response",

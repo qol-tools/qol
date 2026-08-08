@@ -24,7 +24,7 @@ const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
-pub(super) const TIMEOUT_DEFAULT_MS: u64 = 3_600_000;
+pub(super) const TIMEOUT_DEFAULT_MS: u64 = TIMEOUT_MAX_MS;
 pub(super) const TIMEOUT_MAX_MS: u64 = 86_400_000;
 
 static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);

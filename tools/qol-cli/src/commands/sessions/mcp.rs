@@ -17,6 +17,9 @@ const ERROR_INVALID_REQUEST: i64 = -32600;
 const ERROR_METHOD_NOT_FOUND: i64 = -32601;
 const ERROR_INVALID_PARAMS: i64 = -32602;
 
+#[cfg(test)]
+const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(1_000);
+
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub(super) const WAIT_TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const WAIT_TIMEOUT_DEFAULT_MS: u64 = 30_000;
@@ -26,6 +29,7 @@ pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
+    round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
@@ -36,6 +40,7 @@ impl McpSessionServer {
             terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
+            round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
         })
@@ -49,6 +54,7 @@ impl McpSessionServer {
             terminals: Arc::new(terminals),
             interpreter,
             pending,
+            round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
     }
@@ -63,6 +69,7 @@ impl McpSessionServer {
             terminals: Arc::new(terminals),
             interpreter,
             pending: super::bridge::PendingBridgeStore::with_dir(dir),
+            round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
     }
@@ -182,13 +189,9 @@ impl McpSessionServer {
             .get("task")
             .and_then(Value::as_str)
             .ok_or_else(|| "session_bridge requires a `task` string".to_owned())?;
-        let timeout_ms = match arguments.get("timeout_ms") {
-            Some(value) => value.as_u64().ok_or_else(|| {
-                "session_bridge `timeout_ms` must be a non-negative integer".to_owned()
-            })?,
-            None => super::bridge::TIMEOUT_DEFAULT_MS,
+        if arguments.get("timeout_ms").is_some() {
+            return Err("session_bridge takes no `timeout_ms`; the round stays open until the implementation emits its completion signal. Resend this call without that argument.".to_owned());
         }
-        .clamp(super::bridge::TIMEOUT_MIN_MS, super::bridge::TIMEOUT_MAX_MS);
         let acknowledge_marker = arguments
             .get("acknowledge_marker")
             .map(|value| {
@@ -202,7 +205,7 @@ impl McpSessionServer {
             &self.interpreter,
             &binding,
             task,
-            Duration::from_millis(timeout_ms),
+            self.round_timeout,
             &self.pending,
             acknowledge_marker,
         )
@@ -777,7 +780,7 @@ mod tests {
         let response = tool_call(
             &server,
             "session_bridge",
-            json!({ "session": token(), "task": "keep working", "timeout_ms": 1000 }),
+            json!({ "session": token(), "task": "keep working" }),
         );
         let outcome: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
@@ -794,7 +797,7 @@ mod tests {
         let first = tool_call(
             &server,
             "session_bridge",
-            json!({ "session": token(), "task": "first task", "timeout_ms": 1_000 }),
+            json!({ "session": token(), "task": "first task" }),
         );
         let first_outcome: Value =
             serde_json::from_str(first["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -808,7 +811,7 @@ mod tests {
         let recovered = tool_call(
             &server,
             "session_bridge",
-            json!({ "session": token(), "task": "second task", "timeout_ms": 1_000 }),
+            json!({ "session": token(), "task": "second task" }),
         );
         let recovered_outcome: Value =
             serde_json::from_str(recovered["result"]["content"][0]["text"].as_str().unwrap())
@@ -835,7 +838,6 @@ mod tests {
             json!({
                 "session": token(),
                 "task": "second task",
-                "timeout_ms": 1_000,
                 "acknowledge_marker": recovered_outcome["completion_marker"],
             }),
         );
@@ -874,9 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn bridge_rejects_invalid_timeout_types() {
+    fn bridge_refuses_a_caller_supplied_round_deadline() {
         let (server, backend) = server(Vec::new(), true, false);
-        for timeout in [json!(-1), json!("soon"), json!(1.5)] {
+        for timeout in [json!(600_000), json!(-1), json!("soon")] {
             let response = tool_call(
                 &server,
                 "session_bridge",
@@ -886,9 +888,17 @@ mod tests {
             assert!(response["result"]["content"][0]["text"]
                 .as_str()
                 .unwrap()
-                .contains("non-negative integer"));
+                .contains("takes no `timeout_ms`"));
         }
         assert!(backend.sent.lock().unwrap().is_empty());
+
+        let schema = super::super::contract::tool_specs()
+            .iter()
+            .find(|spec| spec.name == "session_bridge")
+            .unwrap()
+            .input_schema
+            .clone();
+        assert!(schema["properties"].get("timeout_ms").is_none());
     }
 
     #[test]
