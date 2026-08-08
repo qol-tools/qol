@@ -4,20 +4,21 @@ use std::fs;
 use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use plugin_cli_sessions::snapshot::capture_all;
 use plugin_cli_sessions::status::Status;
+use qol_terminal_sessions::{SessionBinding, SessionId};
 
 struct FakeHost {
     panes: Vec<Pane>,
-    screens: HashMap<u64, String>,
+    screens: HashMap<SessionId, String>,
 }
 
 impl TerminalHost for FakeHost {
     fn discover(&self) -> Vec<Pane> {
         self.panes.clone()
     }
-    fn get_text(&self, window_id: u64, _root_pid: i32) -> Option<String> {
-        self.screens.get(&window_id).cloned()
+    fn get_text(&self, target: &SessionBinding) -> Option<String> {
+        self.screens.get(target.session_id()).cloned()
     }
-    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
+    fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -41,26 +42,29 @@ fn snapshot_captures_every_window_with_its_panel_status() {
     let host = FakeHost {
         panes: vec![pane(1, "picker", &["claude"]), pane(2, "shell", &["zsh"])],
         screens: HashMap::from([
-            (1, "\u{276F} 1. Yes\n  2. No".to_string()),
-            (2, "$ ls".to_string()),
+            (kitty_session_id(1), "\u{276F} 1. Yes\n  2. No".to_string()),
+            (kitty_session_id(2), "$ ls".to_string()),
         ]),
     };
-    // the panel currently (wrongly) shows the picker window as idle
-    let panel = HashMap::from([(1u64, Status::Unknown), (2u64, Status::Working)]);
+    let panel = HashMap::from([
+        (kitty_session_id(1), Status::Unknown),
+        (kitty_session_id(2), Status::Working),
+    ]);
 
     let dir = std::env::temp_dir().join(format!("cli-sessions-snap-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
 
     let target = capture_all(&host, &panel, &dir, 1234).expect("snapshot writes");
 
-    let win1 = fs::read_to_string(target.join("win1.txt")).expect("win1 screen written");
+    let win1 = fs::read_to_string(target.join("session-1.txt")).expect("screen written");
     assert!(
         win1.contains("1. Yes"),
         "the real screen is captured verbatim"
     );
 
     let meta: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(target.join("win1.meta.json")).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(target.join("session-1.meta.json")).unwrap())
+            .unwrap();
     assert_eq!(meta["title"], "picker");
     assert_eq!(meta["foreground_basenames"][0], "claude");
     assert_eq!(

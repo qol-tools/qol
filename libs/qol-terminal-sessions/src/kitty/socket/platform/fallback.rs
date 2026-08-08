@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) fn exchange(
     _path: &Path,
@@ -8,4 +8,12 @@ pub(super) fn exchange(
     Err(std::io::Error::other(
         "Kitty socket transport needs a Unix platform",
     ))
+}
+
+pub(super) fn discover_sibling_paths(current: &Path) -> Vec<PathBuf> {
+    vec![current.to_owned()]
+}
+
+pub(super) fn instance_id(_path: &Path) -> Option<String> {
+    None
 }

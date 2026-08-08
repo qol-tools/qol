@@ -11,6 +11,7 @@ use qol_terminal_sessions::cli::{
     codex_tool, kimi_tool, CliSessionChangeHandler, CliSessionDescriptor, CliSessionInterpreter,
     CliSessionStrategy, CliSessionSubscription, CliTool,
 };
+use qol_terminal_sessions::SessionBinding;
 
 struct FakeHost {
     panes: Vec<Pane>,
@@ -21,10 +22,10 @@ impl TerminalHost for FakeHost {
     fn discover(&self) -> Vec<Pane> {
         self.panes.clone()
     }
-    fn get_text(&self, _window_id: u64, _root_pid: i32) -> Option<String> {
+    fn get_text(&self, _target: &SessionBinding) -> Option<String> {
         Some(self.screen.clone())
     }
-    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
+    fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -48,12 +49,12 @@ impl TerminalHost for CountingHost {
         self.panes.clone()
     }
 
-    fn get_text(&self, _window_id: u64, _root_pid: i32) -> Option<String> {
+    fn get_text(&self, _target: &SessionBinding) -> Option<String> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         Some(self.screen.lock().unwrap().clone())
     }
 
-    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
+    fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -660,7 +661,11 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 201);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn,);
 
-    reg.lock().unwrap().get_mut(10).unwrap().acknowledge();
+    reg.lock()
+        .unwrap()
+        .get_mut(&kitty_session_id(10))
+        .unwrap()
+        .acknowledge();
     tick(&reg, &parked, &interpreter(), &NoServiceProbe, 300);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Acknowledged,);
 
@@ -754,7 +759,7 @@ fn tick_does_not_refresh_activity_timestamp_while_working() {
 fn tick_refreshes_restored_identity_fields() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     reg.lock().unwrap().restore(vec![SessionState {
-        window_id: 21,
+        id: kitty_session_id(21),
         root_pid: -1,
         project: "stale".into(),
         name: None,

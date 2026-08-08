@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use qol_terminal_sessions::cli::{
     CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription, CliToolId,
 };
+use qol_terminal_sessions::SessionId;
 
-use crate::host::{project_of, window_id, Pane, TerminalHost};
+use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
 use crate::session::registry::{summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
@@ -24,7 +25,7 @@ const SUBSCRIPTION_RETRY_SECS: u64 = 30;
 pub struct ReconcileCaches {
     branch: git::BranchCache,
     persisted: Option<(std::path::PathBuf, Vec<SessionState>)>,
-    screens: HashMap<u64, ScreenCache>,
+    screens: HashMap<SessionId, ScreenCache>,
 }
 
 struct ScreenCache {
@@ -104,7 +105,7 @@ pub fn tick_with_caches(
         let tool = Tool::from_cli_session(&cli_session);
         let strategy = for_tool(tool);
         let wants_screen = strategy.wants_screen(pane);
-        let (prev, prev_hash) = snapshot(registry, window_id(pane));
+        let (prev, prev_hash) = snapshot(registry, &pane.id);
         let refresh_active =
             prev.is_some_and(|state| matches!(state.status, Status::Working | Status::NeedsYou));
         let screen = if wants_screen {
@@ -118,7 +119,7 @@ pub fn tick_with_caches(
                 caches,
             )
         } else {
-            caches.screens.remove(&window_id(pane));
+            caches.screens.remove(&pane.id);
             None
         };
         let new_hash = screen
@@ -153,8 +154,8 @@ pub fn tick_with_caches(
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane wid={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} working={} awaiting={} turn_taken={} read_phase={:?} label={:?} title={:?}",
-            window_id(pane),
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} working={} awaiting={} turn_taken={} read_phase={:?} label={:?} title={:?}",
+            pane.id,
             tool,
             cli_tool,
             pane.at_prompt,
@@ -175,7 +176,7 @@ pub fn tick_with_caches(
             }
             drop(reg);
             crate::diagnostics::anomaly::observe(
-                window_id(pane),
+                pane.id.clone(),
                 now,
                 &pane.title,
                 screen.as_deref(),
@@ -223,7 +224,7 @@ fn cached_screen(
     now: u64,
     caches: &mut ReconcileCaches,
 ) -> Option<String> {
-    let id = window_id(pane);
+    let id = pane.id.clone();
     let identity = ScreenIdentity::new(pane, cli_session);
     let replace = caches
         .screens
@@ -231,7 +232,7 @@ fn cached_screen(
         .is_none_or(|entry| entry.identity != identity);
     if replace {
         caches.screens.insert(
-            id,
+            id.clone(),
             ScreenCache {
                 identity,
                 text: None,
@@ -271,14 +272,17 @@ fn cached_screen(
     let Some(reason) = reason else {
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=screen wid={id} source=cache age_secs={} subscription=active",
+            "phase=screen id={id} source=cache age_secs={} subscription=active",
             now.saturating_sub(entry.last_read)
         );
         return entry.text.clone();
     };
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
-    let fresh = host.get_text(id, pane.root_pid);
+    let fresh = pane
+        .binding()
+        .ok()
+        .and_then(|binding| host.get_text(&binding));
     #[cfg(debug_assertions)]
     let elapsed_ms = started.elapsed().as_millis();
     #[cfg(not(debug_assertions))]
@@ -288,7 +292,7 @@ fn cached_screen(
         entry.last_read = now;
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=screen wid={id} source=read reason={reason} elapsed_ms={elapsed_ms} subscription={}",
+            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} subscription={}",
             if entry.subscription.is_some() {
                 "active"
             } else {
@@ -300,20 +304,20 @@ fn cached_screen(
     entry.dirty.store(true, Ordering::Release);
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
-        "phase=screen wid={id} source=read reason={reason} outcome=unavailable elapsed_ms={elapsed_ms}"
+        "phase=screen id={id} source=read reason={reason} outcome=unavailable elapsed_ms={elapsed_ms}"
     );
     None
 }
 
 fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, panes: &[Pane]) {
-    let live: HashSet<u64> = panes.iter().map(window_id).collect();
+    let live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
     caches.screens.retain(|id, _| live.contains(id));
     let Ok(mut reg) = registry.lock() else { return };
     reg.prune(pid_alive);
-    let stale: Vec<u64> = reg
+    let stale: Vec<SessionId> = reg
         .sorted()
         .into_iter()
-        .map(|s| s.window_id)
+        .map(|s| s.id)
         .filter(|id| !live.contains(id))
         .collect();
     #[cfg(debug_assertions)]
@@ -321,7 +325,7 @@ fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, 
         qol_runtime::probe!("CLI_SESSIONS_RECON", "phase=prune removed={:?}", stale);
     }
     for id in stale {
-        reg.remove(id);
+        reg.remove(&id);
     }
 }
 
@@ -390,11 +394,11 @@ fn short(s: &str) -> String {
         .collect()
 }
 
-fn snapshot(registry: &Arc<Mutex<Registry>>, window_id: u64) -> (Option<Prev>, Option<u64>) {
+fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Option<Prev>, Option<u64>) {
     let Ok(reg) = registry.lock() else {
         return (None, None);
     };
-    match reg.get(window_id) {
+    match reg.get(id) {
         Some(s) => (
             Some(Prev {
                 status: s.status,
@@ -415,8 +419,8 @@ fn apply(
     branch: Option<String>,
     now: u64,
 ) -> (Option<Notice>, Status) {
-    let pane_window_id = window_id(pane);
-    let (prev_status, prev_running) = match reg.get(pane_window_id) {
+    let pane_id = &pane.id;
+    let (prev_status, prev_running) = match reg.get(pane_id) {
         Some(s) => (s.status, s.running_since),
         None => (Status::Unknown, None),
     };
@@ -436,8 +440,8 @@ fn apply(
     if status != prev_status {
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=apply wid={} prev={:?} new={:?} tool={:?} summary={:?}",
-            pane_window_id,
+            "phase=apply id={} prev={:?} new={:?} tool={:?} summary={:?}",
+            pane_id,
             prev_status,
             status,
             tool,
@@ -445,7 +449,7 @@ fn apply(
         );
     }
 
-    if let Some(s) = reg.get_mut(pane_window_id) {
+    if let Some(s) = reg.get_mut(pane_id) {
         if status != s.status {
             s.last_activity = now;
         }
@@ -464,7 +468,7 @@ fn apply(
         return (notice, status);
     }
     reg.upsert(SessionState {
-        window_id: pane_window_id,
+        id: pane_id.clone(),
         root_pid: pane.root_pid,
         project: project_of(&pane.cwd),
         name: reading.label,

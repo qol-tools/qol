@@ -2,23 +2,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::SessionId;
 
-use crate::host::{window_id, TerminalHost};
+use crate::host::TerminalHost;
 use crate::session::status::Status;
 use crate::session::tool::Tool;
 
-/// Dump every live session's frame in the moment - the screen, the title, and
-/// the status the panel is currently showing - so a wrong status (in any
-/// direction) can be turned into a 1:1 fixture. User-triggered, because only the
-/// user knows the panel is wrong; the daemon has no oracle for its own misreads.
-///
-/// `panel` is the status the registry currently holds per window (what you see).
-/// Each window is written in the corpus-fixture shape (`win<id>.txt` +
-/// `win<id>.meta.json`) so a frame can be promoted to a regression test by
-/// setting `expect`. Returns the snapshot directory.
 pub fn capture_all(
     host: &dyn TerminalHost,
-    panel: &HashMap<u64, Status>,
+    panel: &HashMap<SessionId, Status>,
     dir: &Path,
     ts: u64,
 ) -> std::io::Result<PathBuf> {
@@ -30,15 +22,17 @@ pub fn capture_all(
     let mut index = Vec::new();
     for pane in &panes {
         let cli_session = cli_interpreter.describe(pane);
-        let pane_window_id = window_id(pane);
-        let screen = host
-            .get_text(pane_window_id, pane.root_pid)
+        let screen = pane
+            .binding()
+            .ok()
+            .and_then(|binding| host.get_text(&binding))
             .unwrap_or_default();
-        let panel_status = panel.get(&pane_window_id).map(|s| format!("{s:?}"));
-        let file = format!("win{pane_window_id}.txt");
+        let panel_status = panel.get(&pane.id).map(|s| format!("{s:?}"));
+        let file_key = pane.id.native();
+        let file = format!("session-{file_key}.txt");
         std::fs::write(target.join(&file), &screen)?;
         std::fs::write(
-            target.join(format!("win{pane_window_id}.meta.json")),
+            target.join(format!("session-{file_key}.meta.json")),
             to_pretty(&serde_json::json!({
                 "title": pane.title,
                 "at_prompt": pane.at_prompt,
@@ -48,7 +42,7 @@ pub fn capture_all(
             })),
         )?;
         index.push(serde_json::json!({
-            "window_id": pane_window_id,
+            "session_id": pane.id,
             "file": file,
             "title": pane.title,
             "tool": format!("{:?}", Tool::from_cli_session(&cli_session)),

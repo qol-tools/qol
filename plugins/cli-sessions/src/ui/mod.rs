@@ -9,6 +9,7 @@ mod trace;
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
+use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
@@ -21,7 +22,7 @@ pub struct SessionsView {
     pub host: Arc<dyn TerminalHost + Send + Sync>,
     selection: Selection,
     is_showing: bool,
-    last_jumped: Option<u64>,
+    last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
 
@@ -61,37 +62,33 @@ impl SessionsView {
         hidden
     }
 
-    fn order(&self) -> Vec<u64> {
-        self.rows().iter().map(|row| row.window_id).collect()
+    fn order(&self) -> Vec<SessionId> {
+        self.rows().iter().map(|row| row.id.clone()).collect()
     }
 
     pub fn selection(&self) -> &Selection {
         &self.selection
     }
 
-    /// Focus a session by identity. Selecting and focusing by `window_id`
-    /// (never by row index) is what keeps a click on the session the user
-    /// actually clicked, no matter how the attention sort has since reordered
-    /// the rows beneath the cursor.
-    pub fn jump_to_window(&mut self, window_id: u64, reason: &'static str, cx: &mut Context<Self>) {
-        self.selection.select(window_id);
-        self.last_jumped = Some(window_id);
+    pub fn jump_to_session(&mut self, id: SessionId, reason: &'static str, cx: &mut Context<Self>) {
+        self.selection.select(id.clone());
+        self.last_jumped = Some(id.clone());
         let rows = self.rows();
-        let root_pid = match rows
-            .iter()
-            .enumerate()
-            .find(|(_, row)| row.window_id == window_id)
-        {
+        let binding = match rows.iter().enumerate().find(|(_, row)| row.id == id) {
             Some((index, row)) => {
                 trace::jump_target(reason, index, rows.len(), row);
-                row.root_pid
+                let Some(binding) = row.binding() else {
+                    trace::jump_missing(reason, index, rows.len());
+                    return;
+                };
+                binding
             }
             None => {
                 trace::jump_missing(reason, rows.len(), rows.len());
                 return;
             }
         };
-        self.focus_window_async(window_id, root_pid, reason, cx);
+        self.focus_session_async(binding, reason, cx);
     }
 
     pub fn move_selection_down(&mut self) {
@@ -106,35 +103,35 @@ impl SessionsView {
 
     pub fn focus_selected(&mut self, cx: &mut Context<Self>) {
         let order = self.order();
-        if let Some(window_id) = self.selection.resolved(&order) {
-            self.jump_to_window(window_id, "enter", cx);
+        if let Some(id) = self.selection.resolved(&order) {
+            self.jump_to_session(id, "enter", cx);
         }
     }
 
-    fn focus_window_async(
+    fn focus_session_async(
         &self,
-        window_id: u64,
-        root_pid: i32,
+        target: SessionBinding,
         reason: &'static str,
         cx: &mut Context<Self>,
     ) {
         let host = self.host.clone();
-        trace::focus_start(reason, window_id);
+        trace::focus_start(reason, target.session_id());
+        let result_id = target.session_id().clone();
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
                 let result = async_cx
-                    .background_spawn(async move { host.focus(window_id, root_pid) })
+                    .background_spawn(async move { host.focus(&target) })
                     .await;
-                trace::focus_result(reason, window_id, &result);
+                trace::focus_result(reason, &result_id, &result);
             }
         })
         .detach();
     }
 
-    pub fn acknowledge(&self, window_id: u64) {
+    pub fn acknowledge(&self, id: &SessionId) {
         if let Ok(mut reg) = self.registry.lock() {
-            if let Some(s) = reg.get_mut(window_id) {
+            if let Some(s) = reg.get_mut(id) {
                 s.acknowledge();
             }
         }
@@ -142,8 +139,8 @@ impl SessionsView {
 
     pub fn acknowledge_selected(&self) {
         let order = self.order();
-        if let Some(window_id) = self.selection.resolved(&order) {
-            self.acknowledge(window_id);
+        if let Some(id) = self.selection.resolved(&order) {
+            self.acknowledge(&id);
         }
     }
 
@@ -152,12 +149,13 @@ impl SessionsView {
         let statuses: Vec<crate::session::status::Status> = rows.iter().map(|r| r.status).collect();
         let current = self
             .last_jumped
-            .and_then(|wid| rows.iter().position(|r| r.window_id == wid));
-        if let Some(window_id) = crate::ui::nav::next_attention(&statuses, current)
+            .as_ref()
+            .and_then(|id| rows.iter().position(|row| &row.id == id));
+        if let Some(id) = crate::ui::nav::next_attention(&statuses, current)
             .and_then(|index| rows.get(index))
-            .map(|row| row.window_id)
+            .map(|row| row.id.clone())
         {
-            self.jump_to_window(window_id, "next-attention", cx);
+            self.jump_to_session(id, "next-attention", cx);
         }
     }
 }

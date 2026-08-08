@@ -46,7 +46,7 @@ fn basename(cmdline: &[String]) -> Option<String> {
 }
 
 impl KittyWindow {
-    fn into_session(self, backend_id: &BackendId) -> SessionFacts {
+    fn into_session(self, backend_id: &BackendId, instance: Option<&str>) -> SessionFacts {
         let foreground_basenames = self
             .foreground_processes
             .iter()
@@ -63,9 +63,13 @@ impl KittyWindow {
         } else {
             basename(&[reported.to_owned()]).or_else(|| Some(reported.to_owned()))
         };
+        let native_id = match instance {
+            Some(instance) => format!("{instance}.{}", self.id),
+            None => self.id.to_string(),
+        };
         SessionFacts {
-            id: SessionId::new(backend_id.clone(), self.id.to_string())
-                .expect("numeric Kitty ids are valid terminal session identities"),
+            id: SessionId::new(backend_id.clone(), native_id)
+                .expect("Kitty endpoint and window ids are valid terminal session identities"),
             root_pid: self.pid,
             cwd: self.cwd.to_string_lossy().into_owned(),
             title: self.title,
@@ -80,11 +84,19 @@ impl KittyWindow {
 
 impl KittyLs {
     pub fn sessions(self, backend_id: &BackendId) -> Vec<SessionFacts> {
+        self.sessions_for(backend_id, None)
+    }
+
+    pub(super) fn sessions_for(
+        self,
+        backend_id: &BackendId,
+        instance: Option<&str>,
+    ) -> Vec<SessionFacts> {
         self.0
             .into_iter()
             .flat_map(|window| window.tabs)
             .flat_map(|tab| tab.windows)
-            .map(|window| window.into_session(backend_id))
+            .map(|window| window.into_session(backend_id, instance))
             .collect()
     }
 }
@@ -119,5 +131,15 @@ mod tests {
         assert_eq!(sessions[0].foreground_pids, [100, 101]);
         assert!(sessions[1].at_prompt);
         assert_eq!(sessions[1].reported_cmd, None);
+    }
+
+    #[test]
+    fn parser_qualifies_window_ids_with_the_terminal_instance() {
+        let sessions = parse_ls(SAMPLE, backend_id())
+            .unwrap()
+            .sessions_for(backend_id(), Some("k1_2"));
+
+        assert_eq!(sessions[0].id.native(), "k1_2.10");
+        assert_eq!(sessions[1].id.native(), "k1_2.11");
     }
 }

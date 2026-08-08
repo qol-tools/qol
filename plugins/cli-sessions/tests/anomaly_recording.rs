@@ -1,6 +1,7 @@
 use std::fs;
 
 use plugin_cli_sessions::anomaly::observe;
+use plugin_cli_sessions::host::kitty_session_id;
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::Phase;
 
@@ -13,16 +14,23 @@ fn a_needs_you_flap_is_recorded_to_disk_when_enabled() {
 
     let screen = "How should this run?\n\u{276F} 1. Yes\n  2. No\n  enter to confirm";
     observe(
-        42,
+        kitty_session_id(42),
         0,
         "working",
         Some("busy screen"),
         Phase::Busy,
         Status::Working,
     );
-    observe(42, 3, "x", Some(screen), Phase::Blocked, Status::NeedsYou);
     observe(
-        42,
+        kitty_session_id(42),
+        3,
+        "x",
+        Some(screen),
+        Phase::Blocked,
+        Status::NeedsYou,
+    );
+    observe(
+        kitty_session_id(42),
         6,
         "working",
         Some("busy again"),

@@ -1,4 +1,5 @@
 use crate::session::registry::SessionState;
+use qol_terminal_sessions::SessionId;
 
 pub(super) fn jump_missing(reason: &'static str, index: usize, row_count: usize) {
     #[cfg(debug_assertions)]
@@ -20,8 +21,8 @@ pub(super) fn jump_target(
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_JUMP",
-        "phase=target reason={reason} index={index} rows={row_count} wid={} status={:?} tool={:?} project={} name={} branch={}",
-        row.window_id,
+        "phase=target reason={reason} index={index} rows={row_count} id={} status={:?} tool={:?} project={} name={} branch={}",
+        row.id,
         row.status,
         row.tool,
         qol_runtime::probe::token(&row.project),
@@ -41,33 +42,30 @@ pub(super) fn dismiss(reason: &'static str, hidden: bool) {
     let _ = (reason, hidden);
 }
 
-pub(super) fn focus_start(reason: &'static str, window_id: u64) {
+pub(super) fn focus_start(reason: &'static str, id: &SessionId) {
     #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "CLI_SESSIONS_FOCUS",
-        "phase=start reason={reason} wid={window_id}"
-    );
+    qol_runtime::probe!("CLI_SESSIONS_FOCUS", "phase=start reason={reason} id={id}");
 
     #[cfg(not(debug_assertions))]
-    let _ = (reason, window_id);
+    let _ = (reason, id);
 }
 
-pub(super) fn focus_result(reason: &'static str, window_id: u64, result: &anyhow::Result<()>) {
+pub(super) fn focus_result(reason: &'static str, id: &SessionId, result: &anyhow::Result<()>) {
     #[cfg(debug_assertions)]
     match result {
         Ok(()) => qol_runtime::probe!(
             "CLI_SESSIONS_FOCUS",
-            "phase=done reason={reason} wid={window_id} ok=true"
+            "phase=done reason={reason} id={id} ok=true"
         ),
         Err(error) => qol_runtime::probe!(
             "CLI_SESSIONS_FOCUS",
-            "phase=done reason={reason} wid={window_id} ok=false err=\"{}\"",
+            "phase=done reason={reason} id={id} ok=false err=\"{}\"",
             qol_runtime::probe::quoted(&error.to_string(), 160)
         ),
     }
 
     #[cfg(not(debug_assertions))]
-    let _ = (reason, window_id, result);
+    let _ = (reason, id, result);
 }
 
 pub(super) fn open_command(shown: bool) {
