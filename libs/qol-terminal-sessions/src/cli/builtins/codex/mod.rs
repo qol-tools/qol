@@ -64,11 +64,11 @@ impl CliSessionStrategy for CodexStrategy {
 
     fn subscribe(
         &self,
-        _session: &SessionFacts,
+        session: &SessionFacts,
         on_change: CliSessionChangeHandler,
     ) -> Result<Option<CliSessionSubscription>, CliSessionSubscriptionError> {
         self.metadata
-            .subscription_path()
+            .subscription_path(session)
             .map(|path| CliSessionSubscription::watch_file(path, on_change))
             .transpose()
     }

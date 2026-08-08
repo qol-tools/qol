@@ -60,6 +60,24 @@ fn session_index_changes_refresh_names_without_waiting_for_a_ttl() {
 }
 
 #[test]
+fn completion_subscription_tracks_the_target_rollout() {
+    let root = TempDir::new().unwrap();
+    let rollout = root.path().join("rollout.jsonl");
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&rollout, "first\nsecond\n").unwrap();
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment {
+        rollout: rollout.clone(),
+        index,
+    }));
+
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()),
+        Some(rollout)
+    );
+}
+
+#[test]
 fn title_activity_and_thread_name_follow_the_default_title_layout() {
     let root = TempDir::new().unwrap();
     let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
