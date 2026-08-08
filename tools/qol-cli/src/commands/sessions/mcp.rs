@@ -25,21 +25,45 @@ pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
 pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
+    pending: super::bridge::PendingBridgeStore,
+    #[cfg(test)]
+    _pending_root: Option<tempfile::TempDir>,
 }
 
 impl McpSessionServer {
-    pub(crate) fn system() -> Self {
-        Self {
+    pub(crate) fn system() -> Result<Self> {
+        Ok(Self {
             terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
-        }
+            pending: super::bridge::PendingBridgeStore::system()?,
+            #[cfg(test)]
+            _pending_root: None,
+        })
     }
 
     #[cfg(test)]
     fn with(terminals: TerminalSessionService, interpreter: CliSessionInterpreter) -> Self {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
         Self {
             terminals: Arc::new(terminals),
             interpreter,
+            pending,
+            _pending_root: Some(root),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_pending_dir(
+        terminals: TerminalSessionService,
+        interpreter: CliSessionInterpreter,
+        dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            terminals: Arc::new(terminals),
+            interpreter,
+            pending: super::bridge::PendingBridgeStore::with_dir(dir),
+            _pending_root: None,
         }
     }
 
@@ -114,6 +138,7 @@ impl McpSessionServer {
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
             "session_bridge" => self.tool_bridge(arguments),
+            "session_loop_close" => self.close_loop(arguments),
             other => {
                 return error(
                     Some(id),
@@ -164,16 +189,57 @@ impl McpSessionServer {
             None => super::bridge::TIMEOUT_DEFAULT_MS,
         }
         .clamp(super::bridge::TIMEOUT_MIN_MS, super::bridge::TIMEOUT_MAX_MS);
+        let acknowledge_marker = arguments
+            .get("acknowledge_marker")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    "session_bridge `acknowledge_marker` must be a string".to_owned()
+                })
+            })
+            .transpose()?;
         let outcome = super::bridge::execute(
             self.terminals.as_ref(),
             &self.interpreter,
             &binding,
             task,
             Duration::from_millis(timeout_ms),
+            &self.pending,
+            acknowledge_marker,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
+
+    fn close_loop(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let completion_marker = string_argument(&arguments, "completion_marker")?;
+        let outcome = string_argument(&arguments, "outcome")?;
+        if !matches!(outcome, "accepted" | "paused") {
+            return Err("session_loop_close `outcome` must be `accepted` or `paused`".to_owned());
+        }
+        let receipt = render_close_receipt(&arguments, outcome)?;
+        self.pending
+            .acknowledge(&binding, completion_marker, outcome == "accepted")
+            .map_err(|error| error.to_string())?;
+        Ok(receipt)
+    }
+}
+
+fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<String, String> {
+    let landed = non_empty_argument(arguments, "landed")?;
+    let before = non_empty_argument(arguments, "before")?;
+    let now = non_empty_argument(arguments, "now")?;
+    let verification = non_empty_argument(arguments, "verification")?;
+    let remaining = non_empty_argument(arguments, "remaining")?;
+    let final_report = format!(
+        "## What landed\n\n{landed}\n\n## Before\n\n{before}\n\n## Now\n\n{now}\n\n## Verification\n\n{verification}\n\n## Remaining\n\n{remaining}"
+    );
+    serde_json::to_string(&json!({
+        "loop_closed": true,
+        "outcome": outcome,
+        "final_report": final_report,
+    }))
+    .map_err(|error| format!("serialization failed: {error}"))
 }
 
 pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
@@ -188,7 +254,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: {}", help_text().trim_end());
     }
-    let server = McpSessionServer::system();
+    let server = McpSessionServer::system()?;
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut output = BufWriter::new(stdout.lock());
@@ -204,14 +270,26 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_bridge\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_bridge\n  submits once and waits for the implementation terminal's generated\n  completion signal before returning.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_bridge, session_loop_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_bridge\n  submits once and waits for the implementation terminal's generated\n  completion signal before returning. A reviewed completion marker explicitly\n  acknowledges the prior response before another task can be submitted.\n  session_loop_close acknowledges the final response and records the\n  architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+}
+
+fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("missing `{name}` string argument"))
+}
+
+fn non_empty_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
+    let value = string_argument(arguments, name)?.trim();
+    if value.is_empty() {
+        return Err(format!("session_loop_close `{name}` must not be empty"));
+    }
+    Ok(value)
 }
 
 fn binding_argument(arguments: &Value, name: &str) -> Result<SessionBinding, String> {
-    let value = arguments
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("missing `{name}` string argument"))?;
+    let value = string_argument(arguments, name)?;
     value
         .parse()
         .map_err(|_| format!("invalid session token `{value}`"))
@@ -301,13 +379,14 @@ mod tests {
         TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
     };
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     struct FakeBackend {
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
-        complete_bridge: bool,
+        complete_bridge: AtomicBool,
         fail_send: bool,
         current: Mutex<bool>,
     }
@@ -318,7 +397,7 @@ mod tests {
                 sent: Mutex::new(Vec::new()),
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
-                complete_bridge,
+                complete_bridge: AtomicBool::new(complete_bridge),
                 fail_send,
                 current: Mutex::new(false),
             }
@@ -364,7 +443,7 @@ mod tests {
                 *self.last.lock().unwrap() = Some(screen.clone());
                 return Ok(screen);
             }
-            if self.complete_bridge {
+            if self.complete_bridge.load(Ordering::Relaxed) {
                 if let Some(screen) = self.generated_completion() {
                     *self.last.lock().unwrap() = Some(screen.clone());
                     return Ok(screen);
@@ -437,8 +516,30 @@ mod tests {
         )
     }
 
+    fn server_with_backend(
+        backend: Arc<FakeBackend>,
+        pending_dir: std::path::PathBuf,
+    ) -> McpSessionServer {
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        McpSessionServer::with_pending_dir(terminals, CliSessionInterpreter::system(), pending_dir)
+    }
+
     fn token() -> String {
         FakeBackend::session().binding().unwrap().token()
+    }
+
+    fn close_arguments(outcome: &str) -> Value {
+        json!({
+            "session": token(),
+            "completion_marker": "QOL_BRIDGE_DONE_final",
+            "outcome": outcome,
+            "landed": "The feature landed.",
+            "before": "The loop stopped at round boundaries.",
+            "now": "The loop continues through acceptance.",
+            "verification": "Focused tests pass.",
+            "remaining": "None.",
+        })
     }
 
     fn request(id: i64, method: &str, params: Value) -> Value {
@@ -476,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_only_discovery_and_bridge() {
+    fn tools_list_exposes_discovery_bridge_and_loop_closure() {
         let (server, _) = server(Vec::new(), false, false);
         let response = server
             .handle_line(&serde_json::to_string(&request(2, "tools/list", json!({}))).unwrap())
@@ -487,7 +588,10 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["sessions_list", "session_bridge"]);
+        assert_eq!(
+            names,
+            ["sessions_list", "session_bridge", "session_loop_close"]
+        );
     }
 
     #[test]
@@ -553,6 +657,66 @@ mod tests {
     }
 
     #[test]
+    fn next_bridge_recovers_a_late_response_before_submitting_new_work() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let first = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "first task", "timeout_ms": 1_000 }),
+        );
+        let first_outcome: Value =
+            serde_json::from_str(first["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(first_outcome["completed"], false);
+        assert_eq!(first_outcome["submitted"], true);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        drop(server);
+
+        backend.complete_bridge.store(true, Ordering::Relaxed);
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let recovered = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "second task", "timeout_ms": 1_000 }),
+        );
+        let recovered_outcome: Value =
+            serde_json::from_str(recovered["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(recovered_outcome["completed"], true);
+        assert_eq!(recovered_outcome["submitted"], false);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+
+        let mismatched = tool_call(
+            &server,
+            "session_bridge",
+            json!({
+                "session": token(),
+                "task": "second task",
+                "acknowledge_marker": "QOL_BRIDGE_DONE_wrong",
+            }),
+        );
+        assert_eq!(mismatched["result"]["isError"], true);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+
+        let second = tool_call(
+            &server,
+            "session_bridge",
+            json!({
+                "session": token(),
+                "task": "second task",
+                "timeout_ms": 1_000,
+                "acknowledge_marker": recovered_outcome["completion_marker"],
+            }),
+        );
+        let second_outcome: Value =
+            serde_json::from_str(second["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(second_outcome["completed"], true);
+        assert_eq!(second_outcome["submitted"], true);
+        assert_eq!(backend.sent.lock().unwrap().len(), 2);
+    }
+
+    #[test]
     fn bridge_surfaces_validation_and_delivery_failures() {
         let (valid_server, _) = server(Vec::new(), false, false);
         let invalid = tool_call(
@@ -612,6 +776,51 @@ mod tests {
             .unwrap()
             .contains("calling terminal"));
         assert!(backend.sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_returns_a_typed_terminal_receipt() {
+        let (server, _) = server(Vec::new(), false, false);
+        for outcome in ["accepted", "paused"] {
+            let binding: SessionBinding = token().parse().unwrap();
+            server
+                .pending
+                .start(&binding, "QOL_BRIDGE_DONE_final")
+                .unwrap();
+            server
+                .pending
+                .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+                .unwrap();
+            let response = tool_call(&server, "session_loop_close", close_arguments(outcome));
+            assert_eq!(response["result"]["isError"], false);
+            let receipt: Value =
+                serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(receipt["loop_closed"], true);
+            assert_eq!(receipt["outcome"], outcome);
+            assert!(receipt["final_report"]
+                .as_str()
+                .unwrap()
+                .contains("## What landed"));
+            assert!(receipt["final_report"]
+                .as_str()
+                .unwrap()
+                .contains("## Before"));
+            assert!(receipt["final_report"].as_str().unwrap().contains("## Now"));
+        }
+    }
+
+    #[test]
+    fn loop_close_rejects_ambiguous_or_unexplained_outcomes() {
+        let (server, _) = server(Vec::new(), false, false);
+        let mut invalid_outcome = close_arguments("done");
+        let mut empty_landed = close_arguments("accepted");
+        empty_landed["landed"] = json!("  ");
+        let missing_fields = json!({ "outcome": "paused" });
+        for arguments in [invalid_outcome.take(), empty_landed, missing_fields] {
+            let response = tool_call(&server, "session_loop_close", arguments);
+            assert_eq!(response["result"]["isError"], true);
+        }
     }
 
     #[test]

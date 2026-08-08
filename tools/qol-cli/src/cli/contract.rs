@@ -201,7 +201,7 @@ fn app() -> HeadlessApp {
                 "Session rows or bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
             )
-            .detail("The agent surface is two actions: sessions_list and session_bridge.")
+            .detail("The agent surface is sessions_list, session_bridge, and session_loop_close.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
             .detail("read, send, wait, and focus remain human diagnostics.")
             .detail("export renders a per-client agent surface from the shared tool contract.")
@@ -226,7 +226,7 @@ fn app() -> HeadlessApp {
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list and session_bridge. A bridge submits once and waits for the generated completion signal before returning.",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_bridge, and session_loop_close. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

@@ -245,7 +245,7 @@ mod tests {
         assert!(execution.stdout.contains(&usage));
         assert!(execution
             .stdout
-            .contains("sessions_list and session_bridge"));
+            .contains("sessions_list, session_bridge, and session_loop_close"));
         assert!(execution
             .stdout
             .contains("read, send, wait, and focus remain human diagnostics"));
