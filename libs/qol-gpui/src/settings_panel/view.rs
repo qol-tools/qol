@@ -30,6 +30,7 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const DESCRIPTION_CHARS_PER_LINE: usize = 50;
 
 use std::sync::PoisonError;
 
@@ -1781,7 +1782,6 @@ impl SettingsPanelView {
             .when_some(row.description.clone(), |group, description| {
                 group.child(
                     div()
-                        .truncate()
                         .text_xs()
                         .text_color(rgb(self.palette.label_text))
                         .child(description),
@@ -3393,9 +3393,19 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
             };
     }
     if row.description.is_some() {
-        return super::PANEL_DESCRIBED_ROW_HEIGHT;
+        return super::PANEL_DESCRIBED_ROW_HEIGHT
+            + description_wrap_lines(row.description.as_deref().unwrap_or_default()) as f32
+                * super::PANEL_DESCRIPTION_LINE_HEIGHT;
     }
     super::PANEL_ROW_HEIGHT
+}
+
+fn description_wrap_lines(description: &str) -> usize {
+    let chars = description.chars().count();
+    if chars <= DESCRIPTION_CHARS_PER_LINE {
+        return 0;
+    }
+    chars.div_ceil(DESCRIPTION_CHARS_PER_LINE) - 1
 }
 
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
@@ -3505,11 +3515,11 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, color_display, format_number, horizontal_step_direction,
-        initial_active_section, intent, list_action_affordance, list_intent, number_preview,
-        number_unit, parsed_color, parsed_number, row_body_height, scroll_offset_for,
-        slider_fraction, stepped_number, text_or_placeholder, visible_row_window, Intent,
-        ListIntent, Row, RowControl,
+        binary_state_label, color_display, description_wrap_lines, format_number,
+        horizontal_step_direction, initial_active_section, intent, list_action_affordance,
+        list_intent, number_preview, number_unit, parsed_color, parsed_number, row_body_height,
+        scroll_offset_for, slider_fraction, stepped_number, text_or_placeholder,
+        visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -3545,6 +3555,60 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(color_display(value), expected, "value: {value}");
         }
+    }
+
+    #[test]
+    fn described_rows_grow_for_wrapped_description_lines() {
+        let short = Row {
+            id: "short".into(),
+            section_id: None,
+            section_label: None,
+            label: "Short".into(),
+            description: Some("A short description.".into()),
+            placeholder: None,
+            variant: None,
+            config_key: "short".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Toggle(false),
+        };
+        let long = Row {
+            description: Some(
+                "A description long enough to wrap onto a second line in the row body.".into(),
+            ),
+            ..Row {
+                id: "long".into(),
+                section_id: None,
+                section_label: None,
+                label: "Long".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
+                config_key: "long".into(),
+                default: qol_config::contract::FieldDefault::String(String::new()),
+                stream: None,
+                action: None,
+                visibility: None,
+                control: RowControl::Toggle(false),
+            }
+        };
+        assert_eq!(description_wrap_lines("A short description."), 0);
+        assert_eq!(
+            row_body_height(&short),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+        );
+        assert_eq!(
+            description_wrap_lines(
+                "A description long enough to wrap onto a second line in the row body."
+            ),
+            1
+        );
+        assert_eq!(
+            row_body_height(&long),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
+        );
     }
 
     #[test]
