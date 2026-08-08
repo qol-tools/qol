@@ -2040,6 +2040,7 @@ impl SettingsPanelView {
                     .flex_none()
                     .items_center()
                     .justify_center()
+                    .bg(rgb(self.palette.qr_light))
                     .h(px(super::PANEL_QR_CODE_HEIGHT));
                 for y in 0..side {
                     let mut line = div().flex().flex_row().flex_none().h(px(module_px));
@@ -2050,7 +2051,7 @@ impl SettingsPanelView {
                                 div()
                                     .w(px(module_px))
                                     .h(px(module_px))
-                                    .bg(rgb(self.palette.section_text)),
+                                    .bg(rgb(self.palette.qr_dark)),
                             );
                         } else {
                             line = line.child(div().w(px(module_px)).h(px(module_px)));
