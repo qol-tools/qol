@@ -467,8 +467,15 @@ fn unsupported_mismatch(field: &ResolvedField) -> RowControl {
         reason: format!(
             "{} field holds {}",
             field.kind.name(),
-            stored_shape(&field.value)
+            shape_with_article(&field.value)
         ),
+    }
+}
+
+fn shape_with_article(value: &FieldDefault) -> String {
+    match stored_shape(value) {
+        shape @ ("object_array" | "object_map") => format!("an {shape}"),
+        shape => format!("a {shape}"),
     }
 }
 
@@ -2011,5 +2018,262 @@ tone_map = { light = "muted", dark = "accent" }
             )],
             "the only unsupported field in the repo must be pointz download_qr"
         );
+    }
+
+    #[derive(Debug)]
+    enum ExpectedControl {
+        Toggle(bool),
+        Number(f64),
+        Text(&'static str),
+        SelectValue(&'static str),
+        TextList(Vec<&'static str>),
+        Color(&'static str),
+        Unsupported(&'static str),
+    }
+
+    fn coercion_spec(kind: &str) -> String {
+        let body = match kind {
+            "boolean" => "default = true",
+            "number" => "default = 0",
+            "string" => "default = \"d\"",
+            "select" => "default = \"a\"\noptions = [\"a\", \"b\"]",
+            "color" => "default = \"202322\"",
+            "string_array" => "default = []",
+            "object_array" => "default = []\n\n[field.value.item.fields]\napp = \"string\"",
+            "object_map" => "default = { entry = { value = 1 } }",
+            _ => panic!("unknown kind {kind}"),
+        };
+        format!("schema_version = 1\n\n[field.value]\ntype = \"{kind}\"\n{body}\n")
+    }
+
+    fn assert_expected_control(rows: &[Row], label: &str, expected: &ExpectedControl) {
+        let got = &rows[0].control;
+        match (got, expected) {
+            (RowControl::Toggle(value), ExpectedControl::Toggle(want)) => {
+                assert_eq!(value, want, "{label}");
+            }
+            (RowControl::Number { value, .. }, ExpectedControl::Number(want)) => {
+                assert_eq!(value, want, "{label}");
+            }
+            (RowControl::Text(value), ExpectedControl::Text(want)) => {
+                assert_eq!(value, want, "{label}");
+            }
+            (RowControl::Select { options, index, .. }, ExpectedControl::SelectValue(want)) => {
+                assert_eq!(&options[*index].value, want, "{label}");
+            }
+            (RowControl::TextList(values), ExpectedControl::TextList(want)) => {
+                assert_eq!(
+                    values.iter().map(String::as_str).collect::<Vec<_>>(),
+                    *want,
+                    "{label}"
+                );
+            }
+            (RowControl::Color(value), ExpectedControl::Color(want)) => {
+                assert_eq!(value, want, "{label}");
+            }
+            (RowControl::Unsupported { reason, .. }, ExpectedControl::Unsupported(want_reason)) => {
+                assert_eq!(reason, want_reason, "{label}");
+            }
+            (other, want) => panic!("{label}: expected {want:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mismatched_stored_values_coerce_or_stay_unsupported() {
+        let cases: Vec<(&str, serde_json::Value, ExpectedControl)> = vec![
+            (
+                "boolean",
+                serde_json::json!("true"),
+                ExpectedControl::Toggle(true),
+            ),
+            (
+                "boolean",
+                serde_json::json!("false"),
+                ExpectedControl::Toggle(false),
+            ),
+            (
+                "boolean",
+                serde_json::json!("yes"),
+                ExpectedControl::Unsupported("boolean field holds a string"),
+            ),
+            (
+                "boolean",
+                serde_json::json!(1),
+                ExpectedControl::Toggle(true),
+            ),
+            (
+                "boolean",
+                serde_json::json!(0),
+                ExpectedControl::Toggle(false),
+            ),
+            (
+                "boolean",
+                serde_json::json!(2),
+                ExpectedControl::Unsupported("boolean field holds a number"),
+            ),
+            (
+                "boolean",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("boolean field holds a string_array"),
+            ),
+            (
+                "boolean",
+                serde_json::json!([{ "k": true }]),
+                ExpectedControl::Unsupported("boolean field holds an object_array"),
+            ),
+            (
+                "boolean",
+                serde_json::json!({ "e": { "v": 1 } }),
+                ExpectedControl::Unsupported("boolean field holds an object_map"),
+            ),
+            (
+                "number",
+                serde_json::json!("5"),
+                ExpectedControl::Number(5.0),
+            ),
+            (
+                "number",
+                serde_json::json!("5.5"),
+                ExpectedControl::Number(5.5),
+            ),
+            (
+                "number",
+                serde_json::json!(" 7 "),
+                ExpectedControl::Number(7.0),
+            ),
+            (
+                "number",
+                serde_json::json!(""),
+                ExpectedControl::Unsupported("number field holds a string"),
+            ),
+            (
+                "number",
+                serde_json::json!("abc"),
+                ExpectedControl::Unsupported("number field holds a string"),
+            ),
+            (
+                "number",
+                serde_json::json!(true),
+                ExpectedControl::Unsupported("number field holds a boolean"),
+            ),
+            (
+                "number",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("number field holds a string_array"),
+            ),
+            ("string", serde_json::json!(5), ExpectedControl::Text("5")),
+            (
+                "string",
+                serde_json::json!(5.5),
+                ExpectedControl::Text("5.5"),
+            ),
+            (
+                "string",
+                serde_json::json!(true),
+                ExpectedControl::Text("true"),
+            ),
+            (
+                "string",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("string field holds a string_array"),
+            ),
+            (
+                "select",
+                serde_json::json!(5),
+                ExpectedControl::SelectValue("5"),
+            ),
+            (
+                "select",
+                serde_json::json!(true),
+                ExpectedControl::SelectValue("true"),
+            ),
+            (
+                "select",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("select field holds a string_array"),
+            ),
+            (
+                "color",
+                serde_json::json!(46657221),
+                ExpectedControl::Color("46657221"),
+            ),
+            (
+                "color",
+                serde_json::json!(true),
+                ExpectedControl::Color("true"),
+            ),
+            (
+                "color",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("color field holds a string_array"),
+            ),
+            (
+                "string_array",
+                serde_json::json!("foo"),
+                ExpectedControl::TextList(vec!["foo"]),
+            ),
+            (
+                "string_array",
+                serde_json::json!(5),
+                ExpectedControl::Unsupported("string_array field holds a number"),
+            ),
+            (
+                "string_array",
+                serde_json::json!(true),
+                ExpectedControl::Unsupported("string_array field holds a boolean"),
+            ),
+            (
+                "string_array",
+                serde_json::json!([{ "k": true }]),
+                ExpectedControl::Unsupported("string_array field holds an object_array"),
+            ),
+            (
+                "object_array",
+                serde_json::json!("x"),
+                ExpectedControl::Unsupported("object_array field holds a string"),
+            ),
+            (
+                "object_array",
+                serde_json::json!(5),
+                ExpectedControl::Unsupported("object_array field holds a number"),
+            ),
+            (
+                "object_array",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("object_array field holds a string_array"),
+            ),
+            (
+                "object_map",
+                serde_json::json!("x"),
+                ExpectedControl::Unsupported("object_map field holds a string"),
+            ),
+            (
+                "object_map",
+                serde_json::json!(5),
+                ExpectedControl::Unsupported("object_map field holds a number"),
+            ),
+            (
+                "object_map",
+                serde_json::json!(["a"]),
+                ExpectedControl::Unsupported("object_map field holds a string_array"),
+            ),
+            (
+                "object_map",
+                serde_json::json!(true),
+                ExpectedControl::Unsupported("object_map field holds a boolean"),
+            ),
+        ];
+        for (kind, overrides, expected) in cases {
+            let label = format!("{kind} override {overrides}");
+            let spec = qol_config::contract::parse_spec_str(&coercion_spec(kind)).unwrap();
+            let resolved = qol_config::normalized::resolve_config(
+                &spec,
+                &serde_json::json!({ "value": overrides }),
+            )
+            .unwrap_or_else(|errors| panic!("{label}: {errors:?}"));
+            let rows = rows_from_resolved(&resolved);
+            assert_eq!(rows.len(), 1, "{label}");
+            assert_expected_control(&rows, &label, &expected);
+        }
     }
 }

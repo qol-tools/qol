@@ -1148,7 +1148,8 @@ fn field_default_from_override(
     raw: &serde_json::Value,
 ) -> Option<qol_config::contract::FieldDefault> {
     let value = serde_json::from_value::<qol_config::contract::FieldDefault>(raw.clone()).ok()?;
-    field_default_matches_kind(kind, &value).then_some(value)
+    let widened = qol_config::normalized::widen_to_kind(value, kind);
+    field_default_matches_kind(kind, &widened).then_some(widened)
 }
 
 fn field_default_matches_kind(
