@@ -3,6 +3,7 @@
 # QoL Tools
 
 [![tests](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
+[![Release Plugin](https://github.com/qol-tools/qol/actions/workflows/release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/release.yml)
 
 A portable quality-of-life layer for any computer you sit down at.
 
