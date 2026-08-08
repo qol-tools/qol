@@ -17,7 +17,7 @@ Run `qol-tray`, click the tray icon to open the UI at `http://127.0.0.1:42700`, 
 
 ## About
 
-Plugins are standalone Rust binaries, one process each; qol-tray discovers, configures, and launches them. The dev CLI is documented in [docs/qol-commands.md](docs/qol-commands.md), and [diagram/](diagram/) holds an interactive map of the runtime, opened with `make diagram`.
+Plugins are standalone Rust binaries, one process each; qol-tray discovers, configures, and launches them. The dev CLI is documented in [docs/qol-commands.md](docs/qol-commands.md), and [diagram/](diagram/) holds an interactive map of the runtime, opened by loading `diagram/Runtime Architecture Map.html` in a browser.
 
 ## License
 
