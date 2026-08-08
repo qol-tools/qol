@@ -1,7 +1,6 @@
 mod platform;
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
@@ -12,11 +11,10 @@ const FRAME_SUFFIX: &[u8] = b"\x1b\\";
 const OLDEST_SUPPORTED_PROTOCOL_VERSION: [u32; 3] = [0, 14, 0];
 const COMMANDS_THAT_LEAVE_TERMINALS_UNCHANGED: [&str; 2] = ["ls", "get-text"];
 
-pub(super) fn try_run(args: &[String], stdin: Option<&str>) -> Option<CommandOutput> {
+pub(super) fn try_run(path: &Path, args: &[String], stdin: Option<&str>) -> Option<CommandOutput> {
     if stdin.is_some() {
         return None;
     }
-    let path = socket_path()?;
     let request = request(args)?;
     match send(path, &request) {
         Ok(output) => Some(output),
@@ -30,18 +28,20 @@ pub(super) fn try_run(args: &[String], stdin: Option<&str>) -> Option<CommandOut
     }
 }
 
-fn socket_path() -> Option<&'static Path> {
-    static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
-    PATH.get_or_init(|| connectable_socket_from_listen_on(&std::env::var("KITTY_LISTEN_ON").ok()?))
-        .as_deref()
-}
-
-fn connectable_socket_from_listen_on(value: &str) -> Option<PathBuf> {
+pub(super) fn connectable_socket_from_listen_on(value: &str) -> Option<PathBuf> {
     let path = value.strip_prefix("unix:")?;
     if path.is_empty() || path.starts_with('@') {
         return None;
     }
     Some(PathBuf::from(path))
+}
+
+pub(super) fn discover_sibling_paths(current: &Path) -> Vec<PathBuf> {
+    platform::discover_sibling_paths(current)
+}
+
+pub(super) fn instance_id(path: &Path) -> Option<String> {
+    platform::instance_id(path)
 }
 
 fn request(args: &[String]) -> Option<Vec<u8>> {

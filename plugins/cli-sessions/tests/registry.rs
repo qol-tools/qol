@@ -1,6 +1,8 @@
+use plugin_cli_sessions::host::kitty_session_id;
 use plugin_cli_sessions::registry::{summary_for, Registry, SessionState};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::tool::Tool;
+use qol_terminal_sessions::SessionId;
 
 #[test]
 fn working_summary_is_tool_aware() {
@@ -23,7 +25,7 @@ fn working_summary_is_tool_aware() {
 
 fn state(window_id: u64, status: Status, last: u64) -> SessionState {
     SessionState {
-        window_id,
+        id: kitty_session_id(window_id),
         root_pid: window_id as i32,
         project: "proj".into(),
         name: None,
@@ -49,23 +51,52 @@ fn upsert_is_last_writer_wins_by_window() {
 }
 
 #[test]
+fn equal_window_numbers_from_distinct_instances_coexist() {
+    let mut first = state(3, Status::Working, 1);
+    first.id =
+        SessionId::new(qol_terminal_sessions::kitty::backend_id().clone(), "k1_1.3").unwrap();
+    let mut second = state(3, Status::NeedsYou, 2);
+    second.id =
+        SessionId::new(qol_terminal_sessions::kitty::backend_id().clone(), "k1_2.3").unwrap();
+    let mut registry = Registry::default();
+
+    registry.upsert(first);
+    registry.upsert(second);
+
+    let ids = registry
+        .sorted()
+        .into_iter()
+        .map(|state| state.id.native().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["k1_2.3", "k1_1.3"]);
+}
+
+#[test]
 fn sorted_orders_red_yellow_green_unknown_ack() {
     let mut r = Registry::default();
     r.upsert(state(10, Status::Working, 1));
     r.upsert(state(12, Status::YourTurn, 2));
     r.upsert(state(13, Status::NeedsYou, 1));
     r.upsert(state(14, Status::Unknown, 9));
-    let ids: Vec<_> = r.sorted().into_iter().map(|s| s.window_id).collect();
+    let ids: Vec<_> = r
+        .sorted()
+        .into_iter()
+        .map(|s| s.id.native().parse::<u64>().unwrap())
+        .collect();
     assert_eq!(ids, vec![13, 12, 10, 14]);
 }
 
 #[test]
-fn within_a_tier_orders_by_window_id_not_recency() {
+fn within_a_tier_orders_by_session_id_not_recency() {
     let mut r = Registry::default();
     r.upsert(state(2, Status::NeedsYou, 9));
     r.upsert(state(1, Status::NeedsYou, 5));
     r.upsert(state(3, Status::YourTurn, 20));
-    let ids: Vec<_> = r.sorted().into_iter().map(|s| s.window_id).collect();
+    let ids: Vec<_> = r
+        .sorted()
+        .into_iter()
+        .map(|s| s.id.native().parse::<u64>().unwrap())
+        .collect();
     assert_eq!(
         ids,
         vec![1, 2, 3],
@@ -81,7 +112,7 @@ fn same_tier_order_is_stable_when_activity_changes() {
         r.upsert(state(4, Status::YourTurn, b_last));
         r.sorted()
             .into_iter()
-            .map(|s| s.window_id)
+            .map(|s| s.id.native().parse::<u64>().unwrap())
             .collect::<Vec<_>>()
     };
     let cases = [(1, 100), (100, 1), (50, 50)];

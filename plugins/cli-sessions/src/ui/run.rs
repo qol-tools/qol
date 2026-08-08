@@ -10,6 +10,7 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::config;
 use crate::daemon::actions::{self, Command};
@@ -39,7 +40,7 @@ const HIDDEN_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
 type PanelHandle = gpui::WindowHandle<SessionsView>;
 type SharedPanel = Rc<RefCell<Option<PanelHandle>>>;
-type AttentionCursor = Arc<Mutex<Option<u64>>>;
+type AttentionCursor = Arc<Mutex<Option<SessionId>>>;
 
 struct ReconcileRuntime {
     interpreter: Arc<CliSessionInterpreter>,
@@ -135,12 +136,8 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
         eprintln!("[cli-sessions] snapshot: no data dir");
         return;
     };
-    let panel: HashMap<u64, Status> = match registry.lock() {
-        Ok(reg) => reg
-            .sorted()
-            .into_iter()
-            .map(|s| (s.window_id, s.status))
-            .collect(),
+    let panel: HashMap<SessionId, Status> = match registry.lock() {
+        Ok(reg) => reg.sorted().into_iter().map(|s| (s.id, s.status)).collect(),
         Err(_) => HashMap::new(),
     };
     match snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
@@ -414,31 +411,32 @@ fn jump_to_next_attention_without_panel(
     host: &(dyn TerminalHost + Send + Sync),
     attention_cursor: &AttentionCursor,
 ) {
-    let Some((window_id, root_pid)) = next_attention_target(registry, attention_cursor) else {
+    let Some(target) = next_attention_target(registry, attention_cursor) else {
         return;
     };
-    trace::focus_start("next-attention", window_id);
-    let result = host.focus(window_id, root_pid);
-    trace::focus_result("next-attention", window_id, &result);
+    trace::focus_start("next-attention", target.session_id());
+    let result = host.focus(&target);
+    trace::focus_result("next-attention", target.session_id(), &result);
 }
 
 fn next_attention_target(
     registry: &Arc<Mutex<Registry>>,
     attention_cursor: &AttentionCursor,
-) -> Option<(u64, i32)> {
+) -> Option<SessionBinding> {
     let rows = registry.lock().ok()?.sorted();
     let statuses: Vec<Status> = rows.iter().map(|row| row.status).collect();
-    let current = attention_cursor
-        .lock()
-        .ok()
-        .and_then(|cursor| cursor.and_then(|id| rows.iter().position(|row| row.window_id == id)));
+    let current = attention_cursor.lock().ok().and_then(|cursor| {
+        cursor
+            .as_ref()
+            .and_then(|id| rows.iter().position(|row| &row.id == id))
+    });
     let index = crate::ui::nav::next_attention(&statuses, current)?;
     let target = rows.get(index)?;
-    let window_id = target.window_id;
+    let binding = target.binding()?;
     if let Ok(mut cursor) = attention_cursor.lock() {
-        *cursor = Some(window_id);
+        *cursor = Some(target.id.clone());
     }
-    Some((window_id, target.root_pid))
+    Some(binding)
 }
 
 #[cfg(test)]

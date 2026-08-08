@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use qol_terminal_sessions::{SessionBinding, SessionId};
 use serde::{Deserialize, Serialize};
 
 use crate::session::status::Status;
@@ -7,7 +8,7 @@ use crate::session::tool::Tool;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
-    pub window_id: u64,
+    pub id: SessionId,
     pub root_pid: i32,
     pub project: String,
     pub name: Option<String>,
@@ -24,6 +25,10 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    pub fn binding(&self) -> Option<SessionBinding> {
+        SessionBinding::new(self.id.clone(), self.root_pid).ok()
+    }
+
     pub fn acknowledge(&mut self) {
         if self.status == Status::YourTurn {
             self.status = Status::Acknowledged;
@@ -49,47 +54,43 @@ pub fn summary_for(status: Status, tool: Tool) -> String {
 
 #[derive(Default)]
 pub struct Registry {
-    sessions: HashMap<u64, SessionState>,
+    sessions: HashMap<SessionId, SessionState>,
 }
 
 impl Registry {
     pub fn upsert(&mut self, state: SessionState) {
-        self.sessions.insert(state.window_id, state);
+        self.sessions.insert(state.id.clone(), state);
     }
 
     pub fn restore(&mut self, states: Vec<SessionState>) {
         for state in states {
-            self.sessions.entry(state.window_id).or_insert(state);
+            self.sessions.entry(state.id.clone()).or_insert(state);
         }
     }
 
-    pub fn remove(&mut self, window_id: u64) {
-        self.sessions.remove(&window_id);
+    pub fn remove(&mut self, id: &SessionId) {
+        self.sessions.remove(id);
     }
 
-    pub fn contains_window(&self, window_id: u64) -> bool {
-        self.sessions.contains_key(&window_id)
+    pub fn contains(&self, id: &SessionId) -> bool {
+        self.sessions.contains_key(id)
     }
 
     pub fn prune(&mut self, is_alive: impl Fn(i32) -> bool) {
         self.sessions.retain(|_, s| is_alive(s.root_pid));
     }
 
-    pub fn get(&self, window_id: u64) -> Option<&SessionState> {
-        self.sessions.get(&window_id)
+    pub fn get(&self, id: &SessionId) -> Option<&SessionState> {
+        self.sessions.get(id)
     }
 
-    pub fn get_mut(&mut self, window_id: u64) -> Option<&mut SessionState> {
-        self.sessions.get_mut(&window_id)
+    pub fn get_mut(&mut self, id: &SessionId) -> Option<&mut SessionState> {
+        self.sessions.get_mut(id)
     }
 
     pub fn sorted(&self) -> Vec<SessionState> {
         let mut out: Vec<SessionState> = self.sessions.values().cloned().collect();
-        out.sort_by(|a, b| {
-            rank(a.status)
-                .cmp(&rank(b.status))
-                .then(a.window_id.cmp(&b.window_id))
-        });
+        out.sort_by(|a, b| rank(a.status).cmp(&rank(b.status)).then(a.id.cmp(&b.id)));
         out
     }
 }

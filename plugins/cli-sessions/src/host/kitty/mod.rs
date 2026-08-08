@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use qol_terminal_sessions::TerminalSnapshot;
 use qol_terminal_sessions::{ScreenReader, SessionFocus, TerminalSessionService};
 
-use crate::host::{kitty_binding, Pane, TerminalHost};
+use crate::host::{Pane, TerminalHost};
 
 #[derive(Default)]
 pub struct Kitty {
@@ -30,21 +30,19 @@ impl TerminalHost for Kitty {
         panes
     }
 
-    fn get_text(&self, window_id: u64, root_pid: i32) -> Option<String> {
-        let target = kitty_binding(window_id, root_pid).ok()?;
+    fn get_text(&self, target: &qol_terminal_sessions::SessionBinding) -> Option<String> {
         let snapshot = self
             .snapshot
             .lock()
             .ok()
             .and_then(|current| current.clone());
         match snapshot {
-            Some(snapshot) => self.sessions.read_screen_from(&snapshot, &target).ok(),
-            None => self.sessions.read_screen(&target).ok(),
+            Some(snapshot) => self.sessions.read_screen_from(&snapshot, target).ok(),
+            None => self.sessions.read_screen(target).ok(),
         }
     }
 
-    fn focus(&self, window_id: u64, root_pid: i32) -> anyhow::Result<()> {
-        let target = kitty_binding(window_id, root_pid)?;
-        self.sessions.focus(&target).map_err(Into::into)
+    fn focus(&self, target: &qol_terminal_sessions::SessionBinding) -> anyhow::Result<()> {
+        self.sessions.focus(target).map_err(Into::into)
     }
 }
