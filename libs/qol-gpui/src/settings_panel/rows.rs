@@ -1153,6 +1153,46 @@ global = "boolean"
     }
 
     #[test]
+    fn an_object_array_defaulting_to_empty_still_gets_a_row() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.windows]
+label = "Windows"
+
+[field.switchable_panels]
+type = "object_array"
+label = "Switchable Panels"
+section = "windows"
+default = []
+
+[field.switchable_panels.item.fields]
+app = "string"
+switchable = "boolean"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+
+        assert_eq!(rows.len(), 1, "an empty rule list still needs its editor");
+        let RowControl::ObjectArray(state) = &rows[0].control else {
+            panic!("expected an object array row, got {:?}", rows[0].control);
+        };
+        assert!(state.entries.is_empty());
+        assert_eq!(
+            sections_from_resolved(&resolved, &rows)
+                .iter()
+                .map(|section| section.label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Windows".to_string()],
+            "a section holding only this field must not disappear"
+        );
+    }
+
+    #[test]
     fn action_and_list_fields_share_the_contract_order_and_sections() {
         const MIXED_SPEC: &str = r#"
 schema_version = 1
