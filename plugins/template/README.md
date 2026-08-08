@@ -16,7 +16,7 @@ Replace every occurrence of the template identity in the copy, then `qol build m
 
 ## About
 
-Ships a binary entrypoint, platform-specific settings launchers, a valid `plugin.toml` contract, and the Make targets the workspace expects a plugin to have.
+Ships a binary entrypoint, a per-OS settings launcher for each supported platform, and a valid `plugin.toml` contract, so the copy builds and loads before you have written any of its own behavior.
 
 ## License
 

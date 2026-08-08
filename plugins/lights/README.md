@@ -12,7 +12,7 @@ Install from the [QoL Tray](../../apps/qol-tray) plugin store.
 
 ## About
 
-Backend-agnostic light control with a [Zigbee2MQTT](https://www.zigbee2mqtt.io/) adapter as the first target. Exposes power, brightness, color, and color temperature through stable v1 action IDs.
+Backend-agnostic light control. The Zigbee backend drives a coordinator directly over the ZNP serial protocol, with no broker in between, and exposes power, brightness, color, and color temperature as tray actions.
 
 ## License
 
