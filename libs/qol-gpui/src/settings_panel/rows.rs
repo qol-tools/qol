@@ -120,6 +120,11 @@ pub(super) enum RowControl {
         monitor: GamepadMonitor,
     },
     ObjectArray(ObjectArrayState),
+    Unsupported {
+        #[expect(dead_code)]
+        kind: FieldKind,
+        reason: String,
+    },
 }
 
 pub(super) struct Row {
@@ -233,9 +238,7 @@ fn push_row(
     field: &ResolvedField,
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
 ) {
-    let Some(control) = control_for(field) else {
-        return;
-    };
+    let control = control_for(field);
     let visibility = field.show_when.clone().and_then(|show_when| {
         field_values
             .get(&show_when.field)
@@ -293,139 +296,190 @@ pub(super) fn section_label_for(rows: &[Row], index: usize) -> Option<&str> {
         .and_then(|row| row.section_label.as_deref())
 }
 
-fn control_for(field: &ResolvedField) -> Option<RowControl> {
+fn control_for(field: &ResolvedField) -> RowControl {
     match field.kind {
         FieldKind::Boolean => match field.value {
-            FieldDefault::Boolean(value) => Some(RowControl::Toggle(value)),
-            _ => None,
+            FieldDefault::Boolean(value) => RowControl::Toggle(value),
+            _ => unsupported_mismatch(field),
         },
         FieldKind::Select => {
             let current = match &field.value {
                 FieldDefault::String(value) => value.clone(),
-                _ => return None,
+                _ => return unsupported_mismatch(field),
             };
             let (options, dynamic) = field_options(field, std::slice::from_ref(&current));
-            let index = options.iter().position(|option| option.value == current)?;
-            Some(RowControl::Select {
+            let index = options
+                .iter()
+                .position(|option| option.value == current)
+                .unwrap_or(0);
+            RowControl::Select {
                 options,
                 index,
                 dynamic,
-            })
+            }
         }
         FieldKind::Number => match field.value {
-            FieldDefault::Number(value) => Some(RowControl::Number {
+            FieldDefault::Number(value) => RowControl::Number {
                 value,
                 min: field.number.min,
                 max: field.number.max,
                 step: field.number.step,
-            }),
-            _ => None,
+            },
+            _ => unsupported_mismatch(field),
         },
         FieldKind::String => match &field.value {
-            FieldDefault::String(value) => Some(RowControl::Text(value.clone())),
-            _ => None,
+            FieldDefault::String(value) => RowControl::Text(value.clone()),
+            _ => unsupported_mismatch(field),
         },
         FieldKind::StringArray => match &field.value {
             FieldDefault::StringArray(values) => {
                 if field.options.is_empty() && field.query.is_none() {
-                    Some(RowControl::TextList(values.clone()))
+                    RowControl::TextList(values.clone())
                 } else {
                     let (options, dynamic) = field_options(field, values);
-                    Some(RowControl::MultiSelect {
+                    RowControl::MultiSelect {
                         selected: options
                             .iter()
                             .map(|option| values.contains(&option.value))
                             .collect(),
                         options,
                         dynamic,
-                    })
+                    }
                 }
             }
-            _ => None,
+            _ => unsupported_mismatch(field),
         },
         FieldKind::Color => match &field.value {
-            FieldDefault::String(value) => Some(RowControl::Color(value.clone())),
-            _ => None,
+            FieldDefault::String(value) => RowControl::Color(value.clone()),
+            _ => unsupported_mismatch(field),
         },
-        FieldKind::Action => field.action.clone().map(|action| RowControl::Action {
-            action,
-            active_action: field.active_action.clone(),
-            active_label: field.active_label.clone(),
-            active_query: field.active_query.clone(),
-            active_value_from: field.active_value_from.clone(),
-            state_labels: field
-                .label_map
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            active: false,
-            pending: false,
-            error: None,
-        }),
-        FieldKind::Status => field.query.clone().map(|query| RowControl::Status {
-            query,
-            value_from: field.value_from.clone(),
-            label_map: field
-                .label_map
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            tone_map: field
-                .tone_map
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            label: None,
-            tone: StatusTone::Muted,
-            error: None,
-        }),
-        FieldKind::List => field.query.clone().map(|query| RowControl::List {
-            query,
-            active_query: field.active_query.clone(),
-            active_value_from: field.active_value_from.clone(),
-            active_label: field.active_label.clone(),
-            active: false,
-            row_label: field.row_label.clone().unwrap_or_else(|| "{name}".into()),
-            row_subtitle: field.row_subtitle.clone(),
-            actions: Box::new(ListActions {
-                primary: field.row_action.clone(),
-                additional: field.row_actions.clone(),
-            }),
-            empty_message: field
-                .empty_message
-                .clone()
-                .unwrap_or_else(|| "No items.".into()),
-            items: Vec::new(),
-            list: ScrollList::new(LIST_MAX_VISIBLE),
-            error: None,
-        }),
-        FieldKind::Gamepad => field.query.clone().map(|query| RowControl::Gamepad {
-            query,
-            monitor: GamepadMonitor::default(),
-        }),
+        FieldKind::Action => match field.action.as_deref() {
+            Some(action) => RowControl::Action {
+                action: action.to_string(),
+                active_action: field.active_action.clone(),
+                active_label: field.active_label.clone(),
+                active_query: field.active_query.clone(),
+                active_value_from: field.active_value_from.clone(),
+                state_labels: field
+                    .label_map
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                active: false,
+                pending: false,
+                error: None,
+            },
+            None => RowControl::Unsupported {
+                kind: FieldKind::Action,
+                reason: "action field declares no action".into(),
+            },
+        },
+        FieldKind::Status => match field.query.as_deref() {
+            Some(query) => RowControl::Status {
+                query: query.to_string(),
+                value_from: field.value_from.clone(),
+                label_map: field
+                    .label_map
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                tone_map: field
+                    .tone_map
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                label: None,
+                tone: StatusTone::Muted,
+                error: None,
+            },
+            None => RowControl::Unsupported {
+                kind: FieldKind::Status,
+                reason: "status field declares no query".into(),
+            },
+        },
+        FieldKind::List => match field.query.as_deref() {
+            Some(query) => RowControl::List {
+                query: query.to_string(),
+                active_query: field.active_query.clone(),
+                active_value_from: field.active_value_from.clone(),
+                active_label: field.active_label.clone(),
+                active: false,
+                row_label: field.row_label.clone().unwrap_or_else(|| "{name}".into()),
+                row_subtitle: field.row_subtitle.clone(),
+                actions: Box::new(ListActions {
+                    primary: field.row_action.clone(),
+                    additional: field.row_actions.clone(),
+                }),
+                empty_message: field
+                    .empty_message
+                    .clone()
+                    .unwrap_or_else(|| "No items.".into()),
+                items: Vec::new(),
+                list: ScrollList::new(LIST_MAX_VISIBLE),
+                error: None,
+            },
+            None => RowControl::Unsupported {
+                kind: FieldKind::List,
+                reason: "list field declares no query".into(),
+            },
+        },
+        FieldKind::Gamepad => match field.query.as_deref() {
+            Some(query) => RowControl::Gamepad {
+                query: query.to_string(),
+                monitor: GamepadMonitor::default(),
+            },
+            None => RowControl::Unsupported {
+                kind: FieldKind::Gamepad,
+                reason: "gamepad field declares no query".into(),
+            },
+        },
         FieldKind::ObjectArray => match &field.value {
-            FieldDefault::ObjectArray(items) => Some(RowControl::ObjectArray(
-                ObjectArrayState::list(item_schema(field.item.as_ref(), items), items.clone()),
+            FieldDefault::ObjectArray(items) => RowControl::ObjectArray(ObjectArrayState::list(
+                item_schema(field.item.as_ref(), items),
+                items.clone(),
             )),
-            _ => None,
+            _ => unsupported_mismatch(field),
         },
         FieldKind::ObjectMap => match &field.value {
-            FieldDefault::ObjectMap(entries) => {
-                Some(RowControl::ObjectArray(ObjectArrayState::map(
-                    field.key_label.clone().unwrap_or_else(|| "Key".into()),
-                    entry_field_schema(field, entries),
-                    entries
-                        .iter()
-                        .map(|(key, fields)| (key.clone(), fields.clone()))
-                        .collect(),
-                )))
-            }
-            _ => None,
+            FieldDefault::ObjectMap(entries) => RowControl::ObjectArray(ObjectArrayState::map(
+                field.key_label.clone().unwrap_or_else(|| "Key".into()),
+                entry_field_schema(field, entries),
+                entries
+                    .iter()
+                    .map(|(key, fields)| (key.clone(), fields.clone()))
+                    .collect(),
+            )),
+            _ => unsupported_mismatch(field),
         },
-        FieldKind::QrCode => None,
+        FieldKind::QrCode => RowControl::Unsupported {
+            kind: FieldKind::QrCode,
+            reason: "qr_code".into(),
+        },
+    }
+}
+
+fn unsupported_mismatch(field: &ResolvedField) -> RowControl {
+    RowControl::Unsupported {
+        kind: field.kind,
+        reason: format!(
+            "{} field holds {}",
+            field.kind.name(),
+            stored_shape(&field.value)
+        ),
+    }
+}
+
+fn stored_shape(value: &FieldDefault) -> &'static str {
+    match value {
+        FieldDefault::Boolean(_) => "boolean",
+        FieldDefault::String(_) => "string",
+        FieldDefault::Number(_) => "number",
+        FieldDefault::StringArray(_) => "string_array",
+        FieldDefault::ObjectArray(_) => "object_array",
+        FieldDefault::ObjectMap(_) => "object_map",
     }
 }
 
@@ -546,7 +600,8 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::Action { .. }
         | RowControl::List { .. }
         | RowControl::Status { .. }
-        | RowControl::Gamepad { .. } => None,
+        | RowControl::Gamepad { .. }
+        | RowControl::Unsupported { .. } => None,
     }
 }
 
@@ -583,7 +638,8 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
         RowControl::Action { .. }
         | RowControl::Status { .. }
         | RowControl::List { .. }
-        | RowControl::Gamepad { .. } => None,
+        | RowControl::Gamepad { .. }
+        | RowControl::Unsupported { .. } => None,
     }
 }
 
@@ -1149,6 +1205,46 @@ global = "boolean"
                     { "from_mods": ["ctrl"], "to_mods": ["cmd"], "keys": ["c", "v"] },
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn an_object_array_defaulting_to_empty_still_gets_a_row() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.windows]
+label = "Windows"
+
+[field.switchable_panels]
+type = "object_array"
+label = "Switchable Panels"
+section = "windows"
+default = []
+
+[field.switchable_panels.item.fields]
+app = "string"
+switchable = "boolean"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+
+        assert_eq!(rows.len(), 1, "an empty rule list still needs its editor");
+        let RowControl::ObjectArray(state) = &rows[0].control else {
+            panic!("expected an object array row, got {:?}", rows[0].control);
+        };
+        assert!(state.entries.is_empty());
+        assert_eq!(
+            sections_from_resolved(&resolved, &rows)
+                .iter()
+                .map(|section| section.label.clone())
+                .collect::<Vec<_>>(),
+            vec!["Windows".to_string()],
+            "a section holding only this field must not disappear"
         );
     }
 
@@ -1849,6 +1945,71 @@ tone_map = { light = "muted", dark = "accent" }
                 "capture": { "pin_border": true, "saved_feedback": "toast" },
                 "audio": { "inputs": ["mic", "system"] }
             })
+        );
+    }
+
+    #[test]
+    fn every_contract_field_produces_a_row() {
+        let plugins_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let mut contracts = Vec::new();
+        for entry in std::fs::read_dir(&plugins_root).expect("plugins directory") {
+            let plugin_dir = entry.expect("plugin entry").path();
+            let contract_path = plugin_dir.join("qol-config.toml");
+            if !contract_path.is_file() {
+                continue;
+            }
+            let plugin = plugin_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("plugin name")
+                .to_string();
+            let spec = qol_config::contract::parse_spec(&contract_path)
+                .unwrap_or_else(|error| panic!("{plugin}: {error:?}"));
+            contracts.push((plugin, spec));
+        }
+        assert_eq!(contracts.len(), 14, "expected 14 plugin contracts");
+        let mut unsupported = Vec::new();
+        for (plugin, spec) in &contracts {
+            let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
+                .unwrap_or_else(|errors| panic!("{plugin}: {errors:?}"));
+            let field_count = resolved.fields.len()
+                + resolved
+                    .sections
+                    .iter()
+                    .map(|section| section.fields.len())
+                    .sum::<usize>();
+            let rows = rows_from_resolved(&resolved);
+            for field in resolved
+                .fields
+                .iter()
+                .chain(resolved.sections.iter().flat_map(|section| &section.fields))
+            {
+                assert!(
+                    rows.iter().any(|row| row.id == field.id),
+                    "{plugin}: field {} ({}) produced no row",
+                    field.id,
+                    field.kind.name()
+                );
+            }
+            assert_eq!(
+                rows.len(),
+                field_count,
+                "{plugin}: {field_count} contract fields must produce exactly {field_count} rows"
+            );
+            for row in &rows {
+                if let RowControl::Unsupported { reason, .. } = &row.control {
+                    unsupported.push((plugin.clone(), row.id.clone(), reason.clone()));
+                }
+            }
+        }
+        assert_eq!(
+            unsupported,
+            vec![(
+                "pointz".to_string(),
+                "download_qr".to_string(),
+                "qr_code".to_string()
+            )],
+            "the only unsupported field in the repo must be pointz download_qr"
         );
     }
 }

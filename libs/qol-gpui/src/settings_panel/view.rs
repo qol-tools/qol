@@ -754,7 +754,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => self.active_control = None,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => self.active_control = None,
         }
     }
 
@@ -793,6 +794,7 @@ impl SettingsPanelView {
             RowControl::List { .. } => {}
             RowControl::ObjectArray(_) => self.active_control = Some(ActiveControl::ObjectArray),
             RowControl::Gamepad { .. } => self.select_next_gamepad(),
+            RowControl::Unsupported { .. } => {}
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
             }
@@ -1047,7 +1049,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => return,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
     }
@@ -1105,7 +1108,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => return,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => return,
         }
         self.persist();
     }
@@ -1202,6 +1206,7 @@ impl SettingsPanelView {
                 .selected()
                 .map(|controller| controller.name.clone())
                 .unwrap_or_else(|| "Waiting".into()),
+            RowControl::Unsupported { reason, .. } => reason.clone(),
         }
     }
 
@@ -1233,6 +1238,7 @@ impl SettingsPanelView {
             RowControl::Action { active, .. } => binary_state_color(self.palette, *active),
             RowControl::Status { tone, .. } => status_tone_color(self.palette, *tone),
             RowControl::List { .. } | RowControl::Gamepad { .. } => self.palette.label_text,
+            RowControl::Unsupported { .. } => self.palette.status_muted,
         }
     }
 
@@ -1273,6 +1279,12 @@ impl SettingsPanelView {
                 return self.render_toggle_value(*active);
             }
             RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::Unsupported { reason, .. } => {
+                return div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.status_muted))
+                    .child(format!("Unsupported: {reason}"));
+            }
             RowControl::Text(_)
             | RowControl::TextList(_)
             | RowControl::Color(_)
@@ -1619,7 +1631,7 @@ impl SettingsPanelView {
         );
         if !matches!(
             row.control,
-            RowControl::Status { .. } | RowControl::List { .. }
+            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
         ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
@@ -1661,7 +1673,8 @@ impl SettingsPanelView {
                     | RowControl::Status { .. }
                     | RowControl::List { .. }
                     | RowControl::ObjectArray(_)
-                    | RowControl::Gamepad { .. } => None,
+                    | RowControl::Gamepad { .. }
+                    | RowControl::Unsupported { .. } => None,
                 };
                 if let Some(items) = items {
                     let view = cx.weak_entity();
@@ -1950,10 +1963,11 @@ impl SettingsPanelView {
         };
         let mut container = self.render_block_frame(index, row, self.display_value(index));
         let Some(draft) = state.draft.as_ref() else {
-            for entry in state.list.visible_range(state.entry_count()) {
+            for entry in state.item_window() {
                 container = container.child(self.render_object_array_entry(index, entry, cx));
             }
-            return container;
+            let add = state.entries.len();
+            return container.child(self.render_object_array_entry(index, add, cx));
         };
         for (field_index, field) in draft.fields.iter().enumerate() {
             container = container.child(self.render_draft_field(index, field_index, field, cx));
@@ -2030,18 +2044,22 @@ impl SettingsPanelView {
         };
         let active = self.object_array_is_active(index);
         let selected = active && entry == state.list.selected;
-        let body = if entry < state.entries.len() {
+        let stored = entry < state.entries.len();
+        let body = if stored {
             self.render_chip_row(state.chips(entry))
         } else {
             div().flex().flex_row().items_center().child(
                 div()
                     .text_sm()
                     .text_color(rgb(self.palette.state_on))
-                    .child("+ Add rule"),
+                    .child("+ Add"),
             )
         };
         self.object_array_line(index, entry, selected)
             .child(body)
+            .when(stored, |line| {
+                line.child(self.render_entry_remove(index, entry, cx))
+            })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if !event.standard_click() {
                     return;
@@ -2049,6 +2067,45 @@ impl SettingsPanelView {
                 this.select_object_array_entry(index, entry, window, cx);
                 cx.notify();
             }))
+    }
+
+    fn render_entry_remove(
+        &self,
+        index: usize,
+        entry: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(("settings-object-remove", entry_id(index, entry)))
+            .flex_none()
+            .px_1p5()
+            .rounded_sm()
+            .text_xs()
+            .text_color(rgb(self.palette.status_muted))
+            .cursor(CursorStyle::PointingHand)
+            .hover(|style| style.text_color(rgb(self.palette.state_off)))
+            .child("\u{00d7}")
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
+                this.remove_object_array_entry(index, entry);
+                cx.notify();
+            }))
+    }
+
+    fn remove_object_array_entry(&mut self, index: usize, entry: usize) {
+        let Some(RowControl::ObjectArray(state)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        state.list.selected = entry;
+        if state.remove_selected() {
+            self.persist();
+        }
+        self.sync_scroll();
     }
 
     fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> Stateful<Div> {
@@ -2075,7 +2132,14 @@ impl SettingsPanelView {
     }
 
     fn render_chip_row(&self, chips: ItemChips) -> Div {
-        let mut row = div().flex().flex_row().items_center().gap_1().min_w_0();
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden();
         for chip in &chips.from {
             row = row.child(self.render_chip(chip.label.clone(), chip.tone));
         }
@@ -2153,7 +2217,15 @@ impl SettingsPanelView {
     }
 
     fn render_draft_value(&self, field: &DraftField, selected: bool) -> Div {
-        let mut value = div().flex().flex_row().items_center().gap_1().min_w_0();
+        let mut value = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .gap_1()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden();
         if let DraftValue::Mods {
             options,
             selected: flags,
@@ -2226,7 +2298,7 @@ impl SettingsPanelView {
                 div()
                     .text_sm()
                     .text_color(rgb(self.palette.state_on))
-                    .child("Save rule"),
+                    .child("Save"),
             )
             .child(
                 div()
@@ -2872,8 +2944,8 @@ fn entry_id(index: usize, entry: usize) -> u64 {
 fn item_count_label(count: usize) -> String {
     match count {
         0 => "none".to_string(),
-        1 => "1 rule".to_string(),
-        _ => format!("{count} rules"),
+        1 => "1 item".to_string(),
+        _ => format!("{count} items"),
     }
 }
 
@@ -2966,7 +3038,7 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
     let entries = match state.draft.as_ref() {
         Some(draft) => draft.entry_count(),
-        None => state.list.visible_range(state.entry_count()).len(),
+        None => state.item_window().len() + 1,
     };
     super::PANEL_LIST_PADDING_Y
         + list_header_height(row)
