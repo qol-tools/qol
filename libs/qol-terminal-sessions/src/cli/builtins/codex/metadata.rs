@@ -74,8 +74,9 @@ impl CodexMetadataResolver {
         }
     }
 
-    pub fn subscription_path(&self) -> Option<PathBuf> {
-        self.environment.session_index_path()
+    pub fn subscription_path(&self, session: &SessionFacts) -> Option<PathBuf> {
+        let mut cache = self.cache.lock().ok()?;
+        rollout_path(session, self.environment.as_ref(), &mut cache)
     }
 }
 
