@@ -402,13 +402,17 @@ fn validate_field_value_type(
     value: &FieldDefault,
     errors: &mut Vec<ValidationError>,
 ) {
-    if default_matches_kind(value, field.kind) {
+    if value_matches_kind_after_widening(value, field.kind) {
         return;
     }
     errors.push(ValidationError::new(
         path,
         format!("value does not match field type {}", field.kind.name()),
     ));
+}
+
+fn value_matches_kind_after_widening(value: &FieldDefault, kind: FieldKind) -> bool {
+    default_matches_kind(&crate::normalized::widen_to_kind(value.clone(), kind), kind)
 }
 
 fn validate_select_value(
@@ -811,7 +815,7 @@ default = []
         );
         assert!(empty.is_empty(), "{empty:?}");
 
-        let wrong_type = validate_contract(
+        let scalar = validate_contract(
             r#"
 schema_version = 1
 
@@ -819,6 +823,21 @@ schema_version = 1
 type = "string_array"
 config_key = "service_commands"
 default = "cargo watch"
+"#,
+        );
+        assert!(
+            scalar.is_empty(),
+            "a scalar default widens to a single-item list, {scalar:?}"
+        );
+
+        let wrong_type = validate_contract(
+            r#"
+schema_version = 1
+
+[field.service_commands]
+type = "string_array"
+config_key = "service_commands"
+default = 5
 "#,
         );
         assert_has_error(

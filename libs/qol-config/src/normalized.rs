@@ -1,7 +1,7 @@
 use crate::contract::{
     ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, NumberConstraints, RowActionSpec,
 };
-use crate::validation::{validate_field_value, validate_spec_collect, ValidationError};
+use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
 use serde::Serialize;
 
@@ -186,8 +186,32 @@ pub fn resolve_config(
     })
 }
 
-fn widen_to_kind(value: FieldDefault, kind: FieldKind) -> FieldDefault {
+pub fn widen_to_kind(value: FieldDefault, kind: FieldKind) -> FieldDefault {
     match (kind, &value) {
+        (FieldKind::Number, FieldDefault::String(text)) => match text.trim().parse::<f64>() {
+            Ok(number) if number.is_finite() => FieldDefault::Number(number),
+            _ => FieldDefault::String(text.clone()),
+        },
+        (FieldKind::Boolean, FieldDefault::String(text)) => match text.as_str() {
+            "true" => FieldDefault::Boolean(true),
+            "false" => FieldDefault::Boolean(false),
+            _ => FieldDefault::String(text.clone()),
+        },
+        (FieldKind::Boolean, FieldDefault::Number(number)) => match number {
+            1.0 => FieldDefault::Boolean(true),
+            0.0 => FieldDefault::Boolean(false),
+            _ => FieldDefault::Number(*number),
+        },
+        (
+            FieldKind::String | FieldKind::Select | FieldKind::Color,
+            FieldDefault::Number(number),
+        ) => FieldDefault::String(format!("{number}")),
+        (FieldKind::String | FieldKind::Select | FieldKind::Color, FieldDefault::Boolean(flag)) => {
+            FieldDefault::String(flag.to_string())
+        }
+        (FieldKind::StringArray, FieldDefault::String(text)) => {
+            FieldDefault::StringArray(vec![text.clone()])
+        }
         (FieldKind::ObjectArray, FieldDefault::StringArray(values)) if values.is_empty() => {
             FieldDefault::ObjectArray(Vec::new())
         }
@@ -237,7 +261,7 @@ fn resolve_field_value(
         Some(raw) => raw,
         None => return default.clone(),
     };
-    let value = match field_default_from_override(field.kind, raw) {
+    let value = match field_default_from_override(raw) {
         Some(value) => value,
         None => {
             errors.push(ValidationError::new(
@@ -247,12 +271,7 @@ fn resolve_field_value(
             return default.clone();
         }
     };
-    let validation_errors = validate_field_value(&format!("overrides.{id}"), field, &value);
-    if validation_errors.is_empty() {
-        return value;
-    }
-    errors.extend(validation_errors);
-    default.clone()
+    value
 }
 
 fn get_override_value<'a>(
@@ -270,31 +289,23 @@ fn config_key_for(id: &str, field: &crate::contract::FieldSpec) -> String {
     field.config_key.clone().unwrap_or_else(|| id.to_string())
 }
 
-fn field_default_from_override(kind: FieldKind, raw: &serde_json::Value) -> Option<FieldDefault> {
-    match kind {
-        FieldKind::Boolean => raw.as_bool().map(FieldDefault::Boolean),
-        FieldKind::String | FieldKind::Select | FieldKind::Color => raw
-            .as_str()
-            .map(|value| FieldDefault::String(value.to_string())),
-        FieldKind::Number => raw.as_f64().map(FieldDefault::Number),
-        FieldKind::StringArray => {
-            let values = raw.as_array()?;
-            string_array_from_json(values).map(FieldDefault::StringArray)
-        }
-        FieldKind::ObjectArray => {
-            let values = raw.as_array()?;
-            object_array_from_json(values).map(FieldDefault::ObjectArray)
-        }
-        FieldKind::ObjectMap => {
-            let values = raw.as_object()?;
-            object_map_from_json(values).map(FieldDefault::ObjectMap)
-        }
-        FieldKind::Action => None,
-        FieldKind::List => None,
-        FieldKind::Status => None,
-        FieldKind::QrCode => None,
-        FieldKind::Gamepad => None,
+pub(crate) fn field_default_from_override(raw: &serde_json::Value) -> Option<FieldDefault> {
+    if let Some(flag) = raw.as_bool() {
+        return Some(FieldDefault::Boolean(flag));
     }
+    if let Some(number) = raw.as_f64() {
+        return Some(FieldDefault::Number(number));
+    }
+    if let Some(text) = raw.as_str() {
+        return Some(FieldDefault::String(text.to_string()));
+    }
+    if let Some(values) = raw.as_array() {
+        if let Some(strings) = string_array_from_json(values) {
+            return Some(FieldDefault::StringArray(strings));
+        }
+        return object_array_from_json(values).map(FieldDefault::ObjectArray);
+    }
+    object_map_from_json(raw.as_object()?).map(FieldDefault::ObjectMap)
 }
 
 fn string_array_from_json(values: &[serde_json::Value]) -> Option<Vec<String>> {
@@ -419,7 +430,7 @@ default = []
     }
 
     #[test]
-    fn free_form_string_array_invalid_override_falls_back_to_default() {
+    fn free_form_string_array_scalar_override_widens_to_a_single_item_list() {
         let spec = parse_spec_str(FREE_FORM_SPEC).unwrap();
         let resolved = resolve_config(
             &spec,
@@ -429,8 +440,8 @@ default = []
         let field = &resolved.fields[0];
         assert_eq!(
             field.value,
-            FieldDefault::StringArray(Vec::new()),
-            "an override that is not an array falls back to the contract default"
+            FieldDefault::StringArray(vec!["cargo watch".to_string()]),
+            "a scalar override widens to a single-item list so the editor stays usable"
         );
     }
 

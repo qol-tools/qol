@@ -223,7 +223,7 @@ default = 3
     }
 
     #[test]
-    fn validate_plugin_config_rejects_wrong_typed_values() {
+    fn validate_plugin_config_coerces_scalar_overrides_and_rejects_uncoercible() {
         let (_guard, _root, _env) = setup_profile_env();
         let plugin_dir = crate::paths::shared_config_dir()
             .unwrap()
@@ -242,9 +242,16 @@ default = 3
         )
         .unwrap();
 
-        let result = validate_plugin_config("plugin-test", &json!({"threshold": "3"}));
+        let coerced = validate_plugin_config("plugin-test", &json!({"threshold": "3"}));
 
-        assert!(result.is_err());
+        assert!(
+            coerced.is_ok(),
+            "a parseable scalar override widens instead of failing the save"
+        );
+
+        let rejected = validate_plugin_config("plugin-test", &json!({"threshold": "abc"}));
+
+        assert!(rejected.is_err());
     }
 
     fn empty_resolved() -> qol_config::normalized::ResolvedConfig {

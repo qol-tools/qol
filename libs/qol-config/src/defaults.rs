@@ -24,7 +24,8 @@ pub fn defaults_json_from_spec(spec: &ConfigSpec) -> Result<Value, Vec<Validatio
             continue;
         };
         let key = field.config_key.as_deref().unwrap_or(id);
-        if let Err(error) = insert_path(&mut root, key, field_default_to_json(default)) {
+        let widened = crate::normalized::widen_to_kind(default.clone(), field.kind);
+        if let Err(error) = insert_path(&mut root, key, field_default_to_json(&widened)) {
             errors.push(ValidationError::new(
                 format!("field.{id}.config_key"),
                 error,
