@@ -754,7 +754,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => self.active_control = None,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => self.active_control = None,
         }
     }
 
@@ -793,6 +794,7 @@ impl SettingsPanelView {
             RowControl::List { .. } => {}
             RowControl::ObjectArray(_) => self.active_control = Some(ActiveControl::ObjectArray),
             RowControl::Gamepad { .. } => self.select_next_gamepad(),
+            RowControl::Unsupported { .. } => {}
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
             }
@@ -1047,7 +1049,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => return,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
     }
@@ -1105,7 +1108,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => return,
+            | RowControl::Gamepad { .. }
+            | RowControl::Unsupported { .. } => return,
         }
         self.persist();
     }
@@ -1202,6 +1206,7 @@ impl SettingsPanelView {
                 .selected()
                 .map(|controller| controller.name.clone())
                 .unwrap_or_else(|| "Waiting".into()),
+            RowControl::Unsupported { reason, .. } => reason.clone(),
         }
     }
 
@@ -1233,6 +1238,7 @@ impl SettingsPanelView {
             RowControl::Action { active, .. } => binary_state_color(self.palette, *active),
             RowControl::Status { tone, .. } => status_tone_color(self.palette, *tone),
             RowControl::List { .. } | RowControl::Gamepad { .. } => self.palette.label_text,
+            RowControl::Unsupported { .. } => self.palette.status_muted,
         }
     }
 
@@ -1273,6 +1279,12 @@ impl SettingsPanelView {
                 return self.render_toggle_value(*active);
             }
             RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::Unsupported { reason, .. } => {
+                return div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.status_muted))
+                    .child(format!("Unsupported: {reason}"));
+            }
             RowControl::Text(_)
             | RowControl::TextList(_)
             | RowControl::Color(_)
@@ -1619,7 +1631,7 @@ impl SettingsPanelView {
         );
         if !matches!(
             row.control,
-            RowControl::Status { .. } | RowControl::List { .. }
+            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
         ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
@@ -1661,7 +1673,8 @@ impl SettingsPanelView {
                     | RowControl::Status { .. }
                     | RowControl::List { .. }
                     | RowControl::ObjectArray(_)
-                    | RowControl::Gamepad { .. } => None,
+                    | RowControl::Gamepad { .. }
+                    | RowControl::Unsupported { .. } => None,
                 };
                 if let Some(items) = items {
                     let view = cx.weak_entity();
