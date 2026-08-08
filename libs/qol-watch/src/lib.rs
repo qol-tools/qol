@@ -184,6 +184,7 @@ mod tests {
     use super::{watch, watch_file, WatchNotice, WatchRoot};
 
     const DELIVERY: Duration = Duration::from_secs(5);
+    const SILENCE: Duration = Duration::from_millis(300);
 
     #[test]
     fn a_shallow_root_reports_files_that_appear_under_it() {
@@ -280,9 +281,10 @@ mod tests {
             let _ = changed.send(());
         })
         .unwrap();
+        while events.recv_timeout(SILENCE).is_ok() {}
 
         fs::write(root.path().join("other.jsonl"), b"noise").unwrap();
-        assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(events.recv_timeout(SILENCE).is_err());
 
         fs::write(&watched, b"new").unwrap();
         events.recv_timeout(DELIVERY).unwrap();
