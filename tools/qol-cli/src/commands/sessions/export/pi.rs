@@ -8,11 +8,16 @@ import { spawnSync } from "node:child_process";
 import { Type } from "typebox";
 
 const BRIDGE_TIMEOUT_MS = 86_410_000;
+const LOOP_ENTRY = "qol-sessions-feature-loop";
+const LOOP_PHASES = new Set(["idle", "waiting", "review", "closing", "paused"]);
+const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining. Do not stop at a round boundary.`;
+const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close. Do not add or remove sections.`;
 
-function run(args, timeoutMs) {
+function run(args, timeoutMs, input) {
   const result = spawnSync("qol", ["sessions", ...args], {
     encoding: "utf-8",
     timeout: timeoutMs ?? 60_000,
+    input,
   });
   if (result.error) {
     throw new Error(`qol sessions failed: ${result.error.message}`);
@@ -23,6 +28,66 @@ function run(args, timeoutMs) {
   }
   return (result.stdout ?? "").trim();
 }
+
+function assistantText(messages) {
+  return messages
+    .filter((message) => message?.role === "assistant")
+    .flatMap((message) =>
+      typeof message.content === "string"
+        ? [message.content]
+        : Array.isArray(message.content)
+          ? message.content
+              .filter((block) => block?.type === "text" && typeof block.text === "string")
+              .map((block) => block.text)
+          : [],
+    )
+    .join("\n");
+}
+"#;
+
+const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
+  let loopFinalReport = "";
+
+  function setLoopPhase(phase, finalReport = "") {
+    if (loopPhase === phase && loopFinalReport === finalReport) return;
+    loopPhase = phase;
+    loopFinalReport = finalReport;
+    pi.appendEntry(LOOP_ENTRY, { phase, final_report: finalReport });
+  }
+
+  function restoreLoopPhase(ctx) {
+    const entry = [...ctx.sessionManager.getBranch()]
+      .reverse()
+      .find((candidate) => candidate?.type === "custom" && candidate.customType === LOOP_ENTRY);
+    const restored = entry?.data?.phase;
+    loopPhase = LOOP_PHASES.has(restored) ? restored : "idle";
+    loopFinalReport = typeof entry?.data?.final_report === "string" ? entry.data.final_report : "";
+    if (loopPhase === "waiting") setLoopPhase("paused");
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    restoreLoopPhase(ctx);
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    restoreLoopPhase(ctx);
+  });
+
+  pi.on("agent_end", async (event, _ctx) => {
+    const text = assistantText(event.messages);
+    if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
+      setLoopPhase("idle");
+    }
+  });
+
+  pi.on("agent_settled", async (_event, _ctx) => {
+    if (loopPhase === "review") {
+      pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
+    }
+    if (loopPhase === "closing") {
+      pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+    }
+  });
 "#;
 
 const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _onUpdate) {
@@ -41,15 +106,40 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.timeout_ms != null) args.push("--timeout-ms", String(Math.round(params.timeout_ms)));
+      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
       args.push("--", params.task);
-      const stdout = run(args, BRIDGE_TIMEOUT_MS);
-      const outcome = JSON.parse(stdout);
-      const text = outcome.completed
-        ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
-        : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
+      setLoopPhase("waiting");
+      try {
+        const stdout = run(args, BRIDGE_TIMEOUT_MS);
+        const outcome = JSON.parse(stdout);
+        setLoopPhase(outcome.completed ? "review" : "paused");
+        const text = outcome.completed
+          ? outcome.submitted
+            ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
+            : `recovered the previous implementation response before submitting new work after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
+          : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
+        return {
+          content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
+          details: { outcome },
+        };
+      } catch (error) {
+        setLoopPhase("paused");
+        throw error;
+      }
+    },
+"#;
+
+const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+      const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_loop_close", arguments: params } };
+      const response = JSON.parse(run(["mcp"], 10_000, `${JSON.stringify(request)}\n`));
+      const result = response?.result;
+      const text = result?.content?.[0]?.text;
+      if (result?.isError || typeof text !== "string") throw new Error(text || "session_loop_close failed");
+      const receipt = JSON.parse(text);
+      setLoopPhase("closing", receipt.final_report);
       return {
-        content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
-        details: { outcome },
+        content: [{ type: "text", text: JSON.stringify(receipt) }],
+        details: { receipt },
       };
     },
 "#;
@@ -61,7 +151,7 @@ pub(crate) fn pi_extension() -> Result<String> {
         .collect::<Result<Vec<_>>>()?
         .join("\n\n");
     Ok(format!(
-        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{blocks}\n}}\n"
+        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{LOOP_SETUP}\n{blocks}\n}}\n"
     ))
 }
 
@@ -70,6 +160,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_bridge" => EXECUTE_BRIDGE,
+        "session_loop_close" => EXECUTE_LOOP_CLOSE,
         other => bail!("no pi adapter template for contract tool `{other}`"),
     };
     Ok(format!(
@@ -156,8 +247,33 @@ mod tests {
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
         assert!(source.contains(
-            "task: Type.String({ description: \"Bounded implementation task to submit exactly once\" }),"
+            "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
         ));
+        assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
+        assert!(source.contains("args.push(\"--acknowledge-marker\""));
         assert!(source.contains("args.push(\"--\", params.task)"));
+    }
+
+    #[test]
+    fn pi_adapter_keeps_the_feature_loop_armed_through_review() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("setLoopPhase(\"waiting\")"));
+        assert!(source.contains("setLoopPhase(outcome.completed ? \"review\" : \"paused\")"));
+        assert!(source.contains("recovered the previous implementation response"));
+        assert!(source.contains("pi.on(\"agent_settled\""));
+        assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
+    }
+
+    #[test]
+    fn pi_adapter_closes_the_loop_through_a_typed_receipt() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_loop_close")
+            .expect("loop close in contract");
+        let source = render_tool_block(spec).expect("render");
+        assert!(source.contains("name: \"session_loop_close\""));
+        assert!(source.contains("run([\"mcp\"], 10_000"));
+        assert!(source.contains("setLoopPhase(\"closing\", receipt.final_report)"));
     }
 }

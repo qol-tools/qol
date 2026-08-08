@@ -81,7 +81,40 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nBridge work between independent terminal sessions.\n\nPrimary usage:\n  qol sessions list [--json]\n  qol sessions bridge <session> <task...> [--timeout-ms N]\n\nDiagnostics:\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n\nDetails:\n  list discovers stable live-session tokens.\n  bridge submits one bounded task, supplies a generated completion signal,\n  waits in the same call, and prints JSON with completed, session,\n  completion_marker, screen, reads, and elapsed_ms. Its timeout is clamped\n  to 1s..24h (default 1h).\n  Use -- before task text that contains --timeout-ms.\n  The MCP and generated agent surfaces expose only sessions_list and\n  session_bridge. The remaining commands are human diagnostics.\n\nExit:\n  Exits non-zero on discovery, identity, capability, validation, or delivery\n  failures. A bridge timeout is a successful JSON result with completed=false.\n"
+    r#"qol sessions
+
+Bridge work between independent terminal sessions.
+
+Primary usage:
+  qol sessions list [--json]
+  qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
+
+Diagnostics:
+  qol sessions send <session> <text...> [--submit]
+  qol sessions read <session>
+  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]
+  qol sessions focus <session>
+  qol sessions mcp
+  qol sessions export [pi]
+  qol sessions help
+
+Details:
+  list discovers stable live-session tokens.
+  bridge submits one bounded task, supplies a generated completion signal,
+  waits in the same call, and prints JSON with completed, submitted, session,
+  completion_marker, screen, reads, and elapsed_ms. Before submitting, it
+  resumes any unfinished bridge for that session and returns its latest
+  response with submitted=false. Pass its reviewed completion_marker through
+  --acknowledge-marker to submit the following round. Its timeout is clamped
+  to 1s..24h (default 1h).
+  Use -- before task text that contains --timeout-ms.
+  The MCP and generated agent surfaces expose sessions_list, session_bridge,
+  and session_loop_close. The remaining commands are human diagnostics.
+
+Exit:
+  Exits non-zero on discovery, identity, capability, validation, or delivery
+  failures. A bridge timeout is a successful JSON result with completed=false.
+"#
 }
 
 fn service() -> Result<TerminalSessionService> {
@@ -147,19 +180,22 @@ fn send(args: &[OsString]) -> Result<()> {
 }
 
 fn run_bridge(args: &[OsString]) -> Result<()> {
-    let (binding_token, task, timeout_ms) = parse_bridge_args(args)?;
+    let (binding_token, task, timeout_ms, acknowledge_marker) = parse_bridge_args(args)?;
     let binding = SessionBinding::from_str(&binding_token)
         .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
     let timeout_ms = timeout_ms
         .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
         .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
     let terminals = service()?;
+    let pending = bridge::PendingBridgeStore::system()?;
     let outcome = bridge::execute(
         &terminals,
         &CliSessionInterpreter::system(),
         &binding,
         &task,
         std::time::Duration::from_millis(timeout_ms),
+        &pending,
+        acknowledge_marker.as_deref(),
     )?;
     println!(
         "{}",
@@ -168,8 +204,9 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>)> {
-    let usage = "qol sessions bridge <session> <task...> [--timeout-ms N]";
+fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, Option<String>)> {
+    let usage =
+        "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]";
     let binding = args
         .first()
         .and_then(|argument| argument.to_str())
@@ -177,6 +214,7 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>)>
         .to_owned();
     let mut task_parts = Vec::new();
     let mut timeout_ms = None;
+    let mut acknowledge_marker = None;
     let mut literal = false;
     let mut index = 1;
     while index < args.len() {
@@ -205,6 +243,14 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>)>
                 );
                 index += 2;
             }
+            "--acknowledge-marker" => {
+                let value = args
+                    .get(index + 1)
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| anyhow!("usage: {usage}"))?;
+                acknowledge_marker = Some(value.to_owned());
+                index += 2;
+            }
             other => {
                 task_parts.push(other.to_owned());
                 index += 1;
@@ -215,7 +261,7 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>)>
     if task.is_empty() {
         bail!("usage: {usage}");
     }
-    Ok((binding, task, timeout_ms))
+    Ok((binding, task, timeout_ms, acknowledge_marker))
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {
@@ -456,19 +502,25 @@ mod tests {
 
     #[test]
     fn bridge_args_keep_the_surface_small_and_support_literal_flags() {
-        let (binding, task, timeout) = parse_bridge_args(&[
+        let (binding, task, timeout, acknowledge_marker) = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "implement".into(),
             "the fix".into(),
             "--timeout-ms".into(),
             "5000".into(),
+            "--acknowledge-marker".into(),
+            "QOL_BRIDGE_DONE_previous".into(),
         ])
         .unwrap();
         assert_eq!(binding, "v1:kitty:7:123");
         assert_eq!(task, "implement the fix");
         assert_eq!(timeout, Some(5000));
+        assert_eq!(
+            acknowledge_marker.as_deref(),
+            Some("QOL_BRIDGE_DONE_previous")
+        );
 
-        let (_, task, timeout) = parse_bridge_args(&[
+        let (_, task, timeout, acknowledge_marker) = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "--".into(),
             "explain".into(),
@@ -477,5 +529,6 @@ mod tests {
         .unwrap();
         assert_eq!(task, "explain --timeout-ms");
         assert_eq!(timeout, None);
+        assert_eq!(acknowledge_marker, None);
     }
 }
