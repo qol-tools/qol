@@ -5,7 +5,7 @@ Thin bash mocks that faithfully mimic each feature's real headless CLI surface
 dashed/flat verbs, subcommands, fallback layers). Used to simulate the
 five-version design evolution in the companion spec:
 
-`docs/superpowers/specs/2026-08-03-headless-cli-common-interface.md`
+`docs/specs/2026-08-03-headless-cli-common-interface.md`
 
 ## Usage
 

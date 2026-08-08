@@ -100,7 +100,7 @@ grace, then kills the child.
 
 `qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x
 platform grid, Medium injector strategy, Machine substrate, milestones M1-M5):
-`docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) and
+`docs/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) and
 M2 (control verbs + arch-aware accel) are complete. M3 is complete for one
 cell: Debian 13 nocloud arm64 + USB stick + `leaves-no-trace`, via the
 hardcoded `DebianNocloud` GuestOs adapter and `qol emu check <id>`.

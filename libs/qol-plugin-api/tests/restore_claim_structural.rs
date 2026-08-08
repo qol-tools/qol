@@ -5,8 +5,8 @@
 //! These tests lock the contract so that a future change cannot regress the
 //! security model without a visible test failure.
 //!
-//! See `workspace/docs/superpowers/specs/2026-05-12-terminal-workspace-restore-design.md`
-//! and `workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md`.
+//! See `workspace/docs/specs/2026-05-12-terminal-workspace-restore-design.md`
+//! and `workspace/docs/plans/2026-05-12-terminal-workspace-restore-security-plan.md`.
 //! Closes: CONTRACT-1, CONTRACT-2, CONTRACT-3.
 
 use std::collections::BTreeMap;

@@ -7,7 +7,7 @@
 
 ## Problem
 
-The terminal-workspace-restore design (see `docs/superpowers/specs/2026-05-12-terminal-workspace-restore-design.md`) treats inter-plugin RPC as HTTP-over-loopback and pushes the full `PaneSnapshot` to every restore-rule plugin. Both decisions widen the trust surface unnecessarily: any same-uid local process can hit a plugin's loopback port, and every restore-rule plugin sees `cwd`, `title`, and full foreground `argv` regardless of what it actually needs. qol-runtime is the broker between plugin-kitty (the snapshot producer) and N restore-rule plugins (the consumers), so the structural fix lands here.
+The terminal-workspace-restore design (see `docs/specs/2026-05-12-terminal-workspace-restore-design.md`) treats inter-plugin RPC as HTTP-over-loopback and pushes the full `PaneSnapshot` to every restore-rule plugin. Both decisions widen the trust surface unnecessarily: any same-uid local process can hit a plugin's loopback port, and every restore-rule plugin sees `cwd`, `title`, and full foreground `argv` regardless of what it actually needs. qol-runtime is the broker between plugin-kitty (the snapshot producer) and N restore-rule plugins (the consumers), so the structural fix lands here.
 
 ```mermaid
 sequenceDiagram
@@ -114,7 +114,7 @@ sequenceDiagram
 
 ## Notes
 
-- Source spec sections: §1 Cross-plugin IPC authentication (lines 465 to 475 in `docs/superpowers/specs/2026-05-12-terminal-workspace-restore-design.md`), §8 Information disclosure via PaneSnapshot (lines 575 to 602), and the data-contracts block (lines 101 to 191).
+- Source spec sections: §1 Cross-plugin IPC authentication (lines 465 to 475 in `docs/specs/2026-05-12-terminal-workspace-restore-design.md`), §8 Information disclosure via PaneSnapshot (lines 575 to 602), and the data-contracts block (lines 101 to 191).
 - Primitives: `tokio::net::UnixListener`; `libc::getsockopt(SO_PEERCRED)` on Linux; `libc::getsockopt(..., LOCAL_PEERCRED, ...)` returning `xucred` on macOS.
 - The pull API runs over the same socket as the broker; plugins reuse the authenticated connection, no second handshake.
 - Bearer-token TTL of 5 s (from the spec) is kept for replay resistance after peer-cred verification.

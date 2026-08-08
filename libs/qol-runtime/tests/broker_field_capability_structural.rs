@@ -15,7 +15,7 @@
 //! has a companion test that confirms the re-export is visible to
 //! plugins.
 //!
-//! Refs: workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 07)
+//! Refs: workspace/docs/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 07)
 //! Closes: RUNTIME-1.2, RUNTIME-1.3.
 
 use qol_runtime::broker::{check_field_access, FieldCheckError, PaneField};
