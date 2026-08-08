@@ -101,6 +101,13 @@ pub(super) enum RowControl {
         tone: StatusTone,
         error: Option<String>,
     },
+    QrCode {
+        query: String,
+        value_from: Option<String>,
+        url: Option<String>,
+        modules: Vec<bool>,
+        error: Option<String>,
+    },
     List {
         query: String,
         active_query: Option<String>,
@@ -455,9 +462,12 @@ fn control_for(field: &ResolvedField) -> RowControl {
             )),
             _ => unsupported_mismatch(field),
         },
-        FieldKind::QrCode => RowControl::Unsupported {
-            kind: FieldKind::QrCode,
-            reason: "qr_code".into(),
+        FieldKind::QrCode => RowControl::QrCode {
+            query: field.query.clone().unwrap_or_default(),
+            value_from: field.value_from.clone(),
+            url: None,
+            modules: Vec::new(),
+            error: None,
         },
     }
 }
@@ -621,6 +631,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         | RowControl::List { .. }
         | RowControl::Status { .. }
         | RowControl::Gamepad { .. }
+        | RowControl::QrCode { .. }
         | RowControl::Unsupported { .. } => None,
     }
 }
@@ -659,6 +670,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
         | RowControl::Status { .. }
         | RowControl::List { .. }
         | RowControl::Gamepad { .. }
+        | RowControl::QrCode { .. }
         | RowControl::Unsupported { .. } => None,
     }
 }
@@ -695,6 +707,9 @@ pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
                 names.extend(active_query.iter().cloned());
             }
             RowControl::Gamepad { query, .. } => {
+                names.insert(query.clone());
+            }
+            RowControl::QrCode { query, .. } if !query.is_empty() => {
                 names.insert(query.clone());
             }
             _ => {}
@@ -819,6 +834,37 @@ pub(super) fn apply_runtime_query(
                 query: row_query,
                 monitor,
             } if row_query == query => monitor.apply_query(result.clone()),
+            RowControl::QrCode {
+                query: row_query,
+                value_from,
+                url,
+                modules,
+                error,
+            } if row_query == query => match &result {
+                Ok(value) => {
+                    let raw = value_from
+                        .as_deref()
+                        .and_then(|path| query_value(value, Some(path)));
+                    let next = raw.and_then(qr_url_text);
+                    match next {
+                        Some(text) if url.as_ref() != Some(&text) => match qr_modules(&text) {
+                            Ok(encoded) => {
+                                *url = Some(text);
+                                *modules = encoded;
+                                *error = None;
+                            }
+                            Err(message) => *error = Some(message),
+                        },
+                        Some(_) => {}
+                        None => {
+                            *url = None;
+                            modules.clear();
+                            *error = None;
+                        }
+                    }
+                }
+                Err(message) => *error = Some(message.clone()),
+            },
             _ => {}
         }
     }
@@ -851,6 +897,31 @@ fn query_value_text(value: &serde_json::Value) -> Option<String> {
             None
         }
     }
+}
+
+fn qr_url_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            None
+        }
+    }
+}
+
+fn qr_modules(url: &str) -> Result<Vec<bool>, String> {
+    let code = qrcode::QrCode::new(url).map_err(|error| error.to_string())?;
+    let width = code.width();
+    let quiet = 4;
+    let side = width + 2 * quiet;
+    let mut modules = vec![false; side * side];
+    for (index, color) in code.to_colors().into_iter().enumerate() {
+        let x = index % width;
+        let y = index / width;
+        modules[(y + quiet) * side + (x + quiet)] = color == qrcode::Color::Dark;
+    }
+    Ok(modules)
 }
 
 fn status_tone(value: &str) -> StatusTone {
@@ -2062,14 +2133,81 @@ default = true
                 }
             }
         }
+        assert!(
+            unsupported.is_empty(),
+            "every contract field must render, found unsupported rows: {unsupported:?}"
+        );
+    }
+
+    #[test]
+    fn qr_code_rows_encode_the_query_url_and_clear_with_the_payload() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.download_qr]
+type = "qr_code"
+label = "Scan to download"
+query = "connection_info"
+value_from = "app_download_url"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+        assert_eq!(runtime_query_names(&rows), ["connection_info"]);
+        let RowControl::QrCode { url, modules, .. } = &rows[0].control else {
+            panic!("expected a qr code row, got {:?}", rows[0].control);
+        };
+        assert_eq!(url, &None);
+        assert!(modules.is_empty());
+
+        apply_runtime_query(
+            &mut rows,
+            "connection_info",
+            Ok(serde_json::json!({ "app_download_url": "http://192.168.1.5:45455/app" })),
+        );
+        let RowControl::QrCode {
+            url,
+            modules,
+            error,
+            ..
+        } = &rows[0].control
+        else {
+            panic!("expected a qr code row");
+        };
+        assert_eq!(url.as_deref(), Some("http://192.168.1.5:45455/app"));
+        assert!(!modules.is_empty());
+        assert_eq!(error, &None);
+        let side = (modules.len() as f64).sqrt() as usize;
         assert_eq!(
-            unsupported,
-            vec![(
-                "pointz".to_string(),
-                "download_qr".to_string(),
-                "qr_code".to_string()
-            )],
-            "the only unsupported field in the repo must be pointz download_qr"
+            side * side,
+            modules.len(),
+            "quiet zone keeps the matrix square"
+        );
+
+        apply_runtime_query(
+            &mut rows,
+            "connection_info",
+            Ok(serde_json::json!({ "hostname": "host" })),
+        );
+        let RowControl::QrCode { url, modules, .. } = &rows[0].control else {
+            panic!("expected a qr code row");
+        };
+        assert_eq!(url, &None, "a payload without the path clears the code");
+        assert!(modules.is_empty());
+
+        apply_runtime_query(&mut rows, "connection_info", Err("unavailable".into()));
+        let RowControl::QrCode { error, .. } = &rows[0].control else {
+            panic!("expected a qr code row");
+        };
+        assert_eq!(error.as_deref(), Some("unavailable"));
+
+        assert_eq!(
+            merged_config(&serde_json::json!({ "other": 1 }), &rows),
+            serde_json::json!({ "other": 1 }),
+            "qr code rows are display only"
         );
     }
 

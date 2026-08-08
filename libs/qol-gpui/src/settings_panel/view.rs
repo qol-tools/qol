@@ -755,6 +755,7 @@ impl SettingsPanelView {
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => self.active_control = None,
         }
     }
@@ -794,6 +795,7 @@ impl SettingsPanelView {
             RowControl::List { .. } => {}
             RowControl::ObjectArray(_) => self.active_control = Some(ActiveControl::ObjectArray),
             RowControl::Gamepad { .. } => self.select_next_gamepad(),
+            RowControl::QrCode { .. } => {}
             RowControl::Unsupported { .. } => {}
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
@@ -1050,6 +1052,7 @@ impl SettingsPanelView {
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
@@ -1109,6 +1112,7 @@ impl SettingsPanelView {
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         }
         self.persist();
@@ -1206,6 +1210,7 @@ impl SettingsPanelView {
                 .selected()
                 .map(|controller| controller.name.clone())
                 .unwrap_or_else(|| "Waiting".into()),
+            RowControl::QrCode { url, .. } => url.clone().unwrap_or_default(),
             RowControl::Unsupported { reason, .. } => reason.clone(),
         }
     }
@@ -1238,6 +1243,7 @@ impl SettingsPanelView {
             RowControl::Action { active, .. } => binary_state_color(self.palette, *active),
             RowControl::Status { tone, .. } => status_tone_color(self.palette, *tone),
             RowControl::List { .. } | RowControl::Gamepad { .. } => self.palette.label_text,
+            RowControl::QrCode { .. } => self.palette.label_text,
             RowControl::Unsupported { .. } => self.palette.status_muted,
         }
     }
@@ -1291,7 +1297,8 @@ impl SettingsPanelView {
             | RowControl::Status { .. }
             | RowControl::List { .. }
             | RowControl::ObjectArray(_)
-            | RowControl::Gamepad { .. } => {}
+            | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. } => {}
         }
         let mut cell = div().flex().flex_row().items_center().gap_2();
         if let RowControl::Status { tone, .. } = self.rows[index].control {
@@ -1562,6 +1569,9 @@ impl SettingsPanelView {
         if matches!(row.control, RowControl::ObjectArray(_)) {
             return container.child(self.render_object_array(index, cx));
         }
+        if matches!(row.control, RowControl::QrCode { .. }) {
+            return container.child(self.render_qr_code(index));
+        }
         if matches!(row.control, RowControl::Gamepad { .. }) {
             return container.child(self.render_gamepad(index, cx));
         }
@@ -1631,7 +1641,10 @@ impl SettingsPanelView {
         );
         if !matches!(
             row.control,
-            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
+            RowControl::Status { .. }
+                | RowControl::List { .. }
+                | RowControl::Unsupported { .. }
+                | RowControl::QrCode { .. }
         ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
@@ -1674,6 +1687,7 @@ impl SettingsPanelView {
                     | RowControl::List { .. }
                     | RowControl::ObjectArray(_)
                     | RowControl::Gamepad { .. }
+                    | RowControl::QrCode { .. }
                     | RowControl::Unsupported { .. } => None,
                 };
                 if let Some(items) = items {
@@ -1952,6 +1966,137 @@ impl SettingsPanelView {
         }
         for item_index in list.visible_range(items.len()) {
             container = container.child(self.render_list_item(index, item_index, list_active, cx));
+        }
+        container
+    }
+
+    fn render_qr_code(&self, index: usize) -> Div {
+        let row = &self.rows[index];
+        let RowControl::QrCode {
+            url,
+            modules,
+            error,
+            ..
+        } = &row.control
+        else {
+            return div();
+        };
+        let mut container = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .h(px(row_body_height(row)))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .rounded_md();
+        if index == self.selected {
+            container = container
+                .bg(rgb(self.palette.row_bg_selected))
+                .border_1()
+                .border_color(rgb(self.palette.row_border_selected));
+        }
+        container = container.child(
+            div()
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .h(px(list_header_height(row)))
+                .gap_3()
+                .text_sm()
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .flex_1()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.section_text))
+                                .child(row.label.clone()),
+                        )
+                        .when_some(row.description.clone(), |group, description| {
+                            group.child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(self.palette.label_text))
+                                    .child(description),
+                            )
+                        }),
+                ),
+        );
+        let code_block = match url {
+            Some(_) => {
+                let module_px = qr_module_px(modules);
+                let side = qr_side(modules);
+                let mut grid = div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .h(px(super::PANEL_QR_CODE_HEIGHT));
+                for y in 0..side {
+                    let mut line = div().flex().flex_row().flex_none().h(px(module_px));
+                    for x in 0..side {
+                        let dark = modules[y * side + x];
+                        if dark {
+                            line = line.child(
+                                div()
+                                    .w(px(module_px))
+                                    .h(px(module_px))
+                                    .bg(rgb(self.palette.section_text)),
+                            );
+                        } else {
+                            line = line.child(div().w(px(module_px)).h(px(module_px)));
+                        }
+                    }
+                    grid = grid.child(line);
+                }
+                grid
+            }
+            None => {
+                let placeholder = row
+                    .placeholder
+                    .clone()
+                    .unwrap_or_else(|| "Waiting...".into());
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .h(px(super::PANEL_QR_CODE_HEIGHT))
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(placeholder)
+            }
+        };
+        container = container.child(code_block);
+        let status = match (error.as_ref(), url.as_ref()) {
+            (Some(message), _) => message.clone(),
+            (None, Some(url)) => url.clone(),
+            (None, None) => String::new(),
+        };
+        if !status.is_empty() {
+            container = container.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .h(px(super::PANEL_QR_URL_HEIGHT))
+                    .text_xs()
+                    .text_color(if error.is_some() {
+                        rgb(self.palette.state_off)
+                    } else {
+                        rgb(self.palette.label_text)
+                    })
+                    .child(status),
+            );
         }
         container
     }
@@ -3018,6 +3163,13 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
     if matches!(row.control, RowControl::Gamepad { .. }) {
         return super::PANEL_GAMEPAD_HEIGHT;
     }
+    if matches!(row.control, RowControl::QrCode { .. }) {
+        return super::PANEL_LIST_PADDING_Y
+            + list_header_height(row)
+            + super::PANEL_QR_CODE_HEIGHT
+            + super::PANEL_QR_URL_HEIGHT
+            + 2.0 * super::PANEL_LIST_GAP;
+    }
     if let RowControl::ObjectArray(state) = &row.control {
         return object_array_body_height(row, state);
     }
@@ -3052,6 +3204,16 @@ fn list_header_height(row: &Row) -> f32 {
         } else {
             0.0
         }
+}
+
+fn qr_side(modules: &[bool]) -> usize {
+    (modules.len() as f64).sqrt() as usize
+}
+
+fn qr_module_px(modules: &[bool]) -> f32 {
+    let side = qr_side(modules);
+    let module = super::PANEL_QR_CODE_HEIGHT / side as f32;
+    module.clamp(2.0, 4.0)
 }
 
 fn visible_row_window(
