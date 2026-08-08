@@ -36,7 +36,8 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         summary: "x".into(),
         last_activity: last,
         screen_hash: None,
-        running_since: None,
+        working_since: None,
+        settled_since: None,
     }
 }
 
@@ -135,4 +136,30 @@ fn acknowledge_clears_your_turn_only() {
     let mut w = state(1, Status::Working, 1);
     w.acknowledge();
     assert_eq!(w.status, Status::Working, "ack is a no-op off your-turn");
+}
+
+#[test]
+fn settle_timers_are_never_serialized() {
+    let mut s = state(1, Status::Working, 100);
+    s.working_since = Some(42);
+    s.settled_since = Some(50);
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(
+        !json.contains("working_since") && !json.contains("settled_since"),
+        "transition timers must stay process-local: {json}"
+    );
+    let restored: SessionState = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        restored.working_since, None,
+        "restore starts with no timers"
+    );
+    assert_eq!(
+        restored.settled_since, None,
+        "restore starts with no timers"
+    );
+    assert_eq!(restored.status, Status::Working, "status survives");
+    assert_eq!(
+        restored.last_activity, 100,
+        "the wall display timestamp survives"
+    );
 }

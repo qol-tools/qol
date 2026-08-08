@@ -8,8 +8,8 @@ Two things vary independently:
 
 - **where** the sessions live - the shared `qol-terminal-sessions` capability
 - **what CLI tool** owns a session - the shared `CliSessionInterpreter`
-- **what** that tool's on-screen state means to this dashboard -
-  `strategy::Strategy`
+  (`describe` + `classify_screen` evidence)
+- **what** that evidence means to this dashboard - `attention::reduce`
 
 Everything else (the registry, the reconciler, the panel) is written against the
 universal middle vocabulary and never needs to know about Kitty transport or
@@ -23,19 +23,18 @@ tool-specific metadata storage.
         host.discover() -> Vec<Pane>           (shared terminal capability)
                               |
         cli_interpreter.describe(pane)
-          -> CliSessionDescriptor              (shared generic/tool enrichment)
+          -> CliSessionDescriptor              (semantic metadata + descriptor evidence)
+        cli_interpreter.classify_screen(pane, screen)
+          -> CliScreenEvidence                 (pure screen evidence: runtime + viewport)
                               |
-        Tool::from_cli_session(descriptor)      (dashboard attention policy)
-                              |
+        Tool::from_cli_session(descriptor)      (dashboard identity mapping)
         service_probe.is_service(pane)         (deterministic: does it hold a listener?)
-                              |  -> Ctx.is_service (generic panes only)
-        for_tool(tool).read(Ctx) -> Reading    (Strategy: the "what")
-                              |  Reading { phase, label }
+                              |
+        attention::reduce(prev, evidence, now) -> Reduction
+          |  Reduction { attention { status, working_since, settled_since },
+          |              phase, transition { reason } }
                               v
-        Phase { Busy, Service, Blocked, Done, Idle }   universal terminal vocabulary
-                              |
-        status_for(prev, phase) -> Status      folds in memory (ack stickiness)
-                              |
+        Phase { Busy, Service, Blocked, Done, Idle, Hold }   universal vocabulary
         Status { Working, Service, YourTurn, NeedsYou, Unknown, Acknowledged }
                               |
         registry (sorted by attention) -> SessionsView (panel)
@@ -80,76 +79,76 @@ registry and presentation model.
 2. Register the backend in `TerminalSessionService`.
 3. Keep dashboard-specific selection and attention behavior in this plugin.
 
-## Axis 2 - tool strategy (`src/strategy`)
+## Axis 2 - attention policy (`src/attention`)
 
-A `Strategy` turns a `Ctx` (the pane + an optional scrollback snapshot + the
-previous reading + now) into a `Reading { phase, label }`. The default impl
-`Cli` encodes **standard terminal behavior**, with no tool knowledge:
+The dashboard owns one monotonic reducer (`attention::reduce`) and nothing
+else. It never parses tool screens: semantic evidence comes from the shared
+descriptor (`CliSessionEvidence.runtime`, `.activity`) and screen evidence from
+the shared `classify_screen` (`CliScreenEvidence.runtime`, `.viewport`). The
+plugin's per-harness strategies are gone; a new CLI tool is added in
+`qol-terminal-sessions` and this dashboard picks it up unchanged.
 
-- at a shell prompt -> `Idle`, or `Done` if a command had been running a while
-- not at a prompt -> `Busy`, or `Blocked` if the screen shows a selection / input
-  prompt that hasn't changed, or `Service` if it is a long-running service (see
-  "Deterministic service detection")
+`reduce(prev, evidence, now)` is pure and total over the previous attention
+state (status + monotonic timers) and the current evidence, with one explicit
+precedence order:
 
-Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`,
-`Pi`, `Kimi`) supply evidence hooks (`working`, `awaiting`, `turn_taken`) and
-never consult `is_service`; the shared `read` composes the hooks through the
-pure `phase_for` skeleton (Busy > Blocked > Done > Idle) and enforces the
-moving-screen invariant in one place, keyed on the previous status. Movement in
-a session that was `Working`, or that this pass observes for the first time,
-always reads `Busy`: the debounce keeps a streaming session working, and the
-first reading of a moving screen stays conservative rather than arming "your
-turn" from historical evidence. Once a session has settled into a waiting
-status, a redraw no longer overrides the evidence hooks, so a rename or banner
-refresh in an acknowledged session reads `Done` and stays acknowledged rather
-than re-arming. A redraw with no waiting evidence at all still reads `Busy`,
-because movement is the only signal a tool with a hidden spinner leaves behind.
-Kimi's and Pi's `working` hooks are the exception to the skeleton's hard
-`Busy` override: their activity lines (`⠙ working...` / moon + tip) stay
-rendered on a settled screen after the model has finished, so the line only
-reads as live work while the screen is changing. A settled line is stale and
-reads `Done`, which is exactly the "your turn" the user sees. Kimi renders
-inline (no alternate screen), so scrolling the kitty window back shows the
-transcript overflow without the editor chrome; a chrome-less kimi screen with
-no working evidence reads `Hold` and keeps the previous status instead of
-flipping to "your turn" while the agent still works.
-`Cli` alone overrides `read` because its
-shell model is busy-by-default (absence of a foreground process is the idle
-signal), which does not fit the evidence skeleton. Strategies also expose a
-`stable_screen_hash` so the daemon compares only the region whose movement
-means something (the footer counters of `Pi`/`Kimi` are excluded); the
-decision that "the screen settled" therefore ignores cosmetic noise.
+1. **Strong live work wins.** Descriptor `Working` (e.g. the Codex title) is
+   live regardless of the viewport. Screen `Working` (spinner in the recent
+   tail) is live while the screen is moving or the transcript is fresh; a
+   settled, non-fresh spinner is a stale leftover, not live work. Descriptor
+   `Ready` (the harness's own runtime state) wins over a settled, fresh
+   screen spinner, so a Codex "Ready" title never stays green on weak
+   freshness.
+2. **Historical viewport holds.** `viewport == Historical` (startup chrome)
+   preserves the prior status and can never create attention. It is checked
+   before any awaiting/blocked short-circuit, so a stale questionnaire in
+   scrollback holds instead of alerting.
+3. **Strong NeedsInput alerts immediately.** Descriptor `NeedsInput` (Codex
+   "Action Required") is always strong, from any prior status. Screen
+   `NeedsInput` is strong unless the transcript is confirmed stale, the
+   session is mid-turn with fresh activity (a picker-looking tail while the
+   agent works is scrollback), or the evidence is missing and the session was
+   just working: with unknown freshness and a moving viewport the plugin
+   cannot distinguish a real picker from scrollback residue, so it waits for
+   the picker to settle and hold through the grace before alerting. Sustained
+   scroll is never distinguished without evidence; it simply never confirms.
+4. **Weak freshness is only negative evidence.** `file_fresh` never proves
+   Working and never proves turn-taken; it only blocks completion while the
+   agent is demonstrably still writing, and never overrides an authoritative
+   descriptor `Ready`.
+5. **Completion needs settle + grace.** A prior `Working` turn completes to
+   `YourTurn` only after a settled screen (stable normalized hash) and a
+   monotonic grace window (`GRACE_SECS`, time-based - poll counts never
+   debounce). Weak file freshness never overrides authoritative runtime
+   state: a descriptor `Ready` (the Codex title) completes on settle plus
+   grace even while transcript writes stay fresh. First sightings never
+   complete.
+6. **Generic shells stay busy-by-default.** A non-prompt generic pane is
+   `Working` unless it is a declared service; at the prompt a command that ran
+   past the grace window completes, a quick command returns to `Unknown`, and
+   an acknowledged session stays acknowledged.
 
-`Claude`, `Codex`, `Pi`, and `Kimi` implement the evidence hooks and
-`wants_screen` to detect the *same* four phases from their own tells instead
-of the generic prompt heuristics. Labels and session activity metadata arrive
-through the shared descriptor:
+Acknowledgement is sticky in `Status` alone: it survives holds, redraws, stale
+markers, and completed turns, and only strong work or strong input breaks it.
+Kimi's historical hold is a consequence of rules 2-4: a chrome-less scrolled
+screen carries no live evidence, so it holds the prior status instead of
+flipping to attention, and a stale questionnaire never short-circuits into
+`NeedsYou` before the hold check.
 
-| Phase   | `Cli` (generic)              | `Claude`                    | `Codex`                       | `Pi`                            | `Kimi`                  |
-|---------|------------------------------|-----------------------------|-------------------------------|---------------------------------|-------------------------|
-| Busy    | not at prompt                | `esc to interrupt` / spinner | `esc to interrupt`, title     | braille spinner + `...` loader  | moon spinner / bare moon above the editor box / braille `thinking...` |
-| Blocked | selection/input prompt       | choice carets `❯ 1.`        | selection prompt markers      | selector hint (`↑↓ navigate …`) | numbered choice prompt |
-| Done    | returned to prompt after run | `✱ ... for <dur>` summary   | session file has >1 turn      | session file has a message      | session has a prompt    |
-| Idle    | otherwise                    | otherwise                   | welcome banner / untouched    | startup help / untouched        | untouched / fresh       |
-
-The shared detectors live in `signal::screen` and `signal::title`
-(`has_prompt_markers`, `has_input_request`, `claude_working`, `claude_done`,
-`codex_banner`, `title_working`, ...). Strategies compose these; they don't
-re-implement screen parsing.
-
-`Tool::from_cli_session` maps the shared tool id into the dashboard's known
-attention policies. Unrecognized registered tools retain generic dashboard
-behavior, so adding shared interpretation never requires this plugin to support
-a specialized state machine.
+Movement is dashboard policy, so the plugin keeps `screen_hash` plus
+`stable_screen` normalization: Pi footer counters and the Kimi status bar are
+excluded from the hash, so a session whose screen only shows cosmetic noise
+counts as settled. Tool identity (`Tool::from_cli_session`) only selects this
+normalization and the display accent; it carries no state machine.
 
 ### Adding a tool strategy
 
-1. Implement and register `CliSessionStrategy` in `qol-terminal-sessions` for
-   shared detection and semantic metadata. All consumers immediately gain a
-   useful label while preserving generic CLI behavior.
-2. Only when the dashboard needs specialized attention semantics, add a local
-   `Tool` variant and implement `Strategy`.
-3. Register that optional attention strategy in `strategy::for_tool`.
+Implement and register `CliSessionStrategy` in `qol-terminal-sessions`,
+including its `classify_screen` and evidence-bearing `describe`. All consumers
+immediately gain a useful label and attention evidence; this dashboard needs no
+per-tool changes. Only shared-classifier gaps should ever send you back into
+the plugin, and then only to adjust the reducer's policy, never to re-parse a
+tool screen.
 
 ## Deterministic service detection (`src/service`)
 
@@ -180,26 +179,30 @@ reads validate against that snapshot and reuse a screen result when the same
 target is requested again during the pass, avoiding a second Kitty discovery
 process for every pane.
 
-## The Phase -> Status seam
+## The reducer seam
 
-`Phase` is what the terminal is *doing*; `Status` is what it *means to you*.
-`status_for(prev, phase)` is the only place they connect, and it folds in one bit
-of memory - an `Acknowledged` session stays acknowledged until it goes Busy
-again, so a finished agent you've already seen doesn't keep nagging.
+`attention::reduce` is the only place terminal evidence becomes a `Status`. It
+keeps the transition pure and total, and the two monotonic timers it carries
+(`working_since`, `settled_since`) are the only memory beyond the status. The
+phase it returns (`Busy`, `Service`, `Blocked`, `Done`, `Idle`, `Hold`) feeds
+the anomaly recorder; `Hold` is the fail-safe phase that preserves the prior
+status when evidence is absent, historical, or stale.
 
-| prev          | phase   | -> Status      |
-|---------------|---------|----------------|
-| any           | Busy    | Working        |
-| any           | Service | Service        |
-| any           | Blocked | NeedsYou       |
-| Acknowledged  | Done    | Acknowledged   |
-| other         | Done    | YourTurn       |
-| Acknowledged  | Idle    | Acknowledged   |
-| other         | Idle    | Unknown        |
+Transition timing is process-local monotonic time: the reconciler feeds the
+reducer monotonic seconds since process start (`mono_now`), never wall time, so
+NTP or manual wall jumps can neither expire a grace early nor stall a turn.
+The two timers live on the in-memory `SessionState` only and are serde-skipped:
+nothing writes them to disk, and a restart restores `Working` with no timers,
+so a restored turn with the same screen hash still observes a full fresh grace
+before completing. Wall timestamps stay separate and persisted: `last_activity`
+is the display clock shown by the panel.
 
-`running_since` (how long the current Busy stretch has run) is also derived from
-the phase at this seam, in the reconciler (`running_since_for`), so it is tracked
-uniformly for every tool rather than per-strategy.
+Status transitions emit one redacted, transition-only line through the
+existing `CLI_SESSIONS_RECON` probe (trace target `cli-sessions-recon`), in the
+same release-safe channel as the per-tick probes: session id, tool, prev/new
+status, transition reason, elapsed grace, and the evidence flags that drove the
+decision - never screen text, titles, or paths. No transition is ever written
+to stderr.
 
 `Status` drives both the row color and the sort order (most attention-worthy
 first): NeedsYou -> YourTurn -> Working -> Service -> Unknown -> Acknowledged.

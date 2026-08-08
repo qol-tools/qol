@@ -4,6 +4,9 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
+use crate::cli::{
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence, CliViewportState,
+};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::{KimiEnvironment, KimiSessionLocation};
@@ -144,6 +147,66 @@ fn strategy(state_path: PathBuf, session_id: &str) -> KimiStrategy {
     }))
 }
 
+#[test]
+fn launch_program_is_the_kimi_executable_without_arguments() {
+    assert_eq!(
+        KimiStrategy::default().launch(),
+        Some(CliLaunchProgram::new("kimi"))
+    );
+}
+
+#[test]
+fn screen_classification_distinguishes_work_and_questionnaires() {
+    let strategy = KimiStrategy::default();
+    let facts = session();
+
+    assert_eq!(
+        strategy.classify_screen(&facts, "\u{1F311}\u{FE0F} \u{00B7} building"),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::Working,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            "1) quick\n2) thorough\ntab switch to change, esc cancel, \u{21B5} save"
+        ),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, "plain output"),
+        CliScreenEvidence::default()
+    );
+}
+
+#[test]
+fn metadata_attachment_never_proves_live_for_kimi() {
+    let root = TempDir::new().unwrap();
+    let state = root.path().join("state.json");
+    std::fs::write(
+        &state,
+        r#"{"title":"Refactor the queue","lastPrompt":"go"}"#,
+    )
+    .unwrap();
+    let strategy = strategy(state, "session-9");
+
+    let descriptor = strategy.describe(&session());
+    assert_eq!(descriptor.external_id.as_deref(), Some("session-9"));
+    assert_eq!(descriptor.evidence.runtime, CliRuntimeState::Unknown);
+    assert_eq!(descriptor.evidence.activity.file_has_work, Some(true));
+    assert_eq!(
+        descriptor.evidence,
+        CliSessionEvidence {
+            runtime: CliRuntimeState::Unknown,
+            activity: descriptor.evidence.activity,
+        }
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),
@@ -155,5 +218,6 @@ fn session() -> SessionFacts {
         foreground_basenames: vec!["zsh".to_owned(), "kimi-code".to_owned()],
         foreground_pids: vec![22],
         capabilities: SessionCapabilities::ALL,
+        spawn_identity: None,
     }
 }

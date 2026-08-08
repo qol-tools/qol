@@ -1,9 +1,9 @@
 use std::fs;
 
 use plugin_cli_sessions::anomaly::{enable, observe};
+use plugin_cli_sessions::attention::Phase;
 use plugin_cli_sessions::host::kitty_session_id;
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::Phase;
 
 #[test]
 fn enable_records_without_the_env_flag() {

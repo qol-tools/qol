@@ -201,8 +201,10 @@ fn app() -> HeadlessApp {
                 "Session rows or bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
             )
-            .detail("The agent surface is sessions_list, session_bridge, and session_loop_close.")
+            .detail("The agent surface is sessions_list, session_spawn, session_bridge, and session_loop_close.")
+            .detail("spawn launches a tagged harness for a registered tool or reuses its live match under the same key.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
+            .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
             .detail("read, send, wait, and focus remain human diagnostics.")
             .detail("export renders a per-client agent surface from the shared tool contract.")
             .subcommand(command(
@@ -214,19 +216,51 @@ fn app() -> HeadlessApp {
                 "Exits non-zero when discovery fails.",
             ))
             .subcommand(command(
+                "spawn",
+                "Launch a tagged tool session or reuse its live match.",
+                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]",
+                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, and surface. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab.",
+                "Spawn JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on orchestration, identity, capability, or readiness failure.",
+            ))
+            .subcommand(command(
                 "bridge",
                 "Submit and await one bounded implementation task.",
                 "qol sessions bridge <session> <task...> [--timeout-ms N]",
-                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON.",
+                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON. Timeout defaults to 24h.",
                 "Bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on validation or delivery failure; a timeout returns completed=false.",
+            ))
+            .subcommand(command(
+                "next",
+                "Print the exact next command for each open bridge round.",
+                "qol sessions next [<session>] [--json]",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Round phases and commands on stdout.",
+                "Exits non-zero when the bridge state cannot be read.",
+            ))
+            .subcommand(command(
+                "resume",
+                "Re-attach to the pending bridge round and await its completion.",
+                "qol sessions resume <session> [--timeout-ms N] [--kickstart]",
+                "Waits for the recorded completion marker without submitting anything and returns the same JSON as bridge with submitted=false. --kickstart first nudges an interrupted session to continue or emit the signal. An idle target returns stalled=true instead of blocking until timeout. Timeout defaults to 24h.",
+                "Bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is pending; a timeout returns completed=false.",
+            ))
+            .subcommand(command(
+                "interrupt",
+                "Send the target tool's stop key while a bridge round is open.",
+                "qol sessions interrupt <session>",
+                "Resolves the per-tool stop gesture (agent TUIs: esc, plain shells: ctrl+c) and delivers it as a key event, never as text. The round and any queued input stay intact; follow with `qol sessions next`.",
+                "Confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is open or delivery fails.",
             ))
             .subcommand(
                 command(
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_bridge, and session_loop_close. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_bridge, and session_loop_close. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

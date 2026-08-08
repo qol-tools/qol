@@ -11,6 +11,6 @@
     "node",
     "claude"
   ],
-  "expect": "YourTurn",
+  "expect": "Unknown",
   "screen_changed": false
 }

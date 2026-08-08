@@ -1,9 +1,9 @@
 use std::fs;
 
 use plugin_cli_sessions::anomaly::observe;
+use plugin_cli_sessions::attention::Phase;
 use plugin_cli_sessions::host::kitty_session_id;
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::Phase;
 
 #[test]
 fn a_needs_you_flap_is_recorded_to_disk_when_enabled() {

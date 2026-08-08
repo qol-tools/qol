@@ -4,8 +4,8 @@ use std::sync::{Mutex, OnceLock};
 
 use qol_terminal_sessions::SessionId;
 
+use crate::attention::Phase;
 use crate::session::status::Status;
-use crate::strategy::Phase;
 
 const RING_CAP: usize = 6;
 const FLAP_SECS: u64 = 9;

@@ -7,8 +7,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool,
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
+    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
+    CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -59,7 +60,31 @@ impl CliSessionStrategy for KimiStrategy {
             display_name: metadata.session_name.or_else(|| project_name(&session.cwd)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
+            evidence: CliSessionEvidence {
+                runtime: CliRuntimeState::Unknown,
+                activity: metadata.activity,
+            },
         }
+    }
+
+    fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
+        if crate::cli::screen::kimi_working(screen) {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::Working,
+            }
+        } else if crate::cli::screen::kimi_questionnaire(screen) {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::NeedsInput,
+            }
+        } else {
+            CliScreenEvidence::default()
+        }
+    }
+
+    fn launch(&self) -> Option<CliLaunchProgram> {
+        Some(CliLaunchProgram::new("kimi"))
     }
 
     fn subscribe(

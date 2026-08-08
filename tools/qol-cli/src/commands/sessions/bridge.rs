@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process;
@@ -18,10 +18,13 @@ use sha2::{Digest, Sha256};
 const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
 const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUBSCRIPTION_HEARTBEAT: Duration = Duration::from_secs(30);
+const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
+const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
+const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
-pub(super) const TIMEOUT_DEFAULT_MS: u64 = 3_600_000;
+pub(super) const TIMEOUT_DEFAULT_MS: u64 = TIMEOUT_MAX_MS;
 pub(super) const TIMEOUT_MAX_MS: u64 = 86_400_000;
 
 static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -30,18 +33,29 @@ static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub(super) struct BridgeOutcome {
     pub(super) completed: bool,
     pub(super) submitted: bool,
+    pub(super) stalled: bool,
     pub(super) session: String,
     pub(super) completion_marker: String,
     pub(super) screen: String,
     pub(super) reads: u64,
     pub(super) elapsed_ms: u128,
+    pub(super) next_command: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PendingBridge {
+    #[serde(default)]
+    session: String,
     completion_marker: String,
     completed: bool,
     closed: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct PendingRound {
+    pub(super) session: String,
+    pub(super) completion_marker: String,
+    pub(super) completed: bool,
 }
 
 struct PendingBridgeLock {
@@ -49,6 +63,17 @@ struct PendingBridgeLock {
 }
 
 impl Drop for PendingBridgeLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct BridgeOwner {
+    file: File,
+}
+
+impl Drop for BridgeOwner {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
@@ -126,6 +151,7 @@ impl PendingBridgeStore {
         let file = self.file_for(binding);
         let temporary = file.with_extension("tmp");
         let encoded = serde_json::to_string(&PendingBridge {
+            session: binding.token(),
             completion_marker: marker.to_owned(),
             completed,
             closed,
@@ -156,6 +182,117 @@ impl PendingBridgeStore {
         self.write_unlocked(binding, marker, checkpoint.completed, true)
     }
 
+    pub(super) fn pending_round(&self, binding: &SessionBinding) -> Result<Option<PendingRound>> {
+        Ok(self
+            .load(binding)?
+            .filter(|checkpoint| !checkpoint.closed)
+            .map(|checkpoint| PendingRound {
+                session: binding.token(),
+                completion_marker: checkpoint.completion_marker,
+                completed: checkpoint.completed,
+            }))
+    }
+
+    pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
+        let mut rounds = self
+            .open_checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| !checkpoint.session.is_empty())
+            .map(|checkpoint| PendingRound {
+                session: checkpoint.session,
+                completion_marker: checkpoint.completion_marker,
+                completed: checkpoint.completed,
+            })
+            .collect::<Vec<_>>();
+        rounds.sort_by(|left, right| left.session.cmp(&right.session));
+        Ok(rounds)
+    }
+
+    pub(super) fn legacy_open_rounds(&self) -> Result<usize> {
+        Ok(self
+            .open_checkpoints()?
+            .iter()
+            .filter(|checkpoint| checkpoint.session.is_empty())
+            .count())
+    }
+
+    fn open_checkpoints(&self) -> Result<Vec<PendingBridge>> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("failed to read pending bridge directory"),
+        };
+        let mut checkpoints = Vec::new();
+        for entry in entries {
+            let path = entry
+                .context("failed to read pending bridge directory")?
+                .path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let Ok(encoded) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(checkpoint) = serde_json::from_str::<PendingBridge>(&encoded) else {
+                continue;
+            };
+            if checkpoint.closed {
+                continue;
+            }
+            checkpoints.push(checkpoint);
+        }
+        Ok(checkpoints)
+    }
+
+    pub(super) fn acquire_owner(&self, binding: &SessionBinding) -> Result<BridgeOwner> {
+        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
+        let path = self.owner_for(binding);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .context("failed to open bridge owner lock")?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                let owner = fs::read_to_string(&path).unwrap_or_default();
+                let owner = owner.trim();
+                let owner = if owner.is_empty() { "unknown" } else { owner };
+                qol_runtime::probe!(
+                    "CLI_SESSION_BRIDGE",
+                    "event=owner_conflict target_backend={}",
+                    binding.session_id().backend()
+                );
+                bail!(
+                    "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
+                    binding.token()
+                );
+            }
+            Err(TryLockError::Error(error)) => {
+                return Err(error).context("failed to lock the bridge owner file");
+            }
+        }
+        fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
+        Ok(BridgeOwner { file })
+    }
+
+    pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
+        let path = self.owner_for(binding);
+        let file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
+        match file.try_lock() {
+            Ok(()) => {
+                let _ = file.unlock();
+                None
+            }
+            Err(TryLockError::WouldBlock) => {
+                Some(fs::read_to_string(&path).ok()?.trim().to_owned())
+            }
+            Err(TryLockError::Error(_)) => None,
+        }
+    }
+
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = OpenOptions::new()
@@ -177,6 +314,10 @@ impl PendingBridgeStore {
 
     fn lock_for(&self, binding: &SessionBinding) -> PathBuf {
         self.file_for(binding).with_extension("lock")
+    }
+
+    fn owner_for(&self, binding: &SessionBinding) -> PathBuf {
+        self.file_for(binding).with_extension("owner")
     }
 }
 
@@ -209,6 +350,14 @@ impl CompletionMarker {
             right: nonce.to_owned(),
         }
     }
+
+    fn from_token(token: &str) -> Result<Self> {
+        let nonce = token
+            .strip_prefix("QOL_BRIDGE_DONE_")
+            .filter(|nonce| !nonce.is_empty())
+            .ok_or_else(|| anyhow!("pending bridge checkpoint has an invalid completion marker"))?;
+        Ok(Self::from_nonce(nonce))
+    }
 }
 
 pub(super) fn execute(
@@ -221,6 +370,7 @@ pub(super) fn execute(
     acknowledge_marker: Option<&str>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
+    let _owner = pending.acquire_owner(binding)?;
     if terminals
         .is_current(binding)
         .context("failed to identify the current terminal session")?
@@ -228,6 +378,33 @@ pub(super) fn execute(
         bail!("cannot bridge to the calling terminal; choose an independent session");
     }
     let target = resolve_target(terminals, binding)?;
+    if let Some(marker) = acknowledge_marker {
+        pending.acknowledge(binding, marker, true)?;
+    } else if let Some(round) = pending.pending_round(binding)? {
+        let liveness = session_liveness(terminals, interpreter, binding);
+        let pre_screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        let alive = round.completed
+            || delivery_observed(
+                terminals,
+                binding,
+                "QOL_BRIDGE_DONE_",
+                &pre_screen,
+                &liveness,
+                DELIVERY_VERIFY_WINDOW,
+            )?;
+        if alive {
+            return resume_owned(terminals, interpreter, binding, timeout, pending, false);
+        }
+        pending.acknowledge(binding, &round.completion_marker, false)?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=superseded_undelivered target_backend={}",
+            binding.session_id().backend()
+        );
+    }
+
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
     let subscription = interpreter
         .subscribe(
@@ -239,30 +416,14 @@ pub(super) fn execute(
         .context("failed to subscribe to implementation-session changes")?;
     let subscribed = subscription.is_some();
 
-    let checkpoint = pending.load(binding)?;
-    if let Some(marker) = acknowledge_marker {
-        pending.acknowledge(binding, marker, true)?;
-    } else if let Some(checkpoint) = checkpoint.filter(|checkpoint| !checkpoint.closed) {
-        let outcome = wait_for_completion(
-            terminals,
-            binding,
-            &checkpoint.completion_marker,
-            timeout,
-            changed_rx,
-            subscribed,
-            false,
-        )?;
-        if outcome.completed {
-            pending.observe(binding, &checkpoint.completion_marker, true)?;
-        }
-        drop(subscription);
-        return Ok(outcome);
-    }
-
     let marker = CompletionMarker::generate();
     let prompt = bridge_prompt(task, &marker);
     pending.start(binding, &marker.token)?;
 
+    let liveness = session_liveness(terminals, interpreter, binding);
+    let pre_screen = terminals
+        .read_screen(binding)
+        .context("bridge screen read failed")?;
     if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
         pending.acknowledge(binding, &marker.token, false)?;
         qol_runtime::probe!(
@@ -271,6 +432,41 @@ pub(super) fn execute(
             binding.session_id().backend()
         );
         return Err(error).context("bridge task delivery failed");
+    }
+    if !delivery_observed(
+        terminals,
+        binding,
+        &marker.left,
+        &pre_screen,
+        &liveness,
+        DELIVERY_VERIFY_WINDOW,
+    )? {
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=delivery_retry target_backend={}",
+            binding.session_id().backend()
+        );
+        terminals
+            .send_text(binding, &prompt, DeliveryMode::Submit)
+            .context("bridge task redelivery failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            &marker.left,
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &marker.token, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=delivery_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the target never showed the submitted task; no round is pending - fix the target session, then resubmit via `qol sessions bridge`"
+            );
+        }
     }
     qol_runtime::probe!(
         "CLI_SESSION_BRIDGE",
@@ -287,6 +483,8 @@ pub(super) fn execute(
         changed_rx,
         subscribed,
         true,
+        &session_liveness(terminals, interpreter, binding),
+        STALL_PROBE_AFTER,
     )?;
     pending.observe(binding, &marker.token, outcome.completed)?;
     qol_runtime::probe!(
@@ -304,6 +502,145 @@ pub(super) fn execute(
     );
     drop(subscription);
     Ok(outcome)
+}
+
+pub(super) fn resume(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    timeout: Duration,
+    pending: &PendingBridgeStore,
+    kickstart: bool,
+) -> Result<BridgeOutcome> {
+    let _owner = pending.acquire_owner(binding)?;
+    resume_owned(terminals, interpreter, binding, timeout, pending, kickstart)
+}
+
+fn resume_owned(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    timeout: Duration,
+    pending: &PendingBridgeStore,
+    kickstart: bool,
+) -> Result<BridgeOutcome> {
+    let round = pending.pending_round(binding)?.ok_or_else(|| {
+        anyhow!("no pending bridge exists for `{binding}`; run `qol sessions next`")
+    })?;
+    if round.completed {
+        let started = Instant::now();
+        let screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        return Ok(outcome(
+            true,
+            false,
+            false,
+            binding,
+            &round.completion_marker,
+            screen,
+            1,
+            started,
+        ));
+    }
+    let target = resolve_target(terminals, binding)?;
+    let (changed_tx, changed_rx) = mpsc::sync_channel(1);
+    let subscription = interpreter
+        .subscribe(
+            &target,
+            Arc::new(move || {
+                let _ = changed_tx.try_send(());
+            }),
+        )
+        .context("failed to subscribe to implementation-session changes")?;
+    let subscribed = subscription.is_some();
+    if kickstart {
+        let marker = CompletionMarker::from_token(&round.completion_marker)?;
+        terminals
+            .send_text(binding, &kickstart_prompt(&marker), DeliveryMode::Submit)
+            .context("bridge kickstart delivery failed")?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=kickstarted target_backend={}",
+            binding.session_id().backend()
+        );
+    } else {
+        let liveness = session_liveness(terminals, interpreter, binding);
+        let pre_screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            "QOL_BRIDGE_DONE_",
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &round.completion_marker, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=resume_closed_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the pending round shows no trace on the target and is now closed; resubmit the task via `qol sessions bridge`"
+            );
+        }
+    }
+    let outcome = wait_for_completion(
+        terminals,
+        binding,
+        &round.completion_marker,
+        timeout,
+        changed_rx,
+        subscribed,
+        false,
+        &session_liveness(terminals, interpreter, binding),
+        STALL_PROBE_AFTER,
+    )?;
+    if outcome.completed {
+        pending.observe(binding, &round.completion_marker, true)?;
+    }
+    drop(subscription);
+    Ok(outcome)
+}
+
+pub(super) fn delivery_observed(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    fragment: &str,
+    pre_screen: &str,
+    liveness: &dyn Fn() -> Option<bool>,
+    window: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + window;
+    loop {
+        let screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        if screen.contains(fragment) || screen != pre_screen || liveness() == Some(true) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(DELIVERY_VERIFY_INTERVAL);
+    }
+}
+
+pub(super) fn session_liveness<'a>(
+    terminals: &'a TerminalSessionService,
+    interpreter: &'a CliSessionInterpreter,
+    binding: &'a SessionBinding,
+) -> impl Fn() -> Option<bool> + 'a {
+    move || {
+        let facts = terminals.discover().ok()?;
+        let session = facts
+            .into_iter()
+            .find(|session| session.id == *binding.session_id())?;
+        interpreter.describe(&session).has_activity
+    }
 }
 
 fn resolve_target(
@@ -324,7 +661,8 @@ fn resolve_target(
     Ok(target)
 }
 
-fn wait_for_completion(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn wait_for_completion(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
     marker: &str,
@@ -332,9 +670,13 @@ fn wait_for_completion(
     changed: mpsc::Receiver<()>,
     subscribed: bool,
     submitted: bool,
+    liveness: &dyn Fn() -> Option<bool>,
+    stall_after: Duration,
 ) -> Result<BridgeOutcome> {
     let started = Instant::now();
     let mut previous = None;
+    let mut last_change = Instant::now();
+    let mut last_probe: Option<Instant> = None;
     let mut reads = 0;
     loop {
         let screen = terminals
@@ -344,14 +686,31 @@ fn wait_for_completion(
         let matched = screen.contains(marker);
         if matched && previous.as_deref() == Some(screen.as_str()) {
             return Ok(outcome(
-                true, submitted, binding, marker, screen, reads, started,
+                true, submitted, false, binding, marker, screen, reads, started,
             ));
         }
+        if previous.as_deref() != Some(screen.as_str()) {
+            last_change = Instant::now();
+        }
         previous = Some(screen.clone());
+        if !matched
+            && last_change.elapsed() >= stall_after
+            && last_probe.is_none_or(|probed| probed.elapsed() >= stall_after)
+        {
+            last_probe = Some(Instant::now());
+            let activity = liveness();
+            let quiet_enough = activity == Some(false)
+                || (activity.is_none() && last_change.elapsed() >= stall_after * 4);
+            if quiet_enough {
+                return Ok(outcome(
+                    false, submitted, true, binding, marker, screen, reads, started,
+                ));
+            }
+        }
         let elapsed = started.elapsed();
         if elapsed >= timeout {
             return Ok(outcome(
-                false, submitted, binding, marker, screen, reads, started,
+                false, submitted, false, binding, marker, screen, reads, started,
             ));
         }
         let remaining = timeout.saturating_sub(elapsed);
@@ -376,9 +735,11 @@ fn wait_for_completion(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn outcome(
     completed: bool,
     submitted: bool,
+    stalled: bool,
     binding: &SessionBinding,
     marker: &str,
     screen: String,
@@ -388,12 +749,21 @@ fn outcome(
     BridgeOutcome {
         completed,
         submitted,
+        stalled,
         session: binding.token(),
         completion_marker: marker.to_owned(),
         screen,
         reads,
         elapsed_ms: started.elapsed().as_millis(),
+        next_command: format!("qol sessions next {}", binding.token()),
     }
+}
+
+fn kickstart_prompt(marker: &CompletionMarker) -> String {
+    format!(
+        "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
+        marker.left, marker.right
+    )
 }
 
 fn bridge_prompt(task: &str, marker: &CompletionMarker) -> String {
@@ -435,11 +805,78 @@ mod tests {
     }
 
     #[test]
+    fn kickstart_prompt_reuses_the_checkpoint_marker_fragments() {
+        let marker = CompletionMarker::from_token("QOL_BRIDGE_DONE_abc123").unwrap();
+        let prompt = kickstart_prompt(&marker);
+
+        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+        assert!(prompt.contains("abc123"));
+        assert!(!prompt.contains(&marker.token));
+        assert!(CompletionMarker::from_token("unrelated").is_err());
+        assert!(CompletionMarker::from_token("QOL_BRIDGE_DONE_").is_err());
+    }
+
+    #[test]
     fn task_validation_accepts_prose_and_rejects_terminal_controls() {
         validate_task("line one\nline two\tvalue").unwrap();
         assert!(validate_task("\u{1b}[31munsafe").is_err());
         assert!(validate_task("\0").is_err());
         assert!(validate_task("   ").is_err());
+    }
+
+    #[test]
+    fn pending_rounds_expose_open_checkpoints_with_their_phase() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let waiting = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let review = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        let closed = SessionBinding::from_str("v1:fake:3:300").unwrap();
+        store.start(&waiting, "QOL_BRIDGE_DONE_wait").unwrap();
+        store.start(&review, "QOL_BRIDGE_DONE_review").unwrap();
+        store
+            .observe(&review, "QOL_BRIDGE_DONE_review", true)
+            .unwrap();
+        store.start(&closed, "QOL_BRIDGE_DONE_closed").unwrap();
+        store
+            .acknowledge(&closed, "QOL_BRIDGE_DONE_closed", false)
+            .unwrap();
+
+        let rounds = store.pending_rounds().unwrap();
+        assert_eq!(rounds.len(), 2);
+        let by_session = |token: &str| rounds.iter().find(|round| round.session == token).unwrap();
+        assert!(!by_session("v1:fake:1:100").completed);
+        assert!(by_session("v1:fake:2:200").completed);
+        assert_eq!(
+            by_session("v1:fake:2:200").completion_marker,
+            "QOL_BRIDGE_DONE_review"
+        );
+
+        assert!(store.pending_round(&closed).unwrap().is_none());
+        assert!(store.pending_round(&waiting).unwrap().is_some());
+    }
+
+    #[test]
+    fn only_one_process_can_own_a_session_bridge_at_a_time() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:9:900").unwrap();
+        let other = SessionBinding::from_str("v1:fake:9:901").unwrap();
+
+        assert!(store.owner_pid(&binding).is_none());
+        let owner = store.acquire_owner(&binding).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            Some(process::id().to_string()),
+            "a held bridge must report its owning process"
+        );
+        let conflict = store.acquire_owner(&binding).unwrap_err().to_string();
+        assert!(conflict.contains("already attached"), "{conflict}");
+        assert!(conflict.contains("qol sessions next"), "{conflict}");
+        store.acquire_owner(&other).unwrap();
+
+        drop(owner);
+        assert!(store.owner_pid(&binding).is_none());
+        store.acquire_owner(&binding).unwrap();
     }
 
     #[test]

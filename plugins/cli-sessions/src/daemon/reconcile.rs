@@ -7,15 +7,15 @@ use qol_terminal_sessions::cli::{
 };
 use qol_terminal_sessions::SessionId;
 
+use crate::attention::{reduce, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
 use crate::session::registry::{summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
 use crate::session::tool::Tool;
-use crate::signal::screen::screen_hash;
+use crate::signal::screen::{screen_hash, stable_screen};
 use crate::storage::{paths, persist};
-use crate::strategy::{for_tool, running_since_for, status_for, Ctx, Prev, Reading};
 use crate::ui::notify::{self, Notice};
 
 const SCREEN_FALLBACK_SECS: u64 = 60;
@@ -65,7 +65,8 @@ pub fn tick(
     host: &dyn TerminalHost,
     cli_interpreter: &CliSessionInterpreter,
     service_probe: &dyn ServiceProbe,
-    now: u64,
+    wall_now: u64,
+    mono_now: u64,
 ) -> Vec<Notice> {
     let mut caches = ReconcileCaches::default();
     tick_with_caches(
@@ -73,7 +74,8 @@ pub fn tick(
         host,
         cli_interpreter,
         service_probe,
-        now,
+        wall_now,
+        mono_now,
         &mut caches,
     )
 }
@@ -83,7 +85,8 @@ pub fn tick_with_caches(
     host: &dyn TerminalHost,
     cli_interpreter: &CliSessionInterpreter,
     service_probe: &dyn ServiceProbe,
-    now: u64,
+    wall_now: u64,
+    mono_now: u64,
     caches: &mut ReconcileCaches,
 ) -> Vec<Notice> {
     let mut notices = Vec::new();
@@ -93,7 +96,7 @@ pub fn tick_with_caches(
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
-        "phase=tick now={now} panes={}",
+        "phase=tick mono_now={mono_now} panes={}",
         panes.len()
     );
     prune_missing(registry, caches, &panes);
@@ -103,11 +106,9 @@ pub fn tick_with_caches(
         #[cfg(debug_assertions)]
         let cli_tool = cli_session.tool.id.to_string();
         let tool = Tool::from_cli_session(&cli_session);
-        let strategy = for_tool(tool);
-        let wants_screen = strategy.wants_screen(pane);
+        let wants_screen = !pane.at_prompt;
         let (prev, prev_hash) = snapshot(registry, &pane.id);
-        let refresh_active =
-            prev.is_some_and(|state| matches!(state.status, Status::Working | Status::NeedsYou));
+        let refresh_active = matches!(prev.status, Status::Working | Status::NeedsYou);
         let screen = if wants_screen {
             cached_screen(
                 host,
@@ -115,7 +116,7 @@ pub fn tick_with_caches(
                 pane,
                 &cli_session,
                 refresh_active,
-                now,
+                wall_now,
                 caches,
             )
         } else {
@@ -124,63 +125,73 @@ pub fn tick_with_caches(
         };
         let new_hash = screen
             .as_deref()
-            .map(|s| screen_hash(strategy.stable_screen_hash(s)));
+            .map(|text| screen_hash(stable_screen(text, tool).as_ref()));
 
         let screen_changed = match (new_hash, prev_hash) {
-            (Some(n), Some(p)) => n != p,
+            (Some(new_hash), Some(prev_hash)) => new_hash != prev_hash,
             (Some(_), None) => true,
             (None, _) => false,
         };
 
         let is_service = tool == Tool::Generic && !pane.at_prompt && service_probe.is_service(pane);
-
-        let ctx = Ctx {
-            pane,
-            cli_session,
-            screen: screen.as_deref(),
+        let screen_evidence = screen
+            .as_deref()
+            .map(|text| cli_interpreter.classify_screen(pane, text))
+            .unwrap_or_default();
+        let evidence = Evidence {
+            descriptor_runtime: cli_session.evidence.runtime,
+            screen_runtime: screen_evidence.runtime,
+            viewport: screen_evidence.viewport,
+            file_fresh: cli_session.evidence.activity.file_fresh,
             screen_changed,
-            prev,
-            now,
+            at_prompt: pane.at_prompt,
+            is_generic: tool == Tool::Generic,
             is_service,
         };
-        #[cfg(debug_assertions)]
-        let evidence = (
-            strategy.working(&ctx),
-            strategy.awaiting(&ctx),
-            strategy.turn_taken(&ctx),
-        );
-        let reading = strategy.read(&ctx);
 
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} working={} awaiting={} turn_taken={} read_phase={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} label={:?} title={:?}",
             pane.id,
             tool,
             cli_tool,
             pane.at_prompt,
-            evidence.0,
-            evidence.1,
-            evidence.2,
-            reading.phase,
-            reading.label,
+            evidence.descriptor_runtime,
+            evidence.screen_runtime,
+            evidence.viewport,
+            evidence.file_fresh,
+            cli_session.display_name,
             short(&pane.title)
         );
 
-        let phase = reading.phase;
-        let branch = caches.branch.branch(&pane.cwd, now);
+        let reduction = reduce(&prev, &evidence, mono_now);
+        let branch = caches.branch.branch(&pane.cwd, wall_now);
         if let Ok(mut reg) = registry.lock() {
-            let (notice, status) = apply(&mut reg, pane, tool, reading, new_hash, branch, now);
+            let (notice, status) = apply(
+                &mut reg,
+                ApplyInput {
+                    pane,
+                    tool,
+                    label: cli_session.display_name.as_deref(),
+                    reduction,
+                    evidence: &evidence,
+                    new_hash,
+                    branch,
+                    now: mono_now,
+                    wall_now,
+                },
+            );
             if let Some(notice) = notice {
                 notices.push(notice);
             }
             drop(reg);
             crate::diagnostics::anomaly::observe(
                 pane.id.clone(),
-                now,
+                wall_now,
                 &pane.title,
                 screen.as_deref(),
-                phase,
+                reduction.phase,
                 status,
             );
         }
@@ -199,6 +210,26 @@ pub fn tick_with_caches(
         }
     }
     notices
+}
+
+pub fn transition_line(
+    id: &str,
+    tool: &str,
+    prev: Status,
+    new: Status,
+    reason: Reason,
+    grace_secs: u64,
+    evidence: &Evidence,
+) -> String {
+    format!(
+        "[cli-sessions] transition id={id} tool={tool} prev={prev:?} new={new:?} reason={reason:?} grace_s={grace_secs} evidence=dr:{:?} sr:{:?} vp:{:?} fresh:{:?} moved:{} prompt:{}",
+        evidence.descriptor_runtime,
+        evidence.screen_runtime,
+        evidence.viewport,
+        evidence.file_fresh,
+        evidence.screen_changed,
+        evidence.at_prompt
+    )
 }
 
 fn attention_notice(
@@ -394,92 +425,121 @@ fn short(s: &str) -> String {
         .collect()
 }
 
-fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Option<Prev>, Option<u64>) {
+fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Attention, Option<u64>) {
     let Ok(reg) = registry.lock() else {
-        return (None, None);
+        return (Attention::default(), None);
     };
     match reg.get(id) {
         Some(s) => (
-            Some(Prev {
+            Attention {
                 status: s.status,
-                running_since: s.running_since,
-            }),
+                working_since: s.working_since,
+                settled_since: s.settled_since,
+            },
             s.screen_hash,
         ),
-        None => (None, None),
+        None => (Attention::default(), None),
     }
 }
 
-fn apply(
-    reg: &mut Registry,
-    pane: &Pane,
-    tool: Tool,
-    reading: Reading,
-    new_hash: Option<u64>,
-    branch: Option<String>,
-    now: u64,
-) -> (Option<Notice>, Status) {
-    let pane_id = &pane.id;
-    let (prev_status, prev_running) = match reg.get(pane_id) {
-        Some(s) => (s.status, s.running_since),
-        None => (Status::Unknown, None),
+pub struct ApplyInput<'a> {
+    pub pane: &'a Pane,
+    pub tool: Tool,
+    pub label: Option<&'a str>,
+    pub reduction: Reduction,
+    pub evidence: &'a Evidence,
+    pub new_hash: Option<u64>,
+    pub branch: Option<String>,
+    pub now: u64,
+    pub wall_now: u64,
+}
+
+fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
+    let pane_id = &input.pane.id;
+    let prev_status = match reg.get(pane_id) {
+        Some(s) => s.status,
+        None => Status::Unknown,
     };
-    let status = status_for(prev_status, reading.phase);
-    let running_since = running_since_for(prev_running, reading.phase, now);
-    let summary = summary_for(status, tool);
+    let status = input.reduction.attention.status;
+    let summary = summary_for(status, input.tool);
     let notice = attention_notice(
         prev_status,
         status,
-        tool,
-        reading.label.as_deref(),
-        &pane.cwd,
+        input.tool,
+        input.label,
+        &input.pane.cwd,
         &summary,
     );
 
-    #[cfg(debug_assertions)]
     if status != prev_status {
+        let reason = input
+            .reduction
+            .transition
+            .map(|transition| transition.reason)
+            .unwrap_or(Reason::LiveWork);
+        let grace = reg
+            .get(pane_id)
+            .and_then(|s| s.settled_since)
+            .map(|start| input.now.saturating_sub(start))
+            .unwrap_or(0);
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=apply id={} prev={:?} new={:?} tool={:?} summary={:?}",
-            pane_id,
-            prev_status,
-            status,
-            tool,
-            summary
+            "phase=transition {}",
+            transition_line(
+                &pane_id.to_string(),
+                tool_id(input.tool),
+                prev_status,
+                status,
+                reason,
+                grace,
+                input.evidence,
+            )
         );
     }
 
     if let Some(s) = reg.get_mut(pane_id) {
         if status != s.status {
-            s.last_activity = now;
+            s.last_activity = input.wall_now;
         }
         s.status = status;
-        s.tool = tool;
+        s.tool = input.tool;
         s.summary = summary;
-        s.root_pid = pane.root_pid;
-        s.project = project_of(&pane.cwd);
-        s.cwd = pane.cwd.clone();
-        s.branch = branch;
-        s.name = reading.label;
-        s.running_since = running_since;
-        if let Some(h) = new_hash {
+        s.root_pid = input.pane.root_pid;
+        s.project = project_of(&input.pane.cwd);
+        s.cwd = input.pane.cwd.clone();
+        s.branch = input.branch;
+        s.name = input.label.map(str::to_owned);
+        s.working_since = input.reduction.attention.working_since;
+        s.settled_since = input.reduction.attention.settled_since;
+        if let Some(h) = input.new_hash {
             s.screen_hash = Some(h);
         }
         return (notice, status);
     }
     reg.upsert(SessionState {
         id: pane_id.clone(),
-        root_pid: pane.root_pid,
-        project: project_of(&pane.cwd),
-        name: reading.label,
-        cwd: pane.cwd.clone(),
-        branch,
-        tool,
+        root_pid: input.pane.root_pid,
+        project: project_of(&input.pane.cwd),
+        name: input.label.map(str::to_owned),
+        cwd: input.pane.cwd.clone(),
+        branch: input.branch,
+        tool: input.tool,
         status,
         summary,
-        last_activity: now,
-        screen_hash: new_hash,
-        running_since,
+        last_activity: input.wall_now,
+        screen_hash: input.new_hash,
+        working_since: input.reduction.attention.working_since,
+        settled_since: input.reduction.attention.settled_since,
     });
     (notice, status)
+}
+
+fn tool_id(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Claude => "claude",
+        Tool::Codex => "codex",
+        Tool::Kimi => "kimi",
+        Tool::Pi => "pi",
+        Tool::Generic => "generic",
+    }
 }

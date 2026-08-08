@@ -245,10 +245,31 @@ mod tests {
         assert!(execution.stdout.contains(&usage));
         assert!(execution
             .stdout
-            .contains("sessions_list, session_bridge, and session_loop_close"));
+            .contains("sessions_list, session_spawn, session_bridge, and session_loop_close"));
         assert!(execution
             .stdout
             .contains("read, send, wait, and focus remain human diagnostics"));
+    }
+
+    #[test]
+    fn session_spawn_help_describes_the_orchestration() {
+        let args = parse_cli(
+            ["sessions", "spawn", "--help"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        );
+        let execution = contract_execution(&args).unwrap().unwrap();
+        assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
+        assert!(execution.stdout.contains(
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+        ));
+        assert!(execution
+            .stdout
+            .contains("generates a key when --key is omitted"));
+        assert!(execution
+            .stdout
+            .contains("~/.config/qol-tray/sessions.toml"));
     }
 
     #[test]
@@ -266,5 +287,6 @@ mod tests {
             .contains("qol sessions bridge <session> <task...> [--timeout-ms N]"));
         assert!(execution.stdout.contains("Submits exactly once"));
         assert!(execution.stdout.contains("completion_marker"));
+        assert!(execution.stdout.contains("Timeout defaults to 24h"));
     }
 }

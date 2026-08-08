@@ -2,10 +2,9 @@ use std::io::Read;
 
 use serde::Deserialize;
 
+use plugin_cli_sessions::attention::{reduce, Attention, Evidence};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::registry::summary_for;
-use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::{for_tool, status_for, Ctx};
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
@@ -38,27 +37,31 @@ fn main() {
         foreground_basenames: frame.foreground_basenames,
         foreground_pids: vec![],
         capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+        spawn_identity: None,
     };
 
-    let cli_session = CliSessionInterpreter::system().describe(&pane);
+    let interpreter = CliSessionInterpreter::system();
+    let cli_session = interpreter.describe(&pane);
     let tool = Tool::from_cli_session(&cli_session);
-    let strategy = for_tool(tool);
-    let reading = strategy.read(&Ctx {
-        pane: &pane,
-        cli_session,
-        screen: Some(&frame.screen),
+    let screen_evidence = interpreter.classify_screen(&pane, &frame.screen);
+    let evidence = Evidence {
+        descriptor_runtime: cli_session.evidence.runtime,
+        screen_runtime: screen_evidence.runtime,
+        viewport: screen_evidence.viewport,
+        file_fresh: cli_session.evidence.activity.file_fresh,
         screen_changed: true,
-        prev: None,
-        now: 0,
+        at_prompt: frame.at_prompt,
+        is_generic: tool == Tool::Generic,
         is_service: false,
-    });
-    let status = status_for(Status::Unknown, reading.phase);
+    };
+    let reduction = reduce(&Attention::default(), &evidence, 0);
+    let status = reduction.attention.status;
     println!(
         "tool={:?} phase={:?} status={:?} summary={:?} label={:?}",
         tool,
-        reading.phase,
+        reduction.phase,
         status,
         summary_for(status, tool),
-        reading.label
+        cli_session.display_name,
     );
 }

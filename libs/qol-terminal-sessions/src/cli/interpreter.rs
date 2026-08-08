@@ -6,8 +6,8 @@ use crate::SessionFacts;
 
 use super::builtins::GenericStrategy;
 use super::{
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliToolId,
+    CliLaunchProgram, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
+    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +73,21 @@ impl CliSessionInterpreter {
         descriptor
     }
 
+    pub fn interrupt_key(&self, session: &SessionFacts) -> &'static str {
+        self.strategy_for(session).interrupt_key()
+    }
+
+    pub fn classify_screen(&self, session: &SessionFacts, screen: &str) -> CliScreenEvidence {
+        self.strategy_for(session).classify_screen(session, screen)
+    }
+
+    pub fn launch_for(&self, tool: &CliToolId) -> Option<CliLaunchProgram> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.launch())
+    }
+
     pub fn subscribe(
         &self,
         session: &SessionFacts,
@@ -114,8 +129,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::cli::{
-        generic_tool, CliSessionDescriptor, CliSessionInterpreter, CliSessionStrategy, CliTool,
-        CliToolColor, CliToolId,
+        generic_tool, CliActivityEvidence, CliRuntimeState, CliScreenEvidence,
+        CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter, CliSessionStrategy,
+        CliTool, CliToolColor, CliToolId, CliViewportState,
     };
     use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
@@ -147,6 +163,7 @@ mod tests {
                 display_name: Some(self.tool.label.clone()),
                 external_id: None,
                 has_activity: None,
+                evidence: CliSessionEvidence::default(),
             }
         }
     }
@@ -189,6 +206,156 @@ mod tests {
         assert_eq!(arbitrary.tool, generic_tool());
     }
 
+    #[test]
+    fn interrupt_key_is_esc_for_agent_tools_and_ctrl_c_for_generic_shells() {
+        let interpreter = CliSessionInterpreter::system();
+
+        assert_eq!(
+            interpreter.interrupt_key(&session(&["zsh", "claude"])),
+            "esc"
+        );
+        assert_eq!(interpreter.interrupt_key(&session(&["bash"])), "ctrl+c");
+    }
+
+    #[test]
+    fn builtins_expose_launch_programs_and_unknown_ids_return_none() {
+        let interpreter = CliSessionInterpreter::system();
+
+        let cases = [
+            ("codex", "codex"),
+            ("claude", "claude"),
+            ("pi", "pi"),
+            ("kimi", "kimi"),
+        ];
+        for (tool, program) in cases {
+            let launch = interpreter
+                .launch_for(&CliToolId::new(tool).unwrap())
+                .expect("built-in tools must offer a launch program");
+            assert_eq!(launch.program, program, "tool: {tool}");
+            assert!(launch.args.is_empty(), "tool: {tool}");
+        }
+        assert_eq!(
+            interpreter.launch_for(&CliToolId::new("generic").unwrap()),
+            None
+        );
+        assert_eq!(
+            interpreter.launch_for(&CliToolId::new("future-tool").unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn launch_for_ignores_the_recognition_fallback_and_needs_no_session() {
+        let interpreter = CliSessionInterpreter::system();
+        let generic_tool = generic_tool();
+
+        assert_eq!(interpreter.launch_for(&generic_tool.id), None);
+    }
+
+    #[test]
+    fn descriptor_evidence_carries_strong_codex_runtime_and_stays_unknown_for_others() {
+        let interpreter = CliSessionInterpreter::system();
+
+        let mut working = session(&["zsh", "codex"]);
+        working.title = "qol-tts | Working | fix the queue".to_owned();
+        let descriptor = interpreter.describe(&working);
+        assert_eq!(descriptor.evidence.runtime, CliRuntimeState::Working);
+
+        let mut awaiting = session(&["zsh", "codex"]);
+        awaiting.title = "qol-tts | Action Required | qol-tts".to_owned();
+        assert_eq!(
+            interpreter.describe(&awaiting).evidence.runtime,
+            CliRuntimeState::NeedsInput
+        );
+
+        let mut ready = session(&["zsh", "codex"]);
+        ready.title = "qol-tts | Ready | qol-tts".to_owned();
+        assert_eq!(
+            interpreter.describe(&ready).evidence.runtime,
+            CliRuntimeState::Ready
+        );
+
+        let claude = interpreter.describe(&session(&["zsh", "claude"]));
+        assert_eq!(claude.evidence.runtime, CliRuntimeState::Unknown);
+        assert_eq!(claude.evidence.activity, CliActivityEvidence::default());
+        assert_eq!(claude.evidence, CliSessionEvidence::default());
+    }
+
+    #[test]
+    fn metadata_attachment_never_proves_a_live_viewport() {
+        let interpreter = CliSessionInterpreter::system();
+
+        let mut codex = session(&["zsh", "codex"]);
+        codex.title = "qol-tts | Working | fix the queue".to_owned();
+        let descriptor = interpreter.describe(&codex);
+        assert_eq!(descriptor.evidence.runtime, CliRuntimeState::Working);
+        assert_eq!(
+            descriptor.evidence,
+            CliSessionEvidence {
+                runtime: CliRuntimeState::Working,
+                activity: descriptor.evidence.activity,
+            }
+        );
+        assert_eq!(descriptor.external_id, None);
+
+        let mut claude = session(&["zsh", "claude"]);
+        claude.title = "Claude".to_owned();
+        assert_eq!(
+            interpreter.describe(&claude).evidence.runtime,
+            CliRuntimeState::Unknown
+        );
+    }
+
+    #[test]
+    fn classify_screen_routes_by_tool_and_generic_prompt_keeps_viewport_unknown() {
+        let interpreter = CliSessionInterpreter::system();
+
+        let codex = session(&["zsh", "codex"]);
+        assert_eq!(
+            interpreter.classify_screen(&codex, "\u{2728} Working \u{2026} (2s)\nesc to interrupt"),
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::Working,
+            }
+        );
+        assert_eq!(
+            interpreter.classify_screen(&codex, "OpenAI Codex (v0.40)\nTip: Try the Codex App"),
+            CliScreenEvidence {
+                viewport: CliViewportState::Historical,
+                runtime: CliRuntimeState::Unknown,
+            }
+        );
+
+        let mut shell = session(&["bash"]);
+        shell.at_prompt = true;
+        assert_eq!(
+            interpreter.classify_screen(&shell, "kmrh47@host:~$"),
+            CliScreenEvidence {
+                viewport: CliViewportState::Unknown,
+                runtime: CliRuntimeState::Ready,
+            }
+        );
+        let mut busy_shell = session(&["bash"]);
+        busy_shell.at_prompt = false;
+        assert_eq!(
+            interpreter.classify_screen(&busy_shell, "building..."),
+            CliScreenEvidence::default()
+        );
+    }
+
+    #[test]
+    fn generic_descriptor_never_invents_strong_state() {
+        let interpreter = CliSessionInterpreter::system();
+        let mut shell = session(&["bash"]);
+        shell.at_prompt = true;
+        shell.title = "Working".to_owned();
+
+        assert_eq!(
+            interpreter.describe(&shell).evidence,
+            CliSessionEvidence::default()
+        );
+    }
+
     fn strategy(
         id: &str,
         label: &str,
@@ -220,6 +387,7 @@ mod tests {
                 .collect(),
             foreground_pids: Vec::new(),
             capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
         }
     }
 }

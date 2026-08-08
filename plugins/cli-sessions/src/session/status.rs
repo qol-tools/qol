@@ -1,9 +1,10 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Status {
     Working,
     Service,
     YourTurn,
     NeedsYou,
+    #[default]
     Unknown,
     Acknowledged,
 }

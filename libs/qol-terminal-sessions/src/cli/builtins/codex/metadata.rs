@@ -7,10 +7,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
+use crate::cli::{CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
-use crate::cli::activity::file_activity;
+use crate::cli::activity::recently_active;
 
 const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -18,6 +19,8 @@ pub(super) struct CodexMetadata {
     pub thread_name: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub runtime: CliRuntimeState,
+    pub activity: CliActivityEvidence,
 }
 
 pub(super) struct CodexMetadataResolver {
@@ -62,6 +65,16 @@ impl CodexMetadataResolver {
             .as_mut()
             .and_then(|cache| rollout_path(session, self.environment.as_ref(), cache));
         let external_id = rollout.as_deref().and_then(uuid_from_path);
+        let activity = rollout
+            .as_deref()
+            .and_then(|path| {
+                let signature = file_signature(path)?;
+                Some(CliActivityEvidence {
+                    file_fresh: recently_active(signature.modified),
+                    file_has_work: Some(rollout_has_work(path)),
+                })
+            })
+            .unwrap_or_default();
         let indexed_name = cache
             .as_mut()
             .zip(external_id.as_deref())
@@ -69,8 +82,9 @@ impl CodexMetadataResolver {
         CodexMetadata {
             thread_name: title_thread_name(&session.title).or(indexed_name),
             external_id,
-            has_activity: title_activity(&session.title)
-                .or_else(|| rollout.as_deref().and_then(rollout_activity)),
+            has_activity: title_activity(&session.title).or_else(|| activity.combined()),
+            runtime: title_runtime(&session.title).unwrap_or_default(),
+            activity,
         }
     }
 
@@ -186,6 +200,19 @@ fn title_activity(title: &str) -> Option<bool> {
     None
 }
 
+fn title_runtime(title: &str) -> Option<CliRuntimeState> {
+    let items = title_items(title)?;
+    for item in &items {
+        match *item {
+            "Working" | "Thinking" => return Some(CliRuntimeState::Working),
+            "Ready" => return Some(CliRuntimeState::Ready),
+            "Action Required" => return Some(CliRuntimeState::NeedsInput),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn title_thread_name(title: &str) -> Option<String> {
     let items = title_items(title)?;
     let state = items
@@ -195,11 +222,6 @@ fn title_thread_name(title: &str) -> Option<String> {
     let name = items.last().copied()?;
     let project = items.first().copied()?;
     (state != name && name != project).then(|| name.to_owned())
-}
-
-fn rollout_activity(path: &Path) -> Option<bool> {
-    let signature = file_signature(path)?;
-    file_activity(signature.modified, rollout_has_work(path))
 }
 
 fn rollout_has_work(path: &Path) -> bool {

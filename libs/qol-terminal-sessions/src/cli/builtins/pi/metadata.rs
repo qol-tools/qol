@@ -7,10 +7,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
+use crate::cli::CliActivityEvidence;
 use crate::SessionFacts;
 
 use super::environment::PiEnvironment;
-use crate::cli::activity::file_activity;
+use crate::cli::activity::recently_active;
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
@@ -19,6 +20,7 @@ pub(super) struct PiMetadata {
     pub session_name: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub activity: CliActivityEvidence,
 }
 
 pub(super) struct PiMetadataResolver {
@@ -68,13 +70,17 @@ impl PiMetadataResolver {
             .as_mut()
             .and_then(|cache| path.as_deref().and_then(|path| cached_facts(path, cache)));
         let session_name = facts.as_ref().and_then(|facts| facts.session_name.clone());
-        let has_activity = facts
-            .as_ref()
-            .and_then(|facts| file_activity(facts.signature.modified, facts.has_message));
+        let activity = facts
+            .map(|facts| CliActivityEvidence {
+                file_fresh: recently_active(facts.signature.modified),
+                file_has_work: Some(facts.has_message),
+            })
+            .unwrap_or_default();
         PiMetadata {
             session_name,
             external_id,
-            has_activity,
+            has_activity: activity.combined(),
+            activity,
         }
     }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
+use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
@@ -148,6 +149,54 @@ fn claude_strategy_exposes_its_transcript_subscription() {
     assert!(subscription.is_some());
 }
 
+#[test]
+fn launch_program_is_the_claude_executable_without_arguments() {
+    assert_eq!(
+        ClaudeStrategy::default().launch(),
+        Some(CliLaunchProgram::new("claude"))
+    );
+}
+
+#[test]
+fn screen_classification_distinguishes_work_done_and_plain_output() {
+    let strategy = ClaudeStrategy::default();
+    let facts = session();
+
+    assert_eq!(
+        strategy.classify_screen(&facts, "esc to interrupt"),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::Working,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, "\u{2728} Running tests \u{2026} (12s)"),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::Working,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, "plain output"),
+        CliScreenEvidence::default()
+    );
+}
+
+#[test]
+fn claude_done_marker_sets_runtime_ready_but_never_a_live_viewport() {
+    let strategy = ClaudeStrategy::default();
+    let facts = session();
+
+    let done = strategy.classify_screen(&facts, "\u{2734} Fixed the queue for 12s");
+    assert_eq!(done.runtime, CliRuntimeState::Ready);
+    assert_eq!(done.viewport, CliViewportState::Unknown);
+
+    let scrollback = format!("\u{2734} Fixed the queue for 12s\n{}", "filler\n".repeat(9));
+    let stale_scrollback = strategy.classify_screen(&facts, &scrollback);
+    assert_eq!(stale_scrollback.runtime, CliRuntimeState::Unknown);
+    assert_eq!(stale_scrollback.viewport, CliViewportState::Unknown);
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),
@@ -159,5 +208,6 @@ fn session() -> SessionFacts {
         foreground_basenames: vec!["zsh".to_owned(), "claude".to_owned()],
         foreground_pids: vec![22],
         capabilities: SessionCapabilities::ALL,
+        spawn_identity: None,
     }
 }

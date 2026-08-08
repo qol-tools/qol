@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use super::spawn::identity_from_user_vars;
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId, TerminalError};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +31,8 @@ pub struct KittyWindow {
     pub last_reported_cmdline: String,
     #[serde(default)]
     pub foreground_processes: Vec<ForegroundProcess>,
+    #[serde(default)]
+    pub user_vars: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +71,7 @@ impl KittyWindow {
             Some(instance) => format!("{instance}.{}", self.id),
             None => self.id.to_string(),
         };
+        let spawn_identity = identity_from_user_vars(&self.user_vars);
         SessionFacts {
             id: SessionId::new(backend_id.clone(), native_id)
                 .expect("Kitty endpoint and window ids are valid terminal session identities"),
@@ -78,6 +83,7 @@ impl KittyWindow {
             foreground_basenames,
             foreground_pids,
             capabilities: SessionCapabilities::ALL,
+            spawn_identity,
         }
     }
 }
@@ -111,7 +117,9 @@ pub fn parse_ls(body: &str, backend_id: &BackendId) -> Result<KittyLs, TerminalE
 #[cfg(test)]
 mod tests {
     use super::parse_ls;
+    use crate::cli::CliToolId;
     use crate::kitty::backend_id;
+    use crate::{SpawnIdentity, SpawnKey, SpawnSurface};
 
     const SAMPLE: &str = r#"[{"id":1,"tabs":[{"id":1,"windows":[
 {"id":10,"title":"Agent","cwd":"/a/proj","pid":100,"at_prompt":false,"last_reported_cmdline":"claude","foreground_processes":[{"pid":100,"cmdline":["/bin/zsh"]},{"pid":101,"cmdline":["/usr/bin/claude"]}]},
@@ -141,5 +149,32 @@ mod tests {
 
         assert_eq!(sessions[0].id.native(), "k1_2.10");
         assert_eq!(sessions[1].id.native(), "k1_2.11");
+    }
+
+    #[test]
+    fn parser_reads_spawn_identity_only_from_complete_valid_user_vars() {
+        const TAGGED: &str = r#"[{"id":1,"tabs":[{"windows":[
+{"id":20,"title":"Codex","cwd":"/a","pid":300,"user_vars":{"qol_session_key":"lane-1","qol_session_tool":"codex","qol_session_surface":"tab"}},
+{"id":21,"title":"Partial","cwd":"/a","pid":301,"user_vars":{"qol_session_key":"partial","qol_session_surface":"tab"}},
+{"id":22,"title":"Malformed","cwd":"/a","pid":302,"user_vars":{"qol_session_key":"has space","qol_session_tool":"codex","qol_session_surface":"tab"}},
+{"id":23,"title":"Unknown","cwd":"/a","pid":303,"user_vars":{"qol_session_key":"lane-2","qol_session_tool":"codex","qol_session_surface":"banana"}},
+{"id":24,"title":"Untagged","cwd":"/a","pid":304}
+]}]}]"#;
+
+        let sessions = parse_ls(TAGGED, backend_id())
+            .unwrap()
+            .sessions(backend_id());
+
+        assert_eq!(
+            sessions[0].spawn_identity,
+            Some(SpawnIdentity {
+                key: SpawnKey::new("lane-1").unwrap(),
+                tool: CliToolId::new("codex").unwrap(),
+                surface: SpawnSurface::Tab,
+            })
+        );
+        for session in &sessions[1..] {
+            assert_eq!(session.spawn_identity, None, "window: {}", session.id);
+        }
     }
 }

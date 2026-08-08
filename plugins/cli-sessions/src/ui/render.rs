@@ -100,12 +100,7 @@ fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
 }
 
 fn meta_value(s: &SessionState) -> String {
-    let since = if matches!(s.status, Status::Working | Status::Service) {
-        s.running_since.unwrap_or(s.last_activity)
-    } else {
-        s.last_activity
-    };
-    format_elapsed(since)
+    format_elapsed(s.last_activity)
 }
 
 fn header(rows: &[SessionState]) -> impl IntoElement {

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::{
-    BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, TerminalError,
-    TerminalSnapshot,
+    BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, SessionSpawner, SpawnRequest,
+    TerminalError, TerminalSnapshot,
 };
 
 pub trait SessionInventory {
@@ -25,6 +25,8 @@ pub trait TextInput {
         text: &str,
         mode: DeliveryMode,
     ) -> Result<(), TerminalError>;
+
+    fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError>;
 }
 
 pub trait TerminalBackend:
@@ -39,6 +41,10 @@ pub trait TerminalBackend:
     fn id(&self) -> &BackendId;
 
     fn current_session_id(&self) -> Option<SessionId> {
+        None
+    }
+
+    fn spawner(&self) -> Option<&dyn SessionSpawner> {
         None
     }
 }
@@ -70,11 +76,45 @@ impl TerminalSessionService {
         })
     }
 
-    fn backend_for(&self, session_id: &SessionId) -> Result<&dyn TerminalBackend, TerminalError> {
+    pub fn spawn_on(
+        &self,
+        backend: &BackendId,
+        request: &SpawnRequest,
+    ) -> Result<SessionId, TerminalError> {
+        let backend = self.backend_for_id(backend)?;
+        let spawner = backend
+            .spawner()
+            .ok_or_else(|| TerminalError::SpawnUnsupported {
+                backend: backend.id().clone(),
+                surface: request.identity.surface,
+            })?;
+        if !spawner.supports(request.identity.surface) {
+            return Err(TerminalError::SpawnUnsupported {
+                backend: backend.id().clone(),
+                surface: request.identity.surface,
+            });
+        }
+        let spawned = spawner.spawn(request)?;
+        if spawned.backend() != backend.id() {
+            return Err(TerminalError::SpawnFailed {
+                backend: backend.id().clone(),
+                message: format!(
+                    "spawner returned session `{spawned}` owned by a different backend"
+                ),
+            });
+        }
+        Ok(spawned)
+    }
+
+    fn backend_for_id(&self, backend: &BackendId) -> Result<&dyn TerminalBackend, TerminalError> {
         self.backends
-            .get(session_id.backend())
+            .get(backend)
             .map(Arc::as_ref)
-            .ok_or_else(|| TerminalError::UnknownBackend(session_id.backend().clone()))
+            .ok_or_else(|| TerminalError::UnknownBackend(backend.clone()))
+    }
+
+    fn backend_for(&self, session_id: &SessionId) -> Result<&dyn TerminalBackend, TerminalError> {
+        self.backend_for_id(session_id.backend())
     }
 }
 
@@ -172,6 +212,10 @@ impl TextInput for TerminalSessionService {
     ) -> Result<(), TerminalError> {
         self.backend_for(target.session_id())?
             .send_text(target, text, mode)
+    }
+
+    fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+        self.backend_for(target.session_id())?.send_key(target, key)
     }
 }
 

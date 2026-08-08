@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::Deserialize;
 
+use crate::cli::CliActivityEvidence;
 use crate::{SessionBinding, SessionFacts};
 
 use super::environment::{newest_write, KimiEnvironment, KimiSessionLocation};
@@ -18,6 +19,7 @@ pub(super) struct KimiMetadata {
     pub session_name: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub activity: CliActivityEvidence,
 }
 
 pub(super) struct KimiMetadataResolver {
@@ -67,21 +69,25 @@ impl KimiMetadataResolver {
                 .as_ref()
                 .and_then(|l| cached_facts(&l.state_path, cache))
         });
-        let has_activity = match (facts.as_ref(), location.as_ref()) {
+        let activity = match (facts.as_ref(), location.as_ref()) {
             (Some(facts), Some(location)) => {
-                let recent = location
+                let fresh = location
                     .state_path
                     .parent()
                     .and_then(newest_write)
                     .is_some_and(|write| recently_active(Some(write)) == Some(true));
-                Some(facts.has_prompt && recent)
+                CliActivityEvidence {
+                    file_fresh: Some(fresh),
+                    file_has_work: Some(facts.has_prompt),
+                }
             }
-            _ => None,
+            _ => CliActivityEvidence::default(),
         };
         KimiMetadata {
             session_name: facts.as_ref().and_then(|f| f.session_name.clone()),
             external_id: location.as_ref().map(|l| l.session_id.clone()),
-            has_activity,
+            has_activity: activity.combined(),
+            activity,
         }
     }
 
