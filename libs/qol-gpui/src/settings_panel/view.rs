@@ -30,7 +30,8 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const DESCRIPTION_CHARS_PER_LINE: usize = 50;
+const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
+const ROW_CHROME: f32 = 28.0;
 
 use std::sync::PoisonError;
 
@@ -3394,18 +3395,40 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
     }
     if row.description.is_some() {
         return super::PANEL_DESCRIBED_ROW_HEIGHT
-            + description_wrap_lines(row.description.as_deref().unwrap_or_default()) as f32
-                * super::PANEL_DESCRIPTION_LINE_HEIGHT;
+            + description_wrap_lines(row) as f32 * super::PANEL_DESCRIPTION_LINE_HEIGHT;
     }
     super::PANEL_ROW_HEIGHT
 }
 
-fn description_wrap_lines(description: &str) -> usize {
+fn description_wrap_lines(row: &Row) -> usize {
+    let Some(description) = row.description.as_deref() else {
+        return 0;
+    };
     let chars = description.chars().count();
-    if chars <= DESCRIPTION_CHARS_PER_LINE {
+    if chars == 0 {
         return 0;
     }
-    chars.div_ceil(DESCRIPTION_CHARS_PER_LINE) - 1
+    let column = super::PANEL_WIDTH - ROW_CHROME - value_cell_width(&row.control);
+    let per_line = (column / DESCRIPTION_CHAR_WIDTH) as usize;
+    chars.div_ceil(per_line.max(1)) - 1
+}
+
+fn value_cell_width(control: &RowControl) -> f32 {
+    match control {
+        RowControl::Toggle(_) => 92.0,
+        RowControl::Number { .. } => 33.0,
+        RowControl::Color(_) => 76.0,
+        RowControl::Select { .. } | RowControl::MultiSelect { .. } => 96.0,
+        RowControl::Text(_) => 120.0,
+        RowControl::TextList(_) => 160.0,
+        RowControl::Action { .. } => 90.0,
+        RowControl::Status { .. } => 130.0,
+        RowControl::ObjectArray(_) => 60.0,
+        RowControl::List { .. } => 120.0,
+        RowControl::QrCode { .. } => 260.0,
+        RowControl::Unsupported { .. } => 200.0,
+        RowControl::Gamepad { .. } => 200.0,
+    }
 }
 
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
@@ -3546,6 +3569,81 @@ mod tests {
     }
 
     #[test]
+    fn description_wrap_lines_pin_the_observed_alt_tab_rows() {
+        let icon = Row {
+            id: "icon".into(),
+            section_id: None,
+            section_label: None,
+            label: "Icon".into(),
+            description: Some("Where the app icon appears over each window preview.".into()),
+            placeholder: None,
+            variant: None,
+            config_key: "display.icon_position".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Select {
+                options: vec![],
+                index: 0,
+                dynamic: None,
+            },
+        };
+        let card = Row {
+            id: "card".into(),
+            section_id: None,
+            section_label: None,
+            label: "Card".into(),
+            description: Some(
+                "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.card_scale".into(),
+            default: qol_config::contract::FieldDefault::Number(1.5),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Number {
+                value: 1.5,
+                min: None,
+                max: None,
+                step: None,
+            },
+        };
+        let dynamic = Row {
+            id: "dynamic".into(),
+            section_id: None,
+            section_label: None,
+            label: "Dynamic".into(),
+            description: Some(
+                "Grow window cards to fill free space when few windows are open; shrink to fit when many are."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.dynamic_card_scale".into(),
+            default: qol_config::contract::FieldDefault::Boolean(false),
+            stream: None,
+            action: None,
+            visibility: None,
+            control: RowControl::Toggle(false),
+        };
+        assert_eq!(description_wrap_lines(&icon), 0);
+        assert_eq!(description_wrap_lines(&card), 0);
+        assert_eq!(description_wrap_lines(&dynamic), 1);
+        assert_eq!(
+            row_body_height(&dynamic),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
+        );
+        assert_eq!(
+            row_body_height(&card),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+        );
+    }
+
+    #[test]
     fn color_display_normalizes_the_hash_prefix_like_the_web_save() {
         let cases = [
             ("ff0000", "#ff0000"),
@@ -3555,60 +3653,6 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(color_display(value), expected, "value: {value}");
         }
-    }
-
-    #[test]
-    fn described_rows_grow_for_wrapped_description_lines() {
-        let short = Row {
-            id: "short".into(),
-            section_id: None,
-            section_label: None,
-            label: "Short".into(),
-            description: Some("A short description.".into()),
-            placeholder: None,
-            variant: None,
-            config_key: "short".into(),
-            default: qol_config::contract::FieldDefault::String(String::new()),
-            stream: None,
-            action: None,
-            visibility: None,
-            control: RowControl::Toggle(false),
-        };
-        let long = Row {
-            description: Some(
-                "A description long enough to wrap onto a second line in the row body.".into(),
-            ),
-            ..Row {
-                id: "long".into(),
-                section_id: None,
-                section_label: None,
-                label: "Long".into(),
-                description: None,
-                placeholder: None,
-                variant: None,
-                config_key: "long".into(),
-                default: qol_config::contract::FieldDefault::String(String::new()),
-                stream: None,
-                action: None,
-                visibility: None,
-                control: RowControl::Toggle(false),
-            }
-        };
-        assert_eq!(description_wrap_lines("A short description."), 0);
-        assert_eq!(
-            row_body_height(&short),
-            super::super::PANEL_DESCRIBED_ROW_HEIGHT
-        );
-        assert_eq!(
-            description_wrap_lines(
-                "A description long enough to wrap onto a second line in the row body."
-            ),
-            1
-        );
-        assert_eq!(
-            row_body_height(&long),
-            super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
-        );
     }
 
     #[test]
