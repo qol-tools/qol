@@ -10,6 +10,7 @@ anyhow = "1"
 futures = "0.3"
 gpui.workspace = true
 image = { version = "0.25", default-features = false }
+qrcode = { version = "0.14", default-features = false }
 smallvec = "1.13"
 qol-config.workspace = true
 qol-conventions.workspace = true
