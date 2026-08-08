@@ -4,7 +4,6 @@ import { PluginsSection } from './PluginsSection.js';
 import { CoreSection } from './CoreSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
-import { ToolingGhAccountSection } from './ToolingGhAccountSection.js';
 
 export function DevLayout({ ctrl, containerRef }) {
     return html`
@@ -17,7 +16,6 @@ export function DevLayout({ ctrl, containerRef }) {
                     <${CoreSection} />
                     <${CoreLogSection} ctrl=${ctrl} />
                     <${ActionsSection} ctrl=${ctrl} />
-                    <${ToolingGhAccountSection} />
                 </div>
             </div>
         <//>

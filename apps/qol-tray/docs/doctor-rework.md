@@ -179,7 +179,7 @@ impl FixPolicy {
 
 | FixAction | applicability |
 |---|---|
-| SetActiveInstallId, WriteInstallMarker, WriteAutostartEntry, EnsurePluginsDir, KillPluginProcessLeaks, InstallShellHook, RelocateDevLink | `SafeAutomatic` |
+| SetActiveInstallId, WriteInstallMarker, WriteAutostartEntry, EnsurePluginsDir, KillPluginProcessLeaks, RelocateDevLink | `SafeAutomatic` |
 | UnshadowDeBinding, DisableSymbolicHotkey, ClearWindowsAppKey | `ReversibleHostMutation` |
 | PruneOrphanFingerprints (new) | `SafeAutomatic` |
 

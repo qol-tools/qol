@@ -52,20 +52,12 @@ where
 {
     let doctor_operations = operations.clone();
     HeadlessApp::new(APP_ID, BINARY_NAME)
-        .about("Install or uninstall the QoL Tray binary, autostart entry, and shell hook.")
+        .about("Install the QoL Tray binary and autostart entry.")
         .default_command(["install"])
         .command(operation_command(
             "install",
             "Install QoL Tray.",
-            "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--skip-shell-hook] [--dev]",
-            false,
-            operations.clone(),
-        ))
-        .command(operation_command(
-            "uninstall",
-            "Remove the qol-tools shell hook from shell rc files.",
-            "qol-tray-install uninstall [--skip-shell-hook]",
-            true,
+            "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--dev]",
             operations.clone(),
         ))
         .fallback_command(
@@ -87,7 +79,6 @@ fn operation_command<O>(
     name: &'static str,
     about: &'static str,
     usage: &'static str,
-    uninstall: bool,
     operations: O,
 ) -> Command
 where
@@ -98,16 +89,11 @@ where
         .usage(usage)
         .detail("--source <PATH> selects an existing install source.")
         .detail("--workspace <PATH> installs its locally built plugin bundles.")
-        .detail("--skip-shell-hook leaves shell rc files unchanged.")
         .detail("--dev selects dev runtime mode and requires a dev-enabled build.")
         .output("Progress is written to stdout; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero when validation or an install operation fails.")
         .run_plain_text(move |context| {
-            let mut args = context.args().to_vec();
-            if uninstall {
-                args.insert(0, "--uninstall".to_string());
-            }
-            operations.apply(args)?;
+            operations.apply(context.args().to_vec())?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -127,10 +113,7 @@ fn normalize_legacy_argv(args: impl IntoIterator<Item = String>) -> Vec<String> 
         .iter()
         .find(|arg| arg.as_str() != "--json")
         .map(String::as_str);
-    let explicit_command = matches!(
-        first_command,
-        Some("install" | "uninstall" | "doctor" | "help")
-    );
+    let explicit_command = matches!(first_command, Some("install" | "doctor" | "help"));
     let legacy_tokens = args
         .iter()
         .filter(|arg| arg.as_str() != "--json")
@@ -211,22 +194,14 @@ mod tests {
             execute(&app, &["install", "--source", "/tmp/qol-tray"]).exit_code,
             EXIT_SUCCESS
         );
-        assert_eq!(
-            execute(&app, &["uninstall", "--skip-shell-hook"]).exit_code,
-            EXIT_SUCCESS
-        );
-        assert_eq!(
-            execute(&app, &["--uninstall", "--skip-shell-hook"]).exit_code,
-            EXIT_SUCCESS
-        );
+        assert_eq!(execute(&app, &["--dev"]).exit_code, EXIT_SUCCESS);
 
         assert_eq!(
             calls.mutations.lock().unwrap().as_slice(),
             [
                 Vec::<String>::new(),
                 vec!["--source".to_string(), "/tmp/qol-tray".to_string()],
-                vec!["--uninstall".to_string(), "--skip-shell-hook".to_string()],
-                vec!["--uninstall".to_string(), "--skip-shell-hook".to_string()],
+                vec!["--dev".to_string()],
             ]
         );
     }
@@ -239,8 +214,8 @@ mod tests {
             &["help", "install"][..],
             &["install", "help"][..],
             &["--help"][..],
-            &["--uninstall", "-h"][..],
-            &["-h", "--uninstall"][..],
+            &["--dev", "-h"][..],
+            &["-h", "--dev"][..],
         ] {
             let execution = execute(&app, args);
             assert_eq!(execution.exit_code, EXIT_SUCCESS, "{args:?}");
@@ -296,8 +271,8 @@ mod tests {
         for args in [
             &["--json", "install"][..],
             &["install", "--json"][..],
-            &["--json", "--uninstall"][..],
-            &["--uninstall", "--json"][..],
+            &["--json", "--dev"][..],
+            &["--dev", "--json"][..],
         ] {
             let execution = execute(&app, args);
             assert_eq!(execution.exit_code, EXIT_USAGE, "{args:?}");

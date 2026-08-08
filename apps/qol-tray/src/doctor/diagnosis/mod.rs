@@ -25,7 +25,6 @@ pub(super) enum FixAction {
         processes: Vec<ManagedProcess>,
     },
     DrainOrphanPluginConfigs,
-    InstallShellHook,
     UnshadowDeBinding {
         dir: String,
         key: String,
@@ -95,8 +94,7 @@ impl FixAction {
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
             | FixAction::KillPluginProcessLeaks { .. }
-            | FixAction::DrainOrphanPluginConfigs
-            | FixAction::InstallShellHook => FixApplicability::SafeAutomatic,
+            | FixAction::DrainOrphanPluginConfigs => FixApplicability::SafeAutomatic,
             FixAction::UnshadowDeBinding { .. }
             | FixAction::DisableSymbolicHotkey { .. }
             | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
@@ -154,7 +152,6 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             let _drained = crate::config_drain::drain_orphan_runtime_configs();
             Ok(())
         }
-        FixAction::InstallShellHook => crate::installer::install_shell_hook(),
         FixAction::UnshadowDeBinding {
             dir,
             key,
@@ -637,7 +634,6 @@ mod tests {
                 },
                 FixApplicability::SafeAutomatic,
             ),
-            (FixAction::InstallShellHook, FixApplicability::SafeAutomatic),
             (
                 FixAction::DrainOrphanPluginConfigs,
                 FixApplicability::SafeAutomatic,

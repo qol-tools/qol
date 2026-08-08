@@ -371,7 +371,7 @@ mod tests {
             CheckReport::warn(
                 "something is off",
                 "warn_code",
-                vec![FixAction::InstallShellHook],
+                vec![FixAction::DrainOrphanPluginConfigs],
             )
         }
     }

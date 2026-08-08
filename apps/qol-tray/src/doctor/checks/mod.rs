@@ -30,7 +30,6 @@ mod runtime_prereqs;
 mod rust_clippy;
 #[cfg(feature = "dev")]
 mod rust_formatting;
-mod shell_hook_present;
 #[cfg(feature = "dev")]
 mod single_source_guard;
 
@@ -50,7 +49,6 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(runtime_prereqs::PluginsDirCheck),
         Box::new(gpu_driver_sync::GpuDriverSyncCheck),
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
-        Box::new(shell_hook_present::ShellHookPresentCheck),
         Box::new(hotkey_capture_backend::HotkeyCaptureBackendCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
         Box::new(plugin_uid_table::PluginUidTableCheck),

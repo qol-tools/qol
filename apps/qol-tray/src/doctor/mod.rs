@@ -299,8 +299,7 @@ fn log_applied(action: &FixAction) {
         | FixAction::WriteInstallMarker { .. }
         | FixAction::WriteAutostartEntry { .. }
         | FixAction::EnsurePluginsDir { .. }
-        | FixAction::KillPluginProcessLeaks { .. }
-        | FixAction::InstallShellHook => {}
+        | FixAction::KillPluginProcessLeaks { .. } => {}
         #[cfg(feature = "dev")]
         FixAction::RelocateDevLink { plugin_id, to } => {
             log::info!(

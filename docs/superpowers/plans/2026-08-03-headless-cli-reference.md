@@ -238,12 +238,11 @@ App id `window-actions`, bin `window-actions`, `.about("Move, resize, minimize�
 
 ### qol-tray-install
 
-App id `qol-tray-install`, bin `qol-tray-install`, `.about("Install or uninstall…")`, default → `install`.
+App id `qol-tray-install`, bin `qol-tray-install`, `.about("Install the QoL Tray…")`, default → `install`.
 
 | Command | Handler | --json | A | U | D | O | E | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `install` | run_plain_text | — | ✓ | ✓ | ✓ | ✓ | ✓ | flags: `--source` `--workspace` `--skip-shell-hook` `--dev` |
-| `uninstall` | run_plain_text | — | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| `install` | run_plain_text | — | ✓ | ✓ | ✓ | ✓ | ✓ | flags: `--source` `--workspace` `--dev` |
 | *legacy* | fallback | — | ✓ | — | — | — | — | fallback_command |
 | `doctor` | doctor_check | — | — | — | — | — | — | 1 check |
 

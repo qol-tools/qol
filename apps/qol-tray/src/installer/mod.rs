@@ -12,7 +12,6 @@ mod files;
 pub mod housekeeping;
 pub mod mode;
 pub(crate) mod platform;
-mod shell_hook;
 mod source;
 
 pub use boot_environment::BootEnvironment;
@@ -22,16 +21,6 @@ const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
 pub fn autostart_path() -> Result<PathBuf> {
     autostart::autostart_path()
-}
-
-pub fn install_shell_hook() -> Result<()> {
-    shell_hook::install()
-}
-
-pub(crate) use shell_hook::{is_installed as shell_hook_status, ShellHookStatus};
-
-pub(crate) fn shell_hook_any_rc_exists() -> Result<bool> {
-    shell_hook::any_rc_file_exists()
 }
 
 pub fn bootstrap_current_install() -> Result<()> {
@@ -67,15 +56,11 @@ pub fn bootstrap_current_install() -> Result<()> {
 
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let args = source::parse_args(args)?;
-    match args.mode {
-        source::Mode::Install => run_install(
-            args.source.as_deref(),
-            args.workspace.as_deref(),
-            args.skip_shell_hook,
-            args.dev_mode,
-        ),
-        source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
-    }
+    run_install(
+        args.source.as_deref(),
+        args.workspace.as_deref(),
+        args.dev_mode,
+    )
 }
 
 pub fn check_platform_paths() -> Result<()> {
@@ -87,7 +72,6 @@ pub fn check_platform_paths() -> Result<()> {
 fn run_install(
     source_override: Option<&Path>,
     workspace_root: Option<&Path>,
-    skip_shell_hook: bool,
     dev_mode: bool,
 ) -> Result<()> {
     if dev_mode && !cfg!(feature = "dev") {
@@ -151,7 +135,6 @@ fn run_install(
     autostart::write_target(&installed_binary)?;
     platform::warn_system_install_conflict();
     platform::register_application(&installed_binary)?;
-    install_shell_hook_warn_only(skip_shell_hook);
     write_mode_config(dev_mode)?;
     platform::start_now(&installed_binary)?;
     open_ui_after_start();
@@ -173,20 +156,6 @@ fn install_workspace_plugins(workspace_root: Option<&Path>, plugins_dir: &Path) 
     Ok(())
 }
 
-fn run_uninstall(skip_shell_hook: bool) -> Result<()> {
-    println!("Uninstalling QoL Tray shell hook...");
-    if skip_shell_hook {
-        println!("Skipping shell hook removal (--skip-shell-hook).");
-        return Ok(());
-    }
-    if let Err(error) = shell_hook::uninstall() {
-        eprintln!("Warning: failed to remove shell hook: {error}");
-        return Err(error);
-    }
-    println!("Shell hook removed. Open a new terminal for changes to take effect.");
-    Ok(())
-}
-
 fn write_mode_config(dev_mode: bool) -> Result<()> {
     let target = if dev_mode {
         ModeFlag::Dev
@@ -196,18 +165,6 @@ fn write_mode_config(dev_mode: bool) -> Result<()> {
     ModeConfig::set(target).with_context(|| format!("Failed to write mode config ({target:?})"))?;
     println!("Runtime mode: {}", if dev_mode { "dev" } else { "prod" });
     Ok(())
-}
-
-fn install_shell_hook_warn_only(skip_shell_hook: bool) {
-    if skip_shell_hook {
-        println!("Skipping shell hook installation (--skip-shell-hook).");
-        return;
-    }
-    if let Err(error) = shell_hook::install() {
-        eprintln!("Warning: failed to install shell hook: {error}");
-        return;
-    }
-    println!("Shell hook installed. Open a new terminal for changes to take effect.");
 }
 
 fn register_install_id(installed_binary: &Path) -> Result<String> {

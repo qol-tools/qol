@@ -294,13 +294,6 @@ pub(super) struct ActiveWorktreeResponse {
 }
 
 #[cfg(feature = "dev")]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub(super) struct ToolingGhAccountPayload {
-    #[serde(default)]
-    pub(super) value: Option<String>,
-}
-
-#[cfg(feature = "dev")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub(super) struct RuntimeGpuiPayload {
     #[serde(default)]
