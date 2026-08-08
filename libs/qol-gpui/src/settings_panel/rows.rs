@@ -1,5 +1,6 @@
 use qol_config::contract::{
-    resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction, RowActionSpec,
+    interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction,
+    RowActionSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -977,9 +978,9 @@ fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) ->
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| index.to_string()),
-            label: render_template(label, row),
+            label: interpolate_row_template(label, row),
             subtitle: subtitle
-                .map(|template| render_template(template, row))
+                .map(|template| interpolate_row_template(template, row))
                 .filter(|text| !text.is_empty()),
             accent: list_item_tone(row, "accent"),
             badge: row
@@ -1075,42 +1076,6 @@ pub(super) fn apply_list_filter(
     count
 }
 
-fn render_template(template: &str, row: &serde_json::Value) -> String {
-    let mut rendered = String::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        rendered.push_str(&rest[..open]);
-        let tail = &rest[open + 1..];
-        let Some(close) = tail.find('}') else {
-            rendered.push_str(&rest[open..]);
-            return rendered;
-        };
-        let key = &tail[..close];
-        if !template_key(key) {
-            rendered.push('{');
-            rest = tail;
-            continue;
-        }
-        if let Some(value) = row.get(key).filter(|value| !value.is_null()) {
-            let text = value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string());
-            rendered.push_str(&text);
-        }
-        rest = &tail[close + 1..];
-    }
-    rendered.push_str(rest);
-    rendered
-}
-
-fn template_key(key: &str) -> bool {
-    !key.is_empty()
-        && key
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
 fn options_from_value(value: &serde_json::Value) -> Vec<SelectOption> {
     value
         .as_array()
@@ -1175,10 +1140,10 @@ mod tests {
     use super::{
         apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
         list_item_actions, list_items, merged_config, option_accent, primary_list_item_action,
-        render_template, row_action, row_is_visible, row_streams, row_value_json,
-        rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
-        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
-        ResolvedConfig, Row, RowControl, SelectOption,
+        row_action, row_is_visible, row_streams, row_value_json, rows_from_resolved,
+        runtime_query_names, section_label_for, sections_from_resolved, set_config_value,
+        stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig,
+        Row, RowControl, SelectOption,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2723,55 +2688,7 @@ default = 5
     }
 
     #[test]
-    fn render_template_matches_the_web_interpolator() {
-        let row = serde_json::json!({
-            "name": "WH-1000XM4",
-            "index": 5,
-            "paired": true,
-            "nulled": null,
-        });
-        let cases = [
-            ("{name}", "WH-1000XM4", "key present as string renders bare"),
-            (
-                "{index}",
-                "5",
-                "key present as number renders its JSON form",
-            ),
-            (
-                "{paired}",
-                "true",
-                "key present as bool renders its JSON form",
-            ),
-            ("{nulled}", "", "key present as null renders nothing"),
-            ("{missing}", "", "key absent entirely renders nothing"),
-            (
-                "{name} on {missing}",
-                "WH-1000XM4 on ",
-                "only the resolvable placeholder is replaced",
-            ),
-            (
-                "{not a key}",
-                "{not a key}",
-                "a non-word brace expression is left verbatim",
-            ),
-            ("{}", "{}", "an empty brace pair is left verbatim"),
-            (
-                "plain text",
-                "plain text",
-                "a template without placeholders is unchanged",
-            ),
-        ];
-        for (template, expected, label) in cases {
-            assert_eq!(
-                render_template(template, &row),
-                expected,
-                "{label}: template {template:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn render_template_hides_fully_unresolvable_subtitles() {
+    fn unresolvable_subtitles_hide_the_line() {
         let row = serde_json::json!({ "name": "Keyboard" });
         let items = list_items(
             &serde_json::json!({ "items": [row.clone()] }),

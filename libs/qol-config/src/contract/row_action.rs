@@ -57,7 +57,7 @@ fn interpolate_row_value(template: &str, row: &Value) -> Value {
     if let Some(key) = exact_placeholder(template) {
         return row.get(key).cloned().unwrap_or(Value::Null);
     }
-    Value::String(interpolate_row_text(template, row))
+    Value::String(interpolate_row_template(template, row))
 }
 
 fn exact_placeholder(template: &str) -> Option<&str> {
@@ -72,7 +72,7 @@ fn placeholder_key(key: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-fn interpolate_row_text(template: &str, row: &Value) -> String {
+pub fn interpolate_row_template(template: &str, row: &Value) -> String {
     let mut rendered = String::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -111,7 +111,7 @@ fn row_value_text(value: &Value) -> String {
 mod tests {
     use indexmap::IndexMap;
 
-    use super::{resolve_row_actions, RowActionSpec};
+    use super::{interpolate_row_template, resolve_row_actions, RowActionSpec};
 
     fn action(name: &str, label: Option<&str>, when: Option<&str>) -> RowActionSpec {
         RowActionSpec {
@@ -152,6 +152,68 @@ mod tests {
             resolved[1].input["message"],
             serde_json::json!("Connect Keyboard ()")
         );
+    }
+
+    #[test]
+    fn interpolate_row_template_matches_the_web_regex() {
+        let row = serde_json::json!({
+            "name": "WH-1000XM4",
+            "index": 5,
+            "paired": true,
+            "nulled": null,
+            "a": "A",
+            "b": "B",
+        });
+        let cases = [
+            ("{name}", "WH-1000XM4", "key present as string renders bare"),
+            (
+                "{index}",
+                "5",
+                "key present as number renders its JSON form",
+            ),
+            (
+                "{paired}",
+                "true",
+                "key present as bool renders its JSON form",
+            ),
+            ("{nulled}", "", "key present as null renders nothing"),
+            ("{missing}", "", "key absent entirely renders nothing"),
+            (
+                "{name} on {missing}",
+                "WH-1000XM4 on ",
+                "only the resolvable placeholder is replaced",
+            ),
+            (
+                "{not a key}",
+                "{not a key}",
+                "a non-word brace expression is left verbatim",
+            ),
+            ("{}", "{}", "an empty brace pair is left verbatim"),
+            (
+                "plain text",
+                "plain text",
+                "a template without placeholders is unchanged",
+            ),
+            ("{abc", "{abc", "an unclosed brace is left verbatim"),
+            (
+                "{a{b}",
+                "{aB",
+                "a nested brace resolves only the inner placeholder",
+            ),
+            ("{a}}", "A}", "a trailing brace survives the replacement"),
+            (
+                "{ name }",
+                "{ name }",
+                "a spaced brace expression is left verbatim",
+            ),
+        ];
+        for (template, expected, label) in cases {
+            assert_eq!(
+                interpolate_row_template(template, &row),
+                expected,
+                "{label}: template {template:?}"
+            );
+        }
     }
 
     #[test]
