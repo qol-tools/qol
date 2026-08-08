@@ -36,8 +36,6 @@ qol trace [name]
 qol doctor [step]
 ```
 
-`qol sync` is intentionally not implemented yet; use `make sync` when needed.
-
 `qol setup` owns the repository's Git configuration, and `qol dev` runs it on
 every boot, so both settings self-heal without anyone editing `.git/config` by
 hand: `merge.cargo-lock.*` (the `Cargo.lock` auto-resolve driver) and

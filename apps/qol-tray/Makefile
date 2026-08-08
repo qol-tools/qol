@@ -1,4 +1,4 @@
-.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install install-dev ci-local sync recompile-linked
+.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install install-dev ci-local recompile-linked
 
 DEV_HOOKS := .qol-tray-dev-hooks
 
@@ -69,15 +69,6 @@ release:
 
 run: lint
 	cargo run --bin qol-tray
-
-sync:
-	@if command -v qol-sync >/dev/null 2>&1; then \
-		qol-sync; \
-	elif [ -x ../qol-cicd/bin/qol-sync ]; then \
-		../qol-cicd/bin/qol-sync; \
-	else \
-		echo "sync: qol-sync not found, skipping"; \
-	fi
 
 recompile-linked:
 	@bash scripts/recompile-linked-plugins.sh
