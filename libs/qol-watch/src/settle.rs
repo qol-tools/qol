@@ -69,11 +69,12 @@ mod tests {
     #[test]
     fn a_burst_of_changes_arrives_as_one_batch() {
         let root = TempDir::new().unwrap();
+        let model = root.path().join("parakeet");
+        fs::create_dir(&model).unwrap();
+
         let (_watch, batches) =
             settled(&[WatchRoot::deep(root.path())], Duration::from_millis(200)).unwrap();
 
-        let model = root.path().join("parakeet");
-        fs::create_dir(&model).unwrap();
         for name in ["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"] {
             fs::write(model.join(name), b"weights").unwrap();
         }
