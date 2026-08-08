@@ -121,7 +121,6 @@ pub(super) enum RowControl {
     },
     ObjectArray(ObjectArrayState),
     Unsupported {
-        #[expect(dead_code)]
         kind: FieldKind,
         reason: String,
     },
@@ -136,6 +135,7 @@ pub(super) struct Row {
     pub(super) placeholder: Option<String>,
     pub(super) variant: Option<String>,
     pub(super) config_key: String,
+    pub(super) default: FieldDefault,
     pub(super) visibility: Option<RowVisibility>,
     pub(super) control: RowControl,
 }
@@ -257,6 +257,7 @@ fn push_row(
         placeholder: field.placeholder.clone(),
         variant: field.variant.clone(),
         config_key: field.config_key.clone(),
+        default: field.default.clone(),
         visibility,
         control,
     });
@@ -575,8 +576,20 @@ pub(super) fn merged_config(base: &serde_json::Value, rows: &[Row]) -> serde_jso
         serde_json::json!({})
     };
     for row in rows {
-        if let Some(value) = row_value_json(&row.control) {
-            set_config_value(&mut config, &row.config_key, value);
+        match &row.control {
+            RowControl::Unsupported { kind, .. } if kind.has_stored_value() => {
+                set_config_value(
+                    &mut config,
+                    &row.config_key,
+                    qol_config::field_default_to_json(&row.default),
+                );
+            }
+            RowControl::Unsupported { .. } => {}
+            control => {
+                if let Some(value) = row_value_json(control) {
+                    set_config_value(&mut config, &row.config_key, value);
+                }
+            }
         }
     }
     config
@@ -995,7 +1008,8 @@ mod tests {
         apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
         option_accent, primary_list_item_action, row_is_visible, row_value_json,
         rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
-        set_config_value, visible_row_indices, ResolvedConfig, Row, RowControl, SelectOption,
+        set_config_value, visible_row_indices, FieldDefault, ResolvedConfig, Row, RowControl,
+        SelectOption,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -1615,6 +1629,7 @@ query = "managed_device_options"
                 placeholder: None,
                 variant: None,
                 config_key: "action_mode".into(),
+                default: FieldDefault::Boolean(false),
                 visibility: None,
                 control: RowControl::Select {
                     options: vec![option("hold_to_switch", "Hold"), option("sticky", "Sticky")],
@@ -1631,6 +1646,7 @@ query = "managed_device_options"
                 placeholder: None,
                 variant: None,
                 config_key: "display.max_columns".into(),
+                default: FieldDefault::Boolean(false),
                 visibility: None,
                 control: RowControl::Number {
                     value: 4.0,
@@ -1916,6 +1932,7 @@ tone_map = { light = "muted", dark = "accent" }
             placeholder: None,
             variant: None,
             config_key: "search".into(),
+            default: FieldDefault::Boolean(false),
             visibility: None,
             control: RowControl::Action {
                 action: "start_search".into(),
@@ -1952,6 +1969,42 @@ tone_map = { light = "muted", dark = "accent" }
                 "capture": { "pin_border": true, "saved_feedback": "toast" },
                 "audio": { "inputs": ["mic", "system"] }
             })
+        );
+    }
+
+    #[test]
+    fn unsupported_rows_save_their_default_so_other_edits_still_persist() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.enabled]
+type = "boolean"
+config_key = "enabled"
+default = false
+
+[field.mode]
+type = "boolean"
+config_key = "mode"
+default = true
+"#,
+        )
+        .unwrap();
+        let stored = serde_json::json!({ "enabled": false, "mode": "yes" });
+        let resolved = qol_config::normalized::resolve_config(&spec, &stored).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+        assert!(
+            matches!(rows[1].control, RowControl::Unsupported { .. }),
+            "the stored \"yes\" keeps the mode row unsupported for this session"
+        );
+        let RowControl::Toggle(enabled) = &mut rows[0].control else {
+            panic!("expected enabled toggle");
+        };
+        *enabled = true;
+        assert_eq!(
+            merged_config(&stored, &rows),
+            serde_json::json!({ "enabled": true, "mode": true }),
+            "the unsupported row falls back to its contract default so the save is accepted"
         );
     }
 
