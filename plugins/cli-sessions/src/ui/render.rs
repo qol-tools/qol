@@ -7,6 +7,7 @@ use gpui::{
 };
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
+use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::SessionState;
 use crate::session::status::Status;
@@ -271,7 +272,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
 fn summary_cell(
     status: Status,
     summary: &str,
-    window_id: u64,
+    id: SessionId,
     index: usize,
     cx: &mut Context<SessionsView>,
 ) -> AnyElement {
@@ -291,7 +292,7 @@ fn summary_cell(
             .hover(|style| style.bg(rgba(palette.your_turn_hover_rgba)))
             .child(format!("{summary} \u{2713}"))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.acknowledge(window_id);
+                this.acknowledge(&id);
                 cx.stop_propagation();
                 cx.notify();
             }))
@@ -331,7 +332,7 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
         .gap(px(8.0))
         .w_full()
         .overflow_hidden()
-        .child(summary_cell(s.status, &s.summary, s.window_id, index, cx))
+        .child(summary_cell(s.status, &s.summary, s.id.clone(), index, cx))
         .child(
             div()
                 .flex_none()
@@ -348,7 +349,7 @@ fn session_row(
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
     let tint = tint_color(s.status);
-    let window_id = s.window_id;
+    let id = s.id.clone();
     let palette = current_palette();
     div()
         .id(("session-row", index))
@@ -360,7 +361,7 @@ fn session_row(
             rgba(palette.transparent_rgba)
         })
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.jump_to_window(window_id, "row-click", cx);
+            this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }))
         .child(
@@ -383,7 +384,7 @@ impl Render for SessionsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.rows();
         let palette = current_palette();
-        let order: Vec<u64> = rows.iter().map(|s| s.window_id).collect();
+        let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
         let row_els: Vec<_> = rows

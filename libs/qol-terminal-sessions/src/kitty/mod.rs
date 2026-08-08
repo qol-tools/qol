@@ -1,3 +1,4 @@
+mod endpoint;
 mod parse;
 mod socket;
 
@@ -7,6 +8,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub use parse::{parse_ls, KittyLs};
+
+#[cfg(test)]
+use endpoint::LegacyEndpointSource;
+use endpoint::{Endpoint, EndpointSource, SystemEndpointSource};
 
 use crate::{
     BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus, SessionId,
@@ -22,30 +27,41 @@ pub fn backend_id() -> &'static BackendId {
 
 pub struct KittyBackend {
     runner: Arc<dyn CommandRunner>,
+    endpoints: Arc<dyn EndpointSource>,
 }
 
 impl KittyBackend {
+    #[cfg(test)]
     fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            endpoints: Arc::new(LegacyEndpointSource),
+        }
     }
 
-    fn run(
+    #[cfg(test)]
+    fn with_parts(runner: Arc<dyn CommandRunner>, endpoints: Arc<dyn EndpointSource>) -> Self {
+        Self { runner, endpoints }
+    }
+
+    fn run_at(
         &self,
+        endpoint: &Endpoint,
         operation: &'static str,
         args: &[String],
         stdin: Option<&str>,
     ) -> Result<String, TerminalError> {
-        let output =
-            self.runner
-                .run(args, stdin)
-                .map_err(|source| TerminalError::BackendUnavailable {
-                    backend: backend_id().clone(),
-                    source,
-                })?;
+        let output = self.runner.run(endpoint, args, stdin).map_err(|source| {
+            TerminalError::BackendUnavailable {
+                backend: backend_id().clone(),
+                source,
+            }
+        })?;
         qol_runtime::probe!(
             "TERMINAL_SESSIONS",
-            "backend={} operation={} success={} code={:?} stdout_len={}",
+            "backend={} instance={} operation={} success={} code={:?} stdout_len={}",
             backend_id(),
+            endpoint.instance().unwrap_or("legacy"),
             operation,
             output.success,
             output.code,
@@ -62,9 +78,68 @@ impl KittyBackend {
         Ok(output.stdout)
     }
 
+    fn sessions_at(&self, endpoint: &Endpoint) -> Result<Vec<SessionFacts>, TerminalError> {
+        let body = self.run_at(endpoint, "discover sessions", &strings(["@", "ls"]), None)?;
+        Ok(parse_ls(&body, backend_id())?.sessions_for(backend_id(), endpoint.instance()))
+    }
+
     fn sessions(&self) -> Result<Vec<SessionFacts>, TerminalError> {
-        let body = self.run("discover sessions", &strings(["@", "ls"]), None)?;
-        Ok(parse_ls(&body, backend_id())?.sessions(backend_id()))
+        let endpoints = self.endpoints.endpoints();
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "backend={} operation=discover_instances count={}",
+            backend_id(),
+            endpoints.len()
+        );
+        let mut sessions = Vec::new();
+        let mut first_error = None;
+        let mut reached = false;
+        for endpoint in endpoints {
+            match self.sessions_at(&endpoint) {
+                Ok(mut discovered) => {
+                    reached = true;
+                    sessions.append(&mut discovered);
+                }
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if !reached {
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+        }
+        Ok(sessions)
+    }
+
+    fn route_target(&self, target: &SessionBinding) -> Result<(Endpoint, u64), TerminalError> {
+        let native = target.session_id().native();
+        if let Some((instance, window_id)) = split_native_id(native) {
+            let endpoint = self
+                .endpoints
+                .endpoints()
+                .into_iter()
+                .find(|endpoint| endpoint.instance() == Some(instance))
+                .ok_or_else(|| TerminalError::TargetMissing(target.clone()))?;
+            qol_runtime::probe!(
+                "TERMINAL_SESSIONS",
+                "backend={} operation=route instance={} outcome=resolved",
+                backend_id(),
+                instance
+            );
+            return Ok((endpoint, window_id));
+        }
+        let window_id = native
+            .parse()
+            .map_err(|_| TerminalError::TargetMissing(target.clone()))?;
+        let endpoint = self.endpoints.current();
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "backend={} operation=route instance={} outcome=legacy",
+            backend_id(),
+            endpoint.instance().unwrap_or("legacy")
+        );
+        Ok((endpoint, window_id))
     }
 
     fn ensure_capability(
@@ -73,8 +148,9 @@ impl KittyBackend {
         capability: crate::SessionCapabilities,
         label: &'static str,
     ) -> Result<(), TerminalError> {
+        let (endpoint, _) = self.route_target(target)?;
         let session = self
-            .sessions()?
+            .sessions_at(&endpoint)?
             .into_iter()
             .find(|session| session.id == *target.session_id())
             .ok_or_else(|| TerminalError::TargetMissing(target.clone()))?;
@@ -95,13 +171,15 @@ impl KittyBackend {
     }
 
     fn read_screen_command(&self, target: &SessionBinding) -> Result<String, TerminalError> {
-        self.run(
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
             "read screen",
             &strings([
                 "@",
                 "get-text",
                 "--match",
-                &matcher(target),
+                &matcher(window_id),
                 "--extent",
                 "screen",
             ]),
@@ -112,7 +190,10 @@ impl KittyBackend {
 
 impl Default for KittyBackend {
     fn default() -> Self {
-        Self::with_runner(Arc::new(SystemCommandRunner::default()))
+        Self {
+            runner: Arc::new(SystemCommandRunner::default()),
+            endpoints: Arc::new(SystemEndpointSource),
+        }
     }
 }
 
@@ -131,12 +212,16 @@ impl TerminalBackend for KittyBackend {
     }
 
     fn current_session_id(&self) -> Option<SessionId> {
-        current_session_id(std::env::var("KITTY_WINDOW_ID").ok().as_deref())
+        current_session_id(
+            std::env::var("KITTY_WINDOW_ID").ok().as_deref(),
+            &self.endpoints.current(),
+        )
     }
 }
 
-fn current_session_id(native: Option<&str>) -> Option<SessionId> {
-    SessionId::new(backend_id().clone(), native?).ok()
+fn current_session_id(native: Option<&str>, endpoint: &Endpoint) -> Option<SessionId> {
+    let window_id = native?.parse().ok()?;
+    SessionId::new(backend_id().clone(), endpoint.native_id(window_id)).ok()
 }
 
 impl SessionInventory for KittyBackend {
@@ -159,9 +244,11 @@ impl ScreenReader for KittyBackend {
 impl SessionFocus for KittyBackend {
     fn focus(&self, target: &SessionBinding) -> Result<(), TerminalError> {
         self.ensure_capability(target, crate::SessionCapabilities::FOCUS, "focus")?;
-        self.run(
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
             "focus session",
-            &strings(["@", "focus-window", "--match", &matcher(target)]),
+            &strings(["@", "focus-window", "--match", &matcher(window_id)]),
             None,
         )
         .map(drop)
@@ -179,28 +266,32 @@ impl TextInput for KittyBackend {
         if text.is_empty() {
             return Ok(());
         }
+        let (endpoint, window_id) = self.route_target(target)?;
         if mode == DeliveryMode::Submit {
-            self.run(
+            self.run_at(
+                &endpoint,
                 "insert text",
                 &strings([
                     "@",
                     "send-text",
                     "--match",
-                    &matcher(target),
+                    &matcher(window_id),
                     "--stdin",
                     "--bracketed-paste=auto",
                 ]),
                 Some(text),
             )?;
             self.ensure_capability(target, crate::SessionCapabilities::TEXT_INPUT, "text input")?;
+            let (endpoint, window_id) = self.route_target(target)?;
             return self
-                .run(
+                .run_at(
+                    &endpoint,
                     "submit text",
                     &strings([
                         "@",
                         "send-text",
                         "--match",
-                        &matcher(target),
+                        &matcher(window_id),
                         "--stdin",
                         "--bracketed-paste=disable",
                     ]),
@@ -208,13 +299,14 @@ impl TextInput for KittyBackend {
                 )
                 .map(drop);
         }
-        self.run(
+        self.run_at(
+            &endpoint,
             "insert text",
             &strings([
                 "@",
                 "send-text",
                 "--match",
-                &matcher(target),
+                &matcher(window_id),
                 "--stdin",
                 "--bracketed-paste=auto",
             ]),
@@ -224,8 +316,14 @@ impl TextInput for KittyBackend {
     }
 }
 
-fn matcher(target: &SessionBinding) -> String {
-    format!("id:{}", target.session_id().native())
+fn split_native_id(native: &str) -> Option<(&str, u64)> {
+    let (instance, window_id) = native.rsplit_once('.')?;
+    let window_id = window_id.parse().ok()?;
+    (!instance.is_empty()).then_some((instance, window_id))
+}
+
+fn matcher(window_id: u64) -> String {
+    format!("id:{window_id}")
 }
 
 fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
@@ -233,7 +331,12 @@ fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
 }
 
 trait CommandRunner: Send + Sync {
-    fn run(&self, args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput>;
+    fn run(
+        &self,
+        endpoint: &Endpoint,
+        args: &[String],
+        stdin: Option<&str>,
+    ) -> std::io::Result<CommandOutput>;
 }
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -253,18 +356,30 @@ impl Default for SystemCommandRunner {
 }
 
 impl CommandRunner for SystemCommandRunner {
-    fn run(&self, args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput> {
-        if let Some(output) = socket::try_run(args, stdin) {
-            return Ok(output);
+    fn run(
+        &self,
+        endpoint: &Endpoint,
+        args: &[String],
+        stdin: Option<&str>,
+    ) -> std::io::Result<CommandOutput> {
+        if let Some(path) = endpoint.socket_path() {
+            if let Some(output) = socket::try_run(path, args, stdin) {
+                return Ok(output);
+            }
         }
-        self.spawn_kitten(args, stdin)
+        self.spawn_kitten(endpoint, args, stdin)
     }
 }
 
 impl SystemCommandRunner {
-    fn spawn_kitten(&self, args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput> {
+    fn spawn_kitten(
+        &self,
+        endpoint: &Endpoint,
+        args: &[String],
+        stdin: Option<&str>,
+    ) -> std::io::Result<CommandOutput> {
         let mut command = Command::new(&self.program);
-        command.args(args);
+        command.args(routed_args(endpoint, args));
         if stdin.is_some() {
             command.stdin(Stdio::piped());
         }
@@ -280,6 +395,22 @@ impl SystemCommandRunner {
         }
         wait_with_timeout(&mut child, self.timeout)
     }
+}
+
+fn routed_args(endpoint: &Endpoint, args: &[String]) -> Vec<String> {
+    let Some(listen_on) = endpoint.listen_on() else {
+        return args.to_vec();
+    };
+    let Some((marker, rest)) = args.split_first() else {
+        return Vec::new();
+    };
+    if marker != "@" {
+        return args.to_vec();
+    }
+    let mut routed = Vec::with_capacity(args.len() + 2);
+    routed.extend(strings(["@", "--to", listen_on]));
+    routed.extend_from_slice(rest);
+    routed
 }
 
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::io::Result<CommandOutput> {
@@ -342,24 +473,34 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use super::endpoint::{Endpoint, EndpointSource};
     use super::{
-        current_session_id, wait_with_timeout, CommandOutput, CommandRunner, KittyBackend,
-        SystemCommandRunner,
+        current_session_id, routed_args, strings, wait_with_timeout, CommandOutput, CommandRunner,
+        KittyBackend, SystemCommandRunner,
     };
     use crate::{
         kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts,
-        SessionId, TerminalBackend, TerminalError, TerminalSessionService, TerminalSnapshot,
-        TextInput,
+        SessionFocus, SessionId, SessionInventory, TerminalBackend, TerminalError,
+        TerminalSessionService, TerminalSnapshot, TextInput,
     };
+
+    type RecordedCall = (Option<String>, Vec<String>, Option<String>);
 
     #[derive(Default)]
     struct FakeRunner {
-        calls: Mutex<Vec<(Vec<String>, Option<String>)>>,
-        outputs: Mutex<VecDeque<CommandOutput>>,
+        calls: Mutex<Vec<RecordedCall>>,
+        outputs: Mutex<VecDeque<std::io::Result<CommandOutput>>>,
     }
 
     impl FakeRunner {
         fn with_outputs(outputs: Vec<CommandOutput>) -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                outputs: Mutex::new(outputs.into_iter().map(Ok).collect()),
+            })
+        }
+
+        fn with_results(outputs: Vec<std::io::Result<CommandOutput>>) -> Arc<Self> {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 outputs: Mutex::new(outputs.into()),
@@ -368,23 +509,146 @@ mod tests {
     }
 
     impl CommandRunner for FakeRunner {
-        fn run(&self, args: &[String], stdin: Option<&str>) -> std::io::Result<CommandOutput> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((args.to_vec(), stdin.map(str::to_owned)));
-            Ok(self.outputs.lock().unwrap().pop_front().unwrap())
+        fn run(
+            &self,
+            endpoint: &Endpoint,
+            args: &[String],
+            stdin: Option<&str>,
+        ) -> std::io::Result<CommandOutput> {
+            self.calls.lock().unwrap().push((
+                endpoint.instance().map(str::to_owned),
+                args.to_vec(),
+                stdin.map(str::to_owned),
+            ));
+            self.outputs.lock().unwrap().pop_front().unwrap()
+        }
+    }
+
+    struct FixedEndpointSource {
+        endpoints: Vec<Endpoint>,
+        current: Endpoint,
+    }
+
+    impl FixedEndpointSource {
+        fn new(endpoints: Vec<Endpoint>) -> Arc<Self> {
+            Arc::new(Self {
+                current: endpoints[0].clone(),
+                endpoints,
+            })
+        }
+    }
+
+    impl EndpointSource for FixedEndpointSource {
+        fn endpoints(&self) -> Vec<Endpoint> {
+            self.endpoints.clone()
+        }
+
+        fn current(&self) -> Endpoint {
+            self.current.clone()
         }
     }
 
     #[test]
     fn current_session_identity_uses_the_backend_contract() {
+        let endpoint = Endpoint::legacy();
         assert_eq!(
-            current_session_id(Some("42")).unwrap(),
+            current_session_id(Some("42"), &endpoint).unwrap(),
             SessionId::new(backend_id().clone(), "42").unwrap()
         );
-        assert!(current_session_id(None).is_none());
-        assert!(current_session_id(Some("bad:id")).is_none());
+        assert!(current_session_id(None, &endpoint).is_none());
+        assert!(current_session_id(Some("bad:id"), &endpoint).is_none());
+    }
+
+    #[test]
+    fn current_session_identity_includes_the_terminal_instance() {
+        let endpoint = Endpoint::fixture("k1_2", "unix:/tmp/kitty-1");
+
+        assert_eq!(
+            current_session_id(Some("42"), &endpoint).unwrap(),
+            SessionId::new(backend_id().clone(), "k1_2.42").unwrap()
+        );
+    }
+
+    #[test]
+    fn discovery_keeps_equal_window_ids_from_distinct_instances() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 900)), success(ls(42, 901))]);
+        let endpoints = FixedEndpointSource::new(vec![
+            Endpoint::fixture("k1_1", "unix:/tmp/kitty-1"),
+            Endpoint::fixture("k1_2", "unix:/tmp/kitty-2"),
+        ]);
+        let backend = KittyBackend::with_parts(runner.clone(), endpoints);
+
+        let sessions = backend.discover().unwrap();
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].id.native(), "k1_1.42");
+        assert_eq!(sessions[1].id.native(), "k1_2.42");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].0.as_deref(), Some("k1_1"));
+        assert_eq!(calls[1].0.as_deref(), Some("k1_2"));
+    }
+
+    #[test]
+    fn unreachable_sibling_does_not_hide_reachable_sessions() {
+        let runner = FakeRunner::with_results(vec![
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "stale",
+            )),
+            Ok(success(ls(42, 901))),
+        ]);
+        let endpoints = FixedEndpointSource::new(vec![
+            Endpoint::fixture("k1_1", "unix:/tmp/kitty-1"),
+            Endpoint::fixture("k1_2", "unix:/tmp/kitty-2"),
+        ]);
+        let backend = KittyBackend::with_parts(runner, endpoints);
+
+        let sessions = backend.discover().unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id.native(), "k1_2.42");
+    }
+
+    #[test]
+    fn target_operations_route_to_the_encoded_instance() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 901)), success(String::new())]);
+        let endpoints = FixedEndpointSource::new(vec![
+            Endpoint::fixture("k1_1", "unix:/tmp/kitty-1"),
+            Endpoint::fixture("k1_2", "unix:/tmp/kitty-2"),
+        ]);
+        let backend = KittyBackend::with_parts(runner.clone(), endpoints);
+        let target = SessionBinding::new(
+            SessionId::new(backend_id().clone(), "k1_2.42").unwrap(),
+            901,
+        )
+        .unwrap();
+
+        backend.focus(&target).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.0.as_deref() == Some("k1_2")));
+        assert_eq!(calls[1].1, ["@", "focus-window", "--match", "id:42"]);
+    }
+
+    #[test]
+    fn explicit_endpoints_add_kitten_to_routing_without_changing_the_command() {
+        let endpoint = Endpoint::fixture("k1_2", "unix:/tmp/kitty-2");
+
+        assert_eq!(
+            routed_args(
+                &endpoint,
+                &strings(["@", "focus-window", "--match", "id:42"])
+            ),
+            [
+                "@",
+                "--to",
+                "unix:/tmp/kitty-2",
+                "focus-window",
+                "--match",
+                "id:42"
+            ]
+        );
     }
 
     #[test]
@@ -404,9 +668,9 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 4);
-        assert_eq!(calls[0].0, ["@", "ls"]);
+        assert_eq!(calls[0].1, ["@", "ls"]);
         assert_eq!(
-            calls[1].0,
+            calls[1].1,
             [
                 "@",
                 "send-text",
@@ -416,10 +680,10 @@ mod tests {
                 "--bracketed-paste=auto"
             ]
         );
-        assert_eq!(calls[1].1.as_deref(), Some("cargo test"));
-        assert_eq!(calls[2].0, ["@", "ls"]);
+        assert_eq!(calls[1].2.as_deref(), Some("cargo test"));
+        assert_eq!(calls[2].1, ["@", "ls"]);
         assert_eq!(
-            calls[3].0,
+            calls[3].1,
             [
                 "@",
                 "send-text",
@@ -429,7 +693,7 @@ mod tests {
                 "--bracketed-paste=disable"
             ]
         );
-        assert_eq!(calls[3].1.as_deref(), Some("\r"));
+        assert_eq!(calls[3].2.as_deref(), Some("\r"));
     }
 
     #[test]
@@ -449,8 +713,8 @@ mod tests {
         assert!(error.to_string().contains("changed process"));
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
-        assert_eq!(calls[2].0, ["@", "ls"]);
-        assert_eq!(calls[1].1.as_deref(), Some("cargo test"));
+        assert_eq!(calls[2].1, ["@", "ls"]);
+        assert_eq!(calls[1].2.as_deref(), Some("cargo test"));
     }
 
     #[test]
@@ -466,7 +730,7 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(
-            calls[1].0,
+            calls[1].1,
             [
                 "@",
                 "send-text",
@@ -476,7 +740,7 @@ mod tests {
                 "--bracketed-paste=auto"
             ]
         );
-        assert_eq!(calls[1].1.as_deref(), Some("cargo test"));
+        assert_eq!(calls[1].2.as_deref(), Some("cargo test"));
     }
 
     #[test]
@@ -556,9 +820,9 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].0, ["@", "ls"]);
+        assert_eq!(calls[0].1, ["@", "ls"]);
         assert_eq!(
-            calls[1].0,
+            calls[1].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
         );
     }
@@ -622,8 +886,9 @@ mod tests {
         let started = std::time::Instant::now();
         let error = runner
             .run(
+                &Endpoint::legacy(),
                 &["-c".to_owned(), "sleep 60".to_owned()],
-                Some(&"x".repeat(100_000)),
+                Some("x".repeat(100_000).as_str()),
             )
             .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
