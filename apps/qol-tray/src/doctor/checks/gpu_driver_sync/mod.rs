@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::time::Duration;
 
 mod platform;
+mod trace;
 
 const ID: &str = "gpu_driver_sync";
 const POLL_INTERVAL: Duration = Duration::from_secs(600);
@@ -25,6 +26,7 @@ impl DoctorCheck for GpuDriverSyncCheck {
             platform::on_disk_version().as_deref(),
             armed,
             pending.as_deref().unwrap_or(&[]),
+            platform::guard_supported(),
         )
     }
 }
@@ -49,19 +51,24 @@ pub fn spawn_watch() {
                 }
             } else if platform::guard_armed() {
                 let pending = platform::pending_nvidia_updates();
-                if !pending.is_empty() {
-                    let mut names: Vec<&str> = pending.iter().map(|u| u.name.as_str()).collect();
-                    names.sort_unstable();
-                    names.dedup();
-                    let key = names.join(" ");
+                if pending.is_empty() {
+                    if notified_held.take().is_some() {
+                        trace::notify(&[], "cleared", None);
+                    }
+                } else {
+                    let key = held_update_key(&pending);
                     if notified_held.as_ref() != Some(&key) {
-                        let packages: Vec<String> = names.into_iter().map(str::to_string).collect();
+                        let packages: Vec<String> =
+                            pending.iter().map(|update| update.name.clone()).collect();
                         log::warn!(
                             "gpu_driver_sync: held NVIDIA driver update pending: {}",
                             packages.join(", ")
                         );
                         platform::notify_held_updates(&packages);
+                        trace::notify(&packages, "notify", None);
                         notified_held = Some(key);
+                    } else {
+                        trace::notify(&[], "deduped", None);
                     }
                 }
             }
@@ -76,11 +83,21 @@ fn mismatch() -> Option<(String, String)> {
     (loaded != on_disk).then_some((loaded, on_disk))
 }
 
+fn held_update_key(pending: &[platform::PendingUpdate]) -> String {
+    let mut entries: Vec<String> = pending
+        .iter()
+        .map(|update| format!("{}={}", update.name, update.new_version))
+        .collect();
+    entries.sort_unstable();
+    entries.join(" ")
+}
+
 fn diagnosis(
     loaded: Option<&str>,
     on_disk: Option<&str>,
     armed: bool,
     pending: &[platform::PendingUpdate],
+    apt_guard_supported: bool,
 ) -> CheckReport {
     let Some(loaded) = loaded else {
         return CheckReport::ok("no NVIDIA kernel module loaded");
@@ -99,19 +116,25 @@ fn diagnosis(
             ID,
             Vec::new(),
         );
-        report.advice.push(
-            "prevent mid-session driver swaps by holding the NVIDIA packages \
-             (Debian/Ubuntu: sudo apt-mark hold '*nvidia*')"
-                .to_string(),
-        );
+        if apt_guard_supported {
+            report.advice.push(
+                "prevent mid-session driver swaps by holding the NVIDIA driver packages \
+                 (Debian/Ubuntu: sudo apt-mark hold 'nvidia-driver-*' 'nvidia-kernel-*' \
+                 'nvidia-dkms-*' 'nvidia-headless-*')"
+                    .to_string(),
+            );
+        }
         return report;
     }
     if !armed {
+        if !apt_guard_supported {
+            return CheckReport::ok(format!("NVIDIA {loaded} loaded matches the on-disk module"));
+        }
         let mut report = CheckReport {
             summary: format!("NVIDIA {loaded} loaded matches the on-disk module"),
             issues: Vec::new(),
             advice: vec![
-                "the qol guard can hold the NVIDIA packages so a mid-session apt update \
+                "the qol guard can hold the NVIDIA driver packages so a mid-session apt update \
                  cannot swap the on-disk module under the running kernel"
                     .to_string(),
             ],
@@ -149,7 +172,7 @@ fn diagnosis(
         vec![FixAction::ApplyHeldNvidiaDriverUpdate { packages: names }],
     );
     report.advice.push(
-        "apply the held update with `qol-tray doctor fix --id gpu_driver_sync \
+        "apply the held update with `qol-tray-doctor fix --id gpu_driver_sync \
          --apply-manual-fixes`, then reboot to load the new module"
             .to_string(),
     );
@@ -189,7 +212,7 @@ mod tests {
             (Some("580.159.02"), Some("580.173.00"), Some(Severity::Warn)),
         ];
         for (loaded, on_disk, expected) in cases {
-            let report = diagnosis(loaded, on_disk, false, &[]);
+            let report = diagnosis(loaded, on_disk, false, &[], true);
             assert_eq!(
                 report.issues.first().map(|issue| issue.severity),
                 expected,
@@ -200,7 +223,7 @@ mod tests {
 
     #[test]
     fn mismatch_report_names_both_versions_and_the_reboot_path() {
-        let report = diagnosis(Some("580.159.02"), Some("580.173.00"), false, &[]);
+        let report = diagnosis(Some("580.159.02"), Some("580.173.00"), false, &[], true);
         assert!(report.summary.contains("580.159.02"), "{}", report.summary);
         assert!(report.summary.contains("580.173.00"), "{}", report.summary);
         assert!(report.summary.contains("reboot"), "{}", report.summary);
@@ -213,8 +236,18 @@ mod tests {
     }
 
     #[test]
+    fn mismatch_report_skips_apt_advice_without_apt() {
+        let report = diagnosis(Some("580.159.02"), Some("580.173.00"), false, &[], false);
+        assert!(
+            report.advice.iter().all(|line| !line.contains("apt-mark")),
+            "advice: {:?}",
+            report.advice
+        );
+    }
+
+    #[test]
     fn matched_unarmed_state_offers_the_hold_fix() {
-        let report = diagnosis(Some("580.159.02"), Some("580.159.02"), false, &[]);
+        let report = diagnosis(Some("580.159.02"), Some("580.159.02"), false, &[], true);
         assert!(report.issues.is_empty(), "guard offer is not a warning");
         assert_eq!(
             report.fixes,
@@ -224,8 +257,18 @@ mod tests {
     }
 
     #[test]
+    fn matched_unarmed_state_without_apt_offers_no_fix() {
+        let report = diagnosis(Some("580.159.02"), Some("580.159.02"), false, &[], false);
+        assert!(report.issues.is_empty());
+        assert!(
+            report.fixes.is_empty(),
+            "non-APT Linux gets no unusable fix"
+        );
+    }
+
+    #[test]
     fn matched_armed_state_offers_unhold_when_nothing_pending() {
-        let report = diagnosis(Some("580.159.02"), Some("580.159.02"), true, &[]);
+        let report = diagnosis(Some("580.159.02"), Some("580.159.02"), true, &[], true);
         assert!(report.issues.is_empty());
         assert!(report.summary.contains("held"), "{}", report.summary);
         assert_eq!(
@@ -238,7 +281,7 @@ mod tests {
     #[test]
     fn matched_armed_state_warns_and_names_pending_updates() {
         let pending = [update("nvidia-driver-560", "560.35.03-0ubuntu1")];
-        let report = diagnosis(Some("560.35.02"), Some("560.35.02"), true, &pending);
+        let report = diagnosis(Some("560.35.02"), Some("560.35.02"), true, &pending, true);
         assert_eq!(
             report.issues.first().map(|issue| issue.severity),
             Some(Severity::Warn)
@@ -264,27 +307,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn held_update_key_is_version_aware_sorted_and_deduped() {
+        let pending = [
+            update("nvidia-driver-560", "560.35.03"),
+            update("nvidia-kernel-560", "560.35.03"),
+            update("nvidia-driver-560", "560.35.02"),
+        ];
+        let key = held_update_key(&pending);
+        assert_eq!(
+            key,
+            "nvidia-driver-560=560.35.02 nvidia-driver-560=560.35.03 \
+             nvidia-kernel-560=560.35.03"
+        );
+        assert_ne!(
+            held_update_key(&[update("nvidia-driver", "560.35.02")]),
+            key
+        );
+        assert!(held_update_key(&[]).is_empty());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn parse_upgradable_skips_header_filters_and_extracts_versions() {
+        let patterns = vec![
+            "nvidia-driver".to_string(),
+            "nvidia-driver-*".to_string(),
+            "nvidia-kernel-*".to_string(),
+            "nvidia-dkms-*".to_string(),
+            "nvidia-headless-*".to_string(),
+        ];
         let text = "Listing... Done\n\
                     nvidia-driver-560/jammy-updates 560.35.03-0ubuntu1 amd64 [upgradable from: 560.35.02]\n\
                     firefox/jammy-updates 130.0-1 amd64 [upgradable from: 129.0]\n\
                     nvidia-utils-560/jammy-updates 560.35.03-0ubuntu1 amd64 [upgradable from: 560.35.02]\n";
-        let parsed = platform::parse_upgradable(text, "*nvidia*");
+        let parsed = platform::parse_upgradable(text, &patterns);
         let names: Vec<&str> = parsed.iter().map(|u| u.name.as_str()).collect();
-        assert_eq!(names, ["nvidia-driver-560", "nvidia-utils-560"]);
+        assert_eq!(names, ["nvidia-driver-560"]);
         assert_eq!(parsed[0].new_version, "560.35.03-0ubuntu1");
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn parse_upgradable_tolerates_malformed_lines() {
+        let patterns = vec!["nvidia-driver".to_string(), "nvidia-driver-*".to_string()];
         let text = "Listing...\n\
                     broken-line-without-slash\n\
                     nvidia-driver/jammy-updates 560.35.03 amd64\n\
                     \n";
-        let parsed = platform::parse_upgradable(text, "*nvidia*");
+        let parsed = platform::parse_upgradable(text, &patterns);
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "nvidia-driver");
     }

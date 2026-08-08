@@ -376,6 +376,16 @@ impl TraceRunner {
                 let reset = if color.is_empty() { "" } else { COLOR_RESET };
                 format!("{color}{}: {}{reset}", raw.tag, raw.msg)
             }
+            tag if tag.starts_with("GPU_GUARD_") => {
+                let color =
+                    if raw.msg.contains("outcome=error") || raw.msg.contains("outcome=reject") {
+                        COLOR_FAIL
+                    } else {
+                        ""
+                    };
+                let reset = if color.is_empty() { "" } else { COLOR_RESET };
+                format!("{color}{}: {}{reset}", raw.tag, raw.msg)
+            }
             tag if tag.starts_with("WORLD_") => {
                 let is_bad = raw.msg.contains("outcome=reject")
                     || raw.msg.contains("outcome=skip")
@@ -1434,6 +1444,7 @@ impl TraceRunner {
                 .map(ToString::to_string)
                 .unwrap_or_else(|| self.process_name(&raw.pid)),
             tag if tag.starts_with("PROFILE_") => "profile".to_string(),
+            tag if tag.starts_with("GPU_GUARD_") => "gpu-driver-sync".to_string(),
             tag if tag.starts_with("WORLD_") => "world".to_string(),
             tag if tag.starts_with("WINACT_") => "window-actions".to_string(),
             _ => self.process_name(&raw.pid),

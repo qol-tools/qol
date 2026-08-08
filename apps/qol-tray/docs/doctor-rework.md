@@ -187,7 +187,7 @@ impl FixPolicy {
 `auto_fix_startup()` uses `FixPolicy::startup()` → DE fixes still applied silently
 (mission: take back the host surface silently + reversibly). `Destructive` has no
 constructor that enables it; `ManualOnly` is enabled only via
-`qol-tray doctor fix --id <CHECK_ID> --apply-manual-fixes` (requires `--id` so
+`qol-tray-doctor fix --id <CHECK_ID> --apply-manual-fixes` (requires `--id` so
 manual repairs always name their check).
 
 **No fix-ordering field anywhere.** `apply_fixes()` already applies fixes in

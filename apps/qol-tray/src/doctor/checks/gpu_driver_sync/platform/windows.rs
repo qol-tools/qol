@@ -15,6 +15,10 @@ pub(crate) fn on_disk_version() -> Option<String> {
 
 pub(crate) fn notify_mismatch(_loaded: &str, _on_disk: &str) {}
 
+pub(crate) fn guard_supported() -> bool {
+    false
+}
+
 pub(crate) fn guard_armed() -> bool {
     false
 }
