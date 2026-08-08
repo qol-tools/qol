@@ -195,6 +195,9 @@ fn send(args: &[OsString]) -> Result<()> {
         store.record(&binding, &text);
     }
     println!("delivered {} to {}", mode_label(mode), binding);
+    if mode == DeliveryMode::Insert {
+        println!("WARNING: the text sits unsubmitted in the target's input; nothing runs until Enter is pressed there. Pass --submit to deliver and submit in one step.");
+    }
     Ok(())
 }
 
