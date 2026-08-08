@@ -24,4 +24,14 @@ subcommands or flags, so it cannot drift as the CLI grows.
 Two durable conventions worth knowing:
 
 - Commands are quiet by default; `-v`/`--verbose` surfaces child-command output.
-- `make` remains authoritative for anything `qol` explicitly defers; `qol` shadows the dev loop, not the release machinery.
+- Version bumps, tags, and releases are owned by `.github/workflows/plugin-version.yml` and `.github/workflows/qol-tray-release.yml`; `qol` never touches the release machinery.
+
+Three operations stay direct invocations, not `qol` commands:
+
+```bash
+bash apps/qol-tray/scripts/generate-icons.sh
+cd apps/qol-tray/diagram && npm install && npm run build
+cd plugins/bluetooth && node tools/smoke-daemon.mjs
+```
+
+The bluetooth smoke test drives a locally built plugin; build it first with `qol build bluetooth`.

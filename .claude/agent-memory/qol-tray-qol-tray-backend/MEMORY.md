@@ -11,7 +11,7 @@
 
 ## 2026-06-04
 - When adding a new `FixAction` variant gated behind `#[cfg(feature = "dev")]`, also gate the matching arm in `doctor::mod::log_applied` — exhaustiveness check fires under `--features dev`.
-- `make test` in `apps/qol-tray` runs without `--features dev`, so dev-gated tests are silently filtered; verify them separately via `cargo test -p qol-tray --features dev`.
+- `qol check` runs without `--features dev`, so dev-gated tests are silently filtered; verify them separately via `cargo test -p qol-tray --features dev`.
 - `cargo test -p qol-tray <filter>` (without `--lib`) runs integration bins first and reports "0 passed" with the lib filtered out; use `--lib` to actually see lib-tests results.
 
 ## 2026-06-05
@@ -19,7 +19,7 @@
 - `auto_fix_startup` runs pre-tokio before plugin load, so registry-mutating fixes (like `RelocateDevLink`) take effect on first plugin resolution with no daemon restart needed.
 
 ## 2026-06-07
-- `make build` in apps/qol-tray invokes `lint` (clippy `--all-targets -D warnings`) - test-only code (e.g. inside `#[test]` fns) blocks the build, not just CI.
+- `qol build` runs cargo build with declared features and no lint gate; `qol check` clippys affected crates with `--all-targets -D warnings`, so test-only code (e.g. inside `#[test]` fns) must stay lint-clean, not just CI.
 - HashMap-backed JSON saves (e.g. build-fingerprints.json) re-emit keys in nondeterministic order; verify "no content change" with `jq -S` semantic diff, not raw `diff`.
 - CI clippy args come from `.github/scripts/affected_crates.py` (`--workspace --exclude keyremap --all-targets` on Ubuntu); local repro needs `--all-targets`, plain `cargo clippy -p X` misses it.
 

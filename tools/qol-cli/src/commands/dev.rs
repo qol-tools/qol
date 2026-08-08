@@ -259,15 +259,9 @@ fn boot_preflight(
         );
     }
     if reload {
-        dev_step_label(
-            "reload",
-            StepKind::Info,
-            "self-reload, hook skipped",
-            verbose,
-        );
+        dev_step_label("reload", StepKind::Info, "self-reload", verbose);
         return Ok(buildable);
     }
-    run_dev_hook(root, verbose)?;
     Ok(buildable)
 }
 
@@ -726,20 +720,6 @@ fn register_dev_links(plugins: &[BuildablePlugin], verbose: bool) {
             Err(error) => eprintln!("qol dev: failed to link {display}: {error:#}"),
         }
     }
-}
-
-fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {
-    let hook = root.join(".qol-tray-dev-hooks");
-    if !hook.is_file() {
-        return Ok(());
-    }
-    run_dev_step(
-        "hook",
-        StepKind::Pending,
-        ".qol-tray-dev-hooks",
-        Command::new(hook).current_dir(root),
-        verbose,
-    )
 }
 
 fn run_dev_step(

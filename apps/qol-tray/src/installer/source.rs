@@ -132,7 +132,7 @@ fn ensure_existing_source(path: PathBuf) -> Result<PathBuf> {
 }
 
 fn build_release_binary(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
-    let manifest_path = repo_root.join("Cargo.toml");
+    let manifest_path = repo_root.join("apps").join("qol-tray").join("Cargo.toml");
     if !manifest_path.is_file() {
         return Err(anyhow!(
             "Cargo.toml not found at {}",

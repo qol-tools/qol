@@ -163,7 +163,7 @@ fn app() -> HeadlessApp {
         ))
         .command(command(
             "install",
-            "Install built qol applications and plugins.",
+            "Install built qol applications and plugins. --dev builds with the dev feature and installs a dev-mode runtime.",
             "qol install",
             "Use -v to show child command output.",
             "Installation progress on stdout; diagnostics on stderr.",
