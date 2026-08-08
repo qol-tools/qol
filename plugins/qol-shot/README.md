@@ -1,21 +1,18 @@
+<div align="center">
+
 # QoL Shot
 
-[![tests](https://github.com/qol-tools/qol-shot/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-shot/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/qol-shot/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-shot/actions/workflows/lint.yml)
+A [QoL Tray](../../apps/qol-tray) plugin for screenshots and screen recordings.
 
-A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for screenshots and screen recordings.
-
-## Commands
-
-```sh
-qol-shot record
-qol-shot screenshot
-qol-shot settings
-```
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+
+## About
+
+Binds `qol-shot screenshot` and `qol-shot record` to hotkeys, and opens its own panel with `qol-shot settings`.
 
 ## License
 

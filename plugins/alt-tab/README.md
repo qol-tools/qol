@@ -1,23 +1,18 @@
-# Alt Tab Plugin for QoL Tray
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/lint.yml)
+# Alt Tab
 
-A window switcher with live previews for [QoL Tray](https://github.com/qol-tools/qol-tray).
+A window switcher with live previews for [QoL Tray](../../apps/qol-tray).
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
 
-## Diagnostics & Testing
+## About
 
-To tail logs, verify multi-monitor placement, check opacity transitions, and detect any window system state divergences in real time:
-
-```bash
-make trace
-```
-
-This starts the trace aggregator tool, monitoring `/tmp/qol-altmon.log` and automatically validating window visibility and monitor placement alignments.
+`make trace` starts the trace aggregator, which tails `/tmp/qol-altmon.log` and validates window visibility, opacity transitions, and multi-monitor placement in real time. Internals are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

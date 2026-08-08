@@ -1,13 +1,18 @@
-# CLI Sessions Plugin for QoL Tray
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-cli-sessions/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-cli-sessions/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-cli-sessions/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-cli-sessions/actions/workflows/lint.yml)
+# CLI Sessions
 
-An always-on-top overview of live CLI sessions (Claude Code, Codex, Pi, Kimi, any command) for [QoL Tray](https://github.com/qol-tools/qol-tray). Each kitty pane is colored by workflow state so you can see at a glance which session wants attention.
+An always-on-top overview of live CLI sessions for [QoL Tray](../../apps/qol-tray).
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+
+## About
+
+Tracks any command running in a terminal pane, Claude Code and Codex and Pi and Kimi included, and colors each pane by workflow state so you can see at a glance which session wants attention.
 
 ## License
 

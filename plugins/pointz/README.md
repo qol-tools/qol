@@ -1,13 +1,18 @@
-# PointZ
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-pointz/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-pointz/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-pointz/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-pointz/actions/workflows/lint.yml)
+# PointZerver
 
-A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for remote PC control from mobile devices.
+A [QoL Tray](../../apps/qol-tray) plugin for remote PC control from mobile devices.
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+
+## About
+
+The desktop half of PointZ: it advertises itself over UDP, accepts input commands from the mobile client, and injects them into the host session.
 
 ## License
 

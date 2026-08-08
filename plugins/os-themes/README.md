@@ -1,17 +1,18 @@
-# Plugin OS Themes
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-os-themes/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-os-themes/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-os-themes/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-os-themes/actions/workflows/lint.yml)
+# OS Themes
 
-A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for OS-wide theming — GTK, Qt, icons, cursors.
+A [QoL Tray](../../apps/qol-tray) plugin for OS-wide theming: GTK, Qt, icons, cursors.
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
 
 ## About
 
-OS theming on Linux has no unified API. This plugin aims to be the single place to manage it all from qol-tray.
+OS theming on Linux has no unified API. This plugin is the single place to manage it all from the tray.
 
 ## License
 
