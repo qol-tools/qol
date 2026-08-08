@@ -57,6 +57,20 @@ fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, Strin
     Ok(result.data)
 }
 
+pub(super) fn daemon_port(plugin_id: &str) -> Option<u16> {
+    let route = format!("/api/plugins/{plugin_id}/config-form");
+    let (status, body) = tray_http_session(&route).ok()?;
+    if status != 200 {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()?
+        .get("daemonPort")?
+        .as_u64()?
+        .try_into()
+        .ok()
+}
+
 pub(super) fn load_values(plugin_id: &str, path: &Path) -> serde_json::Value {
     if let Ok((200, body)) = tray_http(Method::Get, &tray_config_route(plugin_id), None) {
         if let Ok(values) = serde_json::from_str(&body) {

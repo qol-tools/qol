@@ -190,6 +190,7 @@ fn settings_panel_palette_derives_status_tones_from_system_roles() {
     assert_eq!(palette.transparent_rgba, 0x00000000);
     assert_eq!(palette.qr_dark, DARK_REFERENCE.black);
     assert_eq!(palette.qr_light, DARK_REFERENCE.white);
+    assert_eq!(palette.live_color_fallback, DARK_REFERENCE.white);
 }
 
 #[test]

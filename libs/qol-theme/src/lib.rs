@@ -850,6 +850,7 @@ pub struct SettingsPanelPalette {
     pub status_muted: u32,
     pub qr_dark: u32,
     pub qr_light: u32,
+    pub live_color_fallback: u32,
     pub transparent_rgba: u32,
 }
 
@@ -872,6 +873,7 @@ impl SettingsPanelPalette {
             status_muted: system.text_muted,
             qr_dark: DARK_TRAY_INTERNAL.config_qr_dark,
             qr_light: DARK_TRAY_INTERNAL.config_qr_light,
+            live_color_fallback: DARK_TRAY_INTERNAL.config_live_color_fallback,
             transparent_rgba: 0x00000000,
         }
     }
