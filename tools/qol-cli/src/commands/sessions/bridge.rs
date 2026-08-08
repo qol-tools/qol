@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process;
@@ -63,6 +63,17 @@ struct PendingBridgeLock {
 }
 
 impl Drop for PendingBridgeLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct BridgeOwner {
+    file: File,
+}
+
+impl Drop for BridgeOwner {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
@@ -233,6 +244,55 @@ impl PendingBridgeStore {
         Ok(checkpoints)
     }
 
+    pub(super) fn acquire_owner(&self, binding: &SessionBinding) -> Result<BridgeOwner> {
+        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
+        let path = self.owner_for(binding);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .context("failed to open bridge owner lock")?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                let owner = fs::read_to_string(&path).unwrap_or_default();
+                let owner = owner.trim();
+                let owner = if owner.is_empty() { "unknown" } else { owner };
+                qol_runtime::probe!(
+                    "CLI_SESSION_BRIDGE",
+                    "event=owner_conflict target_backend={}",
+                    binding.session_id().backend()
+                );
+                bail!(
+                    "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
+                    binding.token()
+                );
+            }
+            Err(TryLockError::Error(error)) => {
+                return Err(error).context("failed to lock the bridge owner file");
+            }
+        }
+        fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
+        Ok(BridgeOwner { file })
+    }
+
+    pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
+        let path = self.owner_for(binding);
+        let file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
+        match file.try_lock() {
+            Ok(()) => {
+                let _ = file.unlock();
+                None
+            }
+            Err(TryLockError::WouldBlock) => {
+                Some(fs::read_to_string(&path).ok()?.trim().to_owned())
+            }
+            Err(TryLockError::Error(_)) => None,
+        }
+    }
+
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = OpenOptions::new()
@@ -254,6 +314,10 @@ impl PendingBridgeStore {
 
     fn lock_for(&self, binding: &SessionBinding) -> PathBuf {
         self.file_for(binding).with_extension("lock")
+    }
+
+    fn owner_for(&self, binding: &SessionBinding) -> PathBuf {
+        self.file_for(binding).with_extension("owner")
     }
 }
 
@@ -306,6 +370,7 @@ pub(super) fn execute(
     acknowledge_marker: Option<&str>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
+    let _owner = pending.acquire_owner(binding)?;
     if terminals
         .is_current(binding)
         .context("failed to identify the current terminal session")?
@@ -330,7 +395,7 @@ pub(super) fn execute(
                 DELIVERY_VERIFY_WINDOW,
             )?;
         if alive {
-            return resume(terminals, interpreter, binding, timeout, pending, false);
+            return resume_owned(terminals, interpreter, binding, timeout, pending, false);
         }
         pending.acknowledge(binding, &round.completion_marker, false)?;
         qol_runtime::probe!(
@@ -440,6 +505,18 @@ pub(super) fn execute(
 }
 
 pub(super) fn resume(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    timeout: Duration,
+    pending: &PendingBridgeStore,
+    kickstart: bool,
+) -> Result<BridgeOutcome> {
+    let _owner = pending.acquire_owner(binding)?;
+    resume_owned(terminals, interpreter, binding, timeout, pending, kickstart)
+}
+
+fn resume_owned(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
@@ -776,6 +853,30 @@ mod tests {
 
         assert!(store.pending_round(&closed).unwrap().is_none());
         assert!(store.pending_round(&waiting).unwrap().is_some());
+    }
+
+    #[test]
+    fn only_one_process_can_own_a_session_bridge_at_a_time() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:9:900").unwrap();
+        let other = SessionBinding::from_str("v1:fake:9:901").unwrap();
+
+        assert!(store.owner_pid(&binding).is_none());
+        let owner = store.acquire_owner(&binding).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            Some(process::id().to_string()),
+            "a held bridge must report its owning process"
+        );
+        let conflict = store.acquire_owner(&binding).unwrap_err().to_string();
+        assert!(conflict.contains("already attached"), "{conflict}");
+        assert!(conflict.contains("qol sessions next"), "{conflict}");
+        store.acquire_owner(&other).unwrap();
+
+        drop(owner);
+        assert!(store.owner_pid(&binding).is_none());
+        store.acquire_owner(&binding).unwrap();
     }
 
     #[test]

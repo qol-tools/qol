@@ -377,6 +377,19 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let rows = rounds
         .iter()
         .map(|round| {
+            let attached = round
+                .session
+                .parse::<SessionBinding>()
+                .ok()
+                .and_then(|binding| pending.owner_pid(&binding));
+            if let Some(pid) = attached {
+                return serde_json::json!({
+                    "phase": "attached",
+                    "session": round.session,
+                    "command": "",
+                    "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
+                });
+            }
             if round.completed {
                 return serde_json::json!({
                     "phase": "review",
@@ -451,7 +464,10 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
                     row["session"].as_str().unwrap_or_default(),
                 );
                 println!("{}", row["instruction"].as_str().unwrap_or_default());
-                println!("run: {}", row["command"].as_str().unwrap_or_default());
+                let command = row["command"].as_str().unwrap_or_default();
+                if !command.is_empty() {
+                    println!("run: {command}");
+                }
             }
         }
     }
