@@ -24,4 +24,4 @@ subcommands or flags, so it cannot drift as the CLI grows.
 Two durable conventions worth knowing:
 
 - Commands are quiet by default; `-v`/`--verbose` surfaces child-command output.
-- `make` remains authoritative for anything `qol` explicitly defers (notably `make sync`); `qol` shadows the dev loop, not the release/sync machinery.
+- `make` remains authoritative for anything `qol` explicitly defers; `qol` shadows the dev loop, not the release machinery.
