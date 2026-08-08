@@ -7,7 +7,7 @@ const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-co
 import { spawnSync } from "node:child_process";
 import { Type } from "typebox";
 
-const WAIT_TIMEOUT_MS = 610_000;
+const BRIDGE_TIMEOUT_MS = 86_410_000;
 
 function run(args, timeoutMs) {
   const result = spawnSync("qol", ["sessions", ...args], {
@@ -38,39 +38,19 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _
     },
 "#;
 
-const EXECUTE_READ: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
-      const text = run(["read", params.session]);
-      return { content: [{ type: "text", text }], details: {} };
-    },
-"#;
-
-const EXECUTE_SEND: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
-      const args = ["send", params.session, params.text];
-      if (params.submit) args.push("--submit");
-      const text = run(args);
-      return { content: [{ type: "text", text }], details: {} };
-    },
-"#;
-
-const EXECUTE_WAIT: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
-      const args = ["wait", params.session];
+const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+      const args = ["bridge", params.session];
       if (params.timeout_ms != null) args.push("--timeout-ms", String(Math.round(params.timeout_ms)));
-      if (params.expect) args.push("--expect", params.expect);
-      const stdout = run(args, WAIT_TIMEOUT_MS);
+      args.push("--", params.task);
+      const stdout = run(args, BRIDGE_TIMEOUT_MS);
       const outcome = JSON.parse(stdout);
-      const text = outcome.settled
-        ? `settled after ${outcome.elapsed_ms}ms (${outcome.polls} polls)`
-        : `timeout after ${outcome.elapsed_ms}ms (${outcome.polls} polls); screen below`;
+      const text = outcome.completed
+        ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
+        : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
       return {
         content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
         details: { outcome },
       };
-    },
-"#;
-
-const EXECUTE_FOCUS: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
-      const text = run(["focus", params.session]);
-      return { content: [{ type: "text", text }], details: {} };
     },
 "#;
 
@@ -89,10 +69,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let parameters = typebox_object(&spec.input_schema)?;
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
-        "session_read_screen" => EXECUTE_READ,
-        "session_send_text" => EXECUTE_SEND,
-        "session_wait_output" => EXECUTE_WAIT,
-        "session_focus" => EXECUTE_FOCUS,
+        "session_bridge" => EXECUTE_BRIDGE,
         other => bail!("no pi adapter template for contract tool `{other}`"),
     };
     Ok(format!(
@@ -167,17 +144,20 @@ mod tests {
     }
 
     #[test]
-    fn pi_schema_maps_integer_and_optional() {
+    fn pi_schema_maps_the_bridge_task_and_optional_timeout() {
         let specs = tool_specs();
         let spec = specs
             .iter()
-            .find(|spec| spec.name == "session_wait_output")
-            .expect("wait_output in contract");
+            .find(|spec| spec.name == "session_bridge")
+            .expect("bridge in contract");
         let source = render_tool_block(spec).expect("render");
-        assert!(source.contains("timeout_ms: Type.Optional(Type.Integer({ description: \"Timeout in milliseconds, clamped 1000..600000 (default 30000)\" })),"));
-        assert!(source.contains("expect: Type.Optional(Type.String({ description: \"Substring to wait for in the screen; the echo of the last-sent text does not count\" })),"));
+        assert!(source.contains("timeout_ms: Type.Optional(Type.Integer({ description: \"Optional timeout in milliseconds, clamped 1000..86400000 (default 3600000)\" })),"));
         assert!(source.contains(
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
+        assert!(source.contains(
+            "task: Type.String({ description: \"Bounded implementation task to submit exactly once\" }),"
+        ));
+        assert!(source.contains("args.push(\"--\", params.task)"));
     }
 }

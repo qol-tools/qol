@@ -37,6 +37,10 @@ pub trait TerminalBackend:
     ) -> Result<String, TerminalError>;
 
     fn id(&self) -> &BackendId;
+
+    fn current_session_id(&self) -> Option<SessionId> {
+        None
+    }
 }
 
 pub struct TerminalSessionService {
@@ -136,6 +140,14 @@ impl TerminalSessionService {
             snapshot.age_ms()
         );
         Ok(screen)
+    }
+
+    pub fn is_current(&self, target: &SessionBinding) -> Result<bool, TerminalError> {
+        Ok(self
+            .backend_for(target.session_id())?
+            .current_session_id()
+            .as_ref()
+            == Some(target.session_id()))
     }
 }
 

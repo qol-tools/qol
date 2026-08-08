@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 pub use parse::{parse_ls, KittyLs};
 
 use crate::{
-    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus,
+    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus, SessionId,
     SessionInventory, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
 };
 
@@ -129,6 +129,14 @@ impl TerminalBackend for KittyBackend {
         snapshot.validate_screen_target(target)?;
         self.read_screen_command(target)
     }
+
+    fn current_session_id(&self) -> Option<SessionId> {
+        current_session_id(std::env::var("KITTY_WINDOW_ID").ok().as_deref())
+    }
+}
+
+fn current_session_id(native: Option<&str>) -> Option<SessionId> {
+    SessionId::new(backend_id().clone(), native?).ok()
 }
 
 impl SessionInventory for KittyBackend {
@@ -335,7 +343,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        wait_with_timeout, CommandOutput, CommandRunner, KittyBackend, SystemCommandRunner,
+        current_session_id, wait_with_timeout, CommandOutput, CommandRunner, KittyBackend,
+        SystemCommandRunner,
     };
     use crate::{
         kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts,
@@ -366,6 +375,16 @@ mod tests {
                 .push((args.to_vec(), stdin.map(str::to_owned)));
             Ok(self.outputs.lock().unwrap().pop_front().unwrap())
         }
+    }
+
+    #[test]
+    fn current_session_identity_uses_the_backend_contract() {
+        assert_eq!(
+            current_session_id(Some("42")).unwrap(),
+            SessionId::new(backend_id().clone(), "42").unwrap()
+        );
+        assert!(current_session_id(None).is_none());
+        assert!(current_session_id(Some("bad:id")).is_none());
     }
 
     #[test]

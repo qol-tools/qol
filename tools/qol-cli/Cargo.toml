@@ -29,6 +29,7 @@ qol-terminal-sessions.workspace = true
 qol-host-fixes.workspace = true
 qol-plugin-api.workspace = true
 qol-process.workspace = true
+qol-runtime.workspace = true
 qol-profile-sync.workspace = true
 qol-workspace.workspace = true
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }

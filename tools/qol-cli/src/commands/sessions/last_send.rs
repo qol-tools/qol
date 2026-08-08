@@ -14,6 +14,7 @@ impl LastSendStore {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn with_dir(dir: PathBuf) -> Self {
         Self { dir }
     }
