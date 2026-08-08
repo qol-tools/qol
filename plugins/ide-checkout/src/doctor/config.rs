@@ -10,7 +10,7 @@ pub(super) fn config_readable_check() -> DoctorCheckResult {
         Ok(inspection) => inspection,
         Err(error) => {
             return DoctorCheckResult::fail("config_readable", error.to_string())
-                .with_fix("Repair or remove the invalid Task Runner config file");
+                .with_fix("Repair or remove the invalid IDE Checkout config file");
         }
     };
 
@@ -32,7 +32,7 @@ pub(super) fn configured_apps_check() -> DoctorCheckResult {
                 "configured_apps",
                 format!("Configured IDE paths cannot be inspected: {error}"),
             )
-            .with_fix("Repair or remove the invalid Task Runner config file");
+            .with_fix("Repair or remove the invalid IDE Checkout config file");
         }
     };
     configured_apps_result(&inspection.config)
@@ -58,7 +58,7 @@ fn configured_apps_result(config: &crate::daemon::Config) -> DoctorCheckResult {
 
     if configured.is_empty() {
         return DoctorCheckResult::fail("configured_apps", "No IDE launchers are configured")
-            .with_fix("Configure at least one IDE launcher in Task Runner settings")
+            .with_fix("Configure at least one IDE launcher in IDE Checkout settings")
             .with_details(details);
     }
     if available.is_empty() {
@@ -104,7 +104,7 @@ pub(super) fn temp_root_check() -> DoctorCheckResult {
                 "temp_root",
                 format!("The checkout temp root cannot be inspected: {error}"),
             )
-            .with_fix("Repair or remove the invalid Task Runner config file");
+            .with_fix("Repair or remove the invalid IDE Checkout config file");
         }
     };
     temp_root_result(&inspection.config.temp_dir)

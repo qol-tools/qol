@@ -21,7 +21,7 @@ mod tests {
         let runtime = manifest
             .runtime
             .as_ref()
-            .expect("Task Runner runtime must be declared");
+            .expect("IDE Checkout runtime must be declared");
 
         assert_eq!(runtime.command, "task-runner");
         assert!(manifest.capabilities.doctor);

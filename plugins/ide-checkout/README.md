@@ -1,6 +1,6 @@
 <div align="center">
 
-# Task Runner
+# IDE Checkout
 
 A [QoL Tray](../../apps/qol-tray) plugin that checks out a git branch and opens it in a configured app.
 
