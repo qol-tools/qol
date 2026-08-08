@@ -203,6 +203,7 @@ fn app() -> HeadlessApp {
             )
             .detail("The agent surface is sessions_list, session_bridge, and session_loop_close.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
+            .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
             .detail("read, send, wait, and focus remain human diagnostics.")
             .detail("export renders a per-client agent surface from the shared tool contract.")
             .subcommand(command(
@@ -220,6 +221,22 @@ fn app() -> HeadlessApp {
                 "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON.",
                 "Bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on validation or delivery failure; a timeout returns completed=false.",
+            ))
+            .subcommand(command(
+                "next",
+                "Print the exact next command for each open bridge round.",
+                "qol sessions next [<session>] [--json]",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Round phases and commands on stdout.",
+                "Exits non-zero when the bridge state cannot be read.",
+            ))
+            .subcommand(command(
+                "resume",
+                "Re-attach to the pending bridge round and await its completion.",
+                "qol sessions resume <session> [--timeout-ms N]",
+                "Waits for the recorded completion marker without submitting anything and returns the same JSON as bridge with submitted=false. Timeout defaults to 24h.",
+                "Bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is pending; a timeout returns completed=false.",
             ))
             .subcommand(
                 command(

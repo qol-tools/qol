@@ -20,7 +20,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 8] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 10] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -32,6 +32,14 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 8] = [
     SessionSubcommand {
         name: "bridge",
         run: |rest, _format| run_bridge(rest),
+    },
+    SessionSubcommand {
+        name: "next",
+        run: |rest, format| next(rest, format),
+    },
+    SessionSubcommand {
+        name: "resume",
+        run: |rest, _format| run_resume(rest),
     },
     SessionSubcommand {
         name: "read",
@@ -88,6 +96,8 @@ Bridge work between independent terminal sessions.
 Primary usage:
   qol sessions list [--json]
   qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
+  qol sessions next [<session>] [--json]
+  qol sessions resume <session> [--timeout-ms N]
 
 Diagnostics:
   qol sessions send <session> <text...> [--submit]
@@ -108,6 +118,11 @@ Details:
   --acknowledge-marker to submit the following round. Its timeout is clamped
   to 1s..24h (default 1h).
   Use -- before task text that contains --timeout-ms.
+  next reads the durable per-session bridge state and prints the exact next
+  command for each open round: resume while waiting, then a review
+  instruction with the acknowledge-marker bridge template once complete.
+  resume re-attaches to the one pending round and waits for its completion
+  marker without submitting anything; its timeout defaults to 24h.
   The MCP and generated agent surfaces expose sessions_list, session_bridge,
   and session_loop_close. The remaining commands are human diagnostics.
 
@@ -262,6 +277,95 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
         bail!("usage: {usage}");
     }
     Ok((binding, task, timeout_ms, acknowledge_marker))
+}
+
+fn run_resume(args: &[OsString]) -> Result<()> {
+    let usage = "qol sessions resume <session> [--timeout-ms N]";
+    let (mut positionals, timeout_ms, expect) = parse_wait_args(args)?;
+    if expect.is_some() || positionals.len() != 1 {
+        bail!("usage: {usage}");
+    }
+    let binding: SessionBinding = positionals
+        .pop()
+        .unwrap()
+        .parse()
+        .map_err(|_| anyhow!("invalid session token"))?;
+    let timeout_ms = timeout_ms
+        .unwrap_or(bridge::TIMEOUT_MAX_MS)
+        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
+    let outcome = bridge::resume(
+        &service()?,
+        &CliSessionInterpreter::system(),
+        &binding,
+        std::time::Duration::from_millis(timeout_ms),
+        &bridge::PendingBridgeStore::system()?,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
+    );
+    Ok(())
+}
+
+fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
+    let pending = bridge::PendingBridgeStore::system()?;
+    let rounds = if args.is_empty() {
+        pending.pending_rounds()?
+    } else {
+        let binding = single_binding(args, "qol sessions next [<session>]")?;
+        pending.pending_round(&binding)?.into_iter().collect()
+    };
+    let rows = rounds
+        .iter()
+        .map(|round| {
+            if round.completed {
+                serde_json::json!({
+                    "phase": "review",
+                    "session": round.session,
+                    "completion_marker": round.completion_marker,
+                    "command": format!(
+                        "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
+                        round.session, round.completion_marker
+                    ),
+                    "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
+                })
+            } else {
+                serde_json::json!({
+                    "phase": "waiting",
+                    "session": round.session,
+                    "command": format!(
+                        "qol sessions resume {} --timeout-ms {}",
+                        round.session,
+                        bridge::TIMEOUT_MAX_MS
+                    ),
+                    "instruction": "Implementation is still running. Run the command in the foreground and do nothing else until it returns.",
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    match output_format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).context("failed to serialize next rounds")?
+        ),
+        OutputFormat::PlainText => {
+            if rows.is_empty() {
+                println!("phase=idle");
+                println!("No pending round. Discover targets with `qol sessions list`, then submit one bounded round: `qol sessions bridge <session> -- <task>`.");
+                return Ok(());
+            }
+            for row in &rows {
+                println!(
+                    "phase={} session={}",
+                    row["phase"].as_str().unwrap_or_default(),
+                    row["session"].as_str().unwrap_or_default(),
+                );
+                println!("{}", row["instruction"].as_str().unwrap_or_default());
+                println!("run: {}", row["command"].as_str().unwrap_or_default());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {

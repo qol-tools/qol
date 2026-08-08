@@ -39,9 +39,18 @@ pub(super) struct BridgeOutcome {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PendingBridge {
+    #[serde(default)]
+    session: String,
     completion_marker: String,
     completed: bool,
     closed: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct PendingRound {
+    pub(super) session: String,
+    pub(super) completion_marker: String,
+    pub(super) completed: bool,
 }
 
 struct PendingBridgeLock {
@@ -126,6 +135,7 @@ impl PendingBridgeStore {
         let file = self.file_for(binding);
         let temporary = file.with_extension("tmp");
         let encoded = serde_json::to_string(&PendingBridge {
+            session: binding.token(),
             completion_marker: marker.to_owned(),
             completed,
             closed,
@@ -154,6 +164,50 @@ impl PendingBridgeStore {
             bail!("the pending bridge has not completed");
         }
         self.write_unlocked(binding, marker, checkpoint.completed, true)
+    }
+
+    pub(super) fn pending_round(&self, binding: &SessionBinding) -> Result<Option<PendingRound>> {
+        Ok(self
+            .load(binding)?
+            .filter(|checkpoint| !checkpoint.closed)
+            .map(|checkpoint| PendingRound {
+                session: binding.token(),
+                completion_marker: checkpoint.completion_marker,
+                completed: checkpoint.completed,
+            }))
+    }
+
+    pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("failed to read pending bridge directory"),
+        };
+        let mut rounds = Vec::new();
+        for entry in entries {
+            let path = entry
+                .context("failed to read pending bridge directory")?
+                .path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let Ok(encoded) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(checkpoint) = serde_json::from_str::<PendingBridge>(&encoded) else {
+                continue;
+            };
+            if checkpoint.closed || checkpoint.session.is_empty() {
+                continue;
+            }
+            rounds.push(PendingRound {
+                session: checkpoint.session,
+                completion_marker: checkpoint.completion_marker,
+                completed: checkpoint.completed,
+            });
+        }
+        rounds.sort_by(|left, right| left.session.cmp(&right.session));
+        Ok(rounds)
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
@@ -228,6 +282,15 @@ pub(super) fn execute(
         bail!("cannot bridge to the calling terminal; choose an independent session");
     }
     let target = resolve_target(terminals, binding)?;
+    if let Some(marker) = acknowledge_marker {
+        pending.acknowledge(binding, marker, true)?;
+    } else if pending
+        .load(binding)?
+        .is_some_and(|checkpoint| !checkpoint.closed)
+    {
+        return resume(terminals, interpreter, binding, timeout, pending);
+    }
+
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
     let subscription = interpreter
         .subscribe(
@@ -238,26 +301,6 @@ pub(super) fn execute(
         )
         .context("failed to subscribe to implementation-session changes")?;
     let subscribed = subscription.is_some();
-
-    let checkpoint = pending.load(binding)?;
-    if let Some(marker) = acknowledge_marker {
-        pending.acknowledge(binding, marker, true)?;
-    } else if let Some(checkpoint) = checkpoint.filter(|checkpoint| !checkpoint.closed) {
-        let outcome = wait_for_completion(
-            terminals,
-            binding,
-            &checkpoint.completion_marker,
-            timeout,
-            changed_rx,
-            subscribed,
-            false,
-        )?;
-        if outcome.completed {
-            pending.observe(binding, &checkpoint.completion_marker, true)?;
-        }
-        drop(subscription);
-        return Ok(outcome);
-    }
 
     let marker = CompletionMarker::generate();
     let prompt = bridge_prompt(task, &marker);
@@ -302,6 +345,58 @@ pub(super) fn execute(
         outcome.elapsed_ms,
         outcome.reads
     );
+    drop(subscription);
+    Ok(outcome)
+}
+
+pub(super) fn resume(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    timeout: Duration,
+    pending: &PendingBridgeStore,
+) -> Result<BridgeOutcome> {
+    let round = pending.pending_round(binding)?.ok_or_else(|| {
+        anyhow!("no pending bridge exists for `{binding}`; run `qol sessions next`")
+    })?;
+    if round.completed {
+        let started = Instant::now();
+        let screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        return Ok(outcome(
+            true,
+            false,
+            binding,
+            &round.completion_marker,
+            screen,
+            1,
+            started,
+        ));
+    }
+    let target = resolve_target(terminals, binding)?;
+    let (changed_tx, changed_rx) = mpsc::sync_channel(1);
+    let subscription = interpreter
+        .subscribe(
+            &target,
+            Arc::new(move || {
+                let _ = changed_tx.try_send(());
+            }),
+        )
+        .context("failed to subscribe to implementation-session changes")?;
+    let subscribed = subscription.is_some();
+    let outcome = wait_for_completion(
+        terminals,
+        binding,
+        &round.completion_marker,
+        timeout,
+        changed_rx,
+        subscribed,
+        false,
+    )?;
+    if outcome.completed {
+        pending.observe(binding, &round.completion_marker, true)?;
+    }
     drop(subscription);
     Ok(outcome)
 }
@@ -440,6 +535,37 @@ mod tests {
         assert!(validate_task("\u{1b}[31munsafe").is_err());
         assert!(validate_task("\0").is_err());
         assert!(validate_task("   ").is_err());
+    }
+
+    #[test]
+    fn pending_rounds_expose_open_checkpoints_with_their_phase() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let waiting = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let review = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        let closed = SessionBinding::from_str("v1:fake:3:300").unwrap();
+        store.start(&waiting, "QOL_BRIDGE_DONE_wait").unwrap();
+        store.start(&review, "QOL_BRIDGE_DONE_review").unwrap();
+        store
+            .observe(&review, "QOL_BRIDGE_DONE_review", true)
+            .unwrap();
+        store.start(&closed, "QOL_BRIDGE_DONE_closed").unwrap();
+        store
+            .acknowledge(&closed, "QOL_BRIDGE_DONE_closed", false)
+            .unwrap();
+
+        let rounds = store.pending_rounds().unwrap();
+        assert_eq!(rounds.len(), 2);
+        let by_session = |token: &str| rounds.iter().find(|round| round.session == token).unwrap();
+        assert!(!by_session("v1:fake:1:100").completed);
+        assert!(by_session("v1:fake:2:200").completed);
+        assert_eq!(
+            by_session("v1:fake:2:200").completion_marker,
+            "QOL_BRIDGE_DONE_review"
+        );
+
+        assert!(store.pending_round(&closed).unwrap().is_none());
+        assert!(store.pending_round(&waiting).unwrap().is_some());
     }
 
     #[test]
