@@ -22,6 +22,11 @@ args = ["next"]
 label = "Snapshot All Sessions"
 args = ["snapshot"]
 
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
+
 [daemon]
 enabled = true
 command = "cli-sessions"
