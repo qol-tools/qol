@@ -8,6 +8,10 @@ import { spawnSync } from "node:child_process";
 import { Type } from "typebox";
 
 const BRIDGE_TIMEOUT_MS = 86_410_000;
+const LOOP_ENTRY = "qol-sessions-feature-loop";
+const LOOP_PHASES = new Set(["idle", "waiting", "review", "paused"]);
+const TERMINATION_PATTERN = /(?:^|\n)\[qol-sessions:feature-(?:accepted|paused)\](?:\n|$)/;
+const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round. If the entire feature is accepted, include [qol-sessions:feature-accepted] on its own line in the final response. If the user redirected the work or a genuine blocker requires user input, explain it and include [qol-sessions:feature-paused] on its own line. Do not stop at a round boundary.`;
 
 function run(args, timeoutMs) {
   const result = spawnSync("qol", ["sessions", ...args], {
@@ -23,6 +27,57 @@ function run(args, timeoutMs) {
   }
   return (result.stdout ?? "").trim();
 }
+
+function assistantText(messages) {
+  return messages
+    .filter((message) => message?.role === "assistant")
+    .flatMap((message) =>
+      typeof message.content === "string"
+        ? [message.content]
+        : Array.isArray(message.content)
+          ? message.content
+              .filter((block) => block?.type === "text" && typeof block.text === "string")
+              .map((block) => block.text)
+          : [],
+    )
+    .join("\n");
+}
+"#;
+
+const LOOP_LIFECYCLE: &str = r#"  let loopPhase = "idle";
+
+  function setLoopPhase(phase) {
+    if (loopPhase === phase) return;
+    loopPhase = phase;
+    pi.appendEntry(LOOP_ENTRY, { phase });
+  }
+
+  function restoreLoopPhase(ctx) {
+    const entry = [...ctx.sessionManager.getBranch()]
+      .reverse()
+      .find((candidate) => candidate?.type === "custom" && candidate.customType === LOOP_ENTRY);
+    const restored = entry?.data?.phase;
+    loopPhase = LOOP_PHASES.has(restored) ? restored : "idle";
+    if (loopPhase === "waiting") setLoopPhase("paused");
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    restoreLoopPhase(ctx);
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    restoreLoopPhase(ctx);
+  });
+
+  pi.on("agent_end", async (event, _ctx) => {
+    if (loopPhase !== "review") return;
+    if (TERMINATION_PATTERN.test(assistantText(event.messages))) setLoopPhase("idle");
+  });
+
+  pi.on("agent_settled", async (_event, _ctx) => {
+    if (loopPhase !== "review") return;
+    pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
+  });
 "#;
 
 const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _onUpdate) {
@@ -42,15 +97,22 @@ const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, 
       const args = ["bridge", params.session];
       if (params.timeout_ms != null) args.push("--timeout-ms", String(Math.round(params.timeout_ms)));
       args.push("--", params.task);
-      const stdout = run(args, BRIDGE_TIMEOUT_MS);
-      const outcome = JSON.parse(stdout);
-      const text = outcome.completed
-        ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
-        : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
-      return {
-        content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
-        details: { outcome },
-      };
+      setLoopPhase("waiting");
+      try {
+        const stdout = run(args, BRIDGE_TIMEOUT_MS);
+        const outcome = JSON.parse(stdout);
+        setLoopPhase(outcome.completed ? "review" : "paused");
+        const text = outcome.completed
+          ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
+          : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
+        return {
+          content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
+          details: { outcome },
+        };
+      } catch (error) {
+        setLoopPhase("paused");
+        throw error;
+      }
     },
 "#;
 
@@ -61,7 +123,7 @@ pub(crate) fn pi_extension() -> Result<String> {
         .collect::<Result<Vec<_>>>()?
         .join("\n\n");
     Ok(format!(
-        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{blocks}\n}}\n"
+        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{LOOP_LIFECYCLE}\n{blocks}\n}}\n"
     ))
 }
 
@@ -159,5 +221,22 @@ mod tests {
             "task: Type.String({ description: \"Bounded implementation task to submit exactly once\" }),"
         ));
         assert!(source.contains("args.push(\"--\", params.task)"));
+    }
+
+    #[test]
+    fn pi_bridge_lifecycle_continues_review_until_feature_acceptance() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("pi.appendEntry(LOOP_ENTRY, { phase })"));
+        assert!(source.contains("pi.on(\"session_start\""));
+        assert!(source.contains("pi.on(\"session_tree\""));
+        assert!(source.contains("getBranch()"));
+        assert!(source.contains("pi.on(\"agent_end\""));
+        assert!(source.contains("pi.on(\"agent_settled\""));
+        assert!(source.contains("setLoopPhase(outcome.completed ? \"review\" : \"paused\")"));
+        assert!(
+            source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: \"followUp\" })")
+        );
+        assert!(source.contains("[qol-sessions:feature-accepted]"));
+        assert!(source.contains("feature-(?:accepted|paused)"));
     }
 }
