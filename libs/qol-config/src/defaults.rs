@@ -165,7 +165,7 @@ fn insert_path_parts(
     insert_path_parts(object, tail, value)
 }
 
-fn field_default_to_json(default: &FieldDefault) -> Value {
+pub fn field_default_to_json(default: &FieldDefault) -> Value {
     match default {
         FieldDefault::Boolean(value) => Value::Bool(*value),
         FieldDefault::String(value) => Value::String(value.clone()),

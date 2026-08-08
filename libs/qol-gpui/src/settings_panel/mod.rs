@@ -1,3 +1,4 @@
+mod object_array_row;
 mod persistence;
 mod rows;
 mod view;
@@ -26,6 +27,7 @@ const PANEL_LIST_PADDING_Y: f32 = 8.0;
 const PANEL_LIST_HEIGHT: f32 = PANEL_LIST_PADDING_Y
     + PANEL_LIST_HEADER_HEIGHT
     + rows::LIST_MAX_VISIBLE as f32 * (PANEL_LIST_ITEM_HEIGHT + PANEL_LIST_GAP);
+const PANEL_OBJECT_ROW_HEIGHT: f32 = 30.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_SECTION_MENU_ITEM_HEIGHT: f32 = 64.0;
 const PANEL_CHROME_HEIGHT: f32 = 88.0;
