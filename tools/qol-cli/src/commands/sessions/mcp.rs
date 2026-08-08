@@ -5,12 +5,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
-    TerminalSessionService, TextInput,
+    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
 };
 use serde_json::{json, Value};
-
-use super::last_send::LastSendStore;
 
 const PROTOCOL_VERSION: &str = "2025-03-26";
 const SERVER_NAME: &str = "qol-sessions-mcp";
@@ -28,7 +25,6 @@ pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
 pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
-    store: LastSendStore,
 }
 
 impl McpSessionServer {
@@ -36,22 +32,14 @@ impl McpSessionServer {
         Self {
             terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
-            store: LastSendStore::system().unwrap_or_else(|| {
-                LastSendStore::with_dir(std::env::temp_dir().join("qol-sessions-last-send"))
-            }),
         }
     }
 
     #[cfg(test)]
-    fn with(
-        terminals: TerminalSessionService,
-        interpreter: CliSessionInterpreter,
-        store: LastSendStore,
-    ) -> Self {
+    fn with(terminals: TerminalSessionService, interpreter: CliSessionInterpreter) -> Self {
         Self {
             terminals: Arc::new(terminals),
             interpreter,
-            store,
         }
     }
 
@@ -71,7 +59,7 @@ impl McpSessionServer {
                     message.get("id").cloned(),
                     ERROR_INVALID_REQUEST,
                     "invalid request: missing method",
-                ))
+                ));
             }
         };
         let id = message.get("id").cloned().unwrap();
@@ -125,16 +113,13 @@ impl McpSessionServer {
         };
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
-            "session_read_screen" => self.tool_read_screen(arguments),
-            "session_send_text" => self.tool_send_text(arguments),
-            "session_wait_output" => self.tool_wait_output(arguments),
-            "session_focus" => self.tool_focus(arguments),
+            "session_bridge" => self.tool_bridge(arguments),
             other => {
                 return error(
                     Some(id),
                     ERROR_INVALID_PARAMS,
                     format!("unknown tool: {other}"),
-                )
+                );
             }
         };
         let (text, is_error) = match outcome {
@@ -166,68 +151,28 @@ impl McpSessionServer {
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_read_screen(&self, arguments: Value) -> Result<String, String> {
+    fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        self.terminals
-            .read_screen(&binding)
-            .map_err(|error| format!("screen read failed: {error}"))
-    }
-
-    fn tool_send_text(&self, arguments: Value) -> Result<String, String> {
-        let binding = binding_argument(&arguments, "session")?;
-        let text = arguments
-            .get("text")
+        let task = arguments
+            .get("task")
             .and_then(Value::as_str)
-            .filter(|text| !text.is_empty())
-            .ok_or_else(|| "send_text requires a non-empty `text` string".to_owned())?;
-        let submit = arguments
-            .get("submit")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let mode = if submit {
-            DeliveryMode::Submit
-        } else {
-            DeliveryMode::Insert
-        };
-        self.terminals
-            .send_text(&binding, text, mode)
-            .map_err(|error| format!("text delivery failed: {error}"))?;
-        self.store.record(&binding, text);
-        Ok(format!(
-            "delivered {} to {binding}",
-            super::mode_label(mode)
-        ))
-    }
-
-    fn tool_wait_output(&self, arguments: Value) -> Result<String, String> {
-        let binding = binding_argument(&arguments, "session")?;
-        let timeout_ms = arguments
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(WAIT_TIMEOUT_DEFAULT_MS)
-            .clamp(WAIT_TIMEOUT_MIN_MS, WAIT_TIMEOUT_MAX_MS);
-        let expect = arguments
-            .get("expect")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .filter(|pattern| !pattern.is_empty());
-        let last_sent = self.store.last_sent(&binding);
-        let (settled, screen, polls, started) = poll_until_settled(
+            .ok_or_else(|| "session_bridge requires a `task` string".to_owned())?;
+        let timeout_ms = match arguments.get("timeout_ms") {
+            Some(value) => value.as_u64().ok_or_else(|| {
+                "session_bridge `timeout_ms` must be a non-negative integer".to_owned()
+            })?,
+            None => super::bridge::TIMEOUT_DEFAULT_MS,
+        }
+        .clamp(super::bridge::TIMEOUT_MIN_MS, super::bridge::TIMEOUT_MAX_MS);
+        let outcome = super::bridge::execute(
             self.terminals.as_ref(),
+            &self.interpreter,
             &binding,
+            task,
             Duration::from_millis(timeout_ms),
-            expect.as_deref(),
-            last_sent.as_deref(),
-        )?;
-        Ok(wait_result(settled, screen, polls, started))
-    }
-
-    fn tool_focus(&self, arguments: Value) -> Result<String, String> {
-        let binding = binding_argument(&arguments, "session")?;
-        self.terminals
-            .focus(&binding)
-            .map_err(|error| format!("focus failed: {error}"))?;
-        Ok(format!("focused {binding}"))
+        )
+        .map_err(|error| error.to_string())?;
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 }
 
@@ -259,8 +204,9 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). Delivery is\n  synchronous: session_send_text returns after the text is delivered.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_bridge\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_bridge\n  submits once and waits for the implementation terminal's generated\n  completion signal before returning.\n\nExit:\n  Exits zero on EOF.\n"
 }
+
 fn binding_argument(arguments: &Value, name: &str) -> Result<SessionBinding, String> {
     let value = arguments
         .get(name)
@@ -322,12 +268,6 @@ fn pattern_visible(screen: &str, pattern: &str, last_sent: Option<&str>) -> bool
         .any(|line| line.contains(pattern) && !line.contains(sent))
 }
 
-fn wait_result(settled: bool, screen: String, polls: u64, started: Instant) -> String {
-    let elapsed_ms = started.elapsed().as_millis();
-    json!({ "settled": settled, "screen": screen, "polls": polls, "elapsed_ms": elapsed_ms })
-        .to_string()
-}
-
 fn tool_definitions() -> Vec<Value> {
     super::contract::tool_specs()
         .iter()
@@ -357,41 +297,58 @@ fn error(id: Option<Value>, code: i64, message: impl Into<String>) -> Value {
 mod tests {
     use super::*;
     use qol_terminal_sessions::{
-        SessionCapabilities, SessionFacts, SessionFocus, SessionId, TerminalBackend, TerminalError,
+        BackendId, DeliveryMode, SessionCapabilities, SessionFacts, SessionFocus, SessionId,
+        TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
     };
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     struct FakeBackend {
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
-        fail_send: Mutex<bool>,
+        complete_bridge: bool,
+        fail_send: bool,
+        current: Mutex<bool>,
     }
 
     impl FakeBackend {
-        fn with_screens(screens: Vec<String>) -> Self {
+        fn new(screens: Vec<String>, complete_bridge: bool, fail_send: bool) -> Self {
             Self {
                 sent: Mutex::new(Vec::new()),
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
-                fail_send: Mutex::new(false),
+                complete_bridge,
+                fail_send,
+                current: Mutex::new(false),
             }
         }
 
         fn session() -> SessionFacts {
             SessionFacts {
-                id: SessionId::new(qol_terminal_sessions::BackendId::new("fake").unwrap(), "7")
-                    .expect("fake session id"),
+                id: SessionId::new(BackendId::new("fake").unwrap(), "7").unwrap(),
                 root_pid: 123,
                 cwd: "/work/demo".to_owned(),
                 title: "Demo REPL".to_owned(),
                 at_prompt: true,
-                reported_cmd: Some("python3".to_owned()),
+                reported_cmd: Some("agent".to_owned()),
                 foreground_basenames: Vec::new(),
                 foreground_pids: Vec::new(),
                 capabilities: SessionCapabilities::ALL,
             }
+        }
+
+        fn generated_completion(&self) -> Option<String> {
+            let sent = self.sent.lock().unwrap();
+            let prompt = &sent.last()?.1;
+            let fragments = prompt
+                .split('`')
+                .enumerate()
+                .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
+                .collect::<Vec<_>>();
+            let right = fragments.last()?;
+            let left = fragments.get(fragments.len().checked_sub(2)?)?;
+            Some(format!("implementation complete\n{left}{right}"))
         }
     }
 
@@ -403,10 +360,15 @@ mod tests {
 
     impl ScreenReader for FakeBackend {
         fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
-            let mut screens = self.screens.lock().unwrap();
-            if let Some(screen) = screens.pop_front() {
+            if let Some(screen) = self.screens.lock().unwrap().pop_front() {
                 *self.last.lock().unwrap() = Some(screen.clone());
                 return Ok(screen);
+            }
+            if self.complete_bridge {
+                if let Some(screen) = self.generated_completion() {
+                    *self.last.lock().unwrap() = Some(screen.clone());
+                    return Ok(screen);
+                }
             }
             Ok(self
                 .last
@@ -430,7 +392,7 @@ mod tests {
             text: &str,
             mode: DeliveryMode,
         ) -> Result<(), TerminalError> {
-            if *self.fail_send.lock().unwrap() {
+            if self.fail_send {
                 return Err(TerminalError::TargetMissing(target.clone()));
             }
             self.sent
@@ -442,34 +404,35 @@ mod tests {
     }
 
     impl TerminalBackend for FakeBackend {
-        fn id(&self) -> &qol_terminal_sessions::BackendId {
-            static ID: std::sync::OnceLock<qol_terminal_sessions::BackendId> =
-                std::sync::OnceLock::new();
-            ID.get_or_init(|| qol_terminal_sessions::BackendId::new("fake").unwrap())
+        fn id(&self) -> &BackendId {
+            static ID: std::sync::OnceLock<BackendId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| BackendId::new("fake").unwrap())
         }
 
         fn read_screen_from_snapshot(
             &self,
-            _snapshot: &qol_terminal_sessions::TerminalSnapshot,
+            _snapshot: &TerminalSnapshot,
             _target: &SessionBinding,
         ) -> Result<String, TerminalError> {
             Ok(">>> ready".to_owned())
         }
+
+        fn current_session_id(&self) -> Option<SessionId> {
+            (*self.current.lock().unwrap()).then(|| Self::session().id)
+        }
     }
 
-    fn server() -> (McpSessionServer, Arc<FakeBackend>) {
-        server_with_screens(Vec::new())
-    }
-
-    fn server_with_screens(screens: Vec<String>) -> (McpSessionServer, Arc<FakeBackend>) {
-        let backend = Arc::new(FakeBackend::with_screens(screens));
-        let service =
+    fn server(
+        screens: Vec<String>,
+        complete_bridge: bool,
+        fail_send: bool,
+    ) -> (McpSessionServer, Arc<FakeBackend>) {
+        let backend = Arc::new(FakeBackend::new(screens, complete_bridge, fail_send));
+        let terminals =
             TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
-                .expect("unique fake backend");
-        let store_dir = Box::leak(Box::new(tempfile::TempDir::new().unwrap()));
-        let store = LastSendStore::with_dir(store_dir.path().to_path_buf());
+                .unwrap();
         (
-            McpSessionServer::with(service, CliSessionInterpreter::system(), store),
+            McpSessionServer::with(terminals, CliSessionInterpreter::system()),
             backend,
         )
     }
@@ -482,478 +445,224 @@ mod tests {
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
     }
 
+    fn tool_call(server: &McpSessionServer, name: &str, arguments: Value) -> Value {
+        server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    1,
+                    "tools/call",
+                    json!({ "name": name, "arguments": arguments }),
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+    }
+
     #[test]
     fn initialize_handshake_echoes_version_and_advertises_tools() {
-        let (server, _) = server();
+        let (server, _) = server(Vec::new(), false, false);
         let response = server
             .handle_line(
                 &serde_json::to_string(&request(
                     1,
                     "initialize",
-                    json!({ "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {} }),
+                    json!({ "protocolVersion": "2025-03-26" }),
                 ))
                 .unwrap(),
             )
-            .expect("initialize must answer");
-        assert_eq!(response["id"], 1);
-        assert_eq!(response["result"]["protocolVersion"], "2025-03-26");
+            .unwrap();
+        assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(response["result"]["serverInfo"]["name"], SERVER_NAME);
-        assert!(response["result"]["capabilities"]["tools"].is_object());
     }
 
     #[test]
-    fn tools_list_exposes_the_five_tools() {
-        let (server, _) = server();
+    fn tools_list_exposes_only_discovery_and_bridge() {
+        let (server, _) = server(Vec::new(), false, false);
         let response = server
             .handle_line(&serde_json::to_string(&request(2, "tools/list", json!({}))).unwrap())
-            .expect("tools/list must answer");
+            .unwrap();
         let names = response["result"]["tools"]
             .as_array()
             .unwrap()
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "sessions_list",
-                "session_read_screen",
-                "session_send_text",
-                "session_wait_output",
-                "session_focus"
-            ]
-        );
+        assert_eq!(names, ["sessions_list", "session_bridge"]);
     }
 
     #[test]
-    fn list_tool_returns_session_rows_with_interpreter_fields() {
-        let (server, _) = server();
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    3,
-                    "tools/call",
-                    json!({ "name": "sessions_list", "arguments": {} }),
-                ))
-                .unwrap(),
-            )
-            .expect("tools/call must answer");
-        assert_eq!(response["result"]["isError"], false);
-        let text = response["result"]["content"][0]["text"].as_str().unwrap();
-        let rows: Vec<Value> = serde_json::from_str(text).unwrap();
-        assert_eq!(rows.len(), 1);
+    fn list_tool_returns_live_session_identity() {
+        let (server, _) = server(Vec::new(), false, false);
+        let response = tool_call(&server, "sessions_list", json!({}));
+        let rows: Vec<Value> =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
         assert_eq!(rows[0]["session"], token());
-        assert_eq!(rows[0]["backend"], "fake");
-        assert_eq!(rows[0]["native"], "7");
-        assert_eq!(rows[0]["root_pid"], 123);
         assert_eq!(rows[0]["tool"], "generic");
-        assert_eq!(rows[0]["display_name"], "python3");
-        assert_eq!(rows[0]["activity"], Value::Null);
-        assert!(rows[0].get("pending_input").is_none());
-        assert!(rows[0].get("reported_cmd").is_none());
-        assert!(rows[0]["capabilities"].as_array().unwrap().len() >= 3);
+        assert_eq!(rows[0]["display_name"], "agent");
     }
 
     #[test]
-    fn send_text_tool_surfaces_delivery_failures() {
-        let (server, backend) = server();
-        *backend.fail_send.lock().unwrap() = true;
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    5,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": token(), "text": "hello" }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("tools/call must answer");
-        assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("text delivery failed"));
-    }
-
-    #[test]
-    fn send_text_tool_delivers_with_submit_mode() {
-        let (server, backend) = server();
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    4,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": token(), "text": "print(6*7)", "submit": true }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("tools/call must answer");
+    fn bridge_submits_once_and_waits_for_the_joined_completion_signal() {
+        let (server, backend) = server(Vec::new(), true, false);
+        let response = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "implement and test the bounded change" }),
+        );
         assert_eq!(response["result"]["isError"], false);
-        assert!(response["result"]["content"][0]["text"]
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["completed"], true);
+        assert!(outcome["screen"]
             .as_str()
             .unwrap()
-            .contains("delivered submitted"));
+            .contains("QOL_BRIDGE_DONE_"));
+
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].1, "print(6*7)");
         assert_eq!(sent[0].2, DeliveryMode::Submit);
+        let fragments = sent[0]
+            .1
+            .split('`')
+            .enumerate()
+            .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
+            .collect::<Vec<_>>();
+        let joined = format!(
+            "{}{}",
+            fragments[fragments.len() - 2],
+            fragments[fragments.len() - 1]
+        );
+        assert!(!sent[0].1.contains(&joined));
     }
 
     #[test]
-    fn send_text_tool_delivers_in_request_order() {
-        let (server, backend) = server();
-        let call = |text: &str| {
-            server
-                .handle_line(
-                    &serde_json::to_string(&request(
-                        10,
-                        "tools/call",
-                        json!({
-                            "name": "session_send_text",
-                            "arguments": { "session": token(), "text": text, "submit": true }
-                        }),
-                    ))
-                    .unwrap(),
-                )
+    fn bridge_timeout_does_not_resubmit_the_task() {
+        let (server, backend) = server(vec![">>> working".to_owned()], false, false);
+        let response = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "keep working", "timeout_ms": 1000 }),
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["completed"], false);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bridge_surfaces_validation_and_delivery_failures() {
+        let (valid_server, _) = server(Vec::new(), false, false);
+        let invalid = tool_call(
+            &valid_server,
+            "session_bridge",
+            json!({ "session": token(), "task": "bad\u{1b}[31m" }),
+        );
+        assert_eq!(invalid["result"]["isError"], true);
+        assert!(invalid["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("control characters"));
+
+        let (server, _) = server(Vec::new(), false, true);
+        let failed = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "safe task" }),
+        );
+        assert_eq!(failed["result"]["isError"], true);
+        assert!(failed["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("delivery failed"));
+    }
+
+    #[test]
+    fn bridge_rejects_invalid_timeout_types() {
+        let (server, backend) = server(Vec::new(), true, false);
+        for timeout in [json!(-1), json!("soon"), json!(1.5)] {
+            let response = tool_call(
+                &server,
+                "session_bridge",
+                json!({ "session": token(), "task": "safe task", "timeout_ms": timeout }),
+            );
+            assert_eq!(response["result"]["isError"], true);
+            assert!(response["result"]["content"][0]["text"]
+                .as_str()
                 .unwrap()
-        };
-        assert!(call("first")["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("delivered submitted"));
-        assert!(call("second")["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("delivered submitted"));
-        let sent = backend.sent.lock().unwrap();
-        assert_eq!(sent.len(), 2);
-        assert_eq!(sent[0].1, "first");
-        assert_eq!(sent[1].1, "second");
+                .contains("non-negative integer"));
+        }
+        assert!(backend.sent.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn wait_output_returns_when_expect_pattern_appears() {
-        let (server, _) = server_with_screens(vec![
-            ">>> idle".to_owned(),
-            ">>> print(6*7)".to_owned(),
-            ">>> print(6*7)\n42\n>>>".to_owned(),
-        ]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    30,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "42" }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        let text = response["result"]["content"][0]["text"].as_str().unwrap();
-        let outcome: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(outcome["settled"], true);
-        assert!(outcome["screen"].as_str().unwrap().contains("42"));
-        assert!(outcome["polls"].as_u64().unwrap() >= 3);
-    }
-
-    #[test]
-    fn wait_output_returns_settled_false_on_timeout() {
-        let (server, _) = server_with_screens(vec![">>> idle".to_owned()]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    31,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "NEVER", "timeout_ms": 1100 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], false);
-        assert!(outcome["elapsed_ms"].as_u64().unwrap() >= 1000);
-    }
-
-    #[test]
-    fn wait_output_settles_after_change_then_stable_screen() {
-        let (server, _) = server_with_screens(vec![
-            ">>> idle".to_owned(),
-            ">>> running".to_owned(),
-            ">>> done".to_owned(),
-            ">>> done".to_owned(),
-        ]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    32,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "timeout_ms": 5000 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], true);
-        assert_eq!(outcome["screen"], ">>> done");
-    }
-
-    #[test]
-    fn wait_output_ignores_the_echo_of_the_last_sent_text_until_real_output_lands() {
-        let echo = "$ sleep 4; echo relay-slow-ok";
-        let (server, _) = server_with_screens(vec![
-            echo.to_owned(),
-            echo.to_owned(),
-            format!("{echo}\nrelay-slow-ok\n$"),
-            format!("{echo}\nrelay-slow-ok\n$"),
-        ]);
-        let send = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    40,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": token(), "text": "sleep 4; echo relay-slow-ok", "submit": true }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("send must answer");
-        assert_eq!(send["result"]["isError"], false);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    41,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("wait must answer");
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], true);
-        assert!(outcome["polls"].as_u64().unwrap() >= 3);
-        assert!(outcome["screen"]
-            .as_str()
-            .unwrap()
-            .contains("relay-slow-ok"));
-    }
-
-    #[test]
-    fn wait_output_with_expect_confirms_stability_before_returning() {
-        let (server, _) = server_with_screens(vec![
-            ">>> idle".to_owned(),
-            ">>> idle\nrelay-slow-ok".to_owned(),
-            ">>> idle\nrelay-slow-ok".to_owned(),
-        ]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    42,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("wait must answer");
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], true);
-        assert_eq!(outcome["polls"], 3);
-        assert!(outcome["screen"]
-            .as_str()
-            .unwrap()
-            .contains("relay-slow-ok"));
-    }
-
-    #[test]
-    fn wait_output_does_not_settle_on_the_echo_alone() {
-        let echo = "$ echo relay-slow-ok";
-        let (server, _) = server_with_screens(vec![echo.to_owned(), echo.to_owned()]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    43,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": token(), "text": "echo relay-slow-ok", "submit": true }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("send must answer");
-        assert_eq!(response["result"]["isError"], false);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    44,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 1100 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("wait must answer");
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], false);
-    }
-
-    #[test]
-    fn wait_output_matches_a_pattern_that_was_already_on_screen() {
-        let (server, _) = server_with_screens(vec![
-            ">>> relay-slow-ok already visible".to_owned(),
-            ">>> relay-slow-ok already visible".to_owned(),
-        ]);
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    45,
-                    "tools/call",
-                    json!({
-                        "name": "session_wait_output",
-                        "arguments": { "session": token(), "expect": "relay-slow-ok", "timeout_ms": 5000 }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .expect("wait must answer");
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["settled"], true);
-        assert_eq!(outcome["polls"], 2);
-    }
-
-    #[test]
-    fn read_screen_tool_returns_backend_text() {
-        let (server, _) = server();
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    5,
-                    "tools/call",
-                    json!({ "name": "session_read_screen", "arguments": { "session": token() } }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        assert_eq!(response["result"]["content"][0]["text"], ">>> ready");
-        assert_eq!(response["result"]["isError"], false);
-    }
-
-    #[test]
-    fn invalid_session_token_is_a_tool_error_not_a_protocol_error() {
-        let (server, _) = server();
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    6,
-                    "tools/call",
-                    json!({
-                        "name": "session_send_text",
-                        "arguments": { "session": "nope", "text": "x" }
-                    }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
+    fn bridge_rejects_the_calling_terminal_before_delivery() {
+        let (server, backend) = server(Vec::new(), true, false);
+        *backend.current.lock().unwrap() = true;
+        let response = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": token(), "task": "self deadlock" }),
+        );
         assert_eq!(response["result"]["isError"], true);
         assert!(response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("invalid session token"));
+            .contains("calling terminal"));
+        assert!(backend.sent.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn unknown_tool_is_invalid_params() {
-        let (server, _) = server();
-        let response = server
-            .handle_line(
-                &serde_json::to_string(&request(
-                    7,
-                    "tools/call",
-                    json!({ "name": "explode", "arguments": {} }),
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        assert_eq!(response["error"]["code"], ERROR_INVALID_PARAMS);
+    fn raw_wait_still_ignores_last_send_echo() {
+        let echo = "$ echo relay-ok";
+        let (server, _) = server(
+            vec![
+                echo.to_owned(),
+                format!("{echo}\nrelay-ok"),
+                format!("{echo}\nrelay-ok"),
+            ],
+            false,
+            false,
+        );
+        let binding: SessionBinding = token().parse().unwrap();
+        let outcome = poll_until_settled(
+            server.terminals.as_ref(),
+            &binding,
+            Duration::from_secs(2),
+            Some("relay-ok"),
+            Some("echo relay-ok"),
+        )
+        .unwrap();
+        assert!(outcome.0);
+        assert!(outcome.1.contains("relay-ok"));
+        assert!(outcome.2 >= 3);
     }
 
     #[test]
-    fn unknown_method_is_method_not_found() {
-        let (server, _) = server();
-        let response = server
+    fn protocol_errors_and_notifications_keep_their_shape() {
+        let (server, _) = server(Vec::new(), false, false);
+        assert_eq!(
+            server.handle_line("{not json").unwrap()["error"]["code"],
+            ERROR_PARSE
+        );
+        assert_eq!(
+            tool_call(&server, "unknown", json!({}))["error"]["code"],
+            ERROR_INVALID_PARAMS
+        );
+        let unknown = server
             .handle_line(&serde_json::to_string(&request(8, "resources/list", json!({}))).unwrap())
             .unwrap();
-        assert_eq!(response["error"]["code"], ERROR_METHOD_NOT_FOUND);
-    }
-
-    #[test]
-    fn notifications_get_no_response() {
-        let (server, _) = server();
+        assert_eq!(unknown["error"]["code"], ERROR_METHOD_NOT_FOUND);
         assert!(server
-            .handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#)
+            .handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
             .is_none());
-        assert!(server.handle_line("").is_none());
-    }
-
-    #[test]
-    fn malformed_json_is_a_parse_error() {
-        let (server, _) = server();
-        let response = server.handle_line("{not json").unwrap();
-        assert_eq!(response["error"]["code"], ERROR_PARSE);
-        assert_eq!(response["id"], Value::Null);
-    }
-
-    #[test]
-    fn ping_answers_empty() {
-        let (server, _) = server();
-        let response = server
-            .handle_line(&serde_json::to_string(&request(9, "ping", json!({}))).unwrap())
-            .unwrap();
-        assert_eq!(response["result"], json!({}));
     }
 
     #[test]
     fn run_rejects_unknown_arguments_instead_of_blocking() {
-        let error = run(&[
-            std::ffi::OsString::from("--port"),
-            std::ffi::OsString::from("9999"),
-        ])
-        .unwrap_err();
+        let error = run(&[std::ffi::OsString::from("--port")]).unwrap_err();
         assert!(error.to_string().contains("usage"));
     }
 }

@@ -188,7 +188,7 @@ fn app() -> HeadlessApp {
         .command(
             command(
                 "sessions",
-                "Discover live terminal sessions and deliver text into them.",
+                "Bridge work between independent terminal sessions.",
                 &format!(
                     "qol sessions <{}>",
                     sessions::SUBCOMMANDS
@@ -197,20 +197,36 @@ fn app() -> HeadlessApp {
                         .collect::<Vec<_>>()
                         .join("|")
                 ),
-                "Sessions come from the shared terminal-sessions backends (kitty remote control).",
-                "Session rows, delivery confirmation, or wait JSON on stdout; diagnostics on stderr.",
-                "Exits non-zero when discovery, identity, capability, or delivery fails.",
+                "Use list to discover a stable token, then bridge to submit and await one bounded implementation task.",
+                "Session rows or bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
             )
-            .detail("list --json emits structured rows; send delivers text (--submit appends Enter).")
-            .detail("wait polls until the screen settles or contains --expect text, then prints JSON.")
-            .detail("mcp serves the session tools over stdio.")
+            .detail("The agent surface is two actions: sessions_list and session_bridge.")
+            .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
+            .detail("read, send, wait, and focus remain human diagnostics.")
             .detail("export renders a per-client agent surface from the shared tool contract.")
+            .subcommand(command(
+                "list",
+                "Discover live terminal sessions.",
+                "qol sessions list [--json]",
+                "Returns stable session tokens with current directory, display identity, activity hint, and capabilities.",
+                "Session rows on stdout.",
+                "Exits non-zero when discovery fails.",
+            ))
+            .subcommand(command(
+                "bridge",
+                "Submit and await one bounded implementation task.",
+                "qol sessions bridge <session> <task...> [--timeout-ms N]",
+                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON.",
+                "Bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation or delivery failure; a timeout returns completed=false.",
+            ))
             .subcommand(
                 command(
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_read_screen, session_send_text, session_wait_output, session_focus. Delivery is synchronous.",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list and session_bridge. A bridge submits once and waits for the generated completion signal before returning.",
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

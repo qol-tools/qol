@@ -243,5 +243,28 @@ mod tests {
                 .join("|")
         );
         assert!(execution.stdout.contains(&usage));
+        assert!(execution
+            .stdout
+            .contains("sessions_list and session_bridge"));
+        assert!(execution
+            .stdout
+            .contains("read, send, wait, and focus remain human diagnostics"));
+    }
+
+    #[test]
+    fn session_bridge_help_describes_the_atomic_transaction() {
+        let args = parse_cli(
+            ["sessions", "bridge", "--help"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        );
+        let execution = contract_execution(&args).unwrap().unwrap();
+        assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
+        assert!(execution
+            .stdout
+            .contains("qol sessions bridge <session> <task...> [--timeout-ms N]"));
+        assert!(execution.stdout.contains("Submits exactly once"));
+        assert!(execution.stdout.contains("completion_marker"));
     }
 }

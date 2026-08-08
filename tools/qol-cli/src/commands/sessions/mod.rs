@@ -9,6 +9,7 @@ use qol_terminal_sessions::{
     TerminalSessionService, TextInput,
 };
 
+mod bridge;
 mod contract;
 mod export;
 mod last_send;
@@ -19,7 +20,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 8] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -27,6 +28,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 7] = [
     SessionSubcommand {
         name: "send",
         run: |rest, _format| send(rest),
+    },
+    SessionSubcommand {
+        name: "bridge",
+        run: |rest, _format| run_bridge(rest),
     },
     SessionSubcommand {
         name: "read",
@@ -76,7 +81,7 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol sessions\n\nDiscover live terminal sessions and deliver text into them.\n\nUsage:\n  qol sessions\n  qol sessions list [--json]\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n  qol help sessions\n\nDetails:\n  Sessions come from the shared terminal-sessions backends (kitty remote control).\n  A session is a stable token like v1:kitty:1:42; list prints them with the\n  interpreted tool and activity hint from the shared CLI interpreter.\n  send delivers text to the session's CLI; --submit appends Enter.\n  read prints the current screen text of the session.\n  wait blocks until the screen settles (changed then stable) or shows the\n  expected text outside the echo of the last send and settles again, then\n  prints JSON with settled, screen, polls, and elapsed_ms;\n  settled=false means the timeout elapsed (clamped 1s..600s, default 30s).\n  focus raises the session's window.\n  mcp runs a Model Context Protocol server over stdio exposing these tools\n  (sessions_list, session_read_screen, session_send_text,\n  session_wait_output, session_focus); qol sessions mcp --help prints its\n  usage. Delivery is synchronous: send returns after the text is delivered,\n  wait_output blocks until the screen settles or an expected substring\n  appears outside the echo of the last send and the screen settles again.\n  export renders a per-client agent surface from the shared tool contract\n  in sessions/contract.rs; qol sessions export pi prints the pi extension\n  source, qol sessions export with no client lists the available clients.\n\nOutput:\n  Plain text on stdout by default; list --json emits structured rows.\n\nExit:\n  Exits non-zero when discovery, identity, capability, or delivery fails.\n  mcp exits zero on EOF.\n"
+    "qol sessions\n\nBridge work between independent terminal sessions.\n\nPrimary usage:\n  qol sessions list [--json]\n  qol sessions bridge <session> <task...> [--timeout-ms N]\n\nDiagnostics:\n  qol sessions send <session> <text...> [--submit]\n  qol sessions read <session>\n  qol sessions wait <session> [--timeout-ms N] [--expect TEXT]\n  qol sessions focus <session>\n  qol sessions mcp\n  qol sessions export [pi]\n  qol sessions help\n\nDetails:\n  list discovers stable live-session tokens.\n  bridge submits one bounded task, supplies a generated completion signal,\n  waits in the same call, and prints JSON with completed, session,\n  completion_marker, screen, reads, and elapsed_ms. Its timeout is clamped\n  to 1s..24h (default 1h).\n  Use -- before task text that contains --timeout-ms.\n  The MCP and generated agent surfaces expose only sessions_list and\n  session_bridge. The remaining commands are human diagnostics.\n\nExit:\n  Exits non-zero on discovery, identity, capability, validation, or delivery\n  failures. A bridge timeout is a successful JSON result with completed=false.\n"
 }
 
 fn service() -> Result<TerminalSessionService> {
@@ -139,6 +144,78 @@ fn send(args: &[OsString]) -> Result<()> {
     }
     println!("delivered {} to {}", mode_label(mode), binding);
     Ok(())
+}
+
+fn run_bridge(args: &[OsString]) -> Result<()> {
+    let (binding_token, task, timeout_ms) = parse_bridge_args(args)?;
+    let binding = SessionBinding::from_str(&binding_token)
+        .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
+    let timeout_ms = timeout_ms
+        .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
+        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
+    let terminals = service()?;
+    let outcome = bridge::execute(
+        &terminals,
+        &CliSessionInterpreter::system(),
+        &binding,
+        &task,
+        std::time::Duration::from_millis(timeout_ms),
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
+    );
+    Ok(())
+}
+
+fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>)> {
+    let usage = "qol sessions bridge <session> <task...> [--timeout-ms N]";
+    let binding = args
+        .first()
+        .and_then(|argument| argument.to_str())
+        .ok_or_else(|| anyhow!("usage: {usage}"))?
+        .to_owned();
+    let mut task_parts = Vec::new();
+    let mut timeout_ms = None;
+    let mut literal = false;
+    let mut index = 1;
+    while index < args.len() {
+        let argument = args[index]
+            .to_str()
+            .ok_or_else(|| anyhow!("session arguments must be valid UTF-8"))?;
+        if literal {
+            task_parts.push(argument.to_owned());
+            index += 1;
+            continue;
+        }
+        match argument {
+            "--" => {
+                literal = true;
+                index += 1;
+            }
+            "--timeout-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| anyhow!("usage: {usage}"))?;
+                timeout_ms = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| anyhow!("invalid --timeout-ms value `{value}`"))?,
+                );
+                index += 2;
+            }
+            other => {
+                task_parts.push(other.to_owned());
+                index += 1;
+            }
+        }
+    }
+    let task = task_parts.join(" ");
+    if task.is_empty() {
+        bail!("usage: {usage}");
+    }
+    Ok((binding, task, timeout_ms))
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {
@@ -375,5 +452,30 @@ mod tests {
             parse_send_args(&["t".into(), "run".into(), "--submit".into()]).unwrap();
         assert_eq!(text, "run");
         assert!(submit);
+    }
+
+    #[test]
+    fn bridge_args_keep_the_surface_small_and_support_literal_flags() {
+        let (binding, task, timeout) = parse_bridge_args(&[
+            "v1:kitty:7:123".into(),
+            "implement".into(),
+            "the fix".into(),
+            "--timeout-ms".into(),
+            "5000".into(),
+        ])
+        .unwrap();
+        assert_eq!(binding, "v1:kitty:7:123");
+        assert_eq!(task, "implement the fix");
+        assert_eq!(timeout, Some(5000));
+
+        let (_, task, timeout) = parse_bridge_args(&[
+            "v1:kitty:7:123".into(),
+            "--".into(),
+            "explain".into(),
+            "--timeout-ms".into(),
+        ])
+        .unwrap();
+        assert_eq!(task, "explain --timeout-ms");
+        assert_eq!(timeout, None);
     }
 }
