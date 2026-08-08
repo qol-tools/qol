@@ -39,6 +39,7 @@ pub(super) struct BridgeOutcome {
     pub(super) screen: String,
     pub(super) reads: u64,
     pub(super) elapsed_ms: u128,
+    pub(super) next_command: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -677,6 +678,7 @@ fn outcome(
         screen,
         reads,
         elapsed_ms: started.elapsed().as_millis(),
+        next_command: format!("qol sessions next {}", binding.token()),
     }
 }
 

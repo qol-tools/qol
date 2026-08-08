@@ -484,6 +484,18 @@ mod tests {
                 .push_back(format!(">>> {text}"));
             Ok(())
         }
+
+        fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+            if self.fail_send {
+                return Err(TerminalError::TargetMissing(target.clone()));
+            }
+            self.sent.lock().unwrap().push((
+                target.clone(),
+                format!("key:{key}"),
+                DeliveryMode::Insert,
+            ));
+            Ok(())
+        }
     }
 
     impl TerminalBackend for FakeBackend {

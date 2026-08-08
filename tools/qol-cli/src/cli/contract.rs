@@ -238,6 +238,14 @@ fn app() -> HeadlessApp {
                 "Bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when no round is pending; a timeout returns completed=false.",
             ))
+            .subcommand(command(
+                "interrupt",
+                "Send the target tool's stop key while a bridge round is open.",
+                "qol sessions interrupt <session>",
+                "Resolves the per-tool stop gesture (agent TUIs: esc, plain shells: ctrl+c) and delivers it as a key event, never as text. The round and any queued input stay intact; follow with `qol sessions next`.",
+                "Confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is open or delivery fails.",
+            ))
             .subcommand(
                 command(
                     "mcp",

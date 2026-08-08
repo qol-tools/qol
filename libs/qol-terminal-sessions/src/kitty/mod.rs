@@ -314,6 +314,18 @@ impl TextInput for KittyBackend {
         )
         .map(drop)
     }
+
+    fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+        self.ensure_capability(target, crate::SessionCapabilities::TEXT_INPUT, "text input")?;
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
+            "send key",
+            &strings(["@", "send-key", "--match", &matcher(window_id), key]),
+            None,
+        )
+        .map(drop)
+    }
 }
 
 fn split_native_id(native: &str) -> Option<(&str, u64)> {
@@ -694,6 +706,20 @@ mod tests {
             ]
         );
         assert_eq!(calls[3].2.as_deref(), Some("\r"));
+    }
+
+    #[test]
+    fn send_key_delivers_a_key_event_to_the_window() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 900)), success(String::new())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        backend.send_key(&target, "ctrl+c").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].1, ["@", "send-key", "--match", "id:42", "ctrl+c"]);
+        assert_eq!(calls[1].2, None);
     }
 
     #[test]

@@ -20,7 +20,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 10] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 11] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -40,6 +40,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 10] = [
     SessionSubcommand {
         name: "resume",
         run: |rest, _format| run_resume(rest),
+    },
+    SessionSubcommand {
+        name: "interrupt",
+        run: |rest, _format| interrupt(rest),
     },
     SessionSubcommand {
         name: "read",
@@ -98,6 +102,7 @@ Primary usage:
   qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
+  qol sessions interrupt <session>
 
 Diagnostics:
   qol sessions send <session> <text...> [--submit]
@@ -127,6 +132,10 @@ Details:
   --kickstart it first nudges the interrupted session to continue or emit
   the signal. A wait that detects an idle target returns stalled=true
   instead of blocking until timeout; rerun next when that happens.
+  interrupt sends the target tool's stop key (agent TUIs: esc, plain
+  shells: ctrl+c) while a round is open, leaving the round and its
+  queued input intact. Every bridge JSON result carries next_command;
+  run it instead of repeating the previous command.
   The MCP and generated agent surfaces expose sessions_list, session_bridge,
   and session_loop_close. The remaining commands are human diagnostics.
 
@@ -324,6 +333,32 @@ fn run_resume(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+fn interrupt(args: &[OsString]) -> Result<()> {
+    let binding = single_binding(args, "qol sessions interrupt <session>")?;
+    let pending = bridge::PendingBridgeStore::system()?;
+    let round = pending.pending_round(&binding)?.ok_or_else(|| {
+        anyhow!("no open bridge round for `{binding}`; interrupt only steers an active round")
+    })?;
+    if round.completed {
+        bail!("the round is already complete; review it via `qol sessions next {binding}`");
+    }
+    let terminals = service()?;
+    let target = terminals
+        .discover()
+        .context("session discovery failed")?
+        .into_iter()
+        .find(|session| session.id == *binding.session_id())
+        .ok_or_else(|| anyhow!("interrupt target `{binding}` is no longer present"))?;
+    let key = CliSessionInterpreter::system().interrupt_key(&target);
+    terminals
+        .send_key(&binding, key)
+        .context("interrupt delivery failed")?;
+    println!(
+        "sent {key} to {binding}; the round stays open - continue via `qol sessions next {binding}`"
+    );
+    Ok(())
+}
+
 fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let pending = bridge::PendingBridgeStore::system()?;
     let rounds = if args.is_empty() {
@@ -371,7 +406,7 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
                         round.session,
                         bridge::TIMEOUT_MAX_MS
                     ),
-                    "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground.",
+                    "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
                 })
             } else {
                 serde_json::json!({

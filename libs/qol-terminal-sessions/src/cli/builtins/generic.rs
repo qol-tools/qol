@@ -24,6 +24,10 @@ impl CliSessionStrategy for GenericStrategy {
         true
     }
 
+    fn interrupt_key(&self) -> &'static str {
+        "ctrl+c"
+    }
+
     fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor {
         let reported = session.reported_cmd.as_deref().map(str::trim);
         let title = session.title.trim();

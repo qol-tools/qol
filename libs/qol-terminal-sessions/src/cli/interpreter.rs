@@ -73,6 +73,10 @@ impl CliSessionInterpreter {
         descriptor
     }
 
+    pub fn interrupt_key(&self, session: &SessionFacts) -> &'static str {
+        self.strategy_for(session).interrupt_key()
+    }
+
     pub fn subscribe(
         &self,
         session: &SessionFacts,
@@ -187,6 +191,17 @@ mod tests {
         assert_eq!(codex.tool.id.as_str(), "codex");
         assert_eq!(claude.tool.id.as_str(), "claude");
         assert_eq!(arbitrary.tool, generic_tool());
+    }
+
+    #[test]
+    fn interrupt_key_is_esc_for_agent_tools_and_ctrl_c_for_generic_shells() {
+        let interpreter = CliSessionInterpreter::system();
+
+        assert_eq!(
+            interpreter.interrupt_key(&session(&["zsh", "claude"])),
+            "esc"
+        );
+        assert_eq!(interpreter.interrupt_key(&session(&["bash"])), "ctrl+c");
     }
 
     fn strategy(

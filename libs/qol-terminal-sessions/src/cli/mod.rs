@@ -30,6 +30,10 @@ pub trait CliSessionStrategy: Send + Sync {
 
     fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor;
 
+    fn interrupt_key(&self) -> &'static str {
+        "esc"
+    }
+
     fn subscribe(
         &self,
         _session: &SessionFacts,

@@ -25,6 +25,8 @@ pub trait TextInput {
         text: &str,
         mode: DeliveryMode,
     ) -> Result<(), TerminalError>;
+
+    fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError>;
 }
 
 pub trait TerminalBackend:
@@ -172,6 +174,10 @@ impl TextInput for TerminalSessionService {
     ) -> Result<(), TerminalError> {
         self.backend_for(target.session_id())?
             .send_text(target, text, mode)
+    }
+
+    fn send_key(&self, target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+        self.backend_for(target.session_id())?.send_key(target, key)
     }
 }
 
