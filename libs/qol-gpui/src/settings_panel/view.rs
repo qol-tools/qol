@@ -1347,7 +1347,7 @@ impl SettingsPanelView {
             RowControl::TextList(values) => {
                 text_or_placeholder(&values.join(", "), self.rows[index].placeholder.as_deref())
             }
-            RowControl::Color(value) => value.clone(),
+            RowControl::Color(value) => color_display(value),
             RowControl::Action {
                 active_action,
                 active_query,
@@ -3154,6 +3154,14 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn color_display(value: &str) -> String {
+    if value.starts_with('#') {
+        value.to_string()
+    } else {
+        format!("#{value}")
+    }
+}
+
 fn text_or_placeholder(value: &str, placeholder: Option<&str>) -> String {
     if !value.is_empty() {
         return value.to_string();
@@ -3497,10 +3505,11 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, format_number, horizontal_step_direction, initial_active_section,
-        intent, list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
-        parsed_number, row_body_height, scroll_offset_for, slider_fraction, stepped_number,
-        text_or_placeholder, visible_row_window, Intent, ListIntent, Row, RowControl,
+        binary_state_label, color_display, format_number, horizontal_step_direction,
+        initial_active_section, intent, list_action_affordance, list_intent, number_preview,
+        number_unit, parsed_color, parsed_number, row_body_height, scroll_offset_for,
+        slider_fraction, stepped_number, text_or_placeholder, visible_row_window, Intent,
+        ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -3524,6 +3533,18 @@ mod tests {
                 control: RowControl::Toggle(false),
             })
             .collect()
+    }
+
+    #[test]
+    fn color_display_normalizes_the_hash_prefix_like_the_web_save() {
+        let cases = [
+            ("ff0000", "#ff0000"),
+            ("#202322", "#202322"),
+            ("#FFFFFF", "#FFFFFF"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(color_display(value), expected, "value: {value}");
+        }
     }
 
     #[test]
