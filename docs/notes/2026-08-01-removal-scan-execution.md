@@ -1,6 +1,6 @@
 # Removal scan - execution status
 
-CONSOLIDATED-FINAL.md is the verbatim merged audit (originally under target/removal-scan/, lost to a cargo clean; restored from session context 2026-08-01).
+`2026-08-01-removal-scan-audit.md` is the verbatim merged audit (originally under target/removal-scan/, lost to a cargo clean; restored from session context 2026-08-01).
 
 Known corrections to its arithmetic:
 - 131 CONFIRMED reconciles as 117 surviving + 13 downgraded + 1 refuted (root_has_exited); the "SURVIVES + DOWNGRADED" rule in the summary paragraph is wrong for libs-system.
