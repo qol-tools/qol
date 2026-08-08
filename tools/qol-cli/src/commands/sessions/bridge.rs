@@ -486,6 +486,29 @@ pub(super) fn resume(
             "event=kickstarted target_backend={}",
             binding.session_id().backend()
         );
+    } else {
+        let liveness = session_liveness(terminals, interpreter, binding);
+        let pre_screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            "QOL_BRIDGE_DONE_",
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &round.completion_marker, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=resume_closed_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the pending round shows no trace on the target and is now closed; resubmit the task via `qol sessions bridge`"
+            );
+        }
     }
     let outcome = wait_for_completion(
         terminals,
@@ -597,7 +620,10 @@ pub(super) fn wait_for_completion(
             && last_probe.is_none_or(|probed| probed.elapsed() >= stall_after)
         {
             last_probe = Some(Instant::now());
-            if liveness() == Some(false) {
+            let activity = liveness();
+            let quiet_enough = activity == Some(false)
+                || (activity.is_none() && last_change.elapsed() >= stall_after * 4);
+            if quiet_enough {
                 return Ok(outcome(
                     false, submitted, true, binding, marker, screen, reads, started,
                 ));
