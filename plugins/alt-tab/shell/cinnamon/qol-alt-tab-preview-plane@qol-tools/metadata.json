@@ -3,5 +3,5 @@
   "name": "QoL Alt Tab Preview Plane",
   "description": "Experimental Cinnamon compositor preview plane for QoL Alt Tab.",
   "cinnamon-version": ["6.6"],
-  "url": "https://github.com/qol-tools/qol-monorepo"
+  "url": "https://github.com/qol-tools/qol"
 }
