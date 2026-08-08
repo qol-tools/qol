@@ -92,7 +92,10 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
         command.arg(plugin_id);
     }
     command
-        .env(qol_conventions::ENV_PLUGIN_ID, "qol-settings-surface")
+        .env(
+            qol_conventions::ENV_PLUGIN_ID,
+            qol_conventions::SETTINGS_SURFACE_APP_ID,
+        )
         .env(
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
@@ -202,7 +205,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
     );
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();
-        qol_gpui::keepalive::open_keepalive(cx, Some("qol-settings-surface"));
+        qol_gpui::keepalive::open_keepalive(cx, Some(qol_conventions::SETTINGS_SURFACE_APP_ID));
         let tracker = MonitorTracker::start(cx);
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
         if let Some(plugin_id) = initial {

@@ -440,6 +440,7 @@ fn open_prepared(
     let title = prepared.panel.heading.clone();
     let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
+        .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
         .size(prepared.size)
         .retain_on_dismiss()
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
