@@ -9,7 +9,7 @@ on:
         required: false
         type: string
   workflow_run:
-    workflows: [CI]
+    workflows: [tests]
     types: [completed]
 
 permissions:

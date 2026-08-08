@@ -1,15 +1,19 @@
+<div align="center">
+
 # QoL Runtime
 
-Protocol types and client for the [QoL Tray](https://github.com/qol-tools/qol-tray) platform state server.
+Protocol types and client for the [QoL Tray](../../apps/qol-tray) platform state server.
+
+</div>
 
 ## Quick start
 
-Most plugins should depend on [qol-plugin-api](https://github.com/qol-tools/qol-plugin-api) instead. Use this crate only if you need low-level access to the socket protocol.
-
 ```toml
 [dependencies]
-qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
+qol-runtime.workspace = true
 ```
+
+Use this crate only when you need low-level access to the socket protocol.
 
 ## License
 

@@ -2,11 +2,9 @@
 
 # QoL Tools
 
-A portable quality-of-life layer for any computer you sit down at.
+[![tests](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
 
-[![CI](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
-[![Release](https://github.com/qol-tools/qol/actions/workflows/release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/release.yml)
-[![Versioning](https://github.com/qol-tools/qol/actions/workflows/plugin-version.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/plugin-version.yml)
+A portable quality-of-life layer for any computer you sit down at.
 
 <!-- TODO: hero demo gif -->
 
@@ -24,10 +22,7 @@ qol dev
 
 ## About
 
-> [!NOTE]
-> Alpha. The portable-profile story works in parts today; "leaves no trace" is the goal, not yet a promise.
-
-Install once, configure once. The idea is that your plugins, keybindings, and settings follow you: boot the tray on any machine and it becomes yours; pull away and the host is left as you found it.
+Install once, configure once. Your plugins, keybindings, and settings follow you: boot the tray on any machine and it becomes yours; pull away and the host is left as you found it.
 
 ## License
 

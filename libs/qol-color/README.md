@@ -1,15 +1,16 @@
-# qol-color
+<div align="center">
 
-[![tests](https://github.com/qol-tools/qol-color/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-color/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/qol-color/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-color/actions/workflows/lint.yml)
+# QoL Color
 
 Hex color parsing for qol-tools.
+
+</div>
 
 ## Quick start
 
 ```toml
 [dependencies]
-qol-color = { git = "https://github.com/qol-tools/qol-color" }
+qol-color.workspace = true
 ```
 
 ```rust

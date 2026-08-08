@@ -1,15 +1,16 @@
-# qol-platform
+<div align="center">
 
-[![tests](https://github.com/qol-tools/qol-platform/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/qol-platform/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/lint.yml)
+# QoL Platform
 
 Platform detection and capability reporting for qol-tools.
+
+</div>
 
 ## Quick start
 
 ```toml
 [dependencies]
-qol-platform = { git = "https://github.com/qol-tools/qol-platform" }
+qol-platform.workspace = true
 ```
 
 ```rust

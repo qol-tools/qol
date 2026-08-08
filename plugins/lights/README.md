@@ -1,13 +1,14 @@
-# Plugin Lights
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-lights/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-lights/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-lights/actions/workflows/lint.yml)
+# Lights
 
-A lights control plugin for [QoL Tray](https://github.com/qol-tools/qol-tray).
+A lights control plugin for [QoL Tray](../../apps/qol-tray).
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
 
 ## About
 

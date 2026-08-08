@@ -1,13 +1,14 @@
-# Launcher Plugin for QoL Tray
+<div align="center">
 
-[![tests](https://github.com/qol-tools/plugin-launcher/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/plugin-launcher/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/lint.yml)
+# Launcher
 
-A keyboard-driven application and file launcher for [QoL Tray](https://github.com/qol-tools/qol-tray).
+A keyboard-driven application and file launcher for [QoL Tray](../../apps/qol-tray).
+
+</div>
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
 
 ## License
 

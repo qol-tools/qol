@@ -1,15 +1,19 @@
-# removeapp
+<div align="center">
 
-Uninstall an app and its leftovers, for QoL Tray.
+# Remove App
+
+An uninstaller that takes an app's leftovers with it, for [QoL Tray](../../apps/qol-tray).
+
+</div>
 
 ## Quick start
 
-```sh
-removeapp scan <app>      # preview what would be removed
-removeapp remove <app>    # move it and its leftovers to the Trash
-removeapp open            # open the picker
-```
+Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+
+## About
+
+`removeapp scan <app>` previews what would go, `removeapp remove <app>` moves the app and its leftovers to the Trash, and `removeapp open` brings up the picker.
 
 ## License
 
-PolyForm-Noncommercial-1.0.0
+PolyForm Noncommercial 1.0.0

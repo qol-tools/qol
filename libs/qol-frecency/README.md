@@ -1,15 +1,16 @@
-# qol-frecency
+<div align="center">
 
-[![tests](https://github.com/qol-tools/qol-frecency/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-frecency/actions/workflows/tests.yml)
-[![lint](https://github.com/qol-tools/qol-frecency/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-frecency/actions/workflows/lint.yml)
+# QoL Frecency
 
-Frequency + recency ranking for qol-tools plugins.
+Frequency and recency ranking for qol-tools plugins.
+
+</div>
 
 ## Quick start
 
 ```toml
 [dependencies]
-qol-frecency = { git = "https://github.com/qol-tools/qol-frecency" }
+qol-frecency.workspace = true
 ```
 
 ```rust
