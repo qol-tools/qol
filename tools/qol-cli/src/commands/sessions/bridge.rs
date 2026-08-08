@@ -19,6 +19,8 @@ const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
 const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUBSCRIPTION_HEARTBEAT: Duration = Duration::from_secs(30);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
+const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
+const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
@@ -316,6 +318,10 @@ pub(super) fn execute(
     let prompt = bridge_prompt(task, &marker);
     pending.start(binding, &marker.token)?;
 
+    let liveness = session_liveness(terminals, interpreter, binding);
+    let pre_screen = terminals
+        .read_screen(binding)
+        .context("bridge screen read failed")?;
     if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
         pending.acknowledge(binding, &marker.token, false)?;
         qol_runtime::probe!(
@@ -324,6 +330,41 @@ pub(super) fn execute(
             binding.session_id().backend()
         );
         return Err(error).context("bridge task delivery failed");
+    }
+    if !delivery_observed(
+        terminals,
+        binding,
+        &marker.left,
+        &pre_screen,
+        &liveness,
+        DELIVERY_VERIFY_WINDOW,
+    )? {
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=delivery_retry target_backend={}",
+            binding.session_id().backend()
+        );
+        terminals
+            .send_text(binding, &prompt, DeliveryMode::Submit)
+            .context("bridge task redelivery failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            &marker.left,
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &marker.token, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=delivery_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the target never showed the submitted task; no round is pending - fix the target session, then resubmit via `qol sessions bridge`"
+            );
+        }
     }
     qol_runtime::probe!(
         "CLI_SESSION_BRIDGE",
@@ -426,6 +467,32 @@ pub(super) fn resume(
     }
     drop(subscription);
     Ok(outcome)
+}
+
+pub(super) fn delivery_observed(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    fragment: &str,
+    pre_screen: &str,
+    liveness: &dyn Fn() -> Option<bool>,
+    window: Duration,
+) -> Result<bool> {
+    if liveness().is_none() {
+        return Ok(true);
+    }
+    let deadline = Instant::now() + window;
+    loop {
+        let screen = terminals
+            .read_screen(binding)
+            .context("bridge screen read failed")?;
+        if screen.contains(fragment) || screen != pre_screen {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(DELIVERY_VERIFY_INTERVAL);
+    }
 }
 
 pub(super) fn session_liveness<'a>(

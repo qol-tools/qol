@@ -608,6 +608,59 @@ mod tests {
     }
 
     #[test]
+    fn unobserved_delivery_is_reported_instead_of_trusted() {
+        use std::str::FromStr;
+        let binding = qol_terminal_sessions::SessionBinding::from_str(&token()).unwrap();
+        let quiet = |screens: Vec<String>| {
+            let backend = Arc::new(FakeBackend::new(screens, false, false));
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap()
+        };
+        let window = Duration::from_millis(100);
+
+        let terminals = quiet(vec!["prompt".to_owned(); 16]);
+        let pre = terminals.read_screen(&binding).unwrap();
+        let observed = super::super::bridge::delivery_observed(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_",
+            &pre,
+            &|| Some(false),
+            window,
+        )
+        .unwrap();
+        assert!(!observed);
+
+        let terminals = quiet(vec![
+            "prompt".to_owned(),
+            "prompt [qol session bridge] QOL_BRIDGE_DONE_".to_owned(),
+        ]);
+        let pre = terminals.read_screen(&binding).unwrap();
+        let observed = super::super::bridge::delivery_observed(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_",
+            &pre,
+            &|| Some(false),
+            window,
+        )
+        .unwrap();
+        assert!(observed);
+
+        let terminals = quiet(vec!["prompt".to_owned(); 2]);
+        let pre = terminals.read_screen(&binding).unwrap();
+        let observed = super::super::bridge::delivery_observed(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_",
+            &pre,
+            &|| None,
+            window,
+        )
+        .unwrap();
+        assert!(observed);
+    }
+
+    #[test]
     fn initialize_handshake_echoes_version_and_advertises_tools() {
         let (server, _) = server(Vec::new(), false, false);
         let response = server
