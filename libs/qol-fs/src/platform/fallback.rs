@@ -17,3 +17,7 @@ pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
 pub(crate) fn prepare_file_removal(_: &Path) -> io::Result<()> {
     Ok(())
 }
+
+pub(crate) fn set_mode(_: &File, _: u32) -> io::Result<()> {
+    Ok(())
+}

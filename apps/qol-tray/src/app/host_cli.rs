@@ -9,6 +9,8 @@ pub(super) enum Invocation {
     Open(String),
     UrlCourier(String),
     Url(String),
+    ResidentPolicy(Vec<String>),
+    ResidentPolicyHidden(Vec<String>),
     Invalid,
 }
 
@@ -35,6 +37,15 @@ fn classify(args: Vec<String>) -> Invocation {
         .collect::<Vec<_>>();
     if matches!(tokens.first(), Some(&"doctor")) {
         return Invocation::Headless(args);
+    }
+    if matches!(args.first().map(String::as_str), Some("resident-policy")) {
+        return Invocation::ResidentPolicy(args[1..].to_vec());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg.starts_with("__resident-policy-"))
+    {
+        return Invocation::ResidentPolicyHidden(args);
     }
     let contains_json = args.iter().any(|arg| arg == "--json");
     match args.as_slice() {
@@ -115,6 +126,49 @@ mod tests {
                 "headless route was not recognized: {values:?}",
             );
         }
+    }
+
+    #[test]
+    fn classifies_resident_policy_routes_and_hidden_commands() {
+        assert_eq!(
+            classify(args(&["resident-policy", "status"])),
+            Invocation::ResidentPolicy(args(&["status"]))
+        );
+        assert_eq!(
+            classify(args(&["resident-policy", "help"])),
+            Invocation::ResidentPolicy(args(&["help"]))
+        );
+        assert_eq!(
+            classify(args(&[
+                "__resident-policy-disable",
+                "--policy",
+                "nvidia-driver-version-pin",
+            ])),
+            Invocation::ResidentPolicyHidden(args(&[
+                "__resident-policy-disable",
+                "--policy",
+                "nvidia-driver-version-pin",
+            ]))
+        );
+        assert_eq!(
+            classify(args(&[
+                "__resident-policy-enable",
+                "--policy",
+                "nvidia-driver-version-pin",
+                "--owner",
+                "qol-resident-abc",
+                "--bogus",
+            ])),
+            Invocation::ResidentPolicyHidden(args(&[
+                "__resident-policy-enable",
+                "--policy",
+                "nvidia-driver-version-pin",
+                "--owner",
+                "qol-resident-abc",
+                "--bogus",
+            ])),
+            "the hidden route carries the raw argv for strict parsing at the boundary"
+        );
     }
 
     #[test]

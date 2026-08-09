@@ -363,6 +363,18 @@ impl TraceRunner {
             }
             "GHOST_DUMP" => self.format_ghost_dump(&raw.msg)?,
             "LEGEND" => format!("LEGEND {}", raw.msg),
+            tag if tag.starts_with("GPU_DRIVER_SYNC_") => {
+                let is_bad = raw.msg.contains("outcome=mismatch")
+                    || raw.msg.contains("outcome=sent")
+                    || raw.msg.contains("outcome=unavailable")
+                    || raw.msg.contains("outcome=refused")
+                    || raw.msg.contains("outcome=invalid")
+                    || raw.msg.contains("outcome=error")
+                    || raw.msg.contains("outcome=failed");
+                let color = if is_bad { COLOR_FAIL } else { "" };
+                let reset = if color.is_empty() { "" } else { COLOR_RESET };
+                format!("{color}{}: {}{reset}", raw.tag, raw.msg)
+            }
             tag if tag.starts_with("LAUNCHER_") => self.format_launcher_event(tag, &raw.msg),
             tag if tag.starts_with("WINACT_") => self.format_winact_event(&raw),
             tag if tag.starts_with("PROFILE_") => {
@@ -1436,6 +1448,7 @@ impl TraceRunner {
             tag if tag.starts_with("PROFILE_") => "profile".to_string(),
             tag if tag.starts_with("WORLD_") => "world".to_string(),
             tag if tag.starts_with("WINACT_") => "window-actions".to_string(),
+            tag if tag.starts_with("GPU_DRIVER_SYNC_") => "gpu-driver-sync".to_string(),
             _ => self.process_name(&raw.pid),
         }
     }
@@ -2107,5 +2120,128 @@ mod tests {
         assert!(runner.args.details);
         assert!(strip_ansi(&runner.toggle_details()).contains("Trace details: collapsed"));
         assert!(!runner.args.details);
+    }
+
+    #[test]
+    fn gpu_driver_sync_tags_map_to_their_source() {
+        let args = Args::parse(&[]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        for tag in [
+            "GPU_DRIVER_SYNC_OBSERVE",
+            "GPU_DRIVER_SYNC_NOTIFY",
+            "GPU_DRIVER_SYNC_POLICY_REQUEST",
+            "GPU_DRIVER_SYNC_POLICY_RESULT",
+        ] {
+            let raw = RawLine {
+                ts_ms: 1,
+                pid: "1".to_string(),
+                tag: tag.to_string(),
+                msg: "outcome=mismatch".to_string(),
+            };
+            assert_eq!(runner.source_for(&raw), "gpu-driver-sync", "{tag}");
+        }
+    }
+
+    #[test]
+    fn gpu_driver_sync_policy_result_events_format_failures() {
+        let args = Args::parse(&[]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let raw = RawLine {
+            ts_ms: 1,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_POLICY_RESULT".to_string(),
+            msg: "operation=disable carrier=managed outcome=error state=active reason=injected_failure".to_string(),
+        };
+        let event = runner.format_event(raw).expect("formatted event");
+        assert_eq!(event.source, "gpu-driver-sync");
+        assert!(event.text.contains("outcome=error"), "{}", event.text);
+        assert!(event.text.contains("injected_failure"), "{}", event.text);
+        assert!(
+            event.text.contains("\u{1b}["),
+            "error outcomes must format as failures: {}",
+            event.text
+        );
+        let ok_raw = RawLine {
+            ts_ms: 2,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_POLICY_RESULT".to_string(),
+            msg: "operation=status carrier=managed outcome=ok state=absent".to_string(),
+        };
+        let ok_event = runner.format_event(ok_raw).expect("formatted event");
+        assert!(
+            !ok_event.text.contains("\u{1b}["),
+            "ok outcomes must not format as failures: {}",
+            ok_event.text
+        );
+    }
+
+    #[test]
+    fn gpu_driver_sync_policy_request_events_format_with_source() {
+        let args = Args::parse(&[]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let raw = RawLine {
+            ts_ms: 1,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_POLICY_REQUEST".to_string(),
+            msg: "operation=enable carrier=managed".to_string(),
+        };
+        let event = runner.format_event(raw).expect("formatted event");
+        assert_eq!(event.source, "gpu-driver-sync");
+        assert!(event.text.contains("operation=enable"), "{}", event.text);
+        assert!(event.text.contains("carrier=managed"), "{}", event.text);
+    }
+
+    #[test]
+    fn gpu_driver_sync_events_format_with_source() {
+        let args = Args::parse(&[]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let raw = RawLine {
+            ts_ms: 1,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_OBSERVE".to_string(),
+            msg: "outcome=mismatch loaded=580.159.02 on_disk=580.173.00".to_string(),
+        };
+        let event = runner.format_event(raw).expect("formatted event");
+        assert_eq!(event.source, "gpu-driver-sync");
+        assert!(event.text.contains("outcome=mismatch"), "{}", event.text);
+        assert!(event.text.contains("580.173.00"), "{}", event.text);
+    }
+
+    #[test]
+    fn gpu_driver_sync_policy_events_pass_the_plugin_filter() {
+        let args = Args::parse(&["gpu-driver-sync".into()]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let raw = RawLine {
+            ts_ms: 1,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_POLICY_REQUEST".to_string(),
+            msg: "operation=disable carrier=managed".to_string(),
+        };
+        runner.process_raw(raw);
+        assert_eq!(runner.buffer.len(), 1, "policy events must be retained");
+        assert_eq!(runner.buffer[0].source, "gpu-driver-sync");
+    }
+
+    #[test]
+    fn gpu_driver_sync_plugin_filter_retains_only_gpu_events() {
+        let args = Args::parse(&["gpu-driver-sync".into()]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let gpu_raw = RawLine {
+            ts_ms: 1,
+            pid: "1".to_string(),
+            tag: "GPU_DRIVER_SYNC_NOTIFY".to_string(),
+            msg: "outcome=sent loaded=580.159.02 on_disk=580.173.00".to_string(),
+        };
+        runner.process_raw(gpu_raw);
+        assert_eq!(runner.buffer.len(), 1, "gpu event must be retained");
+        assert_eq!(runner.buffer[0].source, "gpu-driver-sync");
+        let pick_raw = RawLine {
+            ts_ms: 2,
+            pid: "1".to_string(),
+            tag: "PICK".to_string(),
+            msg: "cursor=(0,0) winner=cursor".to_string(),
+        };
+        runner.process_raw(pick_raw);
+        assert_eq!(runner.buffer.len(), 1, "non-gpu event must be filtered out");
     }
 }

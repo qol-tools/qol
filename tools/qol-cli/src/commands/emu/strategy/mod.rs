@@ -7,6 +7,7 @@ pub(crate) use machine::{resolve_machine_strategy, MachineBackend};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GuestStrategy {
     DebianNocloud,
+    UbuntuNocloud,
     MintCinnamon,
     Macos,
     Windows,
@@ -16,6 +17,7 @@ impl GuestStrategy {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::DebianNocloud => "debian-nocloud",
+            Self::UbuntuNocloud => "ubuntu-nocloud",
             Self::MintCinnamon => "mint-cinnamon",
             Self::Macos => "macos",
             Self::Windows => "windows",
@@ -55,7 +57,10 @@ impl GuestPlan {
     }
 
     pub(crate) fn serial_guest(self) -> Result<()> {
-        if self.guest == GuestStrategy::DebianNocloud {
+        if matches!(
+            self.guest,
+            GuestStrategy::DebianNocloud | GuestStrategy::UbuntuNocloud
+        ) {
             return Ok(());
         }
         bail!(

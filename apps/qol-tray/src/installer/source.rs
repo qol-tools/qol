@@ -275,6 +275,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_rejects_sandbox_always() {
+        let err = parse(&["--sandbox", "--source", "/y"]).unwrap_err();
+        assert!(err.to_string().contains("Unknown argument"));
+    }
+
+    #[test]
     fn parse_args_rejects_unknown_flag() {
         let err = parse(&["--what"]).unwrap_err();
         assert!(err.to_string().contains("Unknown argument"));

@@ -22,3 +22,7 @@ pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
 pub(crate) fn prepare_file_removal(_: &Path) -> io::Result<()> {
     Ok(())
 }
+
+pub(crate) fn set_mode(file: &File, mode: u32) -> io::Result<()> {
+    file.set_permissions(std::fs::Permissions::from_mode(mode))
+}

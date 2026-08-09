@@ -26,12 +26,7 @@ pub(crate) fn run(label: &str, script: &str, args: &[String]) -> Result<()> {
 
 pub(crate) fn spawn(label: &str, program: &Path, args: &[OsString]) -> Result<std::process::Child> {
     let mut command = Command::new("pkexec");
-    command
-        .arg(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+    command.arg(program).args(args);
     command
         .spawn()
         .with_context(|| format!("failed to launch privileged {label}"))

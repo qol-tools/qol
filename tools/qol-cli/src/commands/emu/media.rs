@@ -37,9 +37,11 @@ impl BootMedia {
             BootMedia::Disk => args.extend([
                 "-drive".to_string(),
                 format!(
-                    "file={},id=qoldisk,if=virtio,format=qcow2",
+                    "file={},id=qoldisk,if=none,format=qcow2",
                     boot_media.display()
                 ),
+                "-device".to_string(),
+                "virtio-blk-pci,drive=qoldisk,bootindex=1".to_string(),
             ]),
             BootMedia::Iso => args.extend([
                 "-boot".to_string(),
@@ -130,7 +132,9 @@ mod tests {
                 "/tmp/disk.qcow2",
                 vec![
                     "-drive",
-                    "file=/tmp/disk.qcow2,id=qoldisk,if=virtio,format=qcow2",
+                    "file=/tmp/disk.qcow2,id=qoldisk,if=none,format=qcow2",
+                    "-device",
+                    "virtio-blk-pci,drive=qoldisk,bootindex=1",
                 ],
             ),
             (
@@ -148,6 +152,20 @@ mod tests {
                 "media: {media:?}"
             );
         }
+    }
+
+    #[test]
+    fn disk_args_explicitly_boot_the_os_device_and_never_assign_other_boot_indexes() {
+        let mut args = Vec::new();
+        BootMedia::Disk.append_qemu_args(&mut args, Path::new("/tmp/disk.qcow2"));
+        let joined = args.join(" ");
+        assert!(joined.contains("id=qoldisk,if=none,format=qcow2"));
+        assert!(joined.contains("drive=qoldisk,bootindex=1"));
+        assert_eq!(
+            joined.matches("bootindex").count(),
+            1,
+            "the disk args must carry exactly one explicit boot selection: {joined}"
+        );
     }
 
     #[test]

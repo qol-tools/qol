@@ -42,3 +42,7 @@ pub(crate) fn prepare_file_removal(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn set_mode(_: &std::fs::File, _: u32) -> io::Result<()> {
+    Ok(())
+}

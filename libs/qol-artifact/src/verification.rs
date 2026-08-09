@@ -42,7 +42,10 @@ impl ArtifactExpectation {
             exact_source: None,
             require_clean_source: true,
             required_features: Vec::new(),
-            forbidden_features: vec![qol_conventions::artifact::DEV_FEATURE_NAME.to_string()],
+            forbidden_features: vec![
+                qol_conventions::artifact::DEV_FEATURE_NAME.to_string(),
+                qol_conventions::artifact::SANDBOX_FEATURE_NAME.to_string(),
+            ],
         }
     }
 
@@ -66,6 +69,25 @@ impl ArtifactExpectation {
             exact_source: None,
             require_clean_source: false,
             required_features: Vec::new(),
+            forbidden_features: Vec::new(),
+        }
+    }
+
+    pub fn sandbox_debug(binary: &str, package: &str, role: BuildRole) -> Self {
+        Self {
+            binary: binary.to_string(),
+            package: package.to_string(),
+            role,
+            intent: BuildIntent::Sandbox,
+            flavor: BuildFlavor {
+                profile: BuildProfile::Sandbox,
+                dev_features: false,
+            },
+            version: None,
+            target: None,
+            exact_source: None,
+            require_clean_source: false,
+            required_features: vec![qol_conventions::artifact::SANDBOX_FEATURE_NAME.to_string()],
             forbidden_features: Vec::new(),
         }
     }
@@ -411,6 +433,17 @@ mod tests {
     }
 
     #[test]
+    fn production_policy_rejects_the_sandbox_feature() {
+        let mut sandbox_feature = identity();
+        sandbox_feature.features.push("sandbox".to_string());
+        sandbox_feature.features.sort();
+        assert!(matches!(
+            verify_identity(&sandbox_feature, &expectation()),
+            Err(VerificationError::InvalidIdentity(_))
+        ));
+    }
+
+    #[test]
     fn declared_production_intent_cannot_mask_debug_compiler_facts() {
         let mut debug = identity();
         debug.compiler.cargo_profile = "debug".to_string();
@@ -451,6 +484,32 @@ mod tests {
         assert!(matches!(
             verify_identity(&development, &expectation),
             Err(VerificationError::SourceMismatch)
+        ));
+    }
+
+    #[test]
+    fn sandbox_debug_requires_the_sandbox_feature() {
+        let expectation =
+            ArtifactExpectation::sandbox_debug("qol-tray", "qol-tray", BuildRole::Host);
+        let mut sandboxed = identity();
+        sandboxed.intent = BuildIntent::Sandbox;
+        sandboxed.flavor = BuildFlavor {
+            profile: BuildProfile::Sandbox,
+            dev_features: false,
+        };
+        sandboxed.features.push("sandbox".to_string());
+        sandboxed.features.sort();
+        verify_identity(&sandboxed, &expectation).unwrap();
+
+        let mut missing = identity();
+        missing.intent = BuildIntent::Sandbox;
+        missing.flavor = BuildFlavor {
+            profile: BuildProfile::Sandbox,
+            dev_features: false,
+        };
+        assert!(matches!(
+            verify_identity(&missing, &expectation),
+            Err(VerificationError::MissingFeature(feature)) if feature == "sandbox"
         ));
     }
 

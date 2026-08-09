@@ -38,7 +38,7 @@ impl PlatformOps for Platform {
         Err(anyhow!("opening paths is not supported on this platform"))
     }
 
-    fn supports_desktop_payload(&self) -> bool {
+    fn supports_immutable_payload_build(&self) -> bool {
         false
     }
 

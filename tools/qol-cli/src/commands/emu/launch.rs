@@ -308,7 +308,7 @@ pub(crate) fn parse_launch_options(args: &[OsString], usage: &str) -> Result<Lau
                 let value = option_value(args, index, "--guest-adapter")?;
                 guest_adapter = Some(GuestAdapter::parse(value).ok_or_else(|| {
                     anyhow!(
-                        "--guest-adapter must be one of: debian-nocloud, macos-desktop, mint-cinnamon, windows-desktop"
+                        "--guest-adapter must be one of: debian-nocloud, ubuntu-nocloud, macos-desktop, mint-cinnamon, windows-desktop"
                     )
                 })?);
                 index += 2;

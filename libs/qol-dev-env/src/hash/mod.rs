@@ -203,4 +203,27 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    #[test]
+    fn equal_length_replacement_invalidates_memory_and_disk_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("image.qcow2");
+        std::fs::write(&image, b"aaaaaaaaaaaaaaaa").unwrap();
+        let before = sha256_file_cached(&image).unwrap();
+        assert_eq!(sha256_file_cached(&image).unwrap(), before);
+
+        let replacement = root.path().join("replacement.qcow2");
+        std::fs::write(&replacement, b"bbbbbbbbbbbbbbbb").unwrap();
+        std::fs::remove_file(&image).unwrap();
+        std::fs::rename(&replacement, &image).unwrap();
+
+        let after = sha256_file_cached(&image).unwrap();
+        assert_ne!(before, after);
+        let path = cache_path(&image).unwrap();
+        let hit = read_disk_cache(&path, &FileStamp::read(&image).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.digest, after);
+        assert_eq!(sha256_file_cached(&image).unwrap(), after);
+    }
 }

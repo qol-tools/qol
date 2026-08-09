@@ -35,7 +35,6 @@ mod single_source_guard;
 
 #[cfg(feature = "dev")]
 pub(super) use dev_link_paths::relocate_dev_link;
-pub use gpu_driver_sync::spawn_watch as spawn_gpu_driver_sync_watch;
 #[cfg(feature = "dev")]
 pub(super) use plugin_staleness::stale_running_daemons;
 

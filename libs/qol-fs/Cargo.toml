@@ -7,3 +7,6 @@ description = "Atomic file persistence primitives for qol-tools"
 
 [dependencies]
 tempfile = "3.27"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

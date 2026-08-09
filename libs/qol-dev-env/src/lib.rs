@@ -1,3 +1,6 @@
+use anyhow::Result;
+use std::path::Path;
+
 pub mod cancellation;
 mod hash;
 pub mod inventory;
@@ -8,6 +11,10 @@ pub mod resources;
 pub mod run_dir;
 mod session;
 mod time;
+
+pub fn cached_image_sha256(path: &Path) -> Result<String> {
+    hash::sha256_file_cached(path)
+}
 
 pub use cancellation::{clear_cancellation_request, request_cancellation, CancellationInbox};
 pub use inventory::{scan_inventory, EnvironmentSnapshot, Inventory, InventoryIssue};

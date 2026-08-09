@@ -28,29 +28,86 @@ fn expected_source() -> SourceIdentity {
     }
 }
 
-fn deployable_binaries() -> [(&'static str, &'static str, BuildRole); 4] {
-    [
-        (
-            env!("CARGO_BIN_EXE_qol-tray"),
-            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
-            BuildRole::Host,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-install"),
-            qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
-            BuildRole::Installer,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-doctor"),
-            qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
-            BuildRole::Doctor,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-migrate"),
-            qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME,
-            BuildRole::Migrator,
-        ),
-    ]
+fn manifest_bin_names() -> Vec<String> {
+    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+    let mut names = Vec::new();
+    let mut in_bin = false;
+    for line in manifest.lines() {
+        if line.trim_start().starts_with("[[bin]]") {
+            in_bin = true;
+            continue;
+        }
+        if in_bin {
+            if line.trim_start().starts_with("name = ") {
+                let value = line
+                    .split_once('=')
+                    .map(|(_, value)| value.trim().trim_matches('"').to_string())
+                    .unwrap_or_default();
+                if !value.is_empty() {
+                    names.push(value);
+                }
+                in_bin = false;
+            } else if line.trim_start().starts_with('[') {
+                in_bin = false;
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn registry_binary_names() -> Vec<&'static str> {
+    let mut names = vec![
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+        qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+        qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+        qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME,
+        qol_conventions::artifact::TRAY_RESIDENT_POLICY_BINARY_NAME,
+    ];
+    names.sort();
+    names
+}
+
+fn deployable_binaries() -> Vec<(&'static str, &'static str, BuildRole)> {
+    let manifest_names = manifest_bin_names();
+    let registry_names = registry_binary_names();
+    assert_eq!(
+        manifest_names,
+        registry_names,
+        "every manifest [[bin]] must have a typed registry entry and every registry entry a manifest bin"
+    );
+    manifest_names
+        .iter()
+        .map(|name| {
+            let (binary, path) = match name.as_str() {
+                qol_conventions::artifact::TRAY_HOST_BINARY_NAME => (
+                    qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+                    env!("CARGO_BIN_EXE_qol-tray"),
+                ),
+                qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME => (
+                    qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+                    env!("CARGO_BIN_EXE_qol-tray-install"),
+                ),
+                qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME => (
+                    qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+                    env!("CARGO_BIN_EXE_qol-tray-doctor"),
+                ),
+                qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME => (
+                    qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME,
+                    env!("CARGO_BIN_EXE_qol-tray-migrate"),
+                ),
+                qol_conventions::artifact::TRAY_RESIDENT_POLICY_BINARY_NAME => (
+                    qol_conventions::artifact::TRAY_RESIDENT_POLICY_BINARY_NAME,
+                    env!("CARGO_BIN_EXE_qol-resident-policy"),
+                ),
+                other => panic!("registry entry without a manifest bin: {other}"),
+            };
+            let role = qol_conventions::artifact::tray_binary_role(binary)
+                .unwrap_or_else(|| panic!("manifest bin {binary} has no typed role"));
+            (path, binary, role)
+        })
+        .collect()
 }
 
 fn identity_frame_prefix() -> Vec<u8> {
@@ -102,12 +159,16 @@ fn every_deployable_binary_embeds_its_typed_identity() {
     if cfg!(feature = "dev") {
         expected_features.push("dev".to_string());
     }
+    if cfg!(feature = "sandbox") {
+        expected_features.push("sandbox".to_string());
+    }
     if cfg!(feature = "embedded-ui") {
         expected_features.push("embedded-ui".to_string());
     }
     if cfg!(feature = "linux_evdev") {
         expected_features.push("linux_evdev".to_string());
     }
+    expected_features.sort();
     let expected_source = expected_source();
 
     for (path, binary, role) in deployable_binaries() {

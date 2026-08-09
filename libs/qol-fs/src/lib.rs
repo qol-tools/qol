@@ -6,19 +6,42 @@ use std::path::Path;
 use tempfile::Builder;
 
 pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
-    atomic_write_inner(path, content, false, false)
+    atomic_write_inner(path, content, false, false, None)
 }
 
 pub fn atomic_write_durable(path: &Path, content: &[u8]) -> io::Result<()> {
-    atomic_write_inner(path, content, true, false)
+    atomic_write_inner(path, content, true, false, None)
 }
 
 pub fn atomic_write_private(path: &Path, content: &[u8]) -> io::Result<()> {
-    atomic_write_inner(path, content, true, true)
+    atomic_write_inner(path, content, true, true, None)
+}
+
+pub fn atomic_write_durable_mode(path: &Path, content: &[u8], mode: u32) -> io::Result<()> {
+    atomic_write_inner(path, content, true, false, Some(mode))
 }
 
 pub fn sync_directory(path: &Path) -> io::Result<()> {
     platform::sync_parent(path)
+}
+
+#[cfg(unix)]
+pub fn sync_directory_fd(dir: &std::fs::File) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    let result = unsafe { libc::fsync(dir.as_raw_fd()) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EINVAL) || error.raw_os_error() == Some(libc::EROFS) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(not(unix))]
+pub fn sync_directory_fd(_dir: &std::fs::File) -> io::Result<()> {
+    Ok(())
 }
 
 pub fn prepare_file_removal(path: &Path) -> io::Result<()> {
@@ -59,7 +82,13 @@ pub fn recreate_private_dir(path: &Path) -> io::Result<()> {
     create_private_dir(path)
 }
 
-fn atomic_write_inner(path: &Path, content: &[u8], durable: bool, private: bool) -> io::Result<()> {
+fn atomic_write_inner(
+    path: &Path,
+    content: &[u8],
+    durable: bool,
+    private: bool,
+    mode: Option<u32>,
+) -> io::Result<()> {
     let parent = parent_dir(path);
     fs::create_dir_all(parent)?;
     let prefix = temp_prefix(path);
@@ -67,7 +96,9 @@ fn atomic_write_inner(path: &Path, content: &[u8], durable: bool, private: bool)
         .prefix(&prefix)
         .suffix(".tmp")
         .tempfile_in(parent)?;
-    if private {
+    if let Some(mode) = mode {
+        platform::set_mode(temp.as_file(), mode)?;
+    } else if private {
         platform::set_private(temp.as_file())?;
     } else {
         preserve_permissions(path, temp.as_file())?;
@@ -153,6 +184,22 @@ mod tests {
         atomic_write_private(&path, b"secret").unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_durable_mode_publishes_the_explicit_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+
+        atomic_write_durable_mode(&path, b"payload", 0o644).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+        assert_eq!(fs::read(&path).unwrap(), b"payload");
+        assert!(temp_files(dir.path(), "policy.json").is_empty());
     }
 
     #[cfg(unix)]

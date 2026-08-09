@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+CANONICAL=/var/lib/qol-resident-policy-nvidia-driver-version-pin.json
+STAGE=/var/lib/.qol-resident-policy-nvidia-driver-version-pin.json.stage
+
+case "$1" in
+    remove|purge)
+        if [ -e "$CANONICAL" ] || [ -L "$CANONICAL" ] \
+            || [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
+            if [ -x /usr/lib/qol-tray/qol-resident-policy ]; then
+                /usr/lib/qol-tray/qol-resident-policy __resident-policy-disable \
+                    --policy nvidia-driver-version-pin || exit 1
+            else
+                echo "qol-tray: the resident journal or its recovery stage exists but the release adapter is missing; aborting removal to preserve state" >&2
+                exit 1
+            fi
+        fi
+        if [ -e "$CANONICAL" ] || [ -L "$CANONICAL" ] \
+            || [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
+            echo "qol-tray: the resident journal or its recovery stage still exists after release; aborting removal to preserve state" >&2
+            exit 1
+        fi
+        ;;
+esac
+
+exit 0

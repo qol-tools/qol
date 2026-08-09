@@ -52,6 +52,9 @@ fn run(args: Vec<OsString>) -> Result<()> {
         command if command == commands::dev::DEV_PREBUILD_COMMAND => {
             commands::dev::prebuild(rest, args.verbose, args.skip_plugins)
         }
+        "__resident-bundle-prepare" => {
+            commands::emu::resident_wave2::bundle::run_prepare_subcommand(rest)
+        }
         "emu" => commands::emu::run(rest, args.verbose),
         "env" => commands::env::run(rest, args.verbose),
         "flow" => commands::flow::run(rest, args.verbose),
