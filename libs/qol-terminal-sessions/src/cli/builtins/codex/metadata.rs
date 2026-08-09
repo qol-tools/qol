@@ -11,7 +11,7 @@ use crate::cli::{CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
-use crate::cli::activity::recently_active;
+use crate::cli::activity::{quiet_secs, recently_active};
 
 const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -72,6 +72,7 @@ impl CodexMetadataResolver {
                 Some(CliActivityEvidence {
                     file_fresh: recently_active(signature.modified),
                     file_has_work: Some(rollout_has_work(path)),
+                    file_quiet_secs: quiet_secs(signature.modified),
                 })
             })
             .unwrap_or_default();

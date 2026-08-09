@@ -144,6 +144,7 @@ pub fn tick_with_caches(
             screen_runtime: screen_evidence.runtime,
             viewport: screen_evidence.viewport,
             file_fresh: cli_session.evidence.activity.file_fresh,
+            file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
             screen_changed,
             at_prompt: pane.at_prompt,
             is_generic: tool == Tool::Generic,
@@ -155,7 +156,7 @@ pub fn tick_with_caches(
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
             pane.id,
             tool,
             cli_tool,
@@ -164,6 +165,7 @@ pub fn tick_with_caches(
             evidence.screen_runtime,
             evidence.viewport,
             evidence.file_fresh,
+            evidence.file_quiet_secs,
             cli_session.display_name,
             short(&pane.title)
         );
@@ -226,11 +228,12 @@ pub fn transition_line(
     evidence: &Evidence,
 ) -> String {
     format!(
-        "[cli-sessions] transition id={id} tool={tool} prev={prev:?} new={new:?} reason={reason:?} grace_s={grace_secs} evidence=dr:{:?} sr:{:?} vp:{:?} fresh:{:?} moved:{} prompt:{}",
+        "[cli-sessions] transition id={id} tool={tool} prev={prev:?} new={new:?} reason={reason:?} grace_s={grace_secs} evidence=dr:{:?} sr:{:?} vp:{:?} fresh:{:?} quiet:{:?} moved:{} prompt:{}",
         evidence.descriptor_runtime,
         evidence.screen_runtime,
         evidence.viewport,
         evidence.file_fresh,
+        evidence.file_quiet_secs,
         evidence.screen_changed,
         evidence.at_prompt
     )

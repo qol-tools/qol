@@ -94,10 +94,11 @@ precedence order:
 
 1. **Strong live work wins.** Descriptor `Working` (e.g. the Codex title) is
    live regardless of the viewport. Screen `Working` (spinner in the recent
-   tail) is live while the screen is moving or the transcript is fresh; a
-   settled, non-fresh spinner is a stale leftover, not live work. Descriptor
-   `Ready` (the harness's own runtime state) wins over a settled, fresh
-   screen spinner, so a Codex "Ready" title never stays green on weak
+   tail) is live while the screen is moving or a fresh transcript write landed
+   inside the settled stretch (`file_quiet_secs` shorter than the settle); a
+   settled spinner with no writes since settling is a stale leftover, not live
+   work. Descriptor `Ready` (the harness's own runtime state) wins over a
+   settled screen spinner, so a Codex "Ready" title never stays green on weak
    freshness.
 2. **Historical viewport holds.** `viewport == Historical` (startup chrome)
    preserves the prior status and can never create attention. It is checked
@@ -106,7 +107,8 @@ precedence order:
 3. **Strong NeedsInput alerts immediately.** Descriptor `NeedsInput` (Codex
    "Action Required") is always strong, from any prior status. Screen
    `NeedsInput` is strong unless the transcript is confirmed stale, the
-   session is mid-turn with fresh activity (a picker-looking tail while the
+   session is demonstrably mid-turn (the screen is still moving, or a fresh
+   write landed inside the settled stretch - a picker-looking tail while the
    agent works is scrollback), or the evidence is missing and the session was
    just working: with unknown freshness and a moving viewport the plugin
    cannot distinguish a real picker from scrollback residue, so it waits for
@@ -114,8 +116,9 @@ precedence order:
    scroll is never distinguished without evidence; it simply never confirms.
 4. **Weak freshness is only negative evidence.** `file_fresh` never proves
    Working and never proves turn-taken; it only blocks completion while the
-   agent is demonstrably still writing, and never overrides an authoritative
-   descriptor `Ready`.
+   agent is demonstrably still writing (a fresh write landing after the screen
+   settled), and never overrides an authoritative descriptor `Ready`. A final
+   write that merely predates the settle never delays completion.
 5. **Completion needs settle + grace.** A prior `Working` turn completes to
    `YourTurn` only after a settled screen (stable normalized hash) and a
    monotonic grace window (`GRACE_SECS`, time-based - poll counts never

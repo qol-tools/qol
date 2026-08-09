@@ -30,6 +30,7 @@ fn evidence_for(screen: &str, fresh: Option<bool>, changed: bool) -> Evidence {
         screen_runtime: screen_evidence.runtime,
         viewport: screen_evidence.viewport,
         file_fresh: fresh,
+        file_quiet_secs: fresh.map(|is_fresh| if is_fresh { 0 } else { 600 }),
         screen_changed: changed,
         at_prompt: false,
         is_generic: false,

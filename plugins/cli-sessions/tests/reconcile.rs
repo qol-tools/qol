@@ -1022,6 +1022,7 @@ fn transition_diagnostics_are_redacted_and_carry_the_reason() {
         screen_runtime: CliRuntimeState::Ready,
         viewport: CliViewportState::Unknown,
         file_fresh: None,
+        file_quiet_secs: None,
         screen_changed: false,
         at_prompt: false,
         is_generic: false,
