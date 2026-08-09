@@ -1803,6 +1803,7 @@ mod tests {
         fs::create_dir_all(&second_worktree).unwrap();
         let facts = collect_toolchain_facts_on(bin.as_os_str(), &first_worktree).unwrap();
         let canonical_proxy = fs::canonicalize(&proxy).unwrap();
+        let canonical_first_worktree = fs::canonicalize(&first_worktree).unwrap();
         assert_eq!(facts.rustc_path, bin.join("rustc").to_string_lossy());
         assert_eq!(facts.rustc_canonical, canonical_proxy.to_string_lossy());
         assert_eq!(facts.cargo_path, bin.join("cargo").to_string_lossy());
@@ -1815,7 +1816,7 @@ mod tests {
             &facts.dpkg_deb_version,
         ] {
             assert!(
-                version.contains(&format!("cwd={}", first_worktree.display())),
+                version.contains(&format!("cwd={}", canonical_first_worktree.display())),
                 "every probe must run in the supplied worktree: {version:?}"
             );
         }
