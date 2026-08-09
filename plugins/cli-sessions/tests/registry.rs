@@ -38,6 +38,7 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         screen_hash: None,
         working_since: None,
         settled_since: None,
+        bridged: false,
     }
 }
 

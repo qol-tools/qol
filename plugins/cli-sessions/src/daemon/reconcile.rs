@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use qol_terminal_sessions::cli::{
     CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription, CliToolId,
 };
-use qol_terminal_sessions::SessionId;
+use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::attention::{reduce, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
@@ -93,6 +93,7 @@ pub fn tick_with_caches(
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
     let panes = host.discover();
+    let bridged = live_bridge_sessions();
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
@@ -149,10 +150,12 @@ pub fn tick_with_caches(
             is_service,
         };
 
+        let is_bridged = SessionBinding::new(pane.id.clone(), pane.root_pid)
+            .is_ok_and(|binding| bridged.contains(&binding.token()));
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} label={:?} title={:?}",
             pane.id,
             tool,
             cli_tool,
@@ -180,6 +183,7 @@ pub fn tick_with_caches(
                     branch,
                     now: mono_now,
                     wall_now,
+                    bridged: is_bridged,
                 },
             );
             if let Some(notice) = notice {
@@ -452,6 +456,7 @@ pub struct ApplyInput<'a> {
     pub branch: Option<String>,
     pub now: u64,
     pub wall_now: u64,
+    pub bridged: bool,
 }
 
 fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
@@ -511,6 +516,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         s.name = input.label.map(str::to_owned);
         s.working_since = input.reduction.attention.working_since;
         s.settled_since = input.reduction.attention.settled_since;
+        s.bridged = input.bridged;
         if let Some(h) = input.new_hash {
             s.screen_hash = Some(h);
         }
@@ -530,8 +536,15 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         screen_hash: input.new_hash,
         working_since: input.reduction.attention.working_since,
         settled_since: input.reduction.attention.settled_since,
+        bridged: input.bridged,
     });
     (notice, status)
+}
+
+fn live_bridge_sessions() -> HashSet<String> {
+    qol_terminal_sessions::bridge::checkpoint_dir()
+        .map(|dir| qol_terminal_sessions::bridge::live_sessions(&dir))
+        .unwrap_or_default()
 }
 
 fn tool_id(tool: Tool) -> &'static str {

@@ -7,12 +7,13 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionInventory,
     TerminalSessionService, TextInput,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
@@ -40,15 +41,6 @@ pub(super) struct BridgeOutcome {
     pub(super) reads: u64,
     pub(super) elapsed_ms: u128,
     pub(super) next_command: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PendingBridge {
-    #[serde(default)]
-    session: String,
-    completion_marker: String,
-    completed: bool,
-    closed: bool,
 }
 
 #[derive(Debug)]
@@ -85,9 +77,8 @@ pub(super) struct PendingBridgeStore {
 
 impl PendingBridgeStore {
     pub(super) fn system() -> Result<Self> {
-        let dir = qol_config::data_subdir("sessions")
-            .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?
-            .join("pending-bridge");
+        let dir = qol_terminal_sessions::bridge::checkpoint_dir()
+            .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?;
         Ok(Self { dir })
     }
 
@@ -96,12 +87,12 @@ impl PendingBridgeStore {
         Self { dir }
     }
 
-    fn load(&self, binding: &SessionBinding) -> Result<Option<PendingBridge>> {
+    fn load(&self, binding: &SessionBinding) -> Result<Option<BridgeCheckpoint>> {
         let _lock = self.lock(binding)?;
         self.load_unlocked(binding)
     }
 
-    fn load_unlocked(&self, binding: &SessionBinding) -> Result<Option<PendingBridge>> {
+    fn load_unlocked(&self, binding: &SessionBinding) -> Result<Option<BridgeCheckpoint>> {
         let file = self.file_for(binding);
         let encoded = match fs::read_to_string(&file) {
             Ok(encoded) => encoded,
@@ -150,7 +141,7 @@ impl PendingBridgeStore {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
         let temporary = file.with_extension("tmp");
-        let encoded = serde_json::to_string(&PendingBridge {
+        let encoded = serde_json::to_string(&BridgeCheckpoint {
             session: binding.token(),
             completion_marker: marker.to_owned(),
             completed,
@@ -216,7 +207,7 @@ impl PendingBridgeStore {
             .count())
     }
 
-    fn open_checkpoints(&self) -> Result<Vec<PendingBridge>> {
+    fn open_checkpoints(&self) -> Result<Vec<BridgeCheckpoint>> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -233,7 +224,7 @@ impl PendingBridgeStore {
             let Ok(encoded) = fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(checkpoint) = serde_json::from_str::<PendingBridge>(&encoded) else {
+            let Ok(checkpoint) = serde_json::from_str::<BridgeCheckpoint>(&encoded) else {
                 continue;
             };
             if checkpoint.closed {

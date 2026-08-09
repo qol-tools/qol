@@ -6,6 +6,7 @@ license.workspace = true
 description = "Backend-neutral live terminal session discovery and interaction"
 
 [dependencies]
+qol-config.workspace = true
 qol-runtime.workspace = true
 qol-watch.workspace = true
 serde.workspace = true

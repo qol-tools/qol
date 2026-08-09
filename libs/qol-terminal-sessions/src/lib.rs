@@ -1,3 +1,4 @@
+pub mod bridge;
 pub mod cli;
 mod error;
 pub mod kitty;

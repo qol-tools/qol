@@ -6607,6 +6607,7 @@ dependencies = [
 name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
+ "qol-config",
  "qol-runtime",
  "qol-watch",
  "serde",

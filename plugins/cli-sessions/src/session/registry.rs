@@ -24,6 +24,8 @@ pub struct SessionState {
     pub working_since: Option<u64>,
     #[serde(default, skip)]
     pub settled_since: Option<u64>,
+    #[serde(default, skip)]
+    pub bridged: bool,
 }
 
 impl SessionState {
