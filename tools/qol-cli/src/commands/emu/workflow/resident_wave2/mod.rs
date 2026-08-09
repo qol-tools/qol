@@ -7,6 +7,7 @@ use super::{Run, Verdict};
 use crate::progress::{step_label, StepKind};
 
 pub mod bundle;
+mod platform;
 
 const STICK_DEVICE: &str = "/dev/sda";
 const STICK_WAIT_ATTEMPTS: u8 = 40;
@@ -364,7 +365,7 @@ fn verdict_of(results: &Wave2Results) -> bool {
     results.completed && results.cases.iter().all(|case| case.pass)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
