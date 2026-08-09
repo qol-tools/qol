@@ -191,7 +191,10 @@ fn claude_done_marker_sets_runtime_ready_but_never_a_live_viewport() {
     assert_eq!(done.runtime, CliRuntimeState::Ready);
     assert_eq!(done.viewport, CliViewportState::Unknown);
 
-    let scrollback = format!("\u{2734} Fixed the queue for 12s\n{}", "filler\n".repeat(9));
+    let scrollback = format!(
+        "\u{2734} Fixed the queue for 12s\n{}",
+        "filler\n".repeat(20)
+    );
     let stale_scrollback = strategy.classify_screen(&facts, &scrollback);
     assert_eq!(stale_scrollback.runtime, CliRuntimeState::Unknown);
     assert_eq!(stale_scrollback.viewport, CliViewportState::Unknown);

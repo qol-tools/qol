@@ -1,9 +1,10 @@
 use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
-use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter, CliViewportState};
 
 const WORKING_WITH_TASKLIST: &str = include_str!("fixtures/claude_real/working_win1.txt");
+const STATUS_BELOW_FOOTER: &str = include_str!("fixtures/claude_real/status_below_footer.txt");
 
 fn pane() -> Pane {
     Pane {
@@ -37,13 +38,17 @@ fn evidence_for(screen: &str, fresh: Option<bool>, changed: bool) -> Evidence {
 }
 
 #[test]
-fn a_working_turn_stays_working_when_the_spinner_leaves_the_classifier_window() {
+fn a_spinner_above_the_session_footer_still_reads_as_live_work() {
+    let interpreter = CliSessionInterpreter::system();
+    let evidence = interpreter.classify_screen(&pane(), STATUS_BELOW_FOOTER);
+    assert_eq!(evidence.runtime, CliRuntimeState::Working);
+    assert_eq!(evidence.viewport, CliViewportState::Live);
+}
+
+#[test]
+fn a_working_turn_stays_working_while_the_transcript_is_fresh() {
     let evidence = evidence_for(WORKING_WITH_TASKLIST, Some(true), false);
-    assert_eq!(
-        evidence.screen_runtime,
-        CliRuntimeState::Unknown,
-        "the shared classifier only reads the recent tail"
-    );
+    assert_eq!(evidence.screen_runtime, CliRuntimeState::Working);
     let prev = Attention {
         status: Status::Working,
         working_since: Some(0),
@@ -53,7 +58,7 @@ fn a_working_turn_stays_working_when_the_spinner_leaves_the_classifier_window() 
     assert_eq!(
         out.attention.status,
         Status::Working,
-        "a fresh transcript keeps the turn working even when the spinner sits above the tail"
+        "a fresh transcript keeps the turn working"
     );
 }
 

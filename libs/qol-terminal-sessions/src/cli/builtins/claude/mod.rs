@@ -71,9 +71,7 @@ impl CliSessionStrategy for ClaudeStrategy {
     }
 
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
-        if crate::cli::screen::has_interrupt_hint(screen)
-            || crate::cli::screen::has_live_spinner(screen)
-        {
+        if crate::cli::screen::claude_working(screen) {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::Working,

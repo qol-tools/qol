@@ -1,0 +1,56 @@
+
+❯ /tmp/clip_1786282592.png Also it reports this very chat as "your turn" ... very bugged                                                                                                                             
+
+  Read 1 file (ctrl+o to expand)
+
+● Bash(target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>&1 | tail -12)
+  ⎿  * Pontificating… (21s · ↓ 6.4k tokens · thought for 12s)
+       ⎿  Tip: Double-tap esc to rewind the code and/or conversation to a previous point in time
+     … +11 lines (ctrl+o to expand)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(grep -n "STATUS_TAIL\b.*=" libs/qol-terminal-sessions/src/cli/screen.rs | head -3; target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null |…)
+  ⎿  1:const STATUS_TAIL: usize = 8;
+     2:const KIMI_STATUS_TAIL: usize = 30;
+     ['0x23bf', '0x20', '0xa0'] '⎿ \xa0Running…'
+
+● Bash(target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null | grep -n "" | tail -16 | cat -A | sed -n '1,16p' | cut -c1-90)
+  ⎿  41:$
+     42:M-bM-^WM-^O Bash(target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev
+     43:  M-bM-^NM-? M-BM- RunningM-bM-^@M-&$
+     … +13 lines (ctrl+o to expand)
+
+● Bash(ls plugins/cli-sessions/tests/fixtures/corpus/ | head -20; sed -n '1,60p' plugins/cli-sessions/tests/corpus.rs)
+  ⎿  done_tasklist.meta.json
+     done_tasklist.txt
+     kimi_question_picker.meta.json
+     … +73 lines (ctrl+o to expand)
+
+● Bash(cat plugins/cli-sessions/tests/fixtures/corpus/working_me.meta.json; echo; sed -n '1,20p' libs/qol-terminal-sessions/src/cli/screen.rs)
+  ⎿  {
+       "title": "\u2802 Claude Sessions Improvements",
+       "at_prompt": false,
+     … +33 lines (ctrl+o to expand)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(python3 - <<'PY'
+      p='libs/qol-terminal-sessions/src/cli/screen.rs'…)
+  ⎿  ok
+
+● Bash(target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null > plugins/cli-sessions/tests/fixtures/corpus/claude_status_below_footer.txt; tail -1…)
+  ⎿  Running…
+
+✢ Pontificating… (1m 50s · ↓ 6.4k tokens)
+  ⎿  Tip: Double-tap esc to rewind the code and/or conversation to a previous point in time
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  /media/kmrh47/WD_SN850X/Git/qol-monorepo │ Opus 5 (1M context) high
+  ctx ▰▱▱▱▱ 25% │ ⧗ 5h ▰▱▱▱▱ 9% ↻4h │ wk ▰▰▰▰▱ 89% ↻2d │ +193/-7 │ $19.43
+  └─ main │ 2 modified │ 2 ahead │ +20 wt
+  └─ as KMRH47 <kmrh47@proton.me> │ global: cool sunflower <kmrh47@proton.me>
+
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
