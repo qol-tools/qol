@@ -68,6 +68,7 @@ struct SubscribedAgent {
     process: String,
     handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
     external_id: Arc<Mutex<String>>,
+    name: Arc<Mutex<Option<String>>>,
     runtime: Arc<Mutex<CliRuntimeState>>,
 }
 
@@ -75,6 +76,7 @@ struct SubscribedHarness {
     interpreter: CliSessionInterpreter,
     handlers: Arc<Mutex<Vec<CliSessionChangeHandler>>>,
     external_id: Arc<Mutex<String>>,
+    name: Arc<Mutex<Option<String>>>,
     runtime: Arc<Mutex<CliRuntimeState>>,
 }
 
@@ -92,7 +94,7 @@ impl CliSessionStrategy for SubscribedAgent {
     fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
         CliSessionDescriptor {
             tool: self.tool.clone(),
-            display_name: Some("Subscribed".to_owned()),
+            display_name: self.name.lock().unwrap().clone(),
             external_id: Some(self.external_id.lock().unwrap().clone()),
             has_activity: Some(true),
             evidence: CliSessionEvidence {
@@ -168,12 +170,14 @@ fn fake_codex(name: &str, touched: bool) -> CliSessionInterpreter {
 fn subscribed_agent(tool: CliTool, process: &str) -> SubscribedHarness {
     let handlers = Arc::new(Mutex::new(Vec::new()));
     let external_id = Arc::new(Mutex::new("subscribed-session".to_owned()));
+    let name = Arc::new(Mutex::new(Some("Subscribed".to_owned())));
     let runtime = Arc::new(Mutex::new(CliRuntimeState::Working));
     let interpreter = CliSessionInterpreter::from_strategies([Arc::new(SubscribedAgent {
         tool,
         process: process.to_owned(),
         handlers: handlers.clone(),
         external_id: external_id.clone(),
+        name: name.clone(),
         runtime: runtime.clone(),
     })
         as Arc<dyn CliSessionStrategy>])
@@ -182,6 +186,7 @@ fn subscribed_agent(tool: CliTool, process: &str) -> SubscribedHarness {
         interpreter,
         handlers,
         external_id,
+        name,
         runtime,
     }
 }
@@ -365,6 +370,71 @@ fn changed_external_session_replaces_the_metadata_subscription() {
 
     assert_eq!(harness.handlers.lock().unwrap().len(), 2);
     assert_eq!(host.reads.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn transient_missing_label_keeps_the_last_known_title() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(2, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: SELECTION.to_owned(),
+    };
+    let harness = subscribed_agent(codex_tool(), "codex");
+    let mut caches = ReconcileCaches::default();
+
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        100,
+        100,
+        &mut caches,
+    );
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].name.as_deref(),
+        Some("Subscribed")
+    );
+
+    for (now, name, expected) in [
+        (101, Some(" "), Some("Subscribed")),
+        (102, Some("\u{1}"), Some("Subscribed")),
+        (103, None, Some("Subscribed")),
+        (104, Some("Renamed"), Some("Renamed")),
+    ] {
+        *harness.name.lock().unwrap() = name.map(str::to_owned);
+        tick_with_caches(
+            &reg,
+            &host,
+            &harness.interpreter,
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+        assert_eq!(
+            reg.lock().unwrap().sorted()[0].name.as_deref(),
+            expected,
+            "incoming label at {now:?} must not erase a stable title"
+        );
+    }
+
+    *harness.name.lock().unwrap() = None;
+    host.panes[0].root_pid = host.panes[0].root_pid.saturating_add(1);
+    tick_with_caches(
+        &reg,
+        &host,
+        &harness.interpreter,
+        &NoServiceProbe,
+        105,
+        105,
+        &mut caches,
+    );
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].name,
+        None,
+        "a replaced pane identity must not inherit a stale title"
+    );
 }
 
 #[test]
@@ -678,6 +748,38 @@ fn tick_codex_idle_when_no_turn_taken() {
         "no turn in the rollout => idle, not your turn"
     );
     assert_eq!(rows[0].name.as_deref(), Some("Asasdsadasd"),);
+}
+
+#[test]
+fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    reg.lock()
+        .unwrap()
+        .restore(vec![restored(13, Status::NeedsYou)]);
+    let host = FakeHost {
+        panes: vec![pane(
+            13,
+            "qol-monorepo | Action Required | Ready | gpt-5.6-luna max",
+            false,
+            &["zsh", "codex"],
+            "codex",
+        )],
+        screen: String::new(),
+    };
+
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
+    tick(
+        &reg,
+        &host,
+        &interpreter(),
+        &NoServiceProbe,
+        101 + GRACE_SECS,
+        101 + GRACE_SECS,
+    );
+
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Unknown);
 }
 
 #[test]

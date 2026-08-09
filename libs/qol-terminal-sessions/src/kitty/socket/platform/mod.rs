@@ -18,6 +18,10 @@ pub(super) fn discover_sibling_paths(current: &Path) -> Vec<PathBuf> {
     active::discover_sibling_paths(current)
 }
 
+pub(super) fn discover_default_paths() -> Vec<PathBuf> {
+    active::discover_default_paths()
+}
+
 pub(super) fn instance_id(path: &Path) -> Option<String> {
     active::instance_id(path)
 }

@@ -104,9 +104,8 @@ precedence order:
    preserves the prior status and can never create attention. It is checked
    before any awaiting/blocked short-circuit, so a stale questionnaire in
    scrollback holds instead of alerting.
-3. **Strong NeedsInput alerts immediately.** Descriptor `NeedsInput` (Codex
-   "Action Required") is always strong, from any prior status. Screen
-   `NeedsInput` is strong unless the transcript is confirmed stale, the
+3. **Strong NeedsInput alerts immediately.** Screen `NeedsInput` is strong
+   unless the transcript is confirmed stale, the
    session is demonstrably mid-turn (the screen is still moving, or a fresh
    write landed inside the settled stretch - a picker-looking tail while the
    agent works is scrollback), or the evidence is missing and the session was
@@ -114,6 +113,8 @@ precedence order:
    cannot distinguish a real picker from scrollback residue, so it waits for
    the picker to settle and hold through the grace before alerting. Sustained
    scroll is never distinguished without evidence; it simply never confirms.
+   Codex `Action Required` is an activity marker, not runtime evidence;
+   `Ready` remains authoritative when both title markers are present.
 4. **Weak freshness is only negative evidence.** `file_fresh` never proves
    Working and never proves turn-taken; it only blocks completion while the
    agent is demonstrably still writing (a fresh write landing after the screen
@@ -125,7 +126,8 @@ precedence order:
    debounce). Weak file freshness never overrides authoritative runtime
    state: a descriptor `Ready` (the Codex title) completes on settle plus
    grace even while transcript writes stay fresh. First sightings never
-   complete.
+   complete. A prior `NeedsYou` state with no confirmed input settles to
+   `Unknown` after the same stable grace; it never becomes `YourTurn`.
 6. **Generic shells stay busy-by-default.** A non-prompt generic pane is
    `Working` unless it is a declared service; at the prompt a command that ran
    past the grace window completes, a quick command returns to `Unknown`, and

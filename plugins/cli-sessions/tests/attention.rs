@@ -231,6 +231,25 @@ fn strong_needs_input_becomes_needs_you_immediately() {
 }
 
 #[test]
+fn stale_needs_you_clears_after_stable_idle_evidence() {
+    let idle = evidence(RT::Unknown, RT::Unknown, VP::Unknown, None, false);
+    let first = reduce(&att(Status::NeedsYou), &idle, 100);
+    assert_eq!(first.attention.status, Status::NeedsYou);
+    assert_eq!(first.attention.settled_since, Some(100));
+    assert_eq!(
+        reduce(&first.attention, &idle, 100 + GRACE_SECS - 1)
+            .attention
+            .status,
+        Status::NeedsYou
+    );
+
+    let cleared = reduce(&first.attention, &idle, 100 + GRACE_SECS);
+    assert_eq!(cleared.attention.status, Status::Unknown);
+    assert_eq!(cleared.phase, Phase::Idle);
+    assert_eq!(cleared.transition.unwrap().reason, Reason::QuickIdle);
+}
+
+#[test]
 fn acknowledgement_survives_cosmetic_redraw_and_stale_markers() {
     let redraw = evidence(RT::Unknown, RT::Ready, VP::Unknown, None, true);
     let out = reduce(&working(Status::Acknowledged, 0), &redraw, 100);
@@ -261,7 +280,6 @@ fn working_to_your_turn_is_the_only_completion_path() {
 
     for from in [
         Status::Service,
-        Status::NeedsYou,
         Status::Unknown,
         Status::YourTurn,
         Status::Acknowledged,
@@ -272,6 +290,13 @@ fn working_to_your_turn_is_the_only_completion_path() {
             "completion only fires from Working ({from:?})"
         );
     }
+    assert_eq!(
+        reduce(&working(Status::NeedsYou, 0), &ready, 100 + GRACE_SECS)
+            .attention
+            .status,
+        Status::Unknown,
+        "a stale needs-you state clears instead of becoming your turn"
+    );
 }
 
 #[test]

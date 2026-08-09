@@ -22,8 +22,20 @@ pub fn kitty_binding(window_id: u64, root_pid: i32) -> anyhow::Result<SessionBin
 }
 
 pub fn project_of(cwd: &str) -> String {
-    cwd.rsplit('/')
-        .find(|s| !s.is_empty())
-        .unwrap_or(cwd)
-        .to_string()
+    let project = cwd.rsplit('/').find(|s| !s.is_empty()).unwrap_or(cwd);
+    if project.chars().any(|character| character.is_control()) {
+        return String::new();
+    }
+    project.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_of;
+
+    #[test]
+    fn project_fallback_rejects_corrupted_terminal_cwds() {
+        assert_eq!(project_of("/work/project"), "project");
+        assert_eq!(project_of("/Users/kaho/\u{1}"), "");
+    }
 }

@@ -1,5 +1,5 @@
 use plugin_cli_sessions::host::kitty_session_id;
-use plugin_cli_sessions::registry::{summary_for, Registry, SessionState};
+use plugin_cli_sessions::registry::{meaningful_name, summary_for, Registry, SessionState};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::SessionId;
@@ -21,6 +21,14 @@ fn working_summary_is_tool_aware() {
         );
     }
     assert_eq!(summary_for(Status::YourTurn, Tool::Generic), "your turn");
+}
+
+#[test]
+fn meaningful_name_rejects_terminal_controls_and_trims_outer_space() {
+    assert_eq!(meaningful_name(Some("  project  ")), Some("project"));
+    assert_eq!(meaningful_name(Some("\u{1}")), None);
+    assert_eq!(meaningful_name(Some("project\u{1}")), None);
+    assert_eq!(meaningful_name(Some(" \t ")), None);
 }
 
 fn state(window_id: u64, status: Status, last: u64) -> SessionState {

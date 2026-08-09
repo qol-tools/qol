@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -39,6 +39,8 @@ pub struct KittyWindow {
 pub struct ForegroundProcess {
     pub pid: i32,
     pub cmdline: Vec<String>,
+    #[serde(default)]
+    pub cwd: PathBuf,
 }
 
 fn basename(cmdline: &[String]) -> Option<String> {
@@ -49,8 +51,23 @@ fn basename(cmdline: &[String]) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn usable_cwd(path: &Path) -> Option<String> {
+    let value = path.to_string_lossy();
+    if value.is_empty() || value.chars().any(|character| character.is_control()) {
+        return None;
+    }
+    Some(value.into_owned())
+}
+
 impl KittyWindow {
     fn into_session(self, backend_id: &BackendId, instance: Option<&str>) -> SessionFacts {
+        let cwd = self
+            .foreground_processes
+            .iter()
+            .rev()
+            .find_map(|process| usable_cwd(&process.cwd))
+            .or_else(|| usable_cwd(&self.cwd))
+            .unwrap_or_default();
         let foreground_basenames = self
             .foreground_processes
             .iter()
@@ -76,7 +93,7 @@ impl KittyWindow {
             id: SessionId::new(backend_id.clone(), native_id)
                 .expect("Kitty endpoint and window ids are valid terminal session identities"),
             root_pid: self.pid,
-            cwd: self.cwd.to_string_lossy().into_owned(),
+            cwd,
             title: self.title,
             at_prompt: self.at_prompt,
             reported_cmd,
@@ -149,6 +166,17 @@ mod tests {
 
         assert_eq!(sessions[0].id.native(), "k1_2.10");
         assert_eq!(sessions[1].id.native(), "k1_2.11");
+    }
+
+    #[test]
+    fn parser_prefers_a_valid_foreground_cwd_over_corrupted_window_metadata() {
+        let body = r#"[{"id":1,"tabs":[{"windows":[
+{"id":10,"title":"Agent","cwd":"/Users/kaho/\u0001","pid":100,"foreground_processes":[{"pid":101,"cwd":"/work/project","cmdline":["/usr/bin/codex"]}]}
+]}]}]"#;
+
+        let sessions = parse_ls(body, backend_id()).unwrap().sessions(backend_id());
+
+        assert_eq!(sessions[0].cwd, "/work/project");
     }
 
     #[test]

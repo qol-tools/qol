@@ -14,6 +14,10 @@ pub(super) fn discover_sibling_paths(current: &Path) -> Vec<PathBuf> {
     vec![current.to_owned()]
 }
 
+pub(super) fn discover_default_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 pub(super) fn instance_id(_path: &Path) -> Option<String> {
     None
 }

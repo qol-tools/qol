@@ -9,7 +9,7 @@ use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 use qol_terminal_sessions::SessionId;
 
-use crate::session::registry::SessionState;
+use crate::session::registry::{meaningful_name, SessionState};
 use crate::session::status::Status;
 use crate::session::tool::Tool;
 use crate::ui::SessionsView;
@@ -291,12 +291,12 @@ fn footer() -> impl IntoElement {
 fn identity_line(s: &SessionState) -> impl IntoElement {
     let palette = current_palette();
     let branch = s.branch.clone().unwrap_or_default();
-    let label = s.name.clone().unwrap_or_else(|| s.project.clone());
+    let label = meaningful_name(s.name.as_deref())
+        .or_else(|| meaningful_name(Some(&s.project)))
+        .unwrap_or(s.tool.label())
+        .to_owned();
     let tool_tag = match s.tool {
-        Tool::Claude => "Claude",
-        Tool::Codex => "Codex",
-        Tool::Kimi => "Kimi",
-        Tool::Pi => "Pi",
+        Tool::Claude | Tool::Codex | Tool::Kimi | Tool::Pi => s.tool.label(),
         Tool::Generic => "",
     };
     let tool_color = s.tool.accent().rgb24();

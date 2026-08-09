@@ -70,6 +70,54 @@ pub(super) fn discover_sibling_paths(current: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+pub(super) fn discover_default_paths() -> Vec<PathBuf> {
+    let Some(owner) = current_user_uid() else {
+        return Vec::new();
+    };
+    let mut roots = vec![PathBuf::from("/tmp"), std::env::temp_dir()];
+    roots.sort();
+    roots.dedup();
+    discover_paths(roots, owner)
+}
+
+fn discover_paths(roots: impl IntoIterator<Item = PathBuf>, owner: u32) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !is_default_kitty_socket_name(&name) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_socket() {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if metadata.uid() != owner {
+                continue;
+            }
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn current_user_uid() -> Option<u32> {
+    let home = std::env::var_os("HOME")?;
+    std::fs::metadata(home).ok().map(|metadata| metadata.uid())
+}
+
 fn is_default_kitty_socket_name(name: &str) -> bool {
     name.strip_prefix("kitty-")
         .and_then(|suffix| suffix.strip_suffix(".sock").or(Some(suffix)))
@@ -78,9 +126,12 @@ fn is_default_kitty_socket_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::UnixListener;
 
-    use super::{discover_sibling_paths, instance_id, is_default_kitty_socket_name};
+    use super::{
+        discover_paths, discover_sibling_paths, instance_id, is_default_kitty_socket_name,
+    };
 
     #[test]
     fn default_socket_names_are_narrowly_recognized() {
@@ -110,5 +161,15 @@ mod tests {
         assert_eq!(paths, [current.clone(), sibling.clone()]);
         assert_ne!(instance_id(&current), instance_id(&sibling));
         assert!(instance_id(&alias).is_none());
+    }
+
+    #[test]
+    fn default_discovery_finds_kitty_sockets_without_a_seed_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("kitty-11.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let owner = std::fs::metadata(&socket).unwrap().uid();
+
+        assert_eq!(discover_paths([dir.path().to_owned()], owner), [socket]);
     }
 }

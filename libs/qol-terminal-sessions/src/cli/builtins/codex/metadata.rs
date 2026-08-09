@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::cli::{CliActivityEvidence, CliRuntimeState};
+use crate::cli::{model::normalize_display_name, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
@@ -209,7 +209,6 @@ fn title_runtime(title: &str) -> Option<CliRuntimeState> {
         match *item {
             "Working" | "Thinking" => return Some(CliRuntimeState::Working),
             "Ready" => return Some(CliRuntimeState::Ready),
-            "Action Required" => return Some(CliRuntimeState::NeedsInput),
             _ => {}
         }
     }
@@ -221,13 +220,27 @@ fn title_thread_name(title: &str, cwd: &str) -> Option<String> {
     let state = items
         .iter()
         .copied()
-        .find(|item| matches!(*item, "Working" | "Thinking" | "Ready" | "Action Required"))?;
+        .find(|item| matches!(*item, "Working" | "Thinking" | "Ready"))
+        .or_else(|| {
+            items
+                .iter()
+                .copied()
+                .find(|item| *item == "Action Required")
+        })?;
     let leading = items.first().copied()?;
     if super::super::project_name(cwd).as_deref() != Some(leading) {
-        return (!leading.is_empty() && !is_thread_id(leading)).then(|| leading.to_owned());
+        return normalize_display_name(
+            (!leading.is_empty() && !is_thread_id(leading)).then(|| leading.to_owned()),
+        );
     }
     let name = items.last().copied()?;
-    (state != name && name != leading).then(|| name.to_owned())
+    if state == name || name == leading {
+        return None;
+    }
+    if matches!(state, "Ready" | "Action Required") && items.len() < 4 {
+        return None;
+    }
+    normalize_display_name((!name.is_empty() && !is_thread_id(name)).then(|| name.to_owned()))
 }
 
 fn is_thread_id(value: &str) -> bool {

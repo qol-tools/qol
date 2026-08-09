@@ -177,6 +177,17 @@ pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
             transition: transition(prev.status, Status::Working, Reason::LiveWork),
         };
     }
+    if prev.status == Status::NeedsYou && settled && grace_elapsed {
+        return Reduction {
+            attention: Attention {
+                status: Status::Unknown,
+                working_since: None,
+                settled_since: None,
+            },
+            phase: Phase::Idle,
+            transition: transition(prev.status, Status::Unknown, Reason::QuickIdle),
+        };
+    }
     if prev.status == Status::Working && settled && grace_elapsed {
         return Reduction {
             attention: Attention {

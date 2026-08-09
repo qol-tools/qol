@@ -106,6 +106,9 @@ fn title_activity_and_thread_name_follow_the_default_title_layout() {
         ),
         ("qol-tts | Action Required | qol-tts", Some(false), None),
         ("qol-tts | Ready | qol-tts", Some(false), None),
+        ("qol-tts | Ready | gpt-5.6-luna max", Some(false), None),
+        ("qol-tts | Ready | ", Some(false), None),
+        ("qol-tts | Ready | \u{1}", Some(false), None),
         ("qol-tts", Some(false), None),
     ];
 
@@ -246,7 +249,11 @@ fn descriptor_evidence_derives_strong_runtime_from_title_markers_only() {
         ("qol-tts | Ready | qol-tts", CliRuntimeState::Ready),
         (
             "qol-tts | Action Required | qol-tts",
-            CliRuntimeState::NeedsInput,
+            CliRuntimeState::Unknown,
+        ),
+        (
+            "qol-tts | Action Required | Ready | gpt-5.6-luna max",
+            CliRuntimeState::Ready,
         ),
         ("qol-tts", CliRuntimeState::Unknown),
     ];

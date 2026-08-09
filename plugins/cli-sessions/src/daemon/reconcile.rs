@@ -10,7 +10,7 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 use crate::attention::{reduce, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
-use crate::session::registry::{summary_for, Registry, SessionState};
+use crate::session::registry::{meaningful_name, summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
 use crate::session::tool::Tool;
@@ -486,13 +486,31 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         Some(s) => s.status,
         None => Status::Unknown,
     };
+    let previous_name = reg
+        .get(pane_id)
+        .filter(|s| s.root_pid == input.pane.root_pid)
+        .and_then(|s| meaningful_name(s.name.as_deref()))
+        .map(str::to_owned);
+    let name = meaningful_name(input.label)
+        .map(str::to_owned)
+        .or_else(|| previous_name.clone());
+    #[cfg(debug_assertions)]
+    if meaningful_name(input.label).is_none() && previous_name.is_some() {
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=label id={} action=retain previous={:?} incoming={:?}",
+            pane_id,
+            previous_name,
+            input.label
+        );
+    }
     let status = input.reduction.attention.status;
     let summary = summary_for(status, input.tool);
     let notice = attention_notice(
         prev_status,
         status,
         input.tool,
-        input.label,
+        name.as_deref(),
         &input.pane.cwd,
         &summary,
     );
@@ -534,7 +552,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         s.project = project_of(&input.pane.cwd);
         s.cwd = input.pane.cwd.clone();
         s.branch = input.branch;
-        s.name = input.label.map(str::to_owned);
+        s.name = name;
         s.working_since = input.reduction.attention.working_since;
         s.settled_since = input.reduction.attention.settled_since;
         s.bridged = input.bridged;
@@ -548,7 +566,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         id: pane_id.clone(),
         root_pid: input.pane.root_pid,
         project: project_of(&input.pane.cwd),
-        name: input.label.map(str::to_owned),
+        name,
         cwd: input.pane.cwd.clone(),
         branch: input.branch,
         tool: input.tool,

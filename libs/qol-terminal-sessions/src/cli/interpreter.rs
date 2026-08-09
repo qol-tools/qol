@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::SessionFacts;
 
 use super::builtins::GenericStrategy;
+use super::model::normalize_display_name;
 use super::{
     CliLaunchProgram, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
     CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliToolId,
@@ -63,7 +64,8 @@ impl CliSessionInterpreter {
 
     pub fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor {
         let strategy = self.strategy_for(session);
-        let descriptor = strategy.describe(session);
+        let mut descriptor = strategy.describe(session);
+        descriptor.display_name = normalize_display_name(descriptor.display_name);
         qol_runtime::probe!(
             "CLI_SESSION_INTERPRETATION",
             "event=described tool={} terminal_backend={}",
@@ -265,7 +267,15 @@ mod tests {
         awaiting.title = "qol-tts | Action Required | qol-tts".to_owned();
         assert_eq!(
             interpreter.describe(&awaiting).evidence.runtime,
-            CliRuntimeState::NeedsInput
+            CliRuntimeState::Unknown
+        );
+
+        let mut activity_and_ready = session(&["zsh", "codex"]);
+        activity_and_ready.title =
+            "qol-tts | Action Required | Ready | gpt-5.6-luna max".to_owned();
+        assert_eq!(
+            interpreter.describe(&activity_and_ready).evidence.runtime,
+            CliRuntimeState::Ready
         );
 
         let mut ready = session(&["zsh", "codex"]);
