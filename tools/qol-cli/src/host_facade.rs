@@ -38,8 +38,8 @@ pub(crate) fn core_log_dir() -> std::path::PathBuf {
     Platform.core_log_dir()
 }
 
-pub(crate) fn supports_desktop_payload() -> bool {
-    Platform.supports_desktop_payload()
+pub(crate) fn supports_immutable_payload_build() -> bool {
+    Platform.supports_immutable_payload_build()
 }
 
 pub(crate) fn open_text_file(path: &std::path::Path) -> bool {

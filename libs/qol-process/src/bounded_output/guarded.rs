@@ -1,9 +1,9 @@
-use super::{BoundedCommandOutput, CapturedOutput, CompletedCommandOutput};
-use std::io::{self, Read};
+use super::capture::{combine_errors, join_capture_thread, spawn_capture, WAIT_INTERVAL};
+use super::{BoundedCommandOutput, CompletedCommandOutput};
+use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const WAIT_INTERVAL: Duration = Duration::from_millis(10);
 const CONTAINMENT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runs a child inside verified process-tree containment with bounded output.
@@ -229,48 +229,10 @@ fn seal_completed_tree(guard: &crate::ProcessTreeGuard) -> Result<(), GuardedWai
         })
 }
 
-fn combine_errors(primary: io::Error, context: &str, secondary: io::Error) -> io::Error {
-    io::Error::new(primary.kind(), format!("{primary}; {context}: {secondary}"))
-}
-
-fn spawn_capture(
-    stream: impl Read + Send + 'static,
-    output_limit: usize,
-    stream_name: &str,
-) -> io::Result<std::thread::JoinHandle<io::Result<CapturedOutput>>> {
-    std::thread::Builder::new()
-        .name(format!("qol-process-{stream_name}-capture"))
-        .spawn(move || capture_stream(stream, output_limit))
-}
-
-fn capture_stream(mut stream: impl Read, output_limit: usize) -> io::Result<CapturedOutput> {
-    let mut bytes = Vec::with_capacity(output_limit.min(8 * 1024));
-    let mut truncated = false;
-    let mut chunk = [0_u8; 8 * 1024];
-    loop {
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        let retained = output_limit.saturating_sub(bytes.len()).min(read);
-        bytes.extend_from_slice(&chunk[..retained]);
-        truncated |= retained < read;
-    }
-    Ok(CapturedOutput { bytes, truncated })
-}
-
-fn join_capture_thread(
-    reader: std::thread::JoinHandle<io::Result<CapturedOutput>>,
-    stream_name: &str,
-) -> io::Result<CapturedOutput> {
-    reader
-        .join()
-        .map_err(|_| io::Error::other(format!("{stream_name} reader panicked")))?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CapturedOutput;
     use std::io::Write;
 
     const HELPER_ENV: &str = "QOL_PROCESS_BOUNDED_OUTPUT_HELPER";

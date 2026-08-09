@@ -56,7 +56,7 @@ impl PlatformOps for Platform {
         Ok(OpenPathOutcome::new(true))
     }
 
-    fn supports_desktop_payload(&self) -> bool {
+    fn supports_immutable_payload_build(&self) -> bool {
         false
     }
 

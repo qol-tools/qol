@@ -12,11 +12,13 @@ pub const ELF_SECTION_NAME: &str = NATIVE_SECTION_NAME;
 pub const MACHO_SECTION_NAME: &str = "__qolbi";
 pub const PE_SECTION_NAME: &str = NATIVE_SECTION_NAME;
 pub const DEV_FEATURE_NAME: &str = "dev";
+pub const SANDBOX_FEATURE_NAME: &str = "sandbox";
 pub const TRAY_PACKAGE_NAME: &str = "qol-tray";
 pub const TRAY_HOST_BINARY_NAME: &str = "qol-tray";
 pub const TRAY_INSTALLER_BINARY_NAME: &str = "qol-tray-install";
 pub const TRAY_DOCTOR_BINARY_NAME: &str = "qol-tray-doctor";
 pub const TRAY_MIGRATOR_BINARY_NAME: &str = "qol-tray-migrate";
+pub const TRAY_RESIDENT_POLICY_BINARY_NAME: &str = "qol-resident-policy";
 
 pub const ENV_BUILD_INTENT: &str = "QOL_BUILD_INTENT";
 pub const ENV_SOURCE_COMMIT: &str = "QOL_BUILD_SOURCE_COMMIT";
@@ -78,6 +80,7 @@ pub enum BuildRole {
     Cli,
     Plugin,
     GuestRunner,
+    ResidentPolicy,
 }
 
 pub fn tray_binary_role(binary: &str) -> Option<BuildRole> {
@@ -86,6 +89,7 @@ pub fn tray_binary_role(binary: &str) -> Option<BuildRole> {
         TRAY_INSTALLER_BINARY_NAME => Some(BuildRole::Installer),
         TRAY_DOCTOR_BINARY_NAME => Some(BuildRole::Doctor),
         TRAY_MIGRATOR_BINARY_NAME => Some(BuildRole::Migrator),
+        TRAY_RESIDENT_POLICY_BINARY_NAME => Some(BuildRole::ResidentPolicy),
         _ => None,
     }
 }
@@ -108,6 +112,7 @@ pub enum BuildFlavorError {
     SandboxIntentMismatch,
     ProductionRequiresRelease,
     ProductionForbidsDevFeatures,
+    ProductionForbidsSandboxFeature,
     ReleaseCompilerMismatch,
     DebugCompilerMismatch,
 }
@@ -120,6 +125,9 @@ impl BuildFlavorError {
             Self::SandboxIntentMismatch => "sandbox intent and profile disagree",
             Self::ProductionRequiresRelease => "production intent requires release profile",
             Self::ProductionForbidsDevFeatures => "production intent forbids dev features",
+            Self::ProductionForbidsSandboxFeature => {
+                "production intent forbids the sandbox feature"
+            }
             Self::ReleaseCompilerMismatch => "release flavor disagrees with compiler facts",
             Self::DebugCompilerMismatch => "debug flavor disagrees with compiler facts",
         }
@@ -178,6 +186,9 @@ impl BuildFlavor {
         }
         if intent == BuildIntent::Production && self.dev_features {
             return Err(BuildFlavorError::ProductionForbidsDevFeatures);
+        }
+        if intent == BuildIntent::Production && has_sandbox_feature(features) {
+            return Err(BuildFlavorError::ProductionForbidsSandboxFeature);
         }
         match self.profile {
             BuildProfile::Release
@@ -332,6 +343,12 @@ fn has_dev_feature(features: &[String]) -> bool {
         .is_ok()
 }
 
+fn has_sandbox_feature(features: &[String]) -> bool {
+    features
+        .binary_search_by(|feature| feature.as_str().cmp(SANDBOX_FEATURE_NAME))
+        .is_ok()
+}
+
 fn valid_git_oid(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
         && value
@@ -410,6 +427,9 @@ macro_rules! declare_build_identity {
     };
     (GuestRunner) => {
         $crate::declare_build_identity!(@emit "guest_runner");
+    };
+    (ResidentPolicy) => {
+        $crate::declare_build_identity!(@emit "resident_policy");
     };
     (@emit $role:literal) => {
         const QOL_BUILD_IDENTITY_FRAME: &str = concat!(
@@ -567,6 +587,24 @@ mod tests {
         assert!(matches!(
             decode_frame(&unknown),
             Err(DecodeError::InvalidJson(_))
+        ));
+    }
+
+    #[test]
+    fn production_intent_rejects_the_sandbox_feature() {
+        let mut production_sandbox = identity();
+        production_sandbox.intent = BuildIntent::Production;
+        production_sandbox.flavor = BuildFlavor {
+            profile: BuildProfile::Release,
+            dev_features: false,
+        };
+        production_sandbox.compiler.cargo_profile = "release".to_string();
+        production_sandbox.features = vec!["sandbox".to_string()];
+        assert!(matches!(
+            decode_frame(&frame(&production_sandbox)),
+            Err(DecodeError::InvalidContract(
+                "production intent forbids the sandbox feature"
+            ))
         ));
     }
 

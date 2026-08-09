@@ -44,7 +44,8 @@ pub(crate) use live::{LiveRun, OwnedRunCleanup};
 pub(crate) use media::BootMedia;
 pub(crate) use qol_dev_env::ResolutionState as ResolveState;
 pub(crate) use registry::register_image;
-pub(crate) use workflow::Definition as WorkflowDefinition;
+pub(crate) use workflow::resident_wave2;
+pub(crate) use workflow::{Definition as WorkflowDefinition, PayloadRecipe};
 
 pub(crate) fn workflow_definition(id: &str) -> Result<WorkflowDefinition> {
     workflow::find(id).ok_or_else(|| {
@@ -66,7 +67,10 @@ pub(crate) fn validate_workflow_adapter(
 ) -> Result<strategy::GuestPlan> {
     let plan = adapter.plan();
     match (workflow, plan.guest_strategy()) {
-        (workflow::Definition::Serial { .. }, strategy::GuestStrategy::DebianNocloud)
+        (
+            workflow::Definition::Serial { .. },
+            strategy::GuestStrategy::DebianNocloud | strategy::GuestStrategy::UbuntuNocloud,
+        )
         | (
             workflow::Definition::Desktop { .. },
             strategy::GuestStrategy::Macos
@@ -85,6 +89,10 @@ pub(crate) fn validate_workflow_adapter(
         ),
         (workflow::Definition::Desktop { .. }, strategy::GuestStrategy::DebianNocloud) => bail!(
             "workflow `{}` requires a desktop guest adapter, not `debian-nocloud`",
+            workflow.id()
+        ),
+        (workflow::Definition::Desktop { .. }, strategy::GuestStrategy::UbuntuNocloud) => bail!(
+            "workflow `{}` requires a desktop guest adapter, not `ubuntu-nocloud`",
             workflow.id()
         ),
     }
@@ -647,9 +655,7 @@ fn run_workflow(
             }
         );
     }
-    if matches!(workflow, workflow::Definition::Desktop { .. })
-        && options.guest_image_revision.is_none()
-    {
+    if workflow.requires_guest_revision() && options.guest_image_revision.is_none() {
         bail!("desktop workflow `{workflow_id}` requires a manifest-selected image revision");
     }
     if let Some(manifest_path) = &options.payload_manifest {
@@ -770,6 +776,7 @@ fn drive_serial_workflow(
         serial: &mut serial,
         os,
         stick: &stick,
+        image_path: std::path::Path::new(&vm.launch.target),
     };
     workflow_fn(&mut run)
 }
@@ -1947,7 +1954,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... [--] <run-id|environment> <command>...\n  qol emu exec [--run-root PATH]... [--] <run-id|environment> <absolute-program> [args...]\n  qol emu drag [--run-root PATH]... <run-id|environment> <x1,y1> <x2,y2>\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|macos-desktop|mint-cinnamon|windows-desktop\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable, must precede the selector, and defaults to target/qol-emu. Sandbox\nlaunches require verified host process-tree containment; unsupported hosts stay\nvisible but cannot start a VM. For sh and exec,\nevery word after the selector is forwarded literally, including a leading --.\nexec and drag talk to prepared desktop guests: exec runs as the guest desktop\nuser over verified guest control, drag drives the QMP pointer scaled to the\nlive framebuffer.\nPlace -- before the selector to stop global option parsing without forwarding it.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... [--] <run-id|environment> <command>...\n  qol emu exec [--run-root PATH]... [--] <run-id|environment> <absolute-program> [args...]\n  qol emu drag [--run-root PATH]... <run-id|environment> <x1,y1> <x2,y2>\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|ubuntu-nocloud|macos-desktop|mint-cinnamon|windows-desktop\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable, must precede the selector, and defaults to target/qol-emu. Sandbox\nlaunches require verified host process-tree containment; unsupported hosts stay\nvisible but cannot start a VM. For sh and exec,\nevery word after the selector is forwarded literally, including a leading --.\nexec and drag talk to prepared desktop guests: exec runs as the guest desktop\nuser over verified guest control, drag drives the QMP pointer scaled to the\nlive framebuffer.\nPlace -- before the selector to stop global option parsing without forwarding it.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -2709,7 +2716,7 @@ mod tests {
         let help = emu_help_text();
         assert!(help.contains("[--] <run-id|environment> <command>..."));
         assert!(help.contains(
-            "--guest-adapter debian-nocloud|macos-desktop|mint-cinnamon|windows-desktop"
+            "--guest-adapter debian-nocloud|ubuntu-nocloud|macos-desktop|mint-cinnamon|windows-desktop"
         ));
         assert!(help.contains(
             "every word after the selector is forwarded literally, including a leading --"
@@ -2722,10 +2729,15 @@ mod tests {
     #[test]
     fn workflow_adapter_validation_separates_serial_and_desktop_contracts() {
         let serial = workflow_definition("leaves-no-trace").unwrap();
+        let wave2 = workflow_definition("resident-wave2-apt-preferences").unwrap();
         let desktop = workflow_definition("bluetooth-storm").unwrap();
 
         validate_workflow_adapter(serial, GuestAdapter::DebianNocloud).unwrap();
+        validate_workflow_adapter(wave2, GuestAdapter::DebianNocloud).unwrap();
+        validate_workflow_adapter(serial, GuestAdapter::UbuntuNocloud).unwrap();
+        validate_workflow_adapter(wave2, GuestAdapter::UbuntuNocloud).unwrap();
         assert!(validate_workflow_adapter(desktop, GuestAdapter::DebianNocloud).is_err());
+        assert!(validate_workflow_adapter(desktop, GuestAdapter::UbuntuNocloud).is_err());
 
         for adapter in [
             GuestAdapter::MacosDesktop,
@@ -2733,6 +2745,7 @@ mod tests {
             GuestAdapter::WindowsDesktop,
         ] {
             assert!(validate_workflow_adapter(serial, adapter).is_err());
+            assert!(validate_workflow_adapter(wave2, adapter).is_err());
             validate_workflow_adapter(desktop, adapter).unwrap();
         }
     }
@@ -3142,7 +3155,8 @@ mod tests {
             "-serial tcp:127.0.0.1:5555,server,nowait",
             "-chardev socket,id=qol-guest-control,host=127.0.0.1,port=6666,server=on,wait=off",
             "-device virtserialport,chardev=qol-guest-control,name=org.qol-tools.guest-control",
-            "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
+            "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=none,format=qcow2",
+            "-device virtio-blk-pci,drive=qoldisk,bootindex=1",
             "-device qemu-xhci,id=xhci",
             "-device virtio-rng-pci",
             "-device usb-kbd,bus=xhci.0,id=qol-keyboard",
@@ -3202,6 +3216,16 @@ mod tests {
             "-drive if=none,file=/runs/flow/payload.iso,format=raw,readonly=on,id=qolpayload"
         ));
         assert!(joined.contains("-device virtio-blk-pci,drive=qolpayload,serial=qolpayload"));
+        assert!(joined.contains("-device virtio-blk-pci,drive=qoldisk,bootindex=1"));
+        assert_eq!(
+            joined.matches("bootindex").count(),
+            1,
+            "the payload must never be boot-selected; only the OS disk carries a bootindex: {joined}"
+        );
+        assert!(
+            !joined.contains("drive=qolpayload,bootindex"),
+            "the payload device must not be boot-selected: {joined}"
+        );
         assert!(!joined.contains("virtfs"));
         assert!(!joined.contains("fsdev"));
         assert!(joined.contains("-nic none"));

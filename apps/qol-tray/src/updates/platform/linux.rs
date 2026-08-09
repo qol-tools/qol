@@ -65,6 +65,31 @@ fn atomic_replace_inner(source: &Path, target: &Path, staged: &Path) -> Result<(
     Ok(())
 }
 
+fn tar_update_blocked(
+    kind: InstallKind,
+    ownership: Result<
+        qol_host_fixes::policy::managed::DpkgOwnership,
+        qol_host_fixes::policy::managed::CarrierError,
+    >,
+) -> Result<bool> {
+    Ok(match kind {
+        InstallKind::Development => true,
+        InstallKind::UserLocal => false,
+        InstallKind::SystemWide => match ownership {
+            Ok(qol_host_fixes::policy::managed::DpkgOwnership::PackageOwnsPath) => true,
+            Ok(
+                qol_host_fixes::policy::managed::DpkgOwnership::PathNotPackageOwned
+                | qol_host_fixes::policy::managed::DpkgOwnership::NoDpkg,
+            ) => false,
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "cannot determine the qol-tray install ownership: {error}"
+                ));
+            }
+        },
+    })
+}
+
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
@@ -74,9 +99,20 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     if !dev_override {
         match install_kind {
             InstallKind::SystemWide => {
-                log::warn!(
-                    "Updating a system-wide installation — binary will be replaced in place"
+                let current = std::env::current_exe().context("current executable")?;
+                let ownership = qol_host_fixes::policy::managed::dpkg_ownership(
+                    &current.to_string_lossy(),
+                    qol_conventions::artifact::TRAY_PACKAGE_NAME,
                 );
+                if tar_update_blocked(install_kind, ownership)? {
+                    anyhow::bail!(
+                        "qol-tray is installed system-wide from a Debian package; the host-only \
+                         tarball cannot update it (the package's maintainer scripts own the update \
+                         path). Update with the package manager: apt-get update && apt-get install \
+                         --only-upgrade qol-tray, or reinstall the new package with: apt-get install \
+                         ./qol-tray_<version>_<arch>.deb"
+                    )
+                }
             }
             InstallKind::Development => {
                 anyhow::bail!("Self-update is disabled in development builds")
@@ -138,6 +174,51 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::updates::platform::install_kind::InstallKind;
+
+    fn deb_owned() -> Result<
+        qol_host_fixes::policy::managed::DpkgOwnership,
+        qol_host_fixes::policy::managed::CarrierError,
+    > {
+        Ok(qol_host_fixes::policy::managed::DpkgOwnership::PackageOwnsPath)
+    }
+
+    fn foreign_owned() -> Result<
+        qol_host_fixes::policy::managed::DpkgOwnership,
+        qol_host_fixes::policy::managed::CarrierError,
+    > {
+        Ok(qol_host_fixes::policy::managed::DpkgOwnership::PathNotPackageOwned)
+    }
+
+    fn no_dpkg() -> Result<
+        qol_host_fixes::policy::managed::DpkgOwnership,
+        qol_host_fixes::policy::managed::CarrierError,
+    > {
+        Ok(qol_host_fixes::policy::managed::DpkgOwnership::NoDpkg)
+    }
+
+    fn indeterminate() -> Result<
+        qol_host_fixes::policy::managed::DpkgOwnership,
+        qol_host_fixes::policy::managed::CarrierError,
+    > {
+        Err(
+            qol_host_fixes::policy::managed::CarrierError::PackageQueryFailed {
+                detail: "injected".to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn tar_update_blocking_is_a_pure_decision_matrix() {
+        assert!(tar_update_blocked(InstallKind::Development, deb_owned()).unwrap());
+        assert!(tar_update_blocked(InstallKind::Development, no_dpkg()).unwrap());
+        assert!(!tar_update_blocked(InstallKind::UserLocal, deb_owned()).unwrap());
+        assert!(!tar_update_blocked(InstallKind::UserLocal, indeterminate()).unwrap());
+        assert!(tar_update_blocked(InstallKind::SystemWide, deb_owned()).unwrap());
+        assert!(!tar_update_blocked(InstallKind::SystemWide, foreign_owned()).unwrap());
+        assert!(!tar_update_blocked(InstallKind::SystemWide, no_dpkg()).unwrap());
+        assert!(tar_update_blocked(InstallKind::SystemWide, indeterminate()).is_err());
+    }
 
     #[test]
     fn linux_release_asset_name_is_stable() {

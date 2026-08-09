@@ -1,8 +1,9 @@
-//! Bounded command-output capture and guarded execution.
-
+mod capture;
 mod guarded;
+mod owned;
 
 pub use guarded::run_guarded_with_output_timeout;
+pub use owned::run_owned_with_output_timeout;
 use std::process::ExitStatus;
 
 #[derive(Debug)]

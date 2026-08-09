@@ -3,7 +3,7 @@ use crate::commands::{dev_env, emu};
 use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
-use qol_dev_env::{ResolutionState, ResolvedEnvironment};
+use qol_dev_env::{EnvironmentDefinition, ResolutionState, ResolvedEnvironment};
 use qol_dev_orchestrator::{FlowStart, FlowWorkerRequest, RunHandle, RunTicket, MAX_FLOW_REPEATS};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -835,6 +835,26 @@ impl From<FlowStart> for FlowOptions {
     }
 }
 
+fn validate_payload_admission(
+    definition: &EnvironmentDefinition,
+    workflow: emu::WorkflowDefinition,
+) -> Result<()> {
+    if workflow.requires_payload() && definition.mounts.workspace {
+        bail!(
+            "environment `{}` must disable the workspace mount before running immutable payload workflows",
+            definition.id
+        );
+    }
+    if workflow.requires_guest_revision() && !definition.capabilities.contains_key("image_revision")
+    {
+        bail!(
+            "environment `{}` must declare image_revision before running desktop workflows",
+            definition.id
+        );
+    }
+    Ok(())
+}
+
 fn plan_flow(mut start: FlowStart) -> Result<FlowPlan> {
     start.validate()?;
     let worktree = resolve_flow_worktree(&FlowOptions::from(start.clone()))?;
@@ -843,23 +863,7 @@ fn plan_flow(mut start: FlowStart) -> Result<FlowPlan> {
     let workflow = emu::workflow_definition(&start.workflow)?;
     let guest_adapter = require_flow_adapter(&environment)?;
     emu::validate_workflow_adapter(workflow, guest_adapter)?;
-    if workflow.requires_payload() && environment.definition.mounts.workspace {
-        bail!(
-            "environment `{}` must disable the workspace mount before running desktop workflows",
-            start.environment_id
-        );
-    }
-    if workflow.requires_payload()
-        && !environment
-            .definition
-            .capabilities
-            .contains_key("image_revision")
-    {
-        bail!(
-            "environment `{}` must declare image_revision before running desktop workflows",
-            start.environment_id
-        );
-    }
+    validate_payload_admission(&environment.definition, workflow)?;
     let image_path = environment
         .image_path
         .clone()
@@ -1090,6 +1094,11 @@ fn run_flow_inner(plan: FlowPlan, executable: &Path, verbose: bool) -> Result<()
             ));
         }
     }
+    let guest_image_revision = environment
+        .definition
+        .capabilities
+        .get("image_revision")
+        .map(String::as_str);
     let launch_arguments = (|| -> Result<()> {
         for pending in &mut pending {
             pending.args = emu::child_launch_args(emu::ChildLaunch {
@@ -1099,11 +1108,7 @@ fn run_flow_inner(plan: FlowPlan, executable: &Path, verbose: bool) -> Result<()
                 run_id: &pending.run_id,
                 parent_lease: &parent_lease,
                 guest_adapter: Some(guest_adapter),
-                guest_image_revision: environment
-                    .definition
-                    .capabilities
-                    .get("image_revision")
-                    .map(String::as_str),
+                guest_image_revision,
                 payload_manifest: payload
                     .as_ref()
                     .map(|payload| payload.manifest_path.as_path()),
@@ -2566,19 +2571,205 @@ fn prepare_workflow_payload(
     verbose: bool,
     cancellation: &impl CancellationSource,
 ) -> std::result::Result<(Option<FlowPayload>, FlowPreparation), PayloadPreparationFailure> {
-    if !workflow.requires_payload() {
-        return Ok((None, FlowPreparation::pending(false)));
+    match workflow.payload_recipe() {
+        None | Some(emu::PayloadRecipe::None) => Ok((None, FlowPreparation::pending(false))),
+        Some(emu::PayloadRecipe::Desktop) => {
+            prepare_desktop_workflow_payload(workflow, worktree, run_dir, verbose, cancellation)
+        }
+        Some(emu::PayloadRecipe::ResidentWave2) => {
+            prepare_resident_workflow_payload(workflow.id(), worktree, run_dir, cancellation)
+        }
     }
+}
+
+fn prepare_resident_workflow_payload(
+    workflow_id: &str,
+    worktree: &Path,
+    run_dir: &Path,
+    cancellation: &impl CancellationSource,
+) -> std::result::Result<(Option<FlowPayload>, FlowPreparation), PayloadPreparationFailure> {
+    if !crate::host_facade::supports_immutable_payload_build() {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!("workflow `{workflow_id}` currently requires an x86_64 Linux build host"),
+            false,
+        ));
+    }
+    if cancellation.is_cancelled() {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!("flow execution cancelled before bundle preparation"),
+            true,
+        ));
+    }
+    let journals = PreparationJournals::initialize(run_dir)
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    let cache_root = worktree.join(emu::resident_wave2::bundle::BUNDLE_CACHE_ROOT);
+    let snapshot_dir = run_dir.join("bundle-snapshot");
+    step_label(
+        "bundle",
+        StepKind::Pending,
+        "resolving the resident product bundle",
+    );
+    let current = std::env::current_exe().map_err(|error| {
+        PayloadPreparationFailure::before_spawn(
+            anyhow!("failed to resolve the qol executable: {error}"),
+            false,
+        )
+    })?;
+    let mut prepare = Command::new(current);
+    prepare.args(emu::resident_wave2::bundle::prepare_argv(
+        worktree,
+        &cache_root,
+        &snapshot_dir,
+    ));
+    let status = run_owned_preparation_command(prepare, cancellation, &journals.build).map_err(
+        |mut failure| {
+            failure.error = failure.error.context("failed to run bundle preparation");
+            failure
+        },
+    )?;
+    if !status.success() {
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("resident bundle preparation exited with {status}"),
+            cancelled: false,
+            preparation: Box::new(FlowPreparation {
+                status: "failed".to_string(),
+                build_status: "failed".to_string(),
+                process_status: Some(status.to_string()),
+                cleanup: PreparationCleanup::verified(),
+                iso_status: "skipped".to_string(),
+                iso_process_status: None,
+                iso_cleanup: PreparationCleanup::not_required(),
+            }),
+        });
+    }
+    step_label("bundle", StepKind::Success, "product bundle is ready");
+    let mut preparation = FlowPreparation {
+        status: "complete".to_string(),
+        build_status: "pass".to_string(),
+        process_status: Some(status.to_string()),
+        cleanup: PreparationCleanup::verified(),
+        iso_status: "pending".to_string(),
+        iso_process_status: None,
+        iso_cleanup: PreparationCleanup::pending(),
+    };
+    if cancellation.is_cancelled() {
+        preparation.status = "cancelled".to_string();
+        preparation.iso_status = "skipped".to_string();
+        preparation.iso_cleanup = PreparationCleanup::not_required();
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("flow execution cancelled after bundle preparation"),
+            cancelled: true,
+            preparation: Box::new(preparation),
+        });
+    }
+    let files = emu::resident_wave2::bundle::snapshot_payload_files(&snapshot_dir, run_dir)
+        .map_err(|error| {
+            let cancelled = cancellation.is_cancelled();
+            PayloadPreparationFailure {
+                error,
+                cancelled,
+                preparation: Box::new(failed_preparation(preparation.clone(), cancelled)),
+            }
+        })?;
+    let payload_dir = run_dir.join("payload");
+    let prepared =
+        qol_dev_env::payload::stage_payload(&payload_dir.join("root"), workflow_id, &files)
+            .map_err(|error| {
+                let cancelled = cancellation.is_cancelled();
+                PayloadPreparationFailure {
+                    error,
+                    cancelled,
+                    preparation: Box::new(failed_preparation(preparation.clone(), cancelled)),
+                }
+            })?;
+    let iso_tool = emu::find_on_path("genisoimage")
+        .or_else(|| emu::find_on_path("mkisofs"))
+        .context("missing genisoimage or mkisofs on PATH")
+        .map_err(|error| {
+            let cancelled = cancellation.is_cancelled();
+            PayloadPreparationFailure {
+                error,
+                cancelled,
+                preparation: Box::new(failed_preparation(preparation.clone(), cancelled)),
+            }
+        })?;
+    let mut iso_process_failure = None;
+    let mut iso_process_status = None;
+    let image = match qol_dev_env::payload::create_read_only_iso_with_runner(
+        &prepared,
+        &payload_dir,
+        iso_tool.as_os_str(),
+        |mut command| {
+            dev_env::clear_host_session(&mut command);
+            match run_owned_preparation_command(command, cancellation, &journals.iso) {
+                Ok(status) => {
+                    iso_process_status = Some(status);
+                    Ok(status)
+                }
+                Err(failure) => {
+                    let detail = format!("{:#}", failure.error);
+                    iso_process_failure = Some(failure);
+                    Err(anyhow!(detail))
+                }
+            }
+        },
+    ) {
+        Ok(image) => {
+            if let Some(status) = iso_process_status {
+                preparation.iso_status = "pass".to_string();
+                preparation.iso_process_status = Some(status.to_string());
+                preparation.iso_cleanup = PreparationCleanup::verified();
+            } else {
+                preparation.iso_status = "reused".to_string();
+                preparation.iso_cleanup = PreparationCleanup::not_required();
+            }
+            image
+        }
+        Err(error) => {
+            let mut preparation =
+                failed_preparation(preparation.clone(), cancellation.is_cancelled());
+            if let Some(failure) = iso_process_failure {
+                preparation.cleanup = failure.preparation.cleanup;
+                preparation.iso_cleanup = failure.preparation.iso_cleanup;
+                preparation.iso_process_status = failure.preparation.iso_process_status;
+                preparation.iso_status = failure.preparation.iso_status.clone();
+            }
+            return Err(PayloadPreparationFailure {
+                error: error.context("failed to create the resident payload ISO"),
+                cancelled: false,
+                preparation: Box::new(preparation),
+            });
+        }
+    };
+    Ok((
+        Some(FlowPayload {
+            root: prepared.root,
+            manifest_path: prepared.manifest_path,
+            image_path: image.path,
+            manifest_sha256: image.manifest_sha256,
+            cleanup: PayloadCleanup::pending(),
+        }),
+        preparation,
+    ))
+}
+
+fn prepare_desktop_workflow_payload(
+    workflow: emu::WorkflowDefinition,
+    worktree: &Path,
+    run_dir: &Path,
+    verbose: bool,
+    cancellation: &impl CancellationSource,
+) -> std::result::Result<(Option<FlowPayload>, FlowPreparation), PayloadPreparationFailure> {
     let recipe = desktop_payload_recipe(workflow.id()).ok_or_else(|| {
         PayloadPreparationFailure::before_spawn(
             anyhow!(
-                "workflow `{}` declares a payload but has no payload recipe",
+                "workflow `{}` declares a payload but has no desktop payload recipe",
                 workflow.id()
             ),
             false,
         )
     })?;
-    if !crate::host_facade::supports_desktop_payload() {
+    if !crate::host_facade::supports_immutable_payload_build() {
         return Err(PayloadPreparationFailure::before_spawn(
             anyhow!(
                 "workflow `{}` currently requires an x86_64 Linux build host",
@@ -4730,14 +4921,54 @@ mod tests {
         let uncovered: Vec<&str> = emu::workflow_ids()
             .into_iter()
             .filter(|id| {
-                emu::workflow_definition(id).is_ok_and(|definition| definition.requires_payload())
+                emu::workflow_definition(id).is_ok_and(|definition| {
+                    definition.payload_recipe() == Some(emu::PayloadRecipe::Desktop)
+                })
             })
             .filter(|id| desktop_payload_recipe(id).is_none())
             .collect();
         assert!(
             uncovered.is_empty(),
-            "every payload workflow needs a recipe or `qol flow run` bails at prepare time: {uncovered:?}"
+            "every desktop payload workflow needs a desktop recipe: {uncovered:?}"
         );
+        let resident: Vec<&str> = emu::workflow_ids()
+            .into_iter()
+            .filter(|id| {
+                emu::workflow_definition(id).is_ok_and(|definition| {
+                    definition.payload_recipe() == Some(emu::PayloadRecipe::ResidentWave2)
+                })
+            })
+            .collect();
+        assert_eq!(
+            resident,
+            vec![
+                "resident-wave2-apt-preferences",
+                "resident-wave2-package-contract"
+            ]
+        );
+    }
+
+    #[test]
+    fn payload_free_workflows_skip_preparation_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow = emu::workflow_definition("leaves-no-trace").unwrap();
+        assert!(!workflow.requires_payload());
+        assert_eq!(workflow.payload_recipe(), Some(emu::PayloadRecipe::None));
+        let (payload, preparation) = prepare_workflow_payload(
+            workflow,
+            dir.path(),
+            &dir.path().join("run"),
+            false,
+            &FixedCancellation(false),
+        )
+        .unwrap();
+        assert!(payload.is_none());
+        assert_eq!(preparation.status, "complete");
+        assert_eq!(preparation.build_status, "skipped");
+        assert_eq!(preparation.iso_status, "skipped");
+        assert!(preparation.process_status.is_none());
+        assert_eq!(preparation.cleanup.status, "not-required");
+        assert_eq!(preparation.iso_cleanup.status, "not-required");
     }
 
     #[test]
@@ -4814,6 +5045,196 @@ mod tests {
             run_root,
             ticket,
         }
+    }
+
+    fn registered_serial_definition(toml: &str) -> EnvironmentDefinition {
+        qol_dev_env::registry::parse_definition(toml, Path::new("flows/envs/registered.toml"))
+            .unwrap()
+    }
+
+    #[test]
+    fn resident_payload_workflows_admit_registered_debian_and_ubuntu_environments() {
+        for (toml, id, adapter) in [
+            (
+                include_str!("../../../../flows/envs/linux-debian-nocloud.toml"),
+                "linux/debian-nocloud",
+                emu::GuestAdapter::DebianNocloud,
+            ),
+            (
+                include_str!("../../../../flows/envs/linux-ubuntu-nocloud.toml"),
+                "linux/ubuntu-nocloud",
+                emu::GuestAdapter::UbuntuNocloud,
+            ),
+        ] {
+            let definition = registered_serial_definition(toml);
+            assert_eq!(definition.id, id);
+            assert!(!definition.capabilities.contains_key("image_revision"));
+            assert_eq!(
+                configured_flow_adapter(&definition.capabilities).unwrap(),
+                adapter
+            );
+            for workflow_id in [
+                "resident-wave2-apt-preferences",
+                "resident-wave2-package-contract",
+            ] {
+                let workflow = emu::workflow_definition(workflow_id).unwrap();
+                assert!(workflow.requires_payload(), "{workflow_id}");
+                assert!(!workflow.requires_guest_revision(), "{workflow_id}");
+                emu::validate_workflow_adapter(workflow, adapter).unwrap();
+                validate_payload_admission(&definition, workflow).unwrap();
+            }
+        }
+    }
+
+    fn serial_child_launch<'a>(
+        definition: &'a EnvironmentDefinition,
+        parent_lease: &'a qol_dev_env::resources::ParentLeaseClaim,
+    ) -> emu::ChildLaunch<'a> {
+        emu::ChildLaunch {
+            operation: emu::ChildOperation::Run("resident-wave2-apt-preferences"),
+            target: Path::new("/images/debian.qcow2"),
+            environment_id: &definition.id,
+            run_id: "debian-lane-1",
+            parent_lease,
+            guest_adapter: Some(configured_flow_adapter(&definition.capabilities).unwrap()),
+            guest_image_revision: definition
+                .capabilities
+                .get("image_revision")
+                .map(String::as_str),
+            payload_manifest: None,
+            payload_image: None,
+            run_root: Some(Path::new("/runs/cases")),
+            image_kind: Some("qcow2"),
+            display: emu::DisplayMode::None,
+            offline: true,
+            resources: dev_resources::profile(1024, 1).unwrap(),
+            acceleration: definition
+                .capabilities
+                .get("acceleration")
+                .map(String::as_str),
+            arch: definition.image.arch.as_deref(),
+            firmware: definition.image.firmware.as_deref(),
+            usb_host: None,
+        }
+    }
+
+    #[test]
+    fn serial_workflow_forwarding_preserves_a_declared_guest_revision() {
+        let definition = registered_serial_definition(include_str!(
+            "../../../../flows/envs/linux-debian-nocloud.toml"
+        ));
+        let mut revisioned = definition.clone();
+        revisioned
+            .capabilities
+            .insert("image_revision".to_string(), "debian-13-qol-1".to_string());
+        let workflow = emu::workflow_definition("resident-wave2-apt-preferences").unwrap();
+        assert!(!workflow.requires_guest_revision());
+        emu::validate_workflow_adapter(
+            workflow,
+            configured_flow_adapter(&revisioned.capabilities).unwrap(),
+        )
+        .unwrap();
+        validate_payload_admission(&revisioned, workflow).unwrap();
+        validate_payload_admission(&definition, workflow).unwrap();
+
+        let parent_lease =
+            qol_dev_env::resources::ParentLeaseClaim::parse("debian-batch-1").unwrap();
+        let revisioned_args =
+            emu::child_launch_args(serial_child_launch(&revisioned, &parent_lease)).unwrap();
+        let revisioned_args: Vec<String> = revisioned_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let index = revisioned_args
+            .iter()
+            .position(|arg| arg == "--guest-image-revision")
+            .unwrap();
+        assert_eq!(revisioned_args[index + 1], "debian-13-qol-1");
+
+        let revisionless_args =
+            emu::child_launch_args(serial_child_launch(&definition, &parent_lease)).unwrap();
+        let revisionless_args: Vec<String> = revisionless_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!revisionless_args
+            .iter()
+            .any(|arg| arg == "--guest-image-revision"));
+    }
+
+    #[test]
+    fn desktop_workflows_require_a_guest_revision_in_a_desktop_compatible_environment() {
+        let definition = qol_dev_env::registry::parse_definition(
+            include_str!("../../../../flows/envs/linux-mint-cinnamon.toml"),
+            Path::new("flows/envs/linux-mint-cinnamon.toml"),
+        )
+        .unwrap();
+        let mut revisionless = definition;
+        revisionless.capabilities.remove("image_revision");
+        let adapter = configured_flow_adapter(&revisionless.capabilities).unwrap();
+        let desktop = emu::workflow_definition("bluetooth-storm").unwrap();
+        assert!(desktop.requires_guest_revision());
+        emu::validate_workflow_adapter(desktop, adapter).unwrap();
+        let error = validate_payload_admission(&revisionless, desktop).unwrap_err();
+        assert!(error.to_string().contains("image_revision"), "{error}");
+    }
+
+    #[test]
+    fn workspace_mounts_stay_forbidden_for_every_immutable_payload_workflow() {
+        let definition = registered_serial_definition(include_str!(
+            "../../../../flows/envs/linux-ubuntu-nocloud.toml"
+        ));
+        let mut mounted = definition;
+        mounted.mounts.workspace = true;
+        let wave2 = emu::workflow_definition("resident-wave2-apt-preferences").unwrap();
+        let error = validate_payload_admission(&mounted, wave2).unwrap_err();
+        assert!(error.to_string().contains("immutable payload"), "{error}");
+        let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
+        let error = validate_payload_admission(&mounted, desktop).unwrap_err();
+        assert!(error.to_string().contains("immutable payload"), "{error}");
+        validate_payload_admission(
+            &mounted,
+            emu::workflow_definition("leaves-no-trace").unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn resident_payload_consumption_never_touches_the_shared_cache_or_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("run");
+        fs::create_dir_all(&run_dir).unwrap();
+        let snapshot_dir = run_dir.join("bundle-snapshot");
+        let key = "a".repeat(64);
+        emu::resident_wave2::bundle::write_fake_bundle(&snapshot_dir, &key);
+        let cache_root = dir.path().join("cache");
+
+        let files =
+            emu::resident_wave2::bundle::snapshot_payload_files(&snapshot_dir, &run_dir).unwrap();
+        assert_eq!(files.len(), 5);
+        for file in &files {
+            if file.relative_path == *Path::new("scenario.sh") {
+                assert_eq!(file.source, run_dir.join("wave2-scenario.sh"));
+            } else {
+                assert!(
+                    file.source.starts_with(&snapshot_dir),
+                    "{}",
+                    file.source.display()
+                );
+            }
+        }
+        assert!(
+            !cache_root.exists(),
+            "the parent consumption path must never touch the shared cache"
+        );
+        let snapshot_entries: Vec<String> = fs::read_dir(&snapshot_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !snapshot_entries.iter().any(|name| name == "scenario.sh"),
+            "the scenario must stay outside the snapshot bundle set"
+        );
     }
 
     #[test]

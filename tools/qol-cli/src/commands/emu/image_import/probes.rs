@@ -72,8 +72,11 @@ pub(super) fn verify_guest(
     )?;
     let specs = match plan.guest_adapter {
         GuestAdapter::MintCinnamon => mint_probe_specs(&plan.environment)?,
-        GuestAdapter::DebianNocloud => {
-            bail!("guest adapter `debian-nocloud` has no verified image-import probe set")
+        GuestAdapter::DebianNocloud | GuestAdapter::UbuntuNocloud => {
+            bail!(
+                "guest adapter `{}` has no verified image-import probe set",
+                plan.guest_adapter.as_str()
+            )
         }
         GuestAdapter::MacosDesktop | GuestAdapter::WindowsDesktop => bail!(
             "guest adapter `{}` has no verified image-import probe set",

@@ -6,8 +6,22 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1"
+serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
+sha2.workspace = true
+qol-artifact.workspace = true
 qol-config.workspace = true
+qol-conventions.workspace = true
+qol-fs.workspace = true
+qol-process.workspace = true
+qol-runtime.workspace = true
+getrandom.workspace = true
+
+[features]
+sandbox = []
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -143,6 +143,8 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     let outcome = tray::platform::run_app(app_init);
 
+    qol_tray::features::gpu_driver_sync::stop_watch();
+
     if owns_host_surface {
         log_binding_restore("shutdown", hotkeys::restore_desktop_bindings());
     }
@@ -189,6 +191,12 @@ fn dispatch_host_cli(invocation: host_cli::Invocation) -> Option<i32> {
             }
         }
         host_cli::Invocation::Headless(args) => Some(qol_tray::doctor::run_host_cli(args)),
+        host_cli::Invocation::ResidentPolicy(args) => {
+            Some(qol_tray::features::resident_policy::run_cli(&args))
+        }
+        host_cli::Invocation::ResidentPolicyHidden(args) => {
+            Some(qol_tray::features::resident_policy::run_hidden(&args))
+        }
         host_cli::Invocation::Exec { target, action } => Some(exec_subcommand(&target, &action)),
         host_cli::Invocation::Open(route) => Some(forward_route(&route)),
         host_cli::Invocation::UrlCourier(route) => Some(courier_forward_with_retry(&route)),
@@ -244,6 +252,9 @@ fn print_usage() {
         "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
     );
     println!("    qol-tray doctor                       Run read-only host and plugin checks");
+    println!(
+        "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy"
+    );
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray help, --help, -h             Print this message and exit");
@@ -452,7 +463,7 @@ async fn async_init_inner(
         );
     }
     qol_tray::settings_surface::prewarm();
-    qol_tray::doctor::spawn_gpu_driver_sync_watch();
+    qol_tray::features::gpu_driver_sync::spawn_watch();
     qol_tray::doctor::spawn_target_cache_watch();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);

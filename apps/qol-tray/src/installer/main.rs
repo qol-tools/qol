@@ -57,7 +57,7 @@ where
         .command(operation_command(
             "install",
             "Install QoL Tray.",
-            "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--dev]",
+            install_usage(),
             operations.clone(),
         ))
         .fallback_command(
@@ -75,6 +75,10 @@ where
         ))
 }
 
+fn install_usage() -> &'static str {
+    "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--dev]"
+}
+
 fn operation_command<O>(
     name: &'static str,
     about: &'static str,
@@ -84,12 +88,13 @@ fn operation_command<O>(
 where
     O: InstallerOperations,
 {
-    Command::new(name)
+    let command = Command::new(name)
         .about(about)
         .usage(usage)
         .detail("--source <PATH> selects an existing install source.")
         .detail("--workspace <PATH> installs its locally built plugin bundles.")
-        .detail("--dev selects dev runtime mode and requires a dev-enabled build.")
+        .detail("--dev selects dev runtime mode and requires a dev-enabled build.");
+    command
         .output("Progress is written to stdout; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero when validation or an install operation fails.")
         .run_plain_text(move |context| {
