@@ -103,12 +103,12 @@ impl Registry {
 
 fn rank(state: &SessionState) -> u8 {
     if state.bridged {
-        return 2;
+        return 3;
     }
     match state.status {
         Status::NeedsYou => 0,
         Status::YourTurn => 1,
-        Status::Working => 3,
+        Status::Working => 2,
         Status::Service => 4,
         Status::Unknown => 5,
         Status::Acknowledged => 6,

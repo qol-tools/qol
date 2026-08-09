@@ -319,34 +319,6 @@ fn summary_cell(
         .into_any_element()
 }
 
-fn bridged_cell() -> AnyElement {
-    let palette = current_palette();
-    div()
-        .flex()
-        .items_center()
-        .gap(px(5.0))
-        .min_w(px(0.0))
-        .overflow_hidden()
-        .child(
-            div()
-                .flex_none()
-                .w(px(11.0))
-                .text_color(rgb(palette.bridged))
-                .text_size(px(10.0))
-                .child("\u{21C4}"),
-        )
-        .child(
-            div()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .truncate()
-                .text_color(rgb(palette.bridged))
-                .text_size(px(11.0))
-                .child("bridge live"),
-        )
-        .into_any_element()
-}
-
 fn driving_chip(
     count: usize,
     driver: SessionId,
@@ -383,17 +355,22 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
         .gap(px(8.0))
         .w_full()
         .overflow_hidden()
-        .child(if s.bridged {
-            bridged_cell()
-        } else {
-            summary_cell(s.status, &s.summary, s.id.clone(), index, cx)
-        })
+        .child(summary_cell(s.status, &s.summary, s.id.clone(), index, cx))
         .child(
             div()
                 .flex()
                 .flex_none()
                 .items_center()
                 .gap(px(6.0))
+                .when(s.bridged, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_color(rgb(palette.bridged))
+                            .text_size(px(11.0))
+                            .child("\u{21C4}"),
+                    )
+                })
                 .when(!s.driving.is_empty(), |d| {
                     d.child(driving_chip(s.driving.len(), s.id.clone(), index, cx))
                 })

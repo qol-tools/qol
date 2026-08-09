@@ -90,7 +90,7 @@ fn sorted_orders_red_yellow_green_unknown_ack() {
 }
 
 #[test]
-fn bridge_live_sorts_below_your_turn_and_above_working() {
+fn bridge_live_sorts_below_working_whatever_its_status() {
     let mut r = Registry::default();
     r.upsert(state(10, Status::Working, 1));
     let mut driven = state(11, Status::NeedsYou, 1);
@@ -102,7 +102,7 @@ fn bridge_live_sorts_below_your_turn_and_above_working() {
         .into_iter()
         .map(|s| s.id.native().parse::<u64>().unwrap())
         .collect();
-    assert_eq!(ids, vec![12, 11, 10]);
+    assert_eq!(ids, vec![12, 10, 11]);
 }
 
 #[test]

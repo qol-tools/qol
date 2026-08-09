@@ -6,6 +6,7 @@ pub mod run;
 pub mod selection;
 mod trace;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
@@ -16,6 +17,8 @@ use crate::session::registry::Registry;
 use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
+
+static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
@@ -117,11 +120,23 @@ impl SessionsView {
         let host = self.host.clone();
         trace::focus_start(reason, target.session_id());
         let result_id = target.session_id().clone();
+        let retain_panel_focus = reason == "cycle-implementer";
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
                 let result = async_cx
-                    .background_spawn(async move { host.focus(&target) })
+                    .background_spawn(async move {
+                        let result = host.focus(&target);
+                        if retain_panel_focus {
+                            let commit = CYCLE_FOCUS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+                            qol_gpui::popup_window::reassert_focus_until_held(
+                                WINDOW_TITLE,
+                                &CYCLE_FOCUS_GEN,
+                                commit,
+                            );
+                        }
+                        result
+                    })
                     .await;
                 trace::focus_result(reason, &result_id, &result);
             }
