@@ -36,38 +36,23 @@ pub fn live_sessions(dir: &Path) -> HashSet<String> {
         if checkpoint.closed || checkpoint.session.is_empty() {
             continue;
         }
-        if owner_is_attached(&path.with_extension("owner")) {
-            live.insert(checkpoint.session);
-        }
+        live.insert(checkpoint.session);
     }
     live
-}
-
-fn owner_is_attached(path: &Path) -> bool {
-    let Ok(file) = fs::OpenOptions::new().read(true).write(true).open(path) else {
-        return false;
-    };
-    match file.try_lock() {
-        Ok(()) => {
-            let _ = file.unlock();
-            false
-        }
-        Err(_) => true,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn checkpoint(dir: &Path, stem: &str, session: &str, closed: bool) -> PathBuf {
+    fn checkpoint(dir: &Path, stem: &str, session: &str, completed: bool, closed: bool) -> PathBuf {
         let path = dir.join(format!("{stem}.json"));
         fs::write(
             &path,
             serde_json::to_string(&BridgeCheckpoint {
                 session: session.to_owned(),
                 completion_marker: "MARK".to_owned(),
-                completed: false,
+                completed,
                 closed,
             })
             .unwrap(),
@@ -76,31 +61,16 @@ mod tests {
         path
     }
 
-    fn attach(path: &Path) -> fs::File {
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path.with_extension("owner"))
-            .unwrap();
-        file.lock().unwrap();
-        file
-    }
-
     #[test]
-    fn only_open_rounds_held_by_a_live_owner_count_as_live() {
+    fn every_open_loop_is_live_until_closed() {
         let root = tempfile::TempDir::new().unwrap();
-        let attached = checkpoint(root.path(), "a", "v1:kitty:1:10", false);
-        let _owner = attach(&attached);
-        let abandoned = checkpoint(root.path(), "b", "v1:kitty:2:20", false);
-        attach(&abandoned).unlock().unwrap();
-        let closed = checkpoint(root.path(), "c", "v1:kitty:3:30", true);
-        let _closed_owner = attach(&closed);
+        checkpoint(root.path(), "a", "v1:kitty:1:10", false, false);
+        checkpoint(root.path(), "b", "v1:kitty:2:20", true, false);
+        checkpoint(root.path(), "c", "v1:kitty:3:30", true, true);
 
         assert_eq!(
             live_sessions(root.path()),
-            HashSet::from(["v1:kitty:1:10".to_owned()])
+            HashSet::from(["v1:kitty:1:10".to_owned(), "v1:kitty:2:20".to_owned()])
         );
     }
 
