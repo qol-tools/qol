@@ -22,7 +22,7 @@ pub fn checkpoint_dir() -> Option<PathBuf> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct LiveBridges {
     pub driven: HashSet<String>,
-    pub driving: HashMap<String, usize>,
+    pub driving: HashMap<String, Vec<String>>,
 }
 
 pub fn live_sessions(dir: &Path) -> LiveBridges {
@@ -44,10 +44,16 @@ pub fn live_sessions(dir: &Path) -> LiveBridges {
         if checkpoint.closed || checkpoint.session.is_empty() {
             continue;
         }
-        live.driven.insert(checkpoint.session);
         if !checkpoint.driver.is_empty() {
-            *live.driving.entry(checkpoint.driver).or_default() += 1;
+            live.driving
+                .entry(checkpoint.driver)
+                .or_default()
+                .push(checkpoint.session.clone());
         }
+        live.driven.insert(checkpoint.session);
+    }
+    for driven in live.driving.values_mut() {
+        driven.sort();
     }
     live
 }
@@ -120,7 +126,10 @@ mod tests {
         );
         assert_eq!(
             live.driving,
-            HashMap::from([("v1:kitty:9:90".to_owned(), 2)])
+            HashMap::from([(
+                "v1:kitty:9:90".to_owned(),
+                vec!["v1:kitty:1:10".to_owned(), "v1:kitty:2:20".to_owned()]
+            )])
         );
     }
 

@@ -39,7 +39,7 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         working_since: None,
         settled_since: None,
         bridged: false,
-        driving: 0,
+        driving: Vec::new(),
     }
 }
 
@@ -87,6 +87,22 @@ fn sorted_orders_red_yellow_green_unknown_ack() {
         .map(|s| s.id.native().parse::<u64>().unwrap())
         .collect();
     assert_eq!(ids, vec![13, 12, 10, 14]);
+}
+
+#[test]
+fn bridge_live_sorts_below_your_turn_and_above_working() {
+    let mut r = Registry::default();
+    r.upsert(state(10, Status::Working, 1));
+    let mut driven = state(11, Status::NeedsYou, 1);
+    driven.bridged = true;
+    r.upsert(driven);
+    r.upsert(state(12, Status::YourTurn, 2));
+    let ids: Vec<_> = r
+        .sorted()
+        .into_iter()
+        .map(|s| s.id.native().parse::<u64>().unwrap())
+        .collect();
+    assert_eq!(ids, vec![12, 11, 10]);
 }
 
 #[test]

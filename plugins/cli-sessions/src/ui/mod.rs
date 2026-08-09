@@ -144,6 +144,54 @@ impl SessionsView {
         }
     }
 
+    pub fn cycle_implementers(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let rows = self.rows();
+        let order = self.order();
+        let driver = self
+            .selection
+            .resolved(&order)
+            .filter(|id| {
+                rows.iter()
+                    .any(|row| &row.id == id && !row.driving.is_empty())
+            })
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| !row.driving.is_empty())
+                    .map(|row| row.id.clone())
+            });
+        if let Some(driver) = driver {
+            self.cycle_implementers_of(&driver, forward, cx);
+        }
+    }
+
+    pub fn cycle_implementers_of(
+        &mut self,
+        driver: &SessionId,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let driven = self
+            .rows()
+            .iter()
+            .find(|row| &row.id == driver)
+            .map(|row| row.driving.clone())
+            .unwrap_or_default();
+        if driven.is_empty() {
+            return;
+        }
+        let current = self
+            .last_jumped
+            .as_ref()
+            .and_then(|id| driven.iter().position(|d| d == id));
+        let index = match (current, forward) {
+            (Some(i), true) => (i + 1) % driven.len(),
+            (Some(i), false) => (i + driven.len() - 1) % driven.len(),
+            (None, true) => 0,
+            (None, false) => driven.len() - 1,
+        };
+        self.jump_to_session(driven[index].clone(), "cycle-implementer", cx);
+    }
+
     pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {
         let rows = self.rows();
         let statuses: Vec<crate::session::status::Status> = rows.iter().map(|r| r.status).collect();

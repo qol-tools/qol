@@ -201,6 +201,7 @@ fn footer() -> impl IntoElement {
         .border_t_1()
         .border_color(rgb(palette.divider))
         .child(key_hint("\u{2191}\u{2193}", "move"))
+        .child(key_hint("\u{2190}\u{2192}", "cycle"))
         .child(key_hint("\u{23CE}", "jump"))
         .child(key_hint("a", "ack"))
         .child(key_hint("esc", "close"))
@@ -346,6 +347,33 @@ fn bridged_cell() -> AnyElement {
         .into_any_element()
 }
 
+fn driving_chip(
+    count: usize,
+    driver: SessionId,
+    index: usize,
+    cx: &mut Context<SessionsView>,
+) -> AnyElement {
+    let palette = current_palette();
+    div()
+        .id(("cycle", index))
+        .flex_none()
+        .px(px(7.0))
+        .py(px(1.0))
+        .rounded_md()
+        .bg(rgba(palette.bridged_badge_rgba))
+        .text_color(rgb(palette.bridged))
+        .text_size(px(11.0))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgba(palette.bridged_hover_rgba)))
+        .child(format!("\u{21C4} {count}"))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.cycle_implementers_of(&driver, true, cx);
+            cx.stop_propagation();
+            cx.notify();
+        }))
+        .into_any_element()
+}
+
 fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -> impl IntoElement {
     let palette = current_palette();
     div()
@@ -366,14 +394,8 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
                 .flex_none()
                 .items_center()
                 .gap(px(6.0))
-                .when(s.driving > 0, |d| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .text_color(rgb(palette.bridged))
-                            .text_size(px(11.0))
-                            .child(format!("\u{21C4}{}", s.driving)),
-                    )
+                .when(!s.driving.is_empty(), |d| {
+                    d.child(driving_chip(s.driving.len(), s.id.clone(), index, cx))
                 })
                 .child(
                     div()
@@ -460,6 +482,14 @@ impl Render for SessionsView {
                     }
                     "up" | "k" => {
                         this.move_selection_up();
+                        cx.notify();
+                    }
+                    "right" | "l" => {
+                        this.cycle_implementers(true, cx);
+                        cx.notify();
+                    }
+                    "left" | "h" => {
+                        this.cycle_implementers(false, cx);
                         cx.notify();
                     }
                     "enter" => {

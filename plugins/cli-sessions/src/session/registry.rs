@@ -27,7 +27,7 @@ pub struct SessionState {
     #[serde(default, skip)]
     pub bridged: bool,
     #[serde(default, skip)]
-    pub driving: usize,
+    pub driving: Vec<SessionId>,
 }
 
 impl SessionState {
@@ -96,18 +96,21 @@ impl Registry {
 
     pub fn sorted(&self) -> Vec<SessionState> {
         let mut out: Vec<SessionState> = self.sessions.values().cloned().collect();
-        out.sort_by(|a, b| rank(a.status).cmp(&rank(b.status)).then(a.id.cmp(&b.id)));
+        out.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.id.cmp(&b.id)));
         out
     }
 }
 
-fn rank(status: Status) -> u8 {
-    match status {
+fn rank(state: &SessionState) -> u8 {
+    if state.bridged {
+        return 2;
+    }
+    match state.status {
         Status::NeedsYou => 0,
         Status::YourTurn => 1,
-        Status::Working => 2,
-        Status::Service => 3,
-        Status::Unknown => 4,
-        Status::Acknowledged => 5,
+        Status::Working => 3,
+        Status::Service => 4,
+        Status::Unknown => 5,
+        Status::Acknowledged => 6,
     }
 }

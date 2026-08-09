@@ -157,19 +157,26 @@ pub fn tick_with_caches(
         let is_bridged = binding_token
             .as_ref()
             .is_some_and(|token| bridges.driven.contains(token));
-        let driving = binding_token
+        let driving: Vec<SessionId> = binding_token
             .as_ref()
             .and_then(|token| bridges.driving.get(token))
-            .copied()
-            .unwrap_or(0);
+            .map(|tokens| {
+                tokens
+                    .iter()
+                    .filter_map(|token| token.parse::<SessionBinding>().ok())
+                    .map(|binding| binding.session_id().clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={driving} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
             pane.id,
             tool,
             cli_tool,
             pane.at_prompt,
+            driving.len(),
             evidence.descriptor_runtime,
             evidence.screen_runtime,
             evidence.viewport,
@@ -470,7 +477,7 @@ pub struct ApplyInput<'a> {
     pub now: u64,
     pub wall_now: u64,
     pub bridged: bool,
-    pub driving: usize,
+    pub driving: Vec<SessionId>,
 }
 
 fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
