@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 20
     env:
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
     outputs:
       should_release: ${{ steps.version.outputs.should_release }}
       candidate_sha: ${{ steps.candidate.outputs.sha }}
@@ -64,11 +65,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          args=()
+          if [[ -n "${SOURCE_CI_RUN_ID}" ]]; then
+            args+=(--run-id "${SOURCE_CI_RUN_ID}")
+          fi
           python .github/scripts/release_candidate.py verify-source-ci \
             --repo "${GITHUB_REPOSITORY}" \
             --sha "${SOURCE_SHA}" \
             --root . \
-            --report "${RUNNER_TEMP}/source-ci-report.json"
+            --report "${RUNNER_TEMP}/source-ci-report.json" \
+            "${args[@]}"
 
       - name: Compute release versions
         id: version

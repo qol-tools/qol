@@ -12,6 +12,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
         self.assertIn("workflow_run:", workflow)
         self.assertIn("conclusion == 'success'", workflow)
+        self.assertIn(
+            "SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}", workflow
+        )
+        self.assertIn('args+=(--run-id "${SOURCE_CI_RUN_ID}")', workflow)
         self.assertNotIn("push:\n    branches: [main]", workflow)
 
     def test_candidates_are_attested_before_tags_are_created(self):

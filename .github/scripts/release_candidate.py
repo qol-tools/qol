@@ -25,6 +25,7 @@ PACKAGE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ATTESTATION_PREFIX = "qol/release-candidate"
 HOST_ID = "qol-tray"
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 REQUIRED_CI_JOBS = {
     "Plan affected crates",
     "lint + test (ubuntu-latest)",
@@ -344,7 +345,50 @@ def ci_run_jobs(repo: str, run_id: int) -> list[dict]:
     return list(payload.get("jobs", []))
 
 
-def source_ci_evidence(repo: str, sha: str, root: Path) -> dict:
+def exact_ci_run(repo: str, run_id: int) -> dict:
+    if run_id <= 0:
+        raise ValueError(f"invalid CI run id: {run_id}")
+    payload = gh_json(
+        ["--method", "GET", f"/repos/{repo}/actions/runs/{run_id}"]
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("GitHub returned invalid workflow-run data")
+    return payload
+
+
+def require_triggered_ci(
+    run: dict, run_id: int, sha: str, jobs: list[dict]
+) -> dict:
+    expected = {
+        "id": run_id,
+        "path": CI_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "head_sha": sha,
+        "conclusion": "success",
+    }
+    mismatches = [
+        f"{name}={run.get(name)!r}"
+        for name, value in expected.items()
+        if run.get(name) != value
+    ]
+    if mismatches:
+        raise RuntimeError(
+            f"triggering CI run {run_id} has invalid provenance: "
+            + ", ".join(mismatches)
+        )
+    return require_source_ci(sha, [run], jobs)
+
+
+def source_ci_evidence(
+    repo: str, sha: str, root: Path, run_id: int | None = None
+) -> dict:
+    if run_id is not None:
+        run = exact_ci_run(repo, run_id)
+        evidence = require_triggered_ci(
+            run, run_id, sha, ci_run_jobs(repo, run_id)
+        )
+        return {**evidence, "source_sha": sha, "ci_sha": sha}
     ci_sha = sha
     runs = completed_ci_runs(repo, ci_sha)
     try:
@@ -474,7 +518,7 @@ def source_ci_command(args: argparse.Namespace) -> None:
     sha = validate_sha(args.sha)
     started_at = utc_now()
     root = Path(args.root).resolve()
-    evidence = source_ci_evidence(repo, sha, root)
+    evidence = source_ci_evidence(repo, sha, root, args.run_id)
     report = {
         "name": "release-source-ci",
         "started_at": started_at,
@@ -562,6 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
     source_ci = commands.add_parser("verify-source-ci")
     source_ci.add_argument("--repo", required=True)
     source_ci.add_argument("--sha", required=True)
+    source_ci.add_argument("--run-id", type=int)
     source_ci.add_argument("--root", default=".")
     source_ci.add_argument("--report")
     source_ci.set_defaults(handler=source_ci_command)
