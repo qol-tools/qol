@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use qol_dev_build::target_cache::{
-    format_bytes, path_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
+    format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir, SWEPT_CACHE_CEILING,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Stylize};
@@ -40,6 +40,7 @@ pub(super) struct DiskScan {
     pub(super) rx: Receiver<Result<DiskReport, String>>,
     progress: Arc<Mutex<String>>,
     started_at_ms: u64,
+    phase: &'static str,
 }
 
 impl DiskScan {
@@ -53,7 +54,7 @@ impl DiskScan {
     pub(super) fn activity(&self, now_ms: u64) -> Activity {
         Activity {
             title: "disk",
-            phase: "scanning".to_string(),
+            phase: self.phase.to_string(),
             detail: self.progress_step(),
             elapsed: Duration::from_millis(now_ms.saturating_sub(self.started_at_ms)),
         }
@@ -98,17 +99,35 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
     dash.disk.scan = Some(spawn_disk_scan());
 }
 
+pub(super) fn start_disk_cleanup(dash: &mut Dash) {
+    if dash.disk.scan.is_some() {
+        return;
+    }
+    let keep = dash.running_worktree.clone();
+    dash.disk.scan = Some(spawn_disk_worker("cleaning", move |progress| {
+        cleanup_disk_usage(progress, &keep)
+    }));
+}
+
 fn spawn_disk_scan() -> DiskScan {
+    spawn_disk_worker("scanning", scan_disk_usage)
+}
+
+fn spawn_disk_worker(
+    phase: &'static str,
+    work: impl FnOnce(&Arc<Mutex<String>>) -> Result<DiskReport, String> + Send + 'static,
+) -> DiskScan {
     let (tx, rx) = channel();
     let progress = Arc::new(Mutex::new(String::new()));
     let worker_progress = Arc::clone(&progress);
     std::thread::spawn(move || {
-        let _ = tx.send(scan_disk_usage(&worker_progress));
+        let _ = tx.send(work(&worker_progress));
     });
     DiskScan {
         rx,
         progress,
         started_at_ms: now_unix_ms(),
+        phase,
     }
 }
 
@@ -156,6 +175,49 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     set_progress(progress, "cargo home");
     rows.push(optional_dir_row("cargo home", cargo_home()));
     Ok(DiskReport { rows })
+}
+
+fn cleanup_disk_usage(progress: &Arc<Mutex<String>>, keep: &Path) -> Result<DiskReport, String> {
+    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    let mut freed = 0;
+    let mut failed = 0;
+    for worktree in qol_dev_build::tray::list_worktrees(&root) {
+        if worktree.path.starts_with(keep) || keep.starts_with(&worktree.path) {
+            continue;
+        }
+        let target = worktree.path.join("target");
+        if !target.exists() {
+            continue;
+        }
+        set_progress(progress, &format!("worktree {}", worktree.branch));
+        let bytes = path_bytes(&target);
+        match std::fs::remove_dir_all(&target) {
+            Ok(()) => freed += bytes,
+            Err(_) => failed += 1,
+        }
+    }
+    set_progress(progress, "stale caches");
+    let target = root.join("target");
+    let prunable = prunable_target_bytes(&target);
+    match prune_cargo_target_dir(&target) {
+        Ok(()) => freed += prunable,
+        Err(_) => failed += 1,
+    }
+    let mut report = scan_disk_usage(progress)?;
+    report.rows.insert(0, cleanup_row(freed, failed));
+    Ok(report)
+}
+
+fn cleanup_row(freed: u64, failed: usize) -> DiskRow {
+    let mut detail = "worktree targets removed · stale caches pruned".to_string();
+    if failed > 0 {
+        detail.push_str(&format!(" · {failed} could not be removed"));
+    }
+    DiskRow {
+        label: "cleanup · freed".to_string(),
+        detail,
+        bytes: Some(freed),
+    }
 }
 
 pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
@@ -252,8 +314,8 @@ fn cargo_home() -> Option<PathBuf> {
 }
 
 pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
-    if panel.scan.is_some() {
-        return (Color::Yellow, vec!["scanning".fg(Color::Yellow)]);
+    if let Some(scan) = &panel.scan {
+        return (Color::Yellow, vec![scan.phase.fg(Color::Yellow)]);
     }
     if let Some(error) = &panel.error {
         return (
@@ -383,7 +445,19 @@ mod tests {
             rx,
             progress: Arc::new(Mutex::new(String::new())),
             started_at_ms: 0,
+            phase: "scanning",
         }
+    }
+
+    #[test]
+    fn cleanup_row_reports_freed_bytes_and_failures() {
+        let clean = cleanup_row(2 * 1024 * 1024, 0);
+        assert_eq!(clean.label, "cleanup · freed");
+        assert_eq!(clean.bytes, Some(2 * 1024 * 1024));
+        assert!(!clean.detail.contains("could not be removed"));
+
+        let partial = cleanup_row(0, 2);
+        assert!(partial.detail.contains("2 could not be removed"));
     }
 
     #[test]

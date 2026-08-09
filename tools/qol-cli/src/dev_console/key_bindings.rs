@@ -293,12 +293,25 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
             bindings
         }
         View::Disk => {
-            let mut bindings = vec![binding(
-                "enter",
-                "rescan",
-                Action::Activate,
-                vec![KeyStroke::plain(KeyCode::Enter)],
-            )];
+            let enter_desc = if dash.armed {
+                "CLEAN worktree targets + stale caches"
+            } else {
+                "rescan"
+            };
+            let mut bindings = vec![
+                binding(
+                    "enter",
+                    enter_desc,
+                    Action::Activate,
+                    vec![KeyStroke::plain(KeyCode::Enter)],
+                ),
+                binding(
+                    "space",
+                    "arm cleanup, then enter",
+                    Action::ToggleArm,
+                    vec![KeyStroke::plain(KeyCode::Char(' '))],
+                ),
+            ];
             bindings.extend(arrow_view_bindings("scroll"));
             bindings
         }
@@ -667,5 +680,25 @@ mod tests {
             action_for(&dash, KeyCode::Char('c'), KeyModifiers::NONE),
             Action::Ignore
         );
+    }
+
+    #[test]
+    fn disk_view_arms_cleanup_and_advertises_it_on_enter() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Disk;
+        assert_eq!(
+            action_for(&dash, KeyCode::Char(' '), KeyModifiers::NONE),
+            Action::ToggleArm
+        );
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "enter" && hint.desc == "rescan"));
+
+        dash.armed = true;
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "enter" && hint.desc.starts_with("CLEAN")));
     }
 }
