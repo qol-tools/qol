@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use qol_dev_build::target_cache::{
     format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir, SWEPT_CACHE_CEILING,
@@ -12,10 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use super::activity::Activity;
-use super::log_pane::clamp_offset;
-use super::render_util::{
-    list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
-};
+use super::render_util::{accent, now_unix_ms, relative_age, NavigationOverflow};
 use super::{Dash, View};
 
 pub(super) struct DiskPanel {
@@ -73,6 +70,16 @@ impl DiskReport {
             .find(|row| row.label == TARGET_TOTAL_LABEL)
             .and_then(|row| row.bytes)
     }
+
+    fn cleanable_total(&self) -> u64 {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.label.starts_with(WORKTREE_LABEL_PREFIX) || row.label == PRUNABLE_LABEL
+            })
+            .filter_map(|row| row.bytes)
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +90,9 @@ pub(super) struct DiskRow {
 }
 
 const TARGET_TOTAL_LABEL: &str = "target";
+const WORKTREE_LABEL_PREFIX: &str = "worktree · ";
+const PRUNABLE_LABEL: &str = "target · prunable";
+const CLEANABLE_ATTENTION: u64 = 10 * 1024 * 1024 * 1024;
 
 pub(super) fn open_disk(dash: &mut Dash) {
     dash.view = View::Disk;
@@ -100,7 +110,11 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
 }
 
 pub(super) fn start_disk_cleanup(dash: &mut Dash) {
-    if dash.disk.scan.is_some() {
+    if let Some(scan) = &dash.disk.scan {
+        dash.notice = Some((
+            Instant::now(),
+            format!("disk {} · re-arm once it finishes", scan.phase),
+        ));
         return;
     }
     let keep = dash.running_worktree.clone();
@@ -156,7 +170,7 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     rows.extend(target_root_rows(&target));
     set_progress(progress, "stale caches");
     rows.push(DiskRow {
-        label: "target · prunable".to_string(),
+        label: PRUNABLE_LABEL.to_string(),
         detail: format!(
             "the doctor auto-prunes debug caches to a {} ceiling",
             format_bytes(SWEPT_CACHE_CEILING)
@@ -166,7 +180,7 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     for worktree in qol_dev_build::tray::list_worktrees(&root) {
         set_progress(progress, &format!("worktree {}", worktree.branch));
         rows.push(measured_row(
-            format!("worktree · {}", worktree.branch),
+            format!("{WORKTREE_LABEL_PREFIX}{}", worktree.branch),
             &worktree.path.join("target"),
         ));
     }
@@ -327,32 +341,31 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
         );
     }
     let Some(report) = &panel.last else {
-        return (Color::DarkGray, vec!["enter to scan".fg(Color::DarkGray)]);
+        return (accent(), vec!["enter to scan".fg(Color::DarkGray)]);
     };
     let total = report
         .target_total()
         .map(format_bytes)
         .unwrap_or_else(|| "no target dir".to_string());
     let mut value = vec![format!("{total} target").fg(Color::DarkGray)];
+    let cleanable = report.cleanable_total();
+    let color = if cleanable >= CLEANABLE_ATTENTION {
+        Color::Yellow
+    } else {
+        accent()
+    };
+    if cleanable > 0 {
+        value.push(format!(" · {} cleanable", format_bytes(cleanable)).fg(color));
+    }
     if let Some(at) = panel.last_at_ms {
         value.push(format!(" · {}", relative_age(now_ms, at)).fg(Color::DarkGray));
     }
-    (Color::DarkGray, value)
+    (color, value)
 }
 
 pub(super) fn draw_disk(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = disk_view_lines(&dash.disk);
-    let total = lines.len();
-    let height = list_capacity(area.height);
-    dash.log_height = height;
-    dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
-    let start = dash.scroll_offset;
-    view_content(
-        frame,
-        area,
-        lines.into_iter().skip(start).take(height).collect(),
-    );
-    NavigationOverflow::from_window(start, height, total)
+    super::stream_view::draw_top_anchored(frame, dash, area, lines)
 }
 
 pub(super) fn disk_view_lines(panel: &DiskPanel) -> Vec<Line<'static>> {
@@ -425,11 +438,25 @@ mod tests {
             error: Some("boom".to_string()),
             ..DiskPanel::new()
         };
+        let cleanable = DiskPanel {
+            last: Some(report(vec![
+                row("target", Some(3 * 1024 * 1024 * 1024)),
+                row("worktree · big", Some(20 * 1024 * 1024 * 1024)),
+            ])),
+            last_at_ms: Some(now - 15_000),
+            scan: None,
+            error: None,
+        };
         let cases = [
-            (DiskPanel::new(), Color::DarkGray, "enter to scan"),
+            (DiskPanel::new(), accent(), "enter to scan"),
             (scanning, Color::Yellow, "scanning"),
             (failed, Color::Red, "scan failed · boom"),
-            (scanned, Color::DarkGray, "3.0 GiB target · 15s ago"),
+            (scanned, accent(), "3.0 GiB target · 15s ago"),
+            (
+                cleanable,
+                Color::Yellow,
+                "3.0 GiB target · 20.0 GiB cleanable · 15s ago",
+            ),
         ];
         for (panel, expected_color, expected_text) in cases {
             let (color, spans) = disk_status(&panel, now);
@@ -554,6 +581,26 @@ mod tests {
         assert!(
             top_rows.iter().any(|line| line.contains("bucket-0")),
             "up keys must return to the first row"
+        );
+    }
+
+    #[test]
+    fn copy_count_entry_reveals_the_tail_it_will_copy() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Disk;
+        dash.keys_hidden = true;
+        dash.disk.last = Some(report(
+            (0..20)
+                .map(|index| row(&format!("bucket-{index}"), Some(index * 1024)))
+                .collect(),
+        ));
+        dash.copying = true;
+        dash.copy_count = "3".to_string();
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
+        assert!(
+            rows.iter().any(|line| line.contains("bucket-19")),
+            "entering a copy count must scroll the tail into view"
         );
     }
 

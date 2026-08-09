@@ -40,8 +40,8 @@ use super::reload::{
     poll_reload, restart_child_from_prebuilt, start_reload, trigger_rebuild, trigger_reload,
 };
 use super::stream_view::{
-    open_current_log_editor, open_current_log_folder, open_trace, start_trace, stop_trace,
-    toggle_trace_details, toggle_trace_rate, EndpointsState,
+    endpoints_view_lines, open_current_log_editor, open_current_log_folder, open_trace,
+    start_trace, stop_trace, toggle_trace_details, toggle_trace_rate, EndpointsState,
 };
 use super::tray_handle::TrayHandle;
 use super::tray_handle::{stop_child, try_wait};
@@ -431,6 +431,10 @@ fn copy_text_to_clipboard(dash: &mut Dash, text: &str) {
 }
 
 pub(super) fn newest_lines(dash: &Dash, count: usize) -> String {
+    if let Some(lines) = view_container_lines(dash) {
+        let start = lines.len().saturating_sub(count);
+        return lines[start..].join("\n");
+    }
     let ring = match dash.view {
         View::Trace => Some(&dash.trace.ring),
         View::EmuDetail => emu_detail_ring(dash),
@@ -458,6 +462,20 @@ pub(super) fn newest_lines(dash: &Dash, count: usize) -> String {
         .join("\n")
 }
 
+fn view_container_lines(dash: &Dash) -> Option<Vec<String>> {
+    let lines = match dash.view {
+        View::Disk => disk_view_lines(&dash.disk),
+        View::Endpoints => endpoints_view_lines(&dash.endpoints),
+        _ => return None,
+    };
+    Some(
+        lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect(),
+    )
+}
+
 enum CopyStrategy {
     RingBuffer,
     Instant(String),
@@ -468,6 +486,7 @@ fn copy_strategy(dash: &Dash) -> Option<CopyStrategy> {
         View::Doctor => {
             doctor_detail_text(&dash.doctor, dash.doctor_cursor).map(CopyStrategy::Instant)
         }
+        View::Disk | View::Endpoints => Some(CopyStrategy::RingBuffer),
         _ if filterable_view(dash.view) => Some(CopyStrategy::RingBuffer),
         _ => None,
     }
@@ -1450,6 +1469,32 @@ mod tests {
             newest_lines(&dash, 5),
             "beta",
             "ansi codes are stripped from the copied text"
+        );
+    }
+
+    #[test]
+    fn copy_lines_pull_from_the_container_of_the_disk_and_endpoints_views() {
+        let mut dash = Dash::new(Vec::new());
+        dash.logs.push("log noise".to_string());
+
+        dash.view = View::Disk;
+        assert!(matches!(
+            copy_strategy(&dash),
+            Some(CopyStrategy::RingBuffer)
+        ));
+        assert!(
+            newest_lines(&dash, 5).contains("no scan yet"),
+            "disk copy must read the disk container, not the log ring"
+        );
+
+        dash.view = View::Endpoints;
+        assert!(matches!(
+            copy_strategy(&dash),
+            Some(CopyStrategy::RingBuffer)
+        ));
+        assert!(
+            newest_lines(&dash, 5).contains("probing endpoints"),
+            "endpoints copy must read the endpoints container, not the log ring"
         );
     }
 }

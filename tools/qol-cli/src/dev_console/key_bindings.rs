@@ -1,5 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
+use super::dash::{Row, ROWS};
 use super::emu_panel::emu_detail_shows_warnings;
 use super::{Dash, View};
 
@@ -182,7 +183,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
             ),
             binding(
                 "enter",
-                "act on row",
+                dashboard_enter_desc(dash),
                 Action::Activate,
                 vec![KeyStroke::plain(KeyCode::Enter)],
             ),
@@ -311,6 +312,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                     Action::ToggleArm,
                     vec![KeyStroke::plain(KeyCode::Char(' '))],
                 ),
+                char_binding("c", "copy last N", Action::Copy, 'c'),
             ];
             bindings.extend(arrow_view_bindings("scroll"));
             bindings
@@ -344,7 +346,22 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Endpoints => arrow_view_bindings("scroll"),
+        View::Endpoints => {
+            let mut bindings = vec![char_binding("c", "copy last N", Action::Copy, 'c')];
+            bindings.extend(arrow_view_bindings("scroll"));
+            bindings
+        }
+    }
+}
+
+fn dashboard_enter_desc(dash: &Dash) -> &'static str {
+    if !dash.armed {
+        return "act on row";
+    }
+    match ROWS[dash.cursor] {
+        Row::Doctor => "FIX issues",
+        Row::Disk => "CLEAN worktree targets + stale caches",
+        _ => "act on row",
     }
 }
 
@@ -680,6 +697,28 @@ mod tests {
             action_for(&dash, KeyCode::Char('c'), KeyModifiers::NONE),
             Action::Ignore
         );
+    }
+
+    #[test]
+    fn armed_dashboard_enter_advertises_the_selected_row_action() {
+        let mut dash = Dash::new(Vec::new());
+        dash.cursor = 5;
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "enter" && hint.desc == "act on row"));
+
+        dash.armed = true;
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "enter" && hint.desc.starts_with("CLEAN")));
+
+        dash.cursor = 4;
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "enter" && hint.desc == "FIX issues"));
     }
 
     #[test]

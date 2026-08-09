@@ -440,7 +440,7 @@ pub(super) fn draw_run_log(
     overflow
 }
 
-fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
+pub(super) fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
     let pad = inner_width.saturating_sub(line.width());
     let mut spans = line.spans;
     if pad > 0 {
@@ -459,21 +459,49 @@ pub(super) fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
-    let lines: Vec<Line> = match &dash.endpoints {
+pub(super) fn endpoints_view_lines(state: &EndpointsState) -> Vec<Line<'static>> {
+    match state {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
-    };
+    }
+}
+
+pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
+    let lines = endpoints_view_lines(&dash.endpoints);
+    draw_top_anchored(frame, dash, area, lines)
+}
+
+pub(super) fn draw_top_anchored(
+    frame: &mut Frame,
+    dash: &mut Dash,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+) -> NavigationOverflow {
+    let highlight = copy_highlight(dash);
     let total = lines.len();
     let height = list_capacity(area.height);
     dash.log_height = height;
     dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
-    let start = dash.scroll_offset;
-    view_content(
-        frame,
-        area,
-        lines.into_iter().skip(start).take(height).collect(),
-    );
+    let start = if highlight.is_some() {
+        total.saturating_sub(height)
+    } else {
+        dash.scroll_offset
+    };
+    let first_highlighted = total.saturating_sub(highlight.unwrap_or(0));
+    let visible = lines
+        .into_iter()
+        .enumerate()
+        .skip(start)
+        .take(height)
+        .map(|(index, line)| {
+            if index >= first_highlighted {
+                highlight_bar(line, area.width as usize)
+            } else {
+                line
+            }
+        })
+        .collect();
+    view_content(frame, area, visible);
     NavigationOverflow::from_window(start, height, total)
 }
 

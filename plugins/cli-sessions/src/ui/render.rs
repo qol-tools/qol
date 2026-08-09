@@ -390,11 +390,7 @@ fn session_row(
     index: usize,
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
-    let tint = if s.bridged {
-        current_palette().bridged_tint_rgba
-    } else {
-        tint_color(s.status)
-    };
+    let tint = tint_color(s.status);
     let id = s.id.clone();
     let palette = current_palette();
     div()

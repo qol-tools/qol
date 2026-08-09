@@ -411,16 +411,11 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Navi
         dash_row(dash.cursor == 5, disk_color, Row::Disk, disk_value),
         dash_row(
             dash.cursor == 6,
-            Color::DarkGray,
+            accent(),
             Row::Logs,
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
-        dash_row(
-            dash.cursor == 7,
-            Color::DarkGray,
-            Row::Trace,
-            trace_value(dash),
-        ),
+        dash_row(dash.cursor == 7, accent(), Row::Trace, trace_value(dash)),
     ];
 
     let total = rows.len();
