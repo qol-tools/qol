@@ -368,6 +368,7 @@ fn verdict_of(results: &Wave2Results) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     const SAMPLE_CASES: [&str; 2] = ["collision-no-clobber", "release"];
 
@@ -1116,7 +1117,7 @@ mod tests {
         content.push('\n');
         content.push_str(&substitute(function_text(SCENARIO, "case_final_residue")));
         content.push_str(
-            "\ncase \"$3\" in\nfresh)\ninstall_modinfo_fixture\ntouch -t 202001010000 \"$LIVE\"\nchmod 640 \"$LIVE\"\nstat -c '%a %Y' \"$LIVE\" > \"$STAGE/live-before.txt\"\ninstall_modinfo_fixture\nstat -c '%a %Y' \"$LIVE\" > \"$STAGE/live-after.txt\"\n;;\n             replaced)\ninstall_modinfo_fixture\necho \"operator replaced the live entry\" > \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             if (restore_modinfo_fixture 2> \"$STAGE/restore-fail.txt\"); then exit 93; fi\n             case_final_residue\n;;\n             symlink)\ninstall_modinfo_fixture\nrm -f \"$LIVE\"\nln -s /bin/true \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -L \"$LIVE\" ] || exit 95\n;;\n             absent)\ninstall_modinfo_fixture\nrm -f \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -f \"$STAGE/modinfo.fixture\" ] || exit 96\n             [ -f \"$STAGE/modinfo.fixture-script\" ] || exit 97\n;;\n             missing-evidence)\ninstall_modinfo_fixture\nrm -f \"$STAGE/modinfo.fixture-script\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -f \"$LIVE\" ] || exit 98\n;;\n             *) exit 99 ;;\nesac\n",
+            "\ncase \"$3\" in\nfresh)\ninstall_modinfo_fixture\ntouch -t 202001010000 \"$LIVE\" \"$STAGE/reference-time\"\nchmod 640 \"$LIVE\"\ninstall_modinfo_fixture\n;;\n             replaced)\ninstall_modinfo_fixture\necho \"operator replaced the live entry\" > \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             if (restore_modinfo_fixture 2> \"$STAGE/restore-fail.txt\"); then exit 93; fi\n             case_final_residue\n;;\n             symlink)\ninstall_modinfo_fixture\nrm -f \"$LIVE\"\nln -s /bin/true \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -L \"$LIVE\" ] || exit 95\n;;\n             absent)\ninstall_modinfo_fixture\nrm -f \"$LIVE\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -f \"$STAGE/modinfo.fixture\" ] || exit 96\n             [ -f \"$STAGE/modinfo.fixture-script\" ] || exit 97\n;;\n             missing-evidence)\ninstall_modinfo_fixture\nrm -f \"$STAGE/modinfo.fixture-script\"\n             if (install_modinfo_fixture 2> \"$STAGE/fail.txt\"); then exit 92; fi\n             [ -f \"$LIVE\" ] || exit 98\n;;\n             *) exit 99 ;;\nesac\n",
         );
         std::fs::write(&harness, content).unwrap();
         let mut command = std::process::Command::new("sh");
@@ -1146,15 +1147,18 @@ mod tests {
                         "the fresh and repeated install must leave the live entry byte-identical to the fixture"
                     );
                     assert!(stage.join("modinfo.fixture").exists());
-                    let before = std::fs::read_to_string(stage.join("live-before.txt")).unwrap();
-                    let after = std::fs::read_to_string(stage.join("live-after.txt")).unwrap();
                     assert_eq!(
-                        before, after,
-                        "the repeated install must be a true no-op that preserves mode and mtime"
+                        std::fs::metadata(&live).unwrap().permissions().mode() & 0o777,
+                        0o640,
+                        "the repeated install must preserve the live mode"
                     );
-                    assert!(
-                        before.starts_with("640 "),
-                        "the recorded mode must survive the repeated install"
+                    assert_eq!(
+                        std::fs::metadata(&live).unwrap().modified().unwrap(),
+                        std::fs::metadata(stage.join("reference-time"))
+                            .unwrap()
+                            .modified()
+                            .unwrap(),
+                        "the repeated install must preserve the live mtime"
                     );
                 }
                 "replaced" => {
@@ -1645,7 +1649,7 @@ mod tests {
         std::fs::write(
             &harness,
             format!(
-                "#!/bin/sh\nset -u\nRESULTS={}\n{}\nrecord \"id-x\" 1 \"$(printf 'a\\\"b\\\\c\\td\\n')\"\nrecord \"id-y\" 0 \"$(printf 'line1\\nline2\\n')\"\n",
+                "#!/bin/sh\nset -u\nRESULTS={}\n{}\nrecord \"id-x\" 1 \"$(printf 'a\"b\\\\c\\td\\n')\"\nrecord \"id-y\" 0 \"$(printf 'line1\\nline2\\n')\"\n",
                 results.display(),
                 function_text(SCENARIO, "record")
             ),
@@ -1666,7 +1670,7 @@ mod tests {
         assert_eq!(first["id"], "id-x");
         assert_eq!(first["pass"], true);
         assert_eq!(
-            first["detail"], "a\\\"b\\cd",
+            first["detail"], "a\"b\\cd",
             "control characters must be stripped and backslashes and quotes escaped"
         );
         let second: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
