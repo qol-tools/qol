@@ -43,6 +43,14 @@ impl SessionState {
     }
 }
 
+pub fn meaningful_name(value: Option<&str>) -> Option<&str> {
+    let value = value?.trim();
+    if value.is_empty() || value.chars().any(|character| character.is_control()) {
+        return None;
+    }
+    Some(value)
+}
+
 pub fn summary_for(status: Status, tool: Tool) -> String {
     match status {
         Status::Working => match tool {

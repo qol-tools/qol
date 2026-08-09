@@ -72,9 +72,34 @@ pub struct CliSessionDescriptor {
     pub evidence: CliSessionEvidence,
 }
 
+pub(crate) fn normalize_display_name(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(|character| character.is_control()) {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
 fn valid_tool_id(value: &str) -> bool {
     !value.is_empty()
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_display_name;
+
+    #[test]
+    fn display_names_are_trimmed_and_control_free() {
+        assert_eq!(
+            normalize_display_name(Some("  project  ".into())),
+            Some("project".into())
+        );
+        assert_eq!(normalize_display_name(Some("\u{1}".into())), None);
+        assert_eq!(normalize_display_name(Some("project\u{1}".into())), None);
+        assert_eq!(normalize_display_name(Some(" \t ".into())), None);
+    }
 }

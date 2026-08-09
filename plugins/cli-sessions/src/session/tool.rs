@@ -33,4 +33,14 @@ impl Tool {
             Self::Generic => GENERIC_TOOL_ACCENT,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Kimi => "Kimi",
+            Self::Pi => "Pi",
+            Self::Generic => "CLI",
+        }
+    }
 }

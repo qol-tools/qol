@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::SessionFacts;
 
 use super::builtins::GenericStrategy;
+use super::model::normalize_display_name;
 use super::{
     CliLaunchProgram, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
     CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliToolId,
@@ -63,7 +64,8 @@ impl CliSessionInterpreter {
 
     pub fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor {
         let strategy = self.strategy_for(session);
-        let descriptor = strategy.describe(session);
+        let mut descriptor = strategy.describe(session);
+        descriptor.display_name = normalize_display_name(descriptor.display_name);
         qol_runtime::probe!(
             "CLI_SESSION_INTERPRETATION",
             "event=described tool={} terminal_backend={}",

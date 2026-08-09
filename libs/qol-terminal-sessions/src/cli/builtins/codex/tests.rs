@@ -108,6 +108,7 @@ fn title_activity_and_thread_name_follow_the_default_title_layout() {
         ("qol-tts | Ready | qol-tts", Some(false), None),
         ("qol-tts | Ready | gpt-5.6-luna max", Some(false), None),
         ("qol-tts | Ready | ", Some(false), None),
+        ("qol-tts | Ready | \u{1}", Some(false), None),
         ("qol-tts", Some(false), None),
     ];
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::cli::{CliActivityEvidence, CliRuntimeState};
+use crate::cli::{model::normalize_display_name, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
@@ -229,7 +229,9 @@ fn title_thread_name(title: &str, cwd: &str) -> Option<String> {
         })?;
     let leading = items.first().copied()?;
     if super::super::project_name(cwd).as_deref() != Some(leading) {
-        return (!leading.is_empty() && !is_thread_id(leading)).then(|| leading.to_owned());
+        return normalize_display_name(
+            (!leading.is_empty() && !is_thread_id(leading)).then(|| leading.to_owned()),
+        );
     }
     let name = items.last().copied()?;
     if state == name || name == leading {
@@ -238,7 +240,7 @@ fn title_thread_name(title: &str, cwd: &str) -> Option<String> {
     if matches!(state, "Ready" | "Action Required") && items.len() < 4 {
         return None;
     }
-    (!name.is_empty() && !is_thread_id(name)).then(|| name.to_owned())
+    normalize_display_name((!name.is_empty() && !is_thread_id(name)).then(|| name.to_owned()))
 }
 
 fn is_thread_id(value: &str) -> bool {
