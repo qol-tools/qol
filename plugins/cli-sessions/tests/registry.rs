@@ -112,6 +112,21 @@ fn bridge_lifts_idle_rows_to_below_working_only() {
 }
 
 #[test]
+fn agent_working_sorts_above_generic_running() {
+    let mut r = Registry::default();
+    r.upsert(state(10, Status::Working, 1));
+    let mut agent = state(11, Status::Working, 1);
+    agent.tool = Tool::Claude;
+    r.upsert(agent);
+    let ids: Vec<_> = r
+        .sorted()
+        .into_iter()
+        .map(|s| s.id.native().parse::<u64>().unwrap())
+        .collect();
+    assert_eq!(ids, vec![11, 10]);
+}
+
+#[test]
 fn within_a_tier_orders_by_session_id_not_recency() {
     let mut r = Registry::default();
     r.upsert(state(2, Status::NeedsYou, 9));
