@@ -73,6 +73,16 @@ impl DiskReport {
             .find(|row| row.label == TARGET_TOTAL_LABEL)
             .and_then(|row| row.bytes)
     }
+
+    fn cleanable_total(&self) -> u64 {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.label.starts_with(WORKTREE_LABEL_PREFIX) || row.label == PRUNABLE_LABEL
+            })
+            .filter_map(|row| row.bytes)
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +93,9 @@ pub(super) struct DiskRow {
 }
 
 const TARGET_TOTAL_LABEL: &str = "target";
+const WORKTREE_LABEL_PREFIX: &str = "worktree · ";
+const PRUNABLE_LABEL: &str = "target · prunable";
+const CLEANABLE_ATTENTION: u64 = 10 * 1024 * 1024 * 1024;
 
 pub(super) fn open_disk(dash: &mut Dash) {
     dash.view = View::Disk;
@@ -160,7 +173,7 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     rows.extend(target_root_rows(&target));
     set_progress(progress, "stale caches");
     rows.push(DiskRow {
-        label: "target · prunable".to_string(),
+        label: PRUNABLE_LABEL.to_string(),
         detail: format!(
             "the doctor auto-prunes debug caches to a {} ceiling",
             format_bytes(SWEPT_CACHE_CEILING)
@@ -170,7 +183,7 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     for worktree in qol_dev_build::tray::list_worktrees(&root) {
         set_progress(progress, &format!("worktree {}", worktree.branch));
         rows.push(measured_row(
-            format!("worktree · {}", worktree.branch),
+            format!("{WORKTREE_LABEL_PREFIX}{}", worktree.branch),
             &worktree.path.join("target"),
         ));
     }
@@ -338,10 +351,19 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
         .map(format_bytes)
         .unwrap_or_else(|| "no target dir".to_string());
     let mut value = vec![format!("{total} target").fg(Color::DarkGray)];
+    let cleanable = report.cleanable_total();
+    let color = if cleanable >= CLEANABLE_ATTENTION {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    if cleanable > 0 {
+        value.push(format!(" · {} cleanable", format_bytes(cleanable)).fg(color));
+    }
     if let Some(at) = panel.last_at_ms {
         value.push(format!(" · {}", relative_age(now_ms, at)).fg(Color::DarkGray));
     }
-    (Color::DarkGray, value)
+    (color, value)
 }
 
 pub(super) fn draw_disk(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
@@ -429,11 +451,25 @@ mod tests {
             error: Some("boom".to_string()),
             ..DiskPanel::new()
         };
+        let cleanable = DiskPanel {
+            last: Some(report(vec![
+                row("target", Some(3 * 1024 * 1024 * 1024)),
+                row("worktree · big", Some(20 * 1024 * 1024 * 1024)),
+            ])),
+            last_at_ms: Some(now - 15_000),
+            scan: None,
+            error: None,
+        };
         let cases = [
             (DiskPanel::new(), Color::DarkGray, "enter to scan"),
             (scanning, Color::Yellow, "scanning"),
             (failed, Color::Red, "scan failed · boom"),
             (scanned, Color::DarkGray, "3.0 GiB target · 15s ago"),
+            (
+                cleanable,
+                Color::Yellow,
+                "3.0 GiB target · 20.0 GiB cleanable · 15s ago",
+            ),
         ];
         for (panel, expected_color, expected_text) in cases {
             let (color, spans) = disk_status(&panel, now);
