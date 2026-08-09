@@ -16,7 +16,9 @@ use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
-use super::disk::{apply_disk_outcome, disk_view_lines, open_disk, start_disk_scan};
+use super::disk::{
+    apply_disk_outcome, disk_view_lines, open_disk, start_disk_cleanup, start_disk_scan,
+};
 use super::doctor::{
     apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
     toggle_doctor_detail, DoctorMode,
@@ -584,7 +586,13 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
             View::Plugins => act_plugin(dash),
-            View::Disk => start_disk_scan(dash),
+            View::Disk => {
+                if modified {
+                    start_disk_cleanup(dash);
+                } else {
+                    start_disk_scan(dash);
+                }
+            }
             View::Doctor => toggle_doctor_detail(dash),
             View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {}
         },
@@ -710,7 +718,13 @@ pub(super) fn act_row(dash: &mut Dash, modified: bool) {
                 dash.start_doctor(DoctorMode::Check);
             }
         }
-        Row::Disk => start_disk_scan(dash),
+        Row::Disk => {
+            if modified {
+                start_disk_cleanup(dash);
+            } else {
+                start_disk_scan(dash);
+            }
+        }
         Row::Logs | Row::Trace => {}
     }
 }
