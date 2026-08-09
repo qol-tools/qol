@@ -459,11 +459,15 @@ pub(super) fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
-    let lines: Vec<Line> = match &dash.endpoints {
+pub(super) fn endpoints_view_lines(state: &EndpointsState) -> Vec<Line<'static>> {
+    match state {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
-    };
+    }
+}
+
+pub(super) fn draw_endpoints(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
+    let lines = endpoints_view_lines(&dash.endpoints);
     let total = lines.len();
     let height = list_capacity(area.height);
     dash.log_height = height;

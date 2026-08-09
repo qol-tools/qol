@@ -312,6 +312,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                     Action::ToggleArm,
                     vec![KeyStroke::plain(KeyCode::Char(' '))],
                 ),
+                char_binding("c", "copy last N", Action::Copy, 'c'),
             ];
             bindings.extend(arrow_view_bindings("scroll"));
             bindings
@@ -345,7 +346,11 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Endpoints => arrow_view_bindings("scroll"),
+        View::Endpoints => {
+            let mut bindings = vec![char_binding("c", "copy last N", Action::Copy, 'c')];
+            bindings.extend(arrow_view_bindings("scroll"));
+            bindings
+        }
     }
 }
 
