@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use qol_dev_build::target_cache::{
     format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir, SWEPT_CACHE_CEILING,
@@ -100,7 +100,11 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
 }
 
 pub(super) fn start_disk_cleanup(dash: &mut Dash) {
-    if dash.disk.scan.is_some() {
+    if let Some(scan) = &dash.disk.scan {
+        dash.notice = Some((
+            Instant::now(),
+            format!("disk {} · re-arm once it finishes", scan.phase),
+        ));
         return;
     }
     let keep = dash.running_worktree.clone();
