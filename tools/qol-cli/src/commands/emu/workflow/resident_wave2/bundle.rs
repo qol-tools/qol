@@ -5,8 +5,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -37,20 +35,15 @@ impl FileLock {
             .write(true)
             .open(path)
             .with_context(|| format!("failed to open lock file {}", path.display()))?;
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("failed to lock {}", path.display()));
-        }
+        file.lock()
+            .with_context(|| format!("failed to lock {}", path.display()))?;
         Ok(Self { file })
     }
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self.file.unlock();
     }
 }
 
@@ -373,7 +366,7 @@ fn push_entry(entries: &mut Vec<ProductEntry>, root: &Path, path: &Path) -> Resu
     })?;
     entries.push(ProductEntry {
         path: relative.to_string(),
-        mode: metadata.permissions().mode() & 0o777,
+        mode: super::platform::file_mode(&metadata)?,
         sha256: sha256_file(path)?,
     });
     Ok(())
@@ -507,7 +500,7 @@ pub(crate) fn resolve_bundle_snapshot(
                 temp.display()
             )),
         },
-        Ok(_) => match rename_noreplace(&temp, &dir) {
+        Ok(_) => match super::platform::rename_noreplace(&temp, &dir) {
             Ok(()) => snapshot_published_bundle(&dir, &key, snapshot_dest, cache_root, validate),
             Err(rename_error) => match fs::remove_dir_all(&temp) {
                 Ok(()) => Err(rename_error).with_context(|| {
@@ -532,62 +525,6 @@ fn snapshot_file_names() -> Vec<&'static str> {
     std::iter::once(PRODUCT_BUNDLE_MANIFEST_NAME)
         .chain(ARTIFACT_SPECS.iter().map(|spec| spec.name))
         .collect()
-}
-
-fn rename_noreplace(from: &Path, to: &Path) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let from_c = std::ffi::CString::new(from.as_os_str().as_bytes())
-            .with_context(|| format!("source path contains a NUL byte: {}", from.display()))?;
-        let to_c = std::ffi::CString::new(to.as_os_str().as_bytes())
-            .with_context(|| format!("destination contains a NUL byte: {}", to.display()))?;
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_renameat2,
-                libc::AT_FDCWD,
-                from_c.as_ptr(),
-                libc::AT_FDCWD,
-                to_c.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EEXIST) {
-            bail!(
-                "destination already exists; refusing to replace {}",
-                to.display()
-            );
-        }
-        Err(error).with_context(|| format!("failed to publish to {}", to.display()))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let from_c = std::ffi::CString::new(from.as_os_str().as_bytes())
-            .with_context(|| format!("source path contains a NUL byte: {}", from.display()))?;
-        let to_c = std::ffi::CString::new(to.as_os_str().as_bytes())
-            .with_context(|| format!("destination contains a NUL byte: {}", to.display()))?;
-        let result = unsafe { libc::renamex_np(from_c.as_ptr(), to_c.as_ptr(), libc::RENAME_EXCL) };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EEXIST) {
-            bail!(
-                "destination already exists; refusing to replace {}",
-                to.display()
-            );
-        }
-        Err(error).with_context(|| format!("failed to publish to {}", to.display()))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        bail!("atomic no-replace snapshot publication is unsupported on this platform")
-    }
 }
 
 fn prepare_snapshot_destination(dest: &Path, cache_root: &Path) -> Result<()> {
@@ -687,7 +624,7 @@ fn snapshot_published_bundle(
                 staging.display()
             )),
         },
-        Ok(()) => match rename_noreplace(&staging, dest) {
+        Ok(()) => match super::platform::rename_noreplace(&staging, dest) {
             Ok(()) => Ok(dest.to_path_buf()),
             Err(rename_error) => match fs::remove_dir_all(&staging) {
                 Ok(()) => Err(rename_error),
@@ -1645,9 +1582,10 @@ pub(crate) fn write_fake_bundle(dir: &Path, key: &str) {
     .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn sample_facts() -> ToolchainFacts {
         ToolchainFacts {
@@ -3172,7 +3110,7 @@ mod tests {
         fs::create_dir(&dest).unwrap();
         fs::write(dest.join("foreign"), b"collision bytes").unwrap();
 
-        let error = rename_noreplace(&staging, &dest).unwrap_err();
+        let error = super::super::platform::rename_noreplace(&staging, &dest).unwrap_err();
         assert!(
             format!("{error:#}").contains("refusing to replace"),
             "{error:#}"

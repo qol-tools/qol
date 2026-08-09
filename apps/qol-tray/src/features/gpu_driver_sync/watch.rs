@@ -855,6 +855,7 @@ mod lifecycle_tests {
         })
     }
 
+    #[cfg(target_os = "linux")]
     fn hanging_modinfo_script(dir: &std::path::Path) -> std::path::PathBuf {
         let script = dir.join("modinfo");
         std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
@@ -864,6 +865,7 @@ mod lifecycle_tests {
         script
     }
 
+    #[cfg(target_os = "linux")]
     fn hanging_probe(
         script: std::path::PathBuf,
         started: std::sync::mpsc::Sender<()>,
@@ -967,6 +969,7 @@ mod lifecycle_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn stop_watch_is_bounded_against_a_hanging_probe_and_restart_never_overlaps() {
         let _serial = serialized_watch_tests();
@@ -1225,6 +1228,7 @@ mod lifecycle_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn two_concurrent_stops_against_a_hanging_subprocess_both_return_bounded() {
         let _serial = serialized_watch_tests();
