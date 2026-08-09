@@ -12,10 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use super::activity::Activity;
-use super::log_pane::clamp_offset;
-use super::render_util::{
-    accent, list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
-};
+use super::render_util::{accent, now_unix_ms, relative_age, NavigationOverflow};
 use super::{Dash, View};
 
 pub(super) struct DiskPanel {
@@ -368,17 +365,7 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
 
 pub(super) fn draw_disk(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = disk_view_lines(&dash.disk);
-    let total = lines.len();
-    let height = list_capacity(area.height);
-    dash.log_height = height;
-    dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
-    let start = dash.scroll_offset;
-    view_content(
-        frame,
-        area,
-        lines.into_iter().skip(start).take(height).collect(),
-    );
-    NavigationOverflow::from_window(start, height, total)
+    super::stream_view::draw_top_anchored(frame, dash, area, lines)
 }
 
 pub(super) fn disk_view_lines(panel: &DiskPanel) -> Vec<Line<'static>> {
@@ -594,6 +581,26 @@ mod tests {
         assert!(
             top_rows.iter().any(|line| line.contains("bucket-0")),
             "up keys must return to the first row"
+        );
+    }
+
+    #[test]
+    fn copy_count_entry_reveals_the_tail_it_will_copy() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Disk;
+        dash.keys_hidden = true;
+        dash.disk.last = Some(report(
+            (0..20)
+                .map(|index| row(&format!("bucket-{index}"), Some(index * 1024)))
+                .collect(),
+        ));
+        dash.copying = true;
+        dash.copy_count = "3".to_string();
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 14);
+        assert!(
+            rows.iter().any(|line| line.contains("bucket-19")),
+            "entering a copy count must scroll the tail into view"
         );
     }
 
