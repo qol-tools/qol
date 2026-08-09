@@ -122,6 +122,59 @@ fn title_activity_and_thread_name_follow_the_default_title_layout() {
 }
 
 #[test]
+fn the_session_index_name_wins_over_the_trailing_title_segment() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(&rollout, "first\nsecond\n").unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(
+        &index,
+        format!(r#"{{"id":"{id}","thread_name":"kcd2-implementor"}}"#),
+    )
+    .unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+
+    let mut facts = session();
+    facts.title = "kcd2-implementor | Ready | gpt-5.6-luna max".to_owned();
+
+    assert_eq!(
+        strategy.describe(&facts).display_name.as_deref(),
+        Some("kcd2-implementor")
+    );
+}
+
+#[test]
+fn a_leading_title_name_wins_and_an_unnamed_thread_falls_back_to_the_spawn_key() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(&rollout, "first\nsecond\n").unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+
+    let mut named = session();
+    named.title = "kcd2-implementor | Ready | gpt-5.6-luna max".to_owned();
+    assert_eq!(
+        strategy.describe(&named).display_name.as_deref(),
+        Some("kcd2-implementor")
+    );
+
+    let mut unnamed = session();
+    unnamed.title = format!("{id} | Ready | gpt-5.6-sol high");
+    unnamed.spawn_identity = Some(crate::SpawnIdentity {
+        key: crate::SpawnKey::new("titlecheck-codex").unwrap(),
+        tool: crate::cli::CliToolId::new("codex").unwrap(),
+        surface: crate::SpawnSurface::Tab,
+    });
+    assert_eq!(
+        strategy.describe(&unnamed).display_name.as_deref(),
+        Some("titlecheck-codex")
+    );
+}
+
+#[test]
 fn title_activity_falls_back_to_rollout_state_for_unknown_titles() {
     let root = TempDir::new().unwrap();
     let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";

@@ -15,7 +15,7 @@ use crate::SessionFacts;
 
 use self::environment::{PiEnvironment, SystemPiEnvironment};
 use self::metadata::PiMetadataResolver;
-use super::{pi_tool, project_name};
+use super::{fallback_name, pi_tool, project_name};
 
 pub(super) struct PiStrategy {
     tool: CliTool,
@@ -59,7 +59,7 @@ impl CliSessionStrategy for PiStrategy {
             tool: self.tool.clone(),
             display_name: title_session_name(&session.title, &session.cwd)
                 .or(metadata.session_name)
-                .or_else(|| project_name(&session.cwd)),
+                .or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {

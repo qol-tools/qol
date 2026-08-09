@@ -14,6 +14,7 @@ use crate::cli::activity::recently_active;
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const NEW_SESSION_TITLE: &str = "New Session";
+const MAX_SESSION_NAME_CHARS: usize = 80;
 
 pub(super) struct KimiMetadata {
     pub session_name: Option<String>,
@@ -179,7 +180,11 @@ fn parse_state(path: &Path) -> Option<ParsedState> {
     let session_name = record
         .title
         .map(|title| title.trim().to_owned())
-        .filter(|title| !title.is_empty() && title != NEW_SESSION_TITLE);
+        .filter(|title| {
+            !title.is_empty()
+                && title != NEW_SESSION_TITLE
+                && title.chars().count() <= MAX_SESSION_NAME_CHARS
+        });
     let has_prompt = record
         .last_prompt
         .is_some_and(|prompt| !prompt.trim().is_empty());

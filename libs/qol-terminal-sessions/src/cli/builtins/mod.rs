@@ -51,6 +51,14 @@ pub(super) fn system_strategies() -> [Arc<dyn CliSessionStrategy>; 4] {
     ]
 }
 
+pub(super) fn fallback_name(session: &crate::SessionFacts) -> Option<String> {
+    session
+        .spawn_identity
+        .as_ref()
+        .map(|identity| identity.key.as_str().to_owned())
+        .or_else(|| project_name(&session.cwd))
+}
+
 pub(super) fn project_name(cwd: &str) -> Option<String> {
     std::path::Path::new(cwd)
         .file_name()

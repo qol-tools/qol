@@ -207,6 +207,33 @@ fn metadata_attachment_never_proves_live_for_kimi() {
     );
 }
 
+#[test]
+fn a_prompt_length_auto_title_falls_back_to_the_spawn_key() {
+    let root = TempDir::new().unwrap();
+    let state = root.path().join("state.json");
+    let prompt = "[qol session bridge] Act as the implementation agent for the bounded task below and do not delegate it";
+    std::fs::write(
+        &state,
+        format!(
+            r#"{{"createdAt":"t","updatedAt":"t","title":"{prompt}","isCustomTitle":false,"workDir":"/work/proj","lastPrompt":"go"}}"#
+        ),
+    )
+    .unwrap();
+    let strategy = strategy(state, "session_abc-123");
+
+    let mut facts = session();
+    facts.spawn_identity = Some(crate::SpawnIdentity {
+        key: crate::SpawnKey::new("titlecheck-kimi").unwrap(),
+        tool: crate::cli::CliToolId::new("kimi").unwrap(),
+        surface: crate::SpawnSurface::Tab,
+    });
+
+    assert_eq!(
+        strategy.describe(&facts).display_name.as_deref(),
+        Some("titlecheck-kimi")
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

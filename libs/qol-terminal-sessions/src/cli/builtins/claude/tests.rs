@@ -197,6 +197,31 @@ fn claude_done_marker_sets_runtime_ready_but_never_a_live_viewport() {
     assert_eq!(stale_scrollback.viewport, CliViewportState::Unknown);
 }
 
+#[test]
+fn the_startup_placeholder_title_falls_back_to_the_spawn_key() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("missing.jsonl");
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+
+    let mut facts = session();
+    facts.title = "\u{2733} Claude Code".to_owned();
+    facts.spawn_identity = Some(crate::SpawnIdentity {
+        key: crate::SpawnKey::new("titlecheck-claude").unwrap(),
+        tool: crate::cli::CliToolId::new("claude").unwrap(),
+        surface: crate::SpawnSurface::Tab,
+    });
+
+    assert_eq!(
+        strategy.describe(&facts).display_name.as_deref(),
+        Some("titlecheck-claude")
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

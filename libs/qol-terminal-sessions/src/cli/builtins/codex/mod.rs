@@ -15,7 +15,7 @@ use crate::SessionFacts;
 
 use self::environment::{CodexEnvironment, SystemCodexEnvironment};
 use self::metadata::CodexMetadataResolver;
-use super::{codex_tool, project_name};
+use super::{codex_tool, fallback_name};
 
 pub(super) struct CodexStrategy {
     tool: CliTool,
@@ -57,7 +57,7 @@ impl CliSessionStrategy for CodexStrategy {
         let metadata = self.metadata.resolve(session);
         CliSessionDescriptor {
             tool: self.tool.clone(),
-            display_name: metadata.thread_name.or_else(|| project_name(&session.cwd)),
+            display_name: metadata.thread_name.or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {

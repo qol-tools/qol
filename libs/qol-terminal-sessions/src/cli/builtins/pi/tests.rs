@@ -255,6 +255,32 @@ fn screen_classification_distinguishes_work_choices_and_startup_banner() {
     );
 }
 
+#[test]
+fn a_keyed_spawn_names_an_unnamed_session_instead_of_the_project() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-09T11-53-51-719Z_019fe65f-4767-7f2a-9734-37b2f20161c0.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"019fe65f-4767-7f2a-9734-37b2f20161c0\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment { session_file: file }));
+
+    let mut facts = session();
+    facts.spawn_identity = Some(crate::SpawnIdentity {
+        key: crate::SpawnKey::new("nvidia-bundle-integrity-impl").unwrap(),
+        tool: crate::cli::CliToolId::new("pi").unwrap(),
+        surface: crate::SpawnSurface::Tab,
+    });
+
+    assert_eq!(
+        strategy.describe(&facts).display_name.as_deref(),
+        Some("nvidia-bundle-integrity-impl")
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

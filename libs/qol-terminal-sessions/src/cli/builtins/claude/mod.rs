@@ -15,7 +15,7 @@ use crate::SessionFacts;
 
 use self::environment::{ClaudeEnvironment, SystemClaudeEnvironment};
 use self::metadata::ClaudeMetadataResolver;
-use super::{claude_tool, project_name};
+use super::{claude_tool, fallback_name};
 
 pub(super) struct ClaudeStrategy {
     tool: CliTool,
@@ -60,7 +60,7 @@ impl CliSessionStrategy for ClaudeStrategy {
             display_name: metadata
                 .custom_title
                 .or_else(|| clean_title(&session.title))
-                .or_else(|| project_name(&session.cwd)),
+                .or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
@@ -104,6 +104,8 @@ impl CliSessionStrategy for ClaudeStrategy {
     }
 }
 
+const PLACEHOLDER_TITLE: &str = "Claude Code";
+
 fn clean_title(title: &str) -> Option<String> {
     let stripped = title.trim().trim_start_matches(|character: char| {
         let codepoint = character as u32;
@@ -112,5 +114,5 @@ fn clean_title(title: &str) -> Option<String> {
             || character.is_whitespace()
     });
     let title = stripped.trim();
-    (!title.is_empty()).then(|| title.to_owned())
+    (!title.is_empty() && title != PLACEHOLDER_TITLE).then(|| title.to_owned())
 }
