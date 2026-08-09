@@ -10,6 +10,7 @@ use qol_terminal_sessions::{
 };
 
 mod bridge;
+mod close;
 mod contract;
 mod export;
 mod last_send;
@@ -21,7 +22,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 12] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -49,6 +50,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 12] = [
     SessionSubcommand {
         name: "interrupt",
         run: |rest, _format| interrupt(rest),
+    },
+    SessionSubcommand {
+        name: "close",
+        run: |rest, _format| close::run(rest),
     },
     SessionSubcommand {
         name: "read",
@@ -109,6 +114,7 @@ Primary usage:
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
   qol sessions interrupt <session>
+  qol sessions close <session>
 
 Diagnostics:
   qol sessions send <session> <text...> [--submit]
@@ -150,9 +156,12 @@ Details:
   shells: ctrl+c) while a round is open, leaving the round and its
   queued input intact. Every bridge JSON result carries next_command;
   run it instead of repeating the previous command.
+  close terminates a spawned implementation session's terminal after its
+  feature loop is closed. It refuses the calling terminal, sessions without
+  a spawn identity, and sessions with an open loop.
   The MCP and generated agent surfaces expose sessions_list, session_spawn,
-  session_bridge, and session_loop_close. The remaining commands are human
-  diagnostics.
+  session_bridge, session_loop_close, and session_close. The remaining
+  commands are human diagnostics.
 
 Exit:
   Exits non-zero on discovery, identity, capability, validation, or delivery

@@ -15,9 +15,9 @@ use endpoint::LegacyEndpointSource;
 use endpoint::{Endpoint, EndpointSource, SystemEndpointSource};
 
 use crate::{
-    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus, SessionId,
-    SessionInventory, SessionSpawner, SpawnIdentity, SpawnRequest, SpawnSurface, TerminalBackend,
-    TerminalError, TerminalSnapshot, TextInput,
+    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCloser, SessionFacts,
+    SessionFocus, SessionId, SessionInventory, SessionSpawner, SpawnIdentity, SpawnRequest,
+    SpawnSurface, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
 };
 
 const BACKEND_ID: &str = "kitty";
@@ -208,6 +208,10 @@ impl TerminalBackend for KittyBackend {
         Some(self)
     }
 
+    fn closer(&self) -> Option<&dyn SessionCloser> {
+        Some(self)
+    }
+
     fn read_screen_from_snapshot(
         &self,
         snapshot: &TerminalSnapshot,
@@ -255,6 +259,20 @@ impl SessionFocus for KittyBackend {
             &endpoint,
             "focus session",
             &strings(["@", "focus-window", "--match", &matcher(window_id)]),
+            None,
+        )
+        .map(drop)
+    }
+}
+
+impl SessionCloser for KittyBackend {
+    fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+        self.ensure_capability(target, crate::SessionCapabilities::NONE, "close")?;
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
+            "close session",
+            &strings(["@", "close-window", "--match", &matcher(window_id)]),
             None,
         )
         .map(drop)
@@ -576,10 +594,10 @@ mod tests {
     };
     use crate::cli::{CliLaunchProgram, CliToolId};
     use crate::{
-        kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts,
-        SessionFocus, SessionId, SessionInventory, SpawnIdentity, SpawnKey, SpawnRequest,
-        SpawnSurface, TerminalBackend, TerminalError, TerminalSessionService, TerminalSnapshot,
-        TextInput,
+        kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionCloser,
+        SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity, SpawnKey,
+        SpawnRequest, SpawnSurface, TerminalBackend, TerminalError, TerminalSessionService,
+        TerminalSnapshot, TextInput,
     };
 
     type RecordedCall = (Option<String>, Vec<String>, Option<String>);
@@ -727,6 +745,26 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert!(calls.iter().all(|call| call.0.as_deref() == Some("k1_2")));
         assert_eq!(calls[1].1, ["@", "focus-window", "--match", "id:42"]);
+    }
+
+    #[test]
+    fn close_validates_the_target_then_closes_the_window() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 900)), success(String::new())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        backend.close(&target).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, ["@", "ls"]);
+        assert_eq!(calls[1].1, ["@", "close-window", "--match", "id:42"]);
+
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 901))]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let error = backend.close(&binding(42, 900)).unwrap_err();
+        assert!(matches!(error, TerminalError::TargetChanged { .. }));
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
 
     #[test]

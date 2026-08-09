@@ -12,7 +12,7 @@ pub use model::{
     TerminalSnapshot,
 };
 pub use service::{
-    ScreenReader, SessionFocus, SessionInventory, TerminalBackend, TerminalSessionService,
-    TextInput,
+    ScreenReader, SessionCloser, SessionFocus, SessionInventory, TerminalBackend,
+    TerminalSessionService, TextInput,
 };
 pub use spawn::{SessionSpawner, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface};
