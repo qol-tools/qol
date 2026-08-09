@@ -101,7 +101,7 @@ impl Registry {
     }
 }
 
-fn rank(state: &SessionState) -> u8 {
+fn rank(state: &SessionState) -> (u8, u8) {
     let status = match state.status {
         Status::NeedsYou => 0,
         Status::YourTurn => 1,
@@ -110,9 +110,6 @@ fn rank(state: &SessionState) -> u8 {
         Status::Acknowledged => 5,
         Status::Unknown => 6,
     };
-    if state.bridged {
-        status.min(3)
-    } else {
-        status
-    }
+    let status = if state.bridged { status.min(3) } else { status };
+    (status, u8::from(state.tool == Tool::Generic))
 }
