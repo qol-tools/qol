@@ -291,7 +291,12 @@ fn footer() -> impl IntoElement {
 fn identity_line(s: &SessionState) -> impl IntoElement {
     let palette = current_palette();
     let branch = s.branch.clone().unwrap_or_default();
-    let label = s.name.clone().unwrap_or_else(|| s.project.clone());
+    let label = s
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(&s.project)
+        .to_owned();
     let tool_tag = match s.tool {
         Tool::Claude => "Claude",
         Tool::Codex => "Codex",

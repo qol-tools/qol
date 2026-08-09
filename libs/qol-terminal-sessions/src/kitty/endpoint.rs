@@ -66,12 +66,15 @@ pub(super) struct SystemEndpointSource;
 
 impl EndpointSource for SystemEndpointSource {
     fn endpoints(&self) -> Vec<Endpoint> {
-        let Some(current_path) = current_socket_path() else {
-            return vec![Endpoint::legacy()];
-        };
-        let mut paths = socket::discover_sibling_paths(&current_path);
-        if !paths.iter().any(|path| path == &current_path) {
-            paths.push(current_path.clone());
+        let current_path = current_socket_path();
+        let mut paths = current_path
+            .as_deref()
+            .map(socket::discover_sibling_paths)
+            .unwrap_or_else(socket::discover_default_paths);
+        if let Some(current_path) = current_path.as_ref() {
+            if !paths.iter().any(|path| path == current_path) {
+                paths.push(current_path.clone());
+            }
         }
         paths.sort();
         let mut endpoints = paths
@@ -79,8 +82,14 @@ impl EndpointSource for SystemEndpointSource {
             .filter_map(|path| Endpoint::from_path(&path))
             .collect::<Vec<_>>();
         endpoints.sort_by(|left, right| {
-            (left.socket_path() != Some(current_path.as_path()))
-                .cmp(&(right.socket_path() != Some(current_path.as_path())))
+            let left_is_current = current_path
+                .as_deref()
+                .is_some_and(|path| left.socket_path() == Some(path));
+            let right_is_current = current_path
+                .as_deref()
+                .is_some_and(|path| right.socket_path() == Some(path));
+            (!left_is_current)
+                .cmp(&(!right_is_current))
                 .then(left.instance.cmp(&right.instance))
         });
         endpoints.dedup_by(|left, right| left.instance == right.instance);
@@ -93,6 +102,7 @@ impl EndpointSource for SystemEndpointSource {
 
     fn current(&self) -> Endpoint {
         current_socket_path()
+            .or_else(|| socket::discover_default_paths().into_iter().next())
             .as_deref()
             .and_then(Endpoint::from_path)
             .unwrap_or_else(Endpoint::legacy)

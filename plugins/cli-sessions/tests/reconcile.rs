@@ -681,6 +681,38 @@ fn tick_codex_idle_when_no_turn_taken() {
 }
 
 #[test]
+fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    reg.lock()
+        .unwrap()
+        .restore(vec![restored(13, Status::NeedsYou)]);
+    let host = FakeHost {
+        panes: vec![pane(
+            13,
+            "qol-monorepo | Action Required | Ready | gpt-5.6-luna max",
+            false,
+            &["zsh", "codex"],
+            "codex",
+        )],
+        screen: String::new(),
+    };
+
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100, 100);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 101, 101);
+    tick(
+        &reg,
+        &host,
+        &interpreter(),
+        &NoServiceProbe,
+        101 + GRACE_SECS,
+        101 + GRACE_SECS,
+    );
+
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Unknown);
+}
+
+#[test]
 fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let mut host = FakeHost {

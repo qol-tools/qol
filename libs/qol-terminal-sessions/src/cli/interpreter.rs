@@ -265,7 +265,15 @@ mod tests {
         awaiting.title = "qol-tts | Action Required | qol-tts".to_owned();
         assert_eq!(
             interpreter.describe(&awaiting).evidence.runtime,
-            CliRuntimeState::NeedsInput
+            CliRuntimeState::Unknown
+        );
+
+        let mut activity_and_ready = session(&["zsh", "codex"]);
+        activity_and_ready.title =
+            "qol-tts | Action Required | Ready | gpt-5.6-luna max".to_owned();
+        assert_eq!(
+            interpreter.describe(&activity_and_ready).evidence.runtime,
+            CliRuntimeState::Ready
         );
 
         let mut ready = session(&["zsh", "codex"]);
