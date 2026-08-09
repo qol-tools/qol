@@ -72,19 +72,40 @@ pub(crate) fn paths() -> DiscoveryPaths {
             .into_iter()
             .map(|root| root.path)
             .collect(),
-        file_roots: platform::file_watch_roots(),
+        file_roots: configured_file_roots(),
         cache: file_cache::cache_path(),
     }
 }
 
 pub fn load_file_entries() -> Vec<FileEntry> {
-    let roots = platform::file_watch_roots();
-    if let Some(entries) = file_cache::load(&roots) {
+    let roots = configured_file_roots();
+    load_file_entries_from_roots(&roots)
+}
+
+fn load_file_entries_from_roots(roots: &[PathBuf]) -> Vec<FileEntry> {
+    if let Some(entries) = file_cache::load(roots) {
         return entries;
     }
-    let entries = file_scan::scan_files(roots.clone());
-    file_cache::store(&roots, &entries);
+    let entries = file_scan::scan_files(roots.to_vec());
+    file_cache::store(roots, &entries);
     entries
+}
+
+fn configured_file_roots() -> Vec<PathBuf> {
+    merge_file_roots(
+        platform::file_watch_roots(),
+        crate::config::load_launcher_config().extra_file_scan_roots,
+    )
+}
+
+pub(crate) fn merge_file_roots(
+    mut default_roots: Vec<PathBuf>,
+    extra_roots: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    default_roots.extend(extra_roots);
+    default_roots.sort();
+    default_roots.dedup();
+    default_roots
 }
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
@@ -172,10 +193,10 @@ fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
 pub(crate) fn start(entries: SharedEntries) {
     std::thread::spawn(move || {
         let roots = platform::app_roots();
-        let file_roots = platform::file_watch_roots();
+        let file_roots = configured_file_roots();
         let mut cache = AppCache::default();
         cache.rescan_all(&roots);
-        let mut file_entries = Arc::new(load_file_entries());
+        let mut file_entries = Arc::new(load_file_entries_from_roots(&file_roots));
         publish(&entries, &cache, &file_entries);
         eprintln!(
             "[launcher] index: initial load complete ({} roots)",
@@ -330,4 +351,39 @@ pub(crate) fn start(entries: SharedEntries) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_cache::roots_fingerprint, merge_file_roots};
+    use std::path::PathBuf;
+
+    #[test]
+    fn extra_file_roots_merge_deduplicate_sort_and_change_fingerprint() {
+        let defaults = vec![PathBuf::from("/z/default"), PathBuf::from("/a/default")];
+        let merged = merge_file_roots(
+            defaults.clone(),
+            vec![PathBuf::from("/m/extra"), PathBuf::from("/a/default")],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                PathBuf::from("/a/default"),
+                PathBuf::from("/m/extra"),
+                PathBuf::from("/z/default")
+            ]
+        );
+        assert_ne!(roots_fingerprint(&defaults), roots_fingerprint(&merged));
+    }
+
+    #[test]
+    fn empty_extra_file_roots_preserve_sorted_defaults() {
+        let defaults = vec![PathBuf::from("/z/default"), PathBuf::from("/a/default")];
+
+        assert_eq!(
+            merge_file_roots(defaults, Vec::new()),
+            vec![PathBuf::from("/a/default"), PathBuf::from("/z/default")]
+        );
+    }
 }

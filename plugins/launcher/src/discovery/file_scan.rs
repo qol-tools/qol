@@ -32,10 +32,11 @@ pub(crate) fn refresh_files(
     let mut files = current
         .iter()
         .filter(|entry| {
-            !entry
-                .path
-                .ancestors()
-                .any(|path| changed_prefixes.contains(path))
+            !file_path_is_junk(&entry.path)
+                && !entry
+                    .path
+                    .ancestors()
+                    .any(|path| changed_prefixes.contains(path))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -96,6 +97,9 @@ fn collect_changed_path(root: &Path, path: &Path, out: &mut Vec<FileEntry>) {
         return;
     };
     if file_type.is_dir() {
+        if directory_name_is_backup(path) {
+            return;
+        }
         collect_files(path, 0, out);
         return;
     }
@@ -105,6 +109,9 @@ fn collect_changed_path(root: &Path, path: &Path, out: &mut Vec<FileEntry>) {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return;
     };
+    if file_path_is_junk(path) {
+        return;
+    }
     out.push(FileEntry {
         name: name.to_string(),
         path: path.to_path_buf(),
@@ -126,6 +133,9 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
     if depth > MAX_DEPTH || out.len() >= MAX_FILES {
         return;
     }
+    if directory_name_is_backup(dir) {
+        return;
+    }
     let Ok(read_dir) = fs::read_dir(dir) else {
         return;
     };
@@ -143,7 +153,7 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|name| name.starts_with('.'));
-            if !is_hidden {
+            if !is_hidden && !directory_name_is_backup(&path) {
                 collect_files(&path, depth + 1, out);
             }
             continue;
@@ -157,6 +167,9 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
         if name.starts_with('.') {
             continue;
         }
+        if file_path_is_junk(&path) {
+            continue;
+        }
         out.push(FileEntry {
             name: name.to_string(),
             path,
@@ -164,9 +177,43 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
     }
 }
 
+pub(super) fn file_path_is_junk(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    junk_file_name(name) || path.parent().is_some_and(path_contains_backup_directory)
+}
+
+fn junk_file_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".bak")
+        || name.ends_with('~')
+        || name.len() >= 2 && name.starts_with('#') && name.ends_with('#')
+}
+
+fn directory_name_is_backup(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_backup_directory_name)
+}
+
+fn path_contains_backup_directory(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(is_backup_directory_name)
+    })
+}
+
+fn is_backup_directory_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("backup") || name.eq_ignore_ascii_case("backups")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{minimal_changed_paths, refresh_files, FileEntry};
+    use super::{minimal_changed_paths, refresh_files, scan_files, FileEntry};
+    use crate::discovery::search::{filtered, Fuzziness, SearchMode};
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
@@ -251,5 +298,107 @@ mod tests {
         let refreshed = refresh_files(&current, &[root], &HashSet::from([path]));
 
         assert_eq!(refreshed, current);
+    }
+
+    #[test]
+    fn scan_filters_backup_names_and_preserves_real_unicode_documents() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let junk = [
+            "document.bak",
+            "document.BAK",
+            "Budgetskema - Aktuelt.ods.bak",
+            "draft~",
+            "#lock#",
+        ];
+        for name in junk {
+            fs::write(root.join(name), "junk").unwrap();
+        }
+        fs::write(root.join("Budgetskema - Aktuelt.ods"), "budget").unwrap();
+        fs::write(root.join("Økonomi 2026.ods"), "økonomi").unwrap();
+
+        let scanned = scan_files(vec![root]);
+        let names = scanned
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Budgetskema - Aktuelt.ods", "Økonomi 2026.ods"]);
+    }
+
+    #[test]
+    fn scan_skips_backup_directories_but_keeps_similar_file_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::create_dir(root.join("backup")).unwrap();
+        fs::create_dir(root.join("Backups")).unwrap();
+        fs::write(root.join("backup/hidden.txt"), "hidden").unwrap();
+        fs::write(root.join("Backups/hidden-too.txt"), "hidden").unwrap();
+        fs::write(root.join("backup.txt"), "visible").unwrap();
+
+        let scanned = scan_files(vec![root]);
+
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].name, "backup.txt");
+    }
+
+    #[test]
+    fn refresh_filters_new_and_readded_junk_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let real = root.join("Budgetskema - Aktuelt.ods");
+        let kept_name = root.join("backup.txt");
+        let junk = [
+            root.join("Budgetskema - Aktuelt.ods.bak"),
+            root.join("draft~"),
+            root.join("#lock#"),
+            root.join("backup/hidden.txt"),
+            root.join("backups/hidden-too.txt"),
+        ];
+        fs::create_dir(root.join("backup")).unwrap();
+        fs::create_dir(root.join("backups")).unwrap();
+        fs::write(&real, "real").unwrap();
+        fs::write(&kept_name, "visible").unwrap();
+        for path in &junk {
+            fs::write(path, "junk").unwrap();
+        }
+        let current = junk
+            .iter()
+            .map(|path| FileEntry {
+                name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                path: path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let changed = HashSet::from_iter(junk.into_iter().chain([real.clone(), kept_name.clone()]));
+
+        let refreshed = refresh_files(&current, std::slice::from_ref(&root), &changed);
+        let refreshed_paths = refreshed
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(refreshed.len(), 2);
+        assert_eq!(refreshed_paths, HashSet::from([real, kept_name]));
+    }
+
+    #[test]
+    fn budget_search_finds_real_document_while_backup_sits_in_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(root.join("Budgetskema - Aktuelt.ods"), "real").unwrap();
+        fs::write(root.join("Budgetskema - Aktuelt.ods.bak"), "junk").unwrap();
+        let files = scan_files(vec![root]);
+
+        let results = filtered(
+            &[],
+            &files,
+            "budget",
+            SearchMode::Files,
+            Fuzziness::Balanced,
+            None,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(files[results[0].index].name, "Budgetskema - Aktuelt.ods");
     }
 }

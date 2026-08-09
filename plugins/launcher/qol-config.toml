@@ -31,3 +31,12 @@ description = "Background hex color of the hidden launcher window in debug build
 section = "appearance"
 placeholder = "00ff00"
 default = "00ff00"
+
+[field.extra_file_scan_roots]
+type = "string_array"
+config_key = "extra_file_scan_roots"
+label = "Extra File Scan Roots"
+description = "Additional folders whose files should appear in launcher search."
+section = "launcher"
+default = []
+placeholder = "/path/to/files"

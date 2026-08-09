@@ -54,6 +54,7 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::QueryChanged => {
+                self.state.clear_launch_error();
                 self.state.reset_results_position();
                 self.schedule_query_render(cx);
             }
@@ -148,7 +149,7 @@ impl LauncherView {
         self.store.adjust_boost(&name, delta);
     }
 
-    fn launch_selected(&mut self, window: &mut gpui::Window, _cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {
@@ -171,8 +172,10 @@ impl LauncherView {
         let is_app = matches!(scored.source, crate::discovery::search::ResultSource::App);
         let name = self.store.name(scored).to_string();
         eprintln!("[controller] launching item...");
-        if !crate::launch::launch_item(&item) {
-            eprintln!("[controller] launch returned false");
+        if let Err(error) = crate::launch::launch_item(&item) {
+            eprintln!("[controller] launch error: {error}");
+            self.state.set_launch_error(error.to_string());
+            cx.notify();
             return;
         }
         eprintln!("[controller] launch succeeded, hiding window");
