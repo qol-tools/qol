@@ -14,10 +14,6 @@ pub const DEB_ADAPTER_PATH: &str = "/usr/lib/qol-tray/qol-resident-policy";
 pub const DEB_HOST_PATH: &str = "/usr/bin/qol-tray";
 
 pub(crate) const DPKG_QUERY: &str = "/usr/bin/dpkg-query";
-#[cfg(target_os = "linux")]
-pub(crate) const APT_GET: &str = "/usr/bin/apt-get";
-#[cfg(not(any(test, feature = "sandbox")))]
-pub(crate) const APT_CONFIG: &str = "/usr/bin/apt-config";
 const DPKG_QUERY_STATUS_FORMAT: &str = "-f${Package}\t${db:Status-Abbrev}\t${Version}";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -820,8 +816,20 @@ fn production_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
+    fn failed_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn failed_status(code: i32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(code as u32)
+    }
 
     fn installed_record(version: &str) -> DpkgRecord {
         DpkgRecord {
@@ -1653,7 +1661,7 @@ mod tests {
             status: if success {
                 std::process::ExitStatus::default()
             } else {
-                std::process::ExitStatus::from_raw(1)
+                failed_status(1)
             },
             stdout: stdout.to_vec(),
             stderr: Vec::new(),
@@ -1773,7 +1781,7 @@ mod tests {
                 ["-W", ..] => Ok(output_of(true, &query_status_line())),
                 ["-L", "--", package] if *package == TRAY_PACKAGE_NAME => {
                     Ok(std::process::Output {
-                        status: std::process::ExitStatus::from_raw(2 << 8),
+                        status: failed_status(2),
                         stdout: Vec::new(),
                         stderr: b"error: package qol-tray is not installed\n".to_vec(),
                     })
@@ -1877,7 +1885,7 @@ mod tests {
                 ["-W", ..] => Ok(output_of(true, &query_status_line())),
                 ["-L", "--", package] if *package == TRAY_PACKAGE_NAME => {
                     Ok(std::process::Output {
-                        status: std::process::ExitStatus::from_raw(2 << 8),
+                        status: failed_status(2),
                         stdout: Vec::new(),
                         stderr: {
                             let mut bytes = b"error: secret\tpath\r\n".to_vec();
