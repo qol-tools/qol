@@ -171,6 +171,68 @@ class SourceCiTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     rc.require_source_ci(sha, runs, jobs)
 
+    @patch.object(rc, "gh_json")
+    def test_trigger_uses_exact_run_without_workflow_list_lookup(self, gh_json):
+        sha = "a" * 40
+        run = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+            "html_url": "https://example.invalid/42",
+            "run_started_at": "2026-07-30T11:00:00Z",
+        }
+        jobs = [
+            {"name": name, "conclusion": "success"}
+            for name in rc.REQUIRED_CI_JOBS
+        ]
+        gh_json.side_effect = [run, {"jobs": jobs}]
+
+        evidence = rc.source_ci_evidence(
+            "qol-tools/qol", sha, Path("/repo"), run_id=42
+        )
+
+        self.assertEqual(evidence["id"], 42)
+        self.assertEqual(evidence["ci_sha"], sha)
+        self.assertEqual(
+            gh_json.call_args_list[0].args[0],
+            [
+                "--method",
+                "GET",
+                "/repos/qol-tools/qol/actions/runs/42",
+            ],
+        )
+
+    def test_trigger_rejects_wrong_run_provenance(self):
+        sha = "a" * 40
+        jobs = [
+            {"name": name, "conclusion": "success"}
+            for name in rc.REQUIRED_CI_JOBS
+        ]
+        fields = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+        }
+        cases = [
+            ("id", 41),
+            ("path", ".github/workflows/release.yml"),
+            ("event", "workflow_dispatch"),
+            ("status", "in_progress"),
+            ("head_sha", "b" * 40),
+            ("conclusion", "failure"),
+        ]
+        for name, value in cases:
+            with self.subTest(name=name):
+                run = {**fields, name: value}
+                with self.assertRaisesRegex(RuntimeError, "invalid provenance"):
+                    rc.require_triggered_ci(run, 42, sha, jobs)
+
     @patch.object(rc.plugin_version, "verified_version_bump_parent")
     @patch.object(rc, "gh_json")
     def test_bot_bump_uses_its_verified_parent_ci(
