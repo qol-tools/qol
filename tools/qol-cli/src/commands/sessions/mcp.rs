@@ -1028,7 +1028,7 @@ mod tests {
             let binding: SessionBinding = token().parse().unwrap();
             server
                 .pending
-                .start(&binding, "QOL_BRIDGE_DONE_final")
+                .start(&binding, "QOL_BRIDGE_DONE_final", "")
                 .unwrap();
             server
                 .pending

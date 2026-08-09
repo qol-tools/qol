@@ -362,10 +362,26 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
         })
         .child(
             div()
+                .flex()
                 .flex_none()
-                .text_color(rgb(palette.text_faint))
-                .text_size(px(11.0))
-                .child(meta_value(s)),
+                .items_center()
+                .gap(px(6.0))
+                .when(s.driving > 0, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_color(rgb(palette.bridged))
+                            .text_size(px(11.0))
+                            .child(format!("\u{21C4}{}", s.driving)),
+                    )
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(palette.text_faint))
+                        .text_size(px(11.0))
+                        .child(meta_value(s)),
+                ),
         )
 }
 

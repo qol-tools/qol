@@ -104,7 +104,7 @@ impl PendingBridgeStore {
             .context("pending bridge checkpoint is invalid")
     }
 
-    pub(super) fn start(&self, binding: &SessionBinding, marker: &str) -> Result<()> {
+    pub(super) fn start(&self, binding: &SessionBinding, marker: &str, driver: &str) -> Result<()> {
         let _lock = self.lock(binding)?;
         if self
             .load_unlocked(binding)?
@@ -112,7 +112,7 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, false, false)
+        self.write_unlocked(binding, marker, driver, false, false)
     }
 
     pub(super) fn observe(
@@ -128,13 +128,14 @@ impl PendingBridgeStore {
         if checkpoint.closed || checkpoint.completion_marker != marker {
             return Ok(());
         }
-        self.write_unlocked(binding, marker, completed, false)
+        self.write_unlocked(binding, marker, &checkpoint.driver, completed, false)
     }
 
     fn write_unlocked(
         &self,
         binding: &SessionBinding,
         marker: &str,
+        driver: &str,
         completed: bool,
         closed: bool,
     ) -> Result<()> {
@@ -143,6 +144,7 @@ impl PendingBridgeStore {
         let temporary = file.with_extension("tmp");
         let encoded = serde_json::to_string(&BridgeCheckpoint {
             session: binding.token(),
+            driver: driver.to_owned(),
             completion_marker: marker.to_owned(),
             completed,
             closed,
@@ -170,7 +172,13 @@ impl PendingBridgeStore {
         if require_completed && !checkpoint.completed {
             bail!("the pending bridge has not completed");
         }
-        self.write_unlocked(binding, marker, checkpoint.completed, true)
+        self.write_unlocked(
+            binding,
+            marker,
+            &checkpoint.driver,
+            checkpoint.completed,
+            true,
+        )
     }
 
     pub(super) fn pending_round(&self, binding: &SessionBinding) -> Result<Option<PendingRound>> {
@@ -409,7 +417,7 @@ pub(super) fn execute(
 
     let marker = CompletionMarker::generate();
     let prompt = bridge_prompt(task, &marker);
-    pending.start(binding, &marker.token)?;
+    pending.start(binding, &marker.token, &driver_token(terminals))?;
 
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -634,6 +642,18 @@ pub(super) fn session_liveness<'a>(
     }
 }
 
+fn driver_token(terminals: &TerminalSessionService) -> String {
+    let Ok(sessions) = terminals.discover() else {
+        return String::new();
+    };
+    sessions
+        .into_iter()
+        .filter_map(|session| session.binding().ok())
+        .find(|binding| terminals.is_current(binding).unwrap_or(false))
+        .map(|binding| binding.token())
+        .unwrap_or_default()
+}
+
 fn resolve_target(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
@@ -822,12 +842,16 @@ mod tests {
         let waiting = SessionBinding::from_str("v1:fake:1:100").unwrap();
         let review = SessionBinding::from_str("v1:fake:2:200").unwrap();
         let closed = SessionBinding::from_str("v1:fake:3:300").unwrap();
-        store.start(&waiting, "QOL_BRIDGE_DONE_wait").unwrap();
-        store.start(&review, "QOL_BRIDGE_DONE_review").unwrap();
+        store
+            .start(&waiting, "QOL_BRIDGE_DONE_wait", "v1:fake:8:800")
+            .unwrap();
+        store
+            .start(&review, "QOL_BRIDGE_DONE_review", "v1:fake:8:800")
+            .unwrap();
         store
             .observe(&review, "QOL_BRIDGE_DONE_review", true)
             .unwrap();
-        store.start(&closed, "QOL_BRIDGE_DONE_closed").unwrap();
+        store.start(&closed, "QOL_BRIDGE_DONE_closed", "").unwrap();
         store
             .acknowledge(&closed, "QOL_BRIDGE_DONE_closed", false)
             .unwrap();
@@ -875,7 +899,9 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
-        store.start(&binding, "QOL_BRIDGE_DONE_old").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_old", "v1:fake:8:800")
+            .unwrap();
         store
             .acknowledge(&binding, "QOL_BRIDGE_DONE_old", false)
             .unwrap();
@@ -885,7 +911,9 @@ mod tests {
         let closed = store.load(&binding).unwrap().unwrap();
         assert!(closed.closed);
 
-        store.start(&binding, "QOL_BRIDGE_DONE_new").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_new", "v1:fake:8:800")
+            .unwrap();
         store
             .observe(&binding, "QOL_BRIDGE_DONE_old", true)
             .unwrap();

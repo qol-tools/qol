@@ -93,7 +93,7 @@ pub fn tick_with_caches(
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
     let panes = host.discover();
-    let bridged = live_bridge_sessions();
+    let bridges = live_bridge_sessions();
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
@@ -151,12 +151,21 @@ pub fn tick_with_caches(
             is_service,
         };
 
-        let is_bridged = SessionBinding::new(pane.id.clone(), pane.root_pid)
-            .is_ok_and(|binding| bridged.contains(&binding.token()));
+        let binding_token = SessionBinding::new(pane.id.clone(), pane.root_pid)
+            .ok()
+            .map(|binding| binding.token());
+        let is_bridged = binding_token
+            .as_ref()
+            .is_some_and(|token| bridges.driven.contains(token));
+        let driving = binding_token
+            .as_ref()
+            .and_then(|token| bridges.driving.get(token))
+            .copied()
+            .unwrap_or(0);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={driving} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
             pane.id,
             tool,
             cli_tool,
@@ -186,6 +195,7 @@ pub fn tick_with_caches(
                     now: mono_now,
                     wall_now,
                     bridged: is_bridged,
+                    driving,
                 },
             );
             if let Some(notice) = notice {
@@ -460,6 +470,7 @@ pub struct ApplyInput<'a> {
     pub now: u64,
     pub wall_now: u64,
     pub bridged: bool,
+    pub driving: usize,
 }
 
 fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
@@ -520,6 +531,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         s.working_since = input.reduction.attention.working_since;
         s.settled_since = input.reduction.attention.settled_since;
         s.bridged = input.bridged;
+        s.driving = input.driving;
         if let Some(h) = input.new_hash {
             s.screen_hash = Some(h);
         }
@@ -540,11 +552,12 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         working_since: input.reduction.attention.working_since,
         settled_since: input.reduction.attention.settled_since,
         bridged: input.bridged,
+        driving: input.driving,
     });
     (notice, status)
 }
 
-fn live_bridge_sessions() -> HashSet<String> {
+fn live_bridge_sessions() -> qol_terminal_sessions::bridge::LiveBridges {
     qol_terminal_sessions::bridge::checkpoint_dir()
         .map(|dir| qol_terminal_sessions::bridge::live_sessions(&dir))
         .unwrap_or_default()
