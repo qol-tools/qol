@@ -14,7 +14,7 @@ use ratatui::Frame;
 use super::activity::Activity;
 use super::log_pane::clamp_offset;
 use super::render_util::{
-    list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
+    accent, list_capacity, now_unix_ms, relative_age, view_content, NavigationOverflow,
 };
 use super::{Dash, View};
 
@@ -344,7 +344,7 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
         );
     }
     let Some(report) = &panel.last else {
-        return (Color::DarkGray, vec!["enter to scan".fg(Color::DarkGray)]);
+        return (accent(), vec!["enter to scan".fg(Color::DarkGray)]);
     };
     let total = report
         .target_total()
@@ -355,7 +355,7 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
     let color = if cleanable >= CLEANABLE_ATTENTION {
         Color::Yellow
     } else {
-        Color::DarkGray
+        accent()
     };
     if cleanable > 0 {
         value.push(format!(" · {} cleanable", format_bytes(cleanable)).fg(color));
@@ -461,10 +461,10 @@ mod tests {
             error: None,
         };
         let cases = [
-            (DiskPanel::new(), Color::DarkGray, "enter to scan"),
+            (DiskPanel::new(), accent(), "enter to scan"),
             (scanning, Color::Yellow, "scanning"),
             (failed, Color::Red, "scan failed · boom"),
-            (scanned, Color::DarkGray, "3.0 GiB target · 15s ago"),
+            (scanned, accent(), "3.0 GiB target · 15s ago"),
             (
                 cleanable,
                 Color::Yellow,
