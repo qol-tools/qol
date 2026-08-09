@@ -33,6 +33,9 @@ const APPROVED_MODULE_FAMILIES: [&str; 6] = [
 
 const FRAGMENT_FILE_MODE: u32 = 0o644;
 const MAX_FRAGMENT_ENTRY_BYTES: usize = 64 * 1024;
+const APT_GET: &str = "/usr/bin/apt-get";
+#[cfg(not(any(test, feature = "sandbox")))]
+const APT_CONFIG: &str = "/usr/bin/apt-config";
 
 fn guard_patterns() -> Result<Vec<String>> {
     #[cfg(any(test, feature = "sandbox"))]
@@ -72,7 +75,7 @@ fn apt_supported() -> Result<()> {
     if !dpkg.success() {
         bail!("residency policy requires a dpkg-based host; refusing to adopt");
     }
-    let apt = Command::new(crate::policy::managed::APT_GET)
+    let apt = Command::new(APT_GET)
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -87,7 +90,7 @@ fn apt_supported() -> Result<()> {
 
 #[cfg(not(any(test, feature = "sandbox")))]
 fn verify_apt_preferences_consumer() -> Result<()> {
-    let output = Command::new(crate::policy::managed::APT_CONFIG)
+    let output = Command::new(APT_CONFIG)
         .args(["dump"])
         .output()
         .context("failed to run apt-config")?;

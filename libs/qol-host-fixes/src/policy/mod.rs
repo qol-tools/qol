@@ -927,8 +927,8 @@ pub fn write_journal_durable(journal: &PolicyJournal) -> Result<()> {
         let mut journal = journal.clone();
         journal.journal_file_identity = None;
         let content = serde_json::to_vec(&journal).context("failed to serialize the journal")?;
-        return qol_fs::atomic_write_durable_mode(&path, &content, JOURNAL_FILE_MODE)
-            .with_context(|| format!("failed to commit journal {}", path.display()));
+        qol_fs::atomic_write_durable_mode(&path, &content, JOURNAL_FILE_MODE)
+            .with_context(|| format!("failed to commit journal {}", path.display()))
     }
     #[cfg(target_os = "linux")]
     {
@@ -1002,7 +1002,7 @@ pub fn read_journal(policy: &str) -> Result<Option<PolicyJournal>> {
             .into());
         }
         validate_journal_invariants(&journal)?;
-        return Ok(Some(journal));
+        Ok(Some(journal))
     }
     #[cfg(target_os = "linux")]
     {
@@ -1416,7 +1416,6 @@ pub(crate) fn transfer_ownership(
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::ffi::OsString;
-    #[cfg(target_os = "linux")]
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -1435,7 +1434,7 @@ pub(crate) mod test_support {
             }
             #[cfg(not(unix))]
             {
-                std::fs::create_dir_all(dir).unwrap();
+                std::fs::create_dir_all(&dir).unwrap();
             }
             std::env::set_var("QOL_POLICY_JOURNAL_DIR", &dir);
             dir
