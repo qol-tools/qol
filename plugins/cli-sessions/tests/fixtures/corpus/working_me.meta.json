@@ -11,6 +11,6 @@
     "node",
     "claude"
   ],
-  "expect": "Working",
+  "expect": "Unknown",
   "screen_changed": false
 }

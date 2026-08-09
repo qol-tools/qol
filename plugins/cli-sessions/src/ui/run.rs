@@ -83,6 +83,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
             cli_interpreter.as_ref(),
             &probe,
             now_secs(),
+            mono_now(),
             &mut caches,
         );
     }
@@ -129,6 +130,12 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn mono_now() -> u64 {
+    static START: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    START.elapsed().as_secs()
 }
 
 fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex<Registry>>) {
@@ -228,6 +235,7 @@ fn spawn_reconcile_timer(
         let cache = runtime.caches.clone();
         let service_snapshot = runtime.service_snapshot.clone();
         let now = now_secs();
+        let mono = mono_now();
         cx.background_spawn(async move {
             let probe = SystemServiceProbe::with_shared_cache(commands.to_vec(), service_snapshot);
             let notices = match cache.lock() {
@@ -237,6 +245,7 @@ fn spawn_reconcile_timer(
                     interpreter.as_ref(),
                     &probe,
                     now,
+                    mono,
                     &mut caches,
                 ),
                 Err(_) => Vec::new(),

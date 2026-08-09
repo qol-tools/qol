@@ -203,6 +203,7 @@ mod tests {
             foreground_basenames: vec![command.into()],
             foreground_pids,
             capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+            spawn_identity: None,
         }
     }
 

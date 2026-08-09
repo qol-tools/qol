@@ -1,6 +1,7 @@
 mod endpoint;
 mod parse;
 mod socket;
+mod spawn;
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -15,7 +16,8 @@ use endpoint::{Endpoint, EndpointSource, SystemEndpointSource};
 
 use crate::{
     BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus, SessionId,
-    SessionInventory, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+    SessionInventory, SessionSpawner, SpawnIdentity, SpawnRequest, SpawnSurface, TerminalBackend,
+    TerminalError, TerminalSnapshot, TextInput,
 };
 
 const BACKEND_ID: &str = "kitty";
@@ -202,6 +204,10 @@ impl TerminalBackend for KittyBackend {
         backend_id()
     }
 
+    fn spawner(&self) -> Option<&dyn SessionSpawner> {
+        Some(self)
+    }
+
     fn read_screen_from_snapshot(
         &self,
         snapshot: &TerminalSnapshot,
@@ -326,6 +332,84 @@ impl TextInput for KittyBackend {
         )
         .map(drop)
     }
+}
+
+impl SessionSpawner for KittyBackend {
+    fn supports(&self, _surface: SpawnSurface) -> bool {
+        true
+    }
+
+    fn spawn(&self, request: &SpawnRequest) -> Result<SessionId, TerminalError> {
+        self.spawn_at(
+            request,
+            current_window_id(),
+            std::env::var("PATH").ok().as_deref(),
+        )
+    }
+}
+
+impl KittyBackend {
+    fn spawn_at(
+        &self,
+        request: &SpawnRequest,
+        anchor_window_id: Option<u64>,
+        path: Option<&str>,
+    ) -> Result<SessionId, TerminalError> {
+        let endpoint = self.endpoints.current();
+        let argv = spawn::launch_argv(request, path, anchor_window_id)?;
+        let stdout = self.run_at(&endpoint, "spawn session", &argv, None)?;
+        let window_id =
+            spawn::parse_spawned_window_id(&stdout).ok_or_else(|| TerminalError::SpawnFailed {
+                backend: backend_id().clone(),
+                message: format!("kitten returned an invalid window id `{}`", stdout.trim()),
+            })?;
+        self.verify_spawned_identity(&endpoint, window_id, &request.identity)?;
+        let session_id = SessionId::new(backend_id().clone(), endpoint.native_id(window_id))
+            .expect("Kitty endpoint and window ids are valid terminal session identities");
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "backend={} instance={} operation=spawn surface={} window_id={} outcome=ok",
+            backend_id(),
+            endpoint.instance().unwrap_or("legacy"),
+            spawn::surface_tag(request.identity.surface),
+            window_id
+        );
+        Ok(session_id)
+    }
+
+    fn verify_spawned_identity(
+        &self,
+        endpoint: &Endpoint,
+        window_id: u64,
+        expected: &SpawnIdentity,
+    ) -> Result<(), TerminalError> {
+        let target = SessionId::new(backend_id().clone(), endpoint.native_id(window_id))
+            .expect("Kitty endpoint and window ids are valid terminal session identities");
+        let sessions = self.sessions_at(endpoint)?;
+        let live = sessions
+            .into_iter()
+            .find(|session| session.id == target)
+            .ok_or_else(|| TerminalError::SpawnFailed {
+                backend: backend_id().clone(),
+                message: format!("spawned window {window_id} is missing from discovery"),
+            })?;
+        if live.spawn_identity.as_ref() != Some(expected) {
+            return Err(TerminalError::SpawnFailed {
+                backend: backend_id().clone(),
+                message: format!(
+                    "spawned window {window_id} carries identity {:?} instead of {expected:?}",
+                    live.spawn_identity.as_ref()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn current_window_id() -> Option<u64> {
+    std::env::var("KITTY_WINDOW_ID")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
 }
 
 fn split_native_id(native: &str) -> Option<(&str, u64)> {
@@ -490,10 +574,12 @@ mod tests {
         current_session_id, routed_args, strings, wait_with_timeout, CommandOutput, CommandRunner,
         KittyBackend, SystemCommandRunner,
     };
+    use crate::cli::{CliLaunchProgram, CliToolId};
     use crate::{
         kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts,
-        SessionFocus, SessionId, SessionInventory, TerminalBackend, TerminalError,
-        TerminalSessionService, TerminalSnapshot, TextInput,
+        SessionFocus, SessionId, SessionInventory, SpawnIdentity, SpawnKey, SpawnRequest,
+        SpawnSurface, TerminalBackend, TerminalError, TerminalSessionService, TerminalSnapshot,
+        TextInput,
     };
 
     type RecordedCall = (Option<String>, Vec<String>, Option<String>);
@@ -814,6 +900,7 @@ mod tests {
             foreground_basenames: Vec::new(),
             foreground_pids: Vec::new(),
             capabilities: SessionCapabilities::NONE,
+            spawn_identity: None,
         }]);
 
         let error = backend
@@ -861,6 +948,211 @@ mod tests {
         .unwrap()
     }
 
+    fn spawn_request(surface: SpawnSurface) -> SpawnRequest {
+        SpawnRequest {
+            identity: SpawnIdentity {
+                key: SpawnKey::new("voice-42").unwrap(),
+                tool: CliToolId::new("codex").unwrap(),
+                surface,
+            },
+            launch: CliLaunchProgram {
+                program: "codex".to_owned(),
+                args: vec!["--full-auto".to_owned()],
+            },
+            cwd: "/work/project".into(),
+            title: None,
+        }
+    }
+
+    fn ls_with_identity(id: u64, key: &str, tool: &str, surface: &str) -> String {
+        format!(
+            r#"[{{"id":1,"tabs":[{{"windows":[{{"id":{id},"title":"Spawned","cwd":"/work/project","pid":900,"user_vars":{{"qol_session_key":"{key}","qol_session_tool":"{tool}","qol_session_surface":"{surface}"}}}}]}}]}}]"#
+        )
+    }
+
+    fn ls_without_identity(id: u64) -> String {
+        format!(
+            r#"[{{"id":1,"tabs":[{{"windows":[{{"id":{id},"title":"Spawned","cwd":"/work/project","pid":900}}]}}]}}]"#
+        )
+    }
+
+    #[test]
+    fn spawner_capability_supports_both_surfaces() {
+        let backend = KittyBackend::with_runner(FakeRunner::with_outputs(Vec::new()));
+
+        let spawner = backend.spawner().expect("kitty exposes a spawner");
+
+        assert!(spawner.supports(SpawnSurface::Tab));
+        assert!(spawner.supports(SpawnSurface::OsWindow));
+    }
+
+    #[test]
+    fn spawn_launches_an_anchored_tab_into_the_current_endpoint() {
+        let runner = FakeRunner::with_outputs(vec![
+            success("77\n".to_owned()),
+            success(ls_with_identity(77, "voice-42", "codex", "tab")),
+        ]);
+        let endpoints =
+            FixedEndpointSource::new(vec![Endpoint::fixture("k1_2", "unix:/tmp/kitty-2")]);
+        let backend = KittyBackend::with_parts(runner.clone(), endpoints);
+
+        let session = backend
+            .spawn_at(
+                &spawn_request(SpawnSurface::Tab),
+                Some(42),
+                Some("/usr/bin:/bin"),
+            )
+            .unwrap();
+
+        assert_eq!(session.backend().to_string(), "kitty");
+        assert_eq!(session.native(), "k1_2.77");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0.as_deref(), Some("k1_2"));
+        assert_eq!(
+            calls[0].1,
+            [
+                "@",
+                "launch",
+                "--type",
+                "tab",
+                "--next-to",
+                "id:42",
+                "--dont-take-focus",
+                "--env",
+                "PATH=/usr/bin:/bin",
+                "--cwd",
+                "/work/project",
+                "--var",
+                "qol_session_key=voice-42",
+                "--var",
+                "qol_session_tool=codex",
+                "--var",
+                "qol_session_surface=tab",
+                "--",
+                "codex",
+                "--full-auto",
+            ]
+        );
+        assert_eq!(calls[1].1, ["@", "ls"]);
+    }
+
+    #[test]
+    fn spawn_launches_an_os_window_without_an_anchor_or_path() {
+        let runner = FakeRunner::with_outputs(vec![
+            success("77\n".to_owned()),
+            success(ls_with_identity(77, "voice-42", "codex", "os_window")),
+        ]);
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        let session = backend
+            .spawn_at(&spawn_request(SpawnSurface::OsWindow), None, None)
+            .unwrap();
+
+        assert_eq!(session.native(), "77");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, None);
+        assert_eq!(
+            calls[0].1,
+            [
+                "@",
+                "launch",
+                "--type",
+                "os-window",
+                "--dont-take-focus",
+                "--cwd",
+                "/work/project",
+                "--var",
+                "qol_session_key=voice-42",
+                "--var",
+                "qol_session_tool=codex",
+                "--var",
+                "qol_session_surface=os_window",
+                "--",
+                "codex",
+                "--full-auto",
+            ]
+        );
+    }
+
+    #[test]
+    fn spawn_fails_closed_on_unparseable_window_ids() {
+        for stdout in [
+            "",
+            "   ",
+            "garbage",
+            "77 88",
+            "-1",
+            "0",
+            "0\n",
+            "77\n88",
+            "99999999999999999999999999",
+        ] {
+            let runner = FakeRunner::with_outputs(vec![success(stdout.to_owned())]);
+            let backend = KittyBackend::with_runner(runner.clone());
+
+            let error = backend
+                .spawn_at(&spawn_request(SpawnSurface::OsWindow), None, None)
+                .unwrap_err();
+
+            assert!(
+                matches!(error, TerminalError::SpawnFailed { .. }),
+                "stdout: {stdout:?}"
+            );
+            assert_eq!(runner.calls.lock().unwrap().len(), 1, "stdout: {stdout:?}");
+        }
+    }
+
+    #[test]
+    fn spawn_fails_when_the_spawned_window_is_missing_from_discovery() {
+        let runner = FakeRunner::with_outputs(vec![
+            success("77\n".to_owned()),
+            success(ls_with_identity(78, "voice-42", "codex", "os_window")),
+        ]);
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        let error = backend
+            .spawn_at(&spawn_request(SpawnSurface::OsWindow), None, None)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("missing from discovery"));
+        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn spawn_fails_when_the_spawned_window_carries_a_different_identity() {
+        let bodies = [
+            ls_with_identity(77, "other-key", "codex", "tab"),
+            ls_without_identity(77),
+        ];
+        for body in bodies {
+            let runner = FakeRunner::with_outputs(vec![success("77\n".to_owned()), success(body)]);
+            let backend = KittyBackend::with_runner(runner.clone());
+
+            let error = backend
+                .spawn_at(&spawn_request(SpawnSurface::OsWindow), None, None)
+                .unwrap_err();
+
+            assert!(matches!(error, TerminalError::SpawnFailed { .. }));
+            assert!(error.to_string().contains("instead of"));
+            assert_eq!(runner.calls.lock().unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn spawn_fails_closed_when_a_tab_has_no_current_window() {
+        let runner = FakeRunner::with_outputs(Vec::new());
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        let error = backend
+            .spawn_at(&spawn_request(SpawnSurface::Tab), None, None)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("current window"));
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
     fn ls(id: u64, root_pid: i32) -> String {
         format!(
             r#"[{{"tabs":[{{"windows":[{{"id":{id},"title":"Terminal","cwd":"/a","pid":{root_pid}}}]}}]}}]"#
@@ -880,7 +1172,7 @@ mod tests {
     fn wait_with_timeout_kills_a_hung_child() {
         let mut child = std::process::Command::new("sh")
             .arg("-c")
-            .arg("sleep 60")
+            .arg("exec sleep 60")
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
@@ -913,7 +1205,7 @@ mod tests {
         let error = runner
             .run(
                 &Endpoint::legacy(),
-                &["-c".to_owned(), "sleep 60".to_owned()],
+                &["-c".to_owned(), "exec sleep 60".to_owned()],
                 Some("x".repeat(100_000).as_str()),
             )
             .unwrap_err();

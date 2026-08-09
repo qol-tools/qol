@@ -14,16 +14,21 @@ mod contract;
 mod export;
 mod last_send;
 mod mcp;
+mod spawn;
 
 pub(crate) struct SessionSubcommand {
     pub(crate) name: &'static str,
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 11] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 12] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
+    },
+    SessionSubcommand {
+        name: "spawn",
+        run: |rest, _format| spawn::run(rest),
     },
     SessionSubcommand {
         name: "send",
@@ -99,6 +104,7 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]
   qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
@@ -115,13 +121,21 @@ Diagnostics:
 
 Details:
   list discovers stable live-session tokens.
+  spawn launches a tagged harness for a registered tool in a new terminal tab
+  (default surface), or reuses the single live session already carrying the
+  key when its tool matches; a key used by a different tool conflicts and
+  multiple matches are ambiguous. The result JSON reports session, tool, key,
+  reused, cwd, and surface from the live session facts. The CLI generates a
+  key when --key is omitted; the MCP session_spawn tool requires one so
+  retries are idempotent. The surface default comes from the spawn_surface
+  setting in ~/.config/qol-tray/sessions.toml, then tab.
   bridge submits one bounded task, supplies a generated completion signal,
   waits in the same call, and prints JSON with completed, submitted, session,
   completion_marker, screen, reads, and elapsed_ms. Before submitting, it
   resumes any unfinished bridge for that session and returns its latest
   response with submitted=false. Pass its reviewed completion_marker through
   --acknowledge-marker to submit the following round. Its timeout is clamped
-  to 1s..24h (default 1h).
+  to 1s..24h (default 24h).
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
   command for each open round: resume while waiting, resume --kickstart when
@@ -136,8 +150,9 @@ Details:
   shells: ctrl+c) while a round is open, leaving the round and its
   queued input intact. Every bridge JSON result carries next_command;
   run it instead of repeating the previous command.
-  The MCP and generated agent surfaces expose sessions_list, session_bridge,
-  and session_loop_close. The remaining commands are human diagnostics.
+  The MCP and generated agent surfaces expose sessions_list, session_spawn,
+  session_bridge, and session_loop_close. The remaining commands are human
+  diagnostics.
 
 Exit:
   Exits non-zero on discovery, identity, capability, validation, or delivery
@@ -627,6 +642,18 @@ mod tests {
         assert!(contract::capability_names(&caps).is_empty());
         caps = SessionCapabilities::SCREEN_READING | SessionCapabilities::TEXT_INPUT;
         assert_eq!(contract::capability_names(&caps), ["read", "input"]);
+    }
+
+    #[test]
+    fn sessions_help_advertises_spawn_and_the_24h_bridge_timeout() {
+        let help = help_text();
+        assert!(help.contains("default 24h"));
+        assert!(!help.contains("default 1h"));
+        assert!(help.contains(
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+        ));
+        assert!(help.contains("sessions_list, session_spawn"));
+        assert!(help.contains("~/.config/qol-tray/sessions.toml"));
     }
 
     #[test]

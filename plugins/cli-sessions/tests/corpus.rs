@@ -3,9 +3,9 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::{for_tool, status_for, Ctx, Prev};
 use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
@@ -44,29 +44,33 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         foreground_basenames: meta.foreground_basenames.clone(),
         foreground_pids: vec![],
         capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+        spawn_identity: None,
     };
-    let cli_session = CliSessionInterpreter::system().describe(&pane);
+    let interpreter = CliSessionInterpreter::system();
+    let cli_session = interpreter.describe(&pane);
     let tool = Tool::from_cli_session(&cli_session);
-    let strategy = for_tool(tool);
+    let screen_evidence = interpreter.classify_screen(&pane, screen);
     let prev_status = meta
         .prev
         .as_deref()
         .map(expected_status)
         .unwrap_or(Status::Unknown);
-    let prev = meta.prev.as_ref().map(|_| Prev {
+    let prev = Attention {
         status: prev_status,
-        running_since: None,
-    });
-    let reading = strategy.read(&Ctx {
-        pane: &pane,
-        cli_session,
-        screen: Some(screen),
+        working_since: meta.prev.as_ref().map(|_| 0),
+        settled_since: meta.prev.as_ref().map(|_| 0),
+    };
+    let evidence = Evidence {
+        descriptor_runtime: cli_session.evidence.runtime,
+        screen_runtime: screen_evidence.runtime,
+        viewport: screen_evidence.viewport,
+        file_fresh: cli_session.evidence.activity.file_fresh,
         screen_changed: meta.screen_changed,
-        prev,
-        now: 0,
+        at_prompt: meta.at_prompt,
+        is_generic: tool == Tool::Generic,
         is_service: false,
-    });
-    status_for(prev_status, reading.phase)
+    };
+    reduce(&prev, &evidence, GRACE_SECS + 1).attention.status
 }
 
 #[test]

@@ -29,6 +29,7 @@ pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
+    locks: super::spawn::SpawnLocks,
     round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
@@ -40,6 +41,7 @@ impl McpSessionServer {
             terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
+            locks: super::spawn::SpawnLocks::system()?,
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
@@ -54,6 +56,7 @@ impl McpSessionServer {
             terminals: Arc::new(terminals),
             interpreter,
             pending,
+            locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
@@ -68,7 +71,8 @@ impl McpSessionServer {
         Self {
             terminals: Arc::new(terminals),
             interpreter,
-            pending: super::bridge::PendingBridgeStore::with_dir(dir),
+            pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
+            locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
@@ -144,6 +148,7 @@ impl McpSessionServer {
         };
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
+            "session_spawn" => self.tool_spawn(arguments),
             "session_bridge" => self.tool_bridge(arguments),
             "session_loop_close" => self.close_loop(arguments),
             other => {
@@ -181,6 +186,33 @@ impl McpSessionServer {
             })
             .collect::<Vec<_>>();
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_spawn(&self, arguments: Value) -> Result<String, String> {
+        let tool = string_argument(&arguments, "tool")?;
+        let cwd = string_argument(&arguments, "cwd")?;
+        let key = string_argument(&arguments, "key")?;
+        let surface = arguments
+            .get("surface")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `surface` must be a string".to_owned())
+            })
+            .transpose()?;
+        let outcome = super::spawn::spawn_or_reuse(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            tool,
+            cwd,
+            Some(key),
+            surface.as_deref(),
+            super::spawn::config_surface().map_err(|error| error.to_string())?,
+            &self.locks,
+        )
+        .map_err(|error| error.to_string())?;
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
     fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
@@ -273,7 +305,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_bridge, session_loop_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_bridge\n  submits once and waits for the implementation terminal's generated\n  completion signal before returning. A reviewed completion marker explicitly\n  acknowledges the prior response before another task can be submitted.\n  session_loop_close acknowledges the final response and records the\n  architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts.\n  session_bridge submits once and waits for the implementation terminal's\n  generated completion signal before returning. A reviewed completion marker\n  explicitly acknowledges the prior response before another task can be\n  submitted. session_loop_close acknowledges the final response and records\n  the architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -386,24 +418,60 @@ mod tests {
     use std::sync::Mutex;
 
     struct FakeBackend {
+        id: BackendId,
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
         complete_bridge: AtomicBool,
         fail_send: bool,
         current: Mutex<bool>,
+        spawner_enabled: AtomicBool,
+        spawn_count: std::sync::atomic::AtomicUsize,
+        spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
+        spawn_cwd: Mutex<Option<std::path::PathBuf>>,
     }
 
     impl FakeBackend {
         fn new(screens: Vec<String>, complete_bridge: bool, fail_send: bool) -> Self {
             Self {
+                id: BackendId::new("fake").unwrap(),
                 sent: Mutex::new(Vec::new()),
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
                 complete_bridge: AtomicBool::new(complete_bridge),
                 fail_send,
                 current: Mutex::new(false),
+                spawner_enabled: AtomicBool::new(false),
+                spawn_count: std::sync::atomic::AtomicUsize::new(0),
+                spawn_identity: Mutex::new(None),
+                spawn_cwd: Mutex::new(None),
             }
+        }
+
+        fn with_id(mut self, id: BackendId) -> Self {
+            self.id = id;
+            self
+        }
+
+        fn enable_spawner(&self) {
+            self.spawner_enabled.store(true, Ordering::Relaxed);
+        }
+
+        fn spawned_session(&self) -> Option<SessionFacts> {
+            let identity = self.spawn_identity.lock().unwrap().clone()?;
+            let cwd = self.spawn_cwd.lock().unwrap().clone()?;
+            Some(SessionFacts {
+                id: SessionId::new(self.id.clone(), format!("spawn-{}", identity.key)).unwrap(),
+                root_pid: 200,
+                cwd: cwd.display().to_string(),
+                title: "Spawned".to_owned(),
+                at_prompt: true,
+                reported_cmd: None,
+                foreground_basenames: vec![identity.tool.to_string()],
+                foreground_pids: Vec::new(),
+                capabilities: SessionCapabilities::ALL,
+                spawn_identity: Some(identity),
+            })
         }
 
         fn session() -> SessionFacts {
@@ -417,6 +485,7 @@ mod tests {
                 foreground_basenames: Vec::new(),
                 foreground_pids: Vec::new(),
                 capabilities: SessionCapabilities::ALL,
+                spawn_identity: None,
             }
         }
 
@@ -436,7 +505,11 @@ mod tests {
 
     impl SessionInventory for FakeBackend {
         fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
-            Ok(vec![Self::session()])
+            let mut facts = vec![Self::session()];
+            if let Some(spawned) = self.spawned_session() {
+                facts.push(spawned);
+            }
+            Ok(facts)
         }
     }
 
@@ -503,8 +576,7 @@ mod tests {
 
     impl TerminalBackend for FakeBackend {
         fn id(&self) -> &BackendId {
-            static ID: std::sync::OnceLock<BackendId> = std::sync::OnceLock::new();
-            ID.get_or_init(|| BackendId::new("fake").unwrap())
+            &self.id
         }
 
         fn read_screen_from_snapshot(
@@ -517,6 +589,32 @@ mod tests {
 
         fn current_session_id(&self) -> Option<SessionId> {
             (*self.current.lock().unwrap()).then(|| Self::session().id)
+        }
+
+        fn spawner(&self) -> Option<&dyn qol_terminal_sessions::SessionSpawner> {
+            self.spawner_enabled.load(Ordering::Relaxed).then_some(self)
+        }
+    }
+
+    impl qol_terminal_sessions::SessionSpawner for FakeBackend {
+        fn supports(&self, surface: qol_terminal_sessions::SpawnSurface) -> bool {
+            matches!(surface, qol_terminal_sessions::SpawnSurface::Tab)
+        }
+
+        fn spawn(
+            &self,
+            request: &qol_terminal_sessions::SpawnRequest,
+        ) -> Result<SessionId, TerminalError> {
+            self.spawn_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *self.spawn_identity.lock().unwrap() = Some(request.identity.clone());
+            *self.spawn_cwd.lock().unwrap() = Some(request.cwd.clone());
+            SessionId::new(self.id.clone(), format!("spawn-{}", request.identity.key)).map_err(
+                |error| TerminalError::SpawnFailed {
+                    backend: self.id.clone(),
+                    message: error.to_string(),
+                },
+            )
         }
     }
 
@@ -710,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_discovery_bridge_and_loop_closure() {
+    fn tools_list_exposes_discovery_spawn_bridge_and_loop_closure() {
         let (server, _) = server(Vec::new(), false, false);
         let response = server
             .handle_line(&serde_json::to_string(&request(2, "tools/list", json!({}))).unwrap())
@@ -723,7 +821,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            ["sessions_list", "session_bridge", "session_loop_close"]
+            [
+                "sessions_list",
+                "session_spawn",
+                "session_bridge",
+                "session_loop_close"
+            ]
         );
     }
 
@@ -1013,5 +1116,214 @@ mod tests {
     fn run_rejects_unknown_arguments_instead_of_blocking() {
         let error = run(&[std::ffi::OsString::from("--port")]).unwrap_err();
         assert!(error.to_string().contains("usage"));
+    }
+
+    fn spawn_arguments(tool: &str, key: &str, surface: Option<&str>, cwd: &str) -> Value {
+        let mut arguments = json!({
+            "tool": tool,
+            "cwd": cwd,
+            "key": key,
+        });
+        if let Some(surface) = surface {
+            arguments["surface"] = json!(surface);
+        }
+        arguments
+    }
+
+    fn spawn_cwd(root: &tempfile::TempDir) -> String {
+        std::fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn session_spawn_launches_and_returns_actual_facts() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let response = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["session"], "v1:kitty:spawn-mcp-lane:200");
+        assert_eq!(outcome["tool"], "codex");
+        assert_eq!(outcome["key"], "mcp-lane");
+        assert_eq!(outcome["reused"], false);
+        assert_eq!(outcome["cwd"], json!(cwd));
+        assert_eq!(outcome["surface"], "tab");
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn session_spawn_reuses_the_live_match_and_never_launches_twice() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let first = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(first["result"]["isError"], false);
+        let second = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, "ignored-missing-cwd"),
+        );
+        assert_eq!(second["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(second["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(outcome["reused"], true);
+        assert_eq!(outcome["session"], "v1:kitty:spawn-mcp-lane:200");
+        assert_eq!(outcome["cwd"], json!(cwd));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn session_spawn_same_key_with_a_different_tool_conflicts() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        let conflict = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("claude", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(conflict["result"]["isError"], true);
+        assert!(conflict["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already held by tool `codex`"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn session_spawn_requires_tool_cwd_and_key() {
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(
+            backend.clone(),
+            tempfile::TempDir::new().unwrap().path().to_path_buf(),
+        );
+        for (name, arguments) in [
+            ("tool", json!({ "cwd": "/work", "key": "k" })),
+            ("cwd", json!({ "tool": "codex", "key": "k" })),
+            ("key", json!({ "tool": "codex", "cwd": "/work" })),
+        ] {
+            let response = tool_call(&server, "session_spawn", arguments);
+            assert_eq!(response["result"]["isError"], true, "{name}");
+            assert!(
+                response["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("missing `{name}` string argument")),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn session_spawn_rejects_unknown_and_unsupported_surfaces() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let unknown = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", Some("floating"), &cwd),
+        );
+        assert_eq!(unknown["result"]["isError"], true);
+        assert!(unknown["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("invalid surface `floating`"));
+
+        let unsupported = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd),
+        );
+        assert_eq!(unsupported["result"]["isError"], true);
+        assert!(unsupported["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("refused the spawn request"));
+    }
+
+    #[test]
+    fn session_spawn_rejects_unregistered_tools_as_orchestration_errors() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let response = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("generic", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no launch strategy"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 }

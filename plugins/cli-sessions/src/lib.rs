@@ -1,5 +1,6 @@
 use anyhow::Context as _;
 
+pub mod attention;
 pub mod cli;
 pub mod config;
 pub mod daemon;
@@ -9,7 +10,6 @@ pub mod host;
 pub mod session;
 pub mod signal;
 pub mod storage;
-pub mod strategy;
 pub mod ui;
 
 pub use diagnostics::{anomaly, snapshot};

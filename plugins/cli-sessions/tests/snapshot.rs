@@ -34,6 +34,7 @@ fn pane(window_id: u64, title: &str, fg: &[&str]) -> Pane {
         foreground_basenames: fg.iter().map(|s| s.to_string()).collect(),
         foreground_pids: vec![],
         capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+        spawn_identity: None,
     }
 }
 

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{IdentityError, TerminalError};
+use crate::{IdentityError, SpawnIdentity, TerminalError};
 
 const TOKEN_VERSION: &str = "v1";
 
@@ -168,6 +168,7 @@ pub struct SessionFacts {
     pub foreground_basenames: Vec<String>,
     pub foreground_pids: Vec<i32>,
     pub capabilities: SessionCapabilities,
+    pub spawn_identity: Option<SpawnIdentity>,
 }
 
 impl SessionFacts {
@@ -239,7 +240,7 @@ impl TerminalSnapshot {
     }
 }
 
-fn valid_component(value: &str) -> bool {
+pub(crate) fn valid_component(value: &str) -> bool {
     !value.is_empty()
         && value
             .bytes()

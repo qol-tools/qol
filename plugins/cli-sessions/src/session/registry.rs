@@ -20,8 +20,10 @@ pub struct SessionState {
     pub last_activity: u64,
     #[serde(default)]
     pub screen_hash: Option<u64>,
-    #[serde(default)]
-    pub running_since: Option<u64>,
+    #[serde(default, skip)]
+    pub working_since: Option<u64>,
+    #[serde(default, skip)]
+    pub settled_since: Option<u64>,
 }
 
 impl SessionState {

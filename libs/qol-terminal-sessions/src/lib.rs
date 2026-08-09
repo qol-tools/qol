@@ -3,6 +3,7 @@ mod error;
 pub mod kitty;
 mod model;
 mod service;
+mod spawn;
 
 pub use error::{IdentityError, TerminalError};
 pub use model::{
@@ -13,3 +14,4 @@ pub use service::{
     ScreenReader, SessionFocus, SessionInventory, TerminalBackend, TerminalSessionService,
     TextInput,
 };
+pub use spawn::{SessionSpawner, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface};

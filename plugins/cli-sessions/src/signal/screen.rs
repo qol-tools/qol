@@ -1,5 +1,8 @@
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+use crate::session::tool::Tool;
 
 pub fn screen_hash(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
@@ -7,272 +10,135 @@ pub fn screen_hash(text: &str) -> u64 {
     h.finish()
 }
 
-const KEY_HINTS: [&str; 6] = [
-    "enter to",
-    "to confirm",
-    "to select",
-    "to navigate",
-    "to submit",
-    "space to toggle",
-];
-
-pub fn has_prompt_markers(text: &str) -> bool {
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines.iter().rev().take(8).any(|line| is_selection(line))
-}
-
-pub fn claude_working(text: &str) -> bool {
-    text.lines().any(|l| {
-        let t = l.trim();
-        t.contains("esc to interrupt") || is_live_spinner(t)
-    })
-}
-
-fn is_live_spinner(t: &str) -> bool {
-    starts_with_spinner_glyph(t) && t.contains("\u{2026} (") && t.ends_with(')')
-}
-
-fn starts_with_spinner_glyph(t: &str) -> bool {
-    matches!(t.chars().next(), Some(c) if (0x2722..=0x273F).contains(&(c as u32)))
-}
-
-pub fn claude_done(text: &str) -> bool {
-    text.lines().any(|l| {
-        let t = l.trim();
-        starts_with_star(t) && t.contains(" for ") && ends_with_duration(t)
-    })
-}
-
-pub fn codex_working(text: &str) -> bool {
-    text.lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(8)
-        .any(|l| l.contains("esc to interrupt"))
-}
-
-pub fn codex_banner(text: &str) -> bool {
-    text.contains("OpenAI Codex (v") || text.contains("Tip: Try the Codex App")
-}
-
-pub fn pi_working(text: &str) -> bool {
-    text.lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(8)
-        .any(|l| {
-            let t = l.trim_start();
-            starts_with_braille(t) && (t.contains("...") || t.contains('\u{2026}'))
-        })
-}
-
-fn starts_with_braille(t: &str) -> bool {
-    matches!(t.chars().next(), Some(c) if (0x2800..=0x28FF).contains(&(c as u32)))
-}
-
-pub fn pi_awaiting_choice(text: &str) -> bool {
-    text.lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(8)
-        .any(|l| {
-            let t = l.trim();
-            t.contains('\u{2191}') && t.contains("navigate") && t.contains("select")
-        })
-}
-
-pub fn pi_banner(text: &str) -> bool {
-    text.contains("to show full startup help")
-}
-
-const KIMI_STATUS_WINDOW: usize = 30;
-
-pub fn kimi_working(text: &str) -> bool {
-    let tail = kimi_status_tail(text);
-    tail.iter().any(|l| is_kimi_spinner(l.trim_start()))
-        || tail
-            .windows(2)
-            .any(|w| is_bare_moon(w[0].trim_start()) && is_editor_box_top(w[1].trim_start()))
-}
-
-pub fn kimi_questionnaire(text: &str) -> bool {
-    let tail = kimi_status_tail(text);
-    let numbered = tail.iter().any(|line| numbered_option(line.trim()));
-    let footer = tail.iter().any(|line| {
-        let lower = line.to_lowercase();
-        lower.contains("tab switch")
-            && lower.contains("esc cancel")
-            && (lower.contains("↵ save") || lower.contains("↵ choose"))
-    });
-    numbered && footer
-}
-
-fn kimi_status_tail(text: &str) -> Vec<&str> {
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .rev()
-        .take(KIMI_STATUS_WINDOW)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
-}
-
-fn is_kimi_spinner(text: &str) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if is_moon_phase(first) {
-        chars
-            .as_str()
-            .strip_prefix('\u{FE0F}')
-            .unwrap_or(chars.as_str())
-            .trim_start()
-            .starts_with('\u{00B7}')
-    } else if matches!(first as u32, 0x2800..=0x28FF) {
-        text.contains("...") || text.contains('\u{2026}')
-    } else {
-        false
+pub fn stable_screen<'a>(text: &'a str, tool: Tool) -> Cow<'a, str> {
+    match tool {
+        Tool::Pi => pi_stable(text),
+        Tool::Kimi => kimi_stable(text),
+        Tool::Claude | Tool::Codex | Tool::Generic => Cow::Borrowed(text),
     }
 }
 
-fn is_bare_moon(text: &str) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    is_moon_phase(first)
-        && chars
-            .as_str()
-            .strip_prefix('\u{FE0F}')
-            .unwrap_or(chars.as_str())
-            .trim()
-            .is_empty()
-}
-
-fn is_moon_phase(c: char) -> bool {
-    matches!(c as u32, 0x1F311..=0x1F318)
-}
-
-fn is_editor_box_top(text: &str) -> bool {
-    matches!(text.chars().next(), Some('\u{256D}'))
-}
-
-fn starts_with_star(t: &str) -> bool {
-    matches!(t.chars().next(), Some(c) if (0x2733..=0x273F).contains(&(c as u32)))
-}
-
-fn ends_with_duration(t: &str) -> bool {
-    let tail = t.rsplit(" for ").next().unwrap_or("");
-    let toks: Vec<&str> = tail.split_whitespace().collect();
-    !toks.is_empty() && toks.iter().all(|tok| is_duration_token(tok))
-}
-
-fn is_duration_token(tok: &str) -> bool {
-    let Some(unit) = tok.chars().last() else {
-        return false;
-    };
-    if !matches!(unit, 'h' | 'm' | 's') {
-        return false;
-    }
-    let num = &tok[..tok.len() - unit.len_utf8()];
-    !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
-}
-
-pub fn claude_awaiting_choice(text: &str) -> bool {
+fn pi_stable(text: &str) -> Cow<'_, str> {
     let lines: Vec<&str> = text.lines().collect();
-    lines
-        .iter()
-        .enumerate()
-        .any(|(index, line)| selected_option(line) && has_sibling_option(&lines, index))
-}
-
-fn selected_option(line: &str) -> bool {
-    let mut chars = line.trim_start().chars();
-    matches!(chars.next(), Some('\u{276F}') | Some('\u{203A}'))
-        && numbered_option(chars.as_str().trim_start())
-}
-
-fn has_sibling_option(lines: &[&str], index: usize) -> bool {
-    let previous = lines[..index].iter().rev().find(|l| !l.trim().is_empty());
-    let next = lines[index + 1..].iter().find(|l| !l.trim().is_empty());
-    [previous, next]
-        .into_iter()
-        .flatten()
-        .any(|line| numbered_option(line.trim()))
-}
-
-pub fn has_input_request(text: &str) -> bool {
-    match text.lines().rfind(|l| !l.trim().is_empty()) {
-        Some(line) => {
-            let t = line.trim();
-            t.ends_with(':') || t.ends_with('?')
-        }
-        None => false,
-    }
-}
-
-pub fn has_numbered_choice_prompt(text: &str) -> bool {
-    let tail: Vec<&str> = text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .rev()
-        .take(8)
-        .collect();
-    let numbered = tail.iter().any(|l| numbered_option(l.trim()));
-    let affordance = tail.iter().any(|l| is_choice_affordance(l));
-    numbered && affordance
-}
-
-fn is_selection(line: &str) -> bool {
-    let t = line.trim();
-    if t.is_empty() {
-        return false;
-    }
-    numbered_option(t) || is_choice_affordance(line)
-}
-
-fn is_choice_affordance(line: &str) -> bool {
-    let t = line.trim();
-    if t.starts_with("[x]") || t.starts_with("[ ]") {
-        return true;
-    }
-    let lower = t.to_lowercase();
-    lower.contains("[y/n]")
-        || lower.contains("(y/n)")
-        || lower.contains("\u{2191}\u{2193} select")
-        || lower.contains("\u{21B5} choose")
-        || KEY_HINTS.iter().any(|h| lower.contains(h))
-}
-
-fn numbered_option(t: &str) -> bool {
-    let t = t.strip_prefix('\u{2192}').map(str::trim_start).unwrap_or(t);
-    if bracketed_numbered_option(t) {
-        return true;
-    }
-    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 {
-        return false;
-    }
-    let mut rest = t[digits..].chars();
-    if !matches!(rest.next(), Some('.') | Some(')')) {
-        return false;
-    }
-    matches!(rest.next(), None | Some(' ') | Some('\t'))
-}
-
-fn bracketed_numbered_option(t: &str) -> bool {
-    let Some(t) = t.strip_prefix('[') else {
-        return false;
+    let is_rule = |line: &str| {
+        !line.trim().is_empty() && line.trim().chars().all(|character| character == '\u{2500}')
     };
-    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 {
-        return false;
+    let Some(border) = lines.iter().rposition(|line| is_rule(line)) else {
+        return Cow::Borrowed(text);
+    };
+    if lines.len().saturating_sub(border) > 5 {
+        return Cow::Borrowed(text);
     }
-    let mut rest = t[digits..].chars();
-    if rest.next() != Some(']') {
-        return false;
+    let paired = lines[..border]
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| is_rule(line));
+    if !paired {
+        return Cow::Borrowed(text);
     }
-    matches!(rest.next(), None | Some(' ') | Some('\t'))
+    let end = lines[..border].iter().map(|line| line.len() + 1).sum();
+    Cow::Borrowed(text.get(..end).unwrap_or(text))
+}
+
+fn kimi_stable(text: &str) -> Cow<'_, str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(box_top) = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with('\u{256D}'))
+    else {
+        return Cow::Borrowed(text);
+    };
+    if lines.len().saturating_sub(box_top) > 6 {
+        return Cow::Borrowed(text);
+    }
+    let end = lines[..box_top].iter().map(|line| line.len() + 1).sum();
+    Cow::Borrowed(text.get(..end).unwrap_or(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{screen_hash, stable_screen};
+    use crate::session::tool::Tool;
+
+    #[test]
+    fn screen_hash_changes_with_content_and_is_stable_for_equal_text() {
+        assert_eq!(screen_hash("same"), screen_hash("same"));
+        assert_ne!(screen_hash("a"), screen_hash("b"));
+    }
+
+    #[test]
+    fn pi_stable_ignores_footer_counter_changes() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let base = format!(
+            "conversation output\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+        );
+        let footer = format!(
+            "conversation output\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.480 (sub) 30.1%/1.0M (auto)"
+        );
+        let content = format!(
+            "new output arrived\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+        );
+        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Pi).as_ref());
+        assert_eq!(
+            hash(&base),
+            hash(&footer),
+            "footer counters must not count as movement"
+        );
+        assert_ne!(
+            hash(&base),
+            hash(&content),
+            "content changes must count as movement"
+        );
+    }
+
+    #[test]
+    fn pi_stable_requires_footer_rules_near_the_tail() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let a = format!(
+            "streamed output\n{rule}\nchanging line A\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+        );
+        let b = format!(
+            "streamed output\n{rule}\nchanging line B\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
+        );
+        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Pi).as_ref());
+        assert_ne!(
+            hash(&a),
+            hash(&b),
+            "a rule-looking line inside streamed output must not hide movement below it"
+        );
+    }
+
+    #[test]
+    fn kimi_stable_ignores_status_bar_changes() {
+        let boxed = "\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}";
+        let base = format!(
+            "conversation output\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
+        );
+        let status = format!(
+            "conversation output\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 21% (51.5k/256k)"
+        );
+        let content = format!(
+            "new output arrived\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
+        );
+        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Kimi).as_ref());
+        assert_eq!(
+            hash(&base),
+            hash(&status),
+            "status bar changes must not count as movement"
+        );
+        assert_ne!(
+            hash(&base),
+            hash(&content),
+            "content changes must count as movement"
+        );
+    }
+
+    #[test]
+    fn non_tool_screens_are_never_normalized() {
+        let text = "plain output stays as-is";
+        assert_eq!(stable_screen(text, Tool::Claude).as_ref(), text);
+        assert_eq!(stable_screen(text, Tool::Codex).as_ref(), text);
+        assert_eq!(stable_screen(text, Tool::Generic).as_ref(), text);
+    }
 }

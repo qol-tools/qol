@@ -7,8 +7,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool,
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
+    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
+    CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -59,7 +60,42 @@ impl CliSessionStrategy for CodexStrategy {
             display_name: metadata.thread_name.or_else(|| project_name(&session.cwd)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
+            evidence: CliSessionEvidence {
+                runtime: metadata.runtime,
+                activity: metadata.activity,
+            },
         }
+    }
+
+    fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
+        let working = crate::cli::screen::has_interrupt_hint(screen);
+        let awaiting = crate::cli::screen::has_numbered_choice(screen);
+        let banner = crate::cli::screen::contains_any(
+            screen,
+            &["OpenAI Codex (v", "Tip: Try the Codex App"],
+        );
+        if working {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::Working,
+            }
+        } else if awaiting {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::NeedsInput,
+            }
+        } else if banner {
+            CliScreenEvidence {
+                viewport: CliViewportState::Historical,
+                runtime: CliRuntimeState::Unknown,
+            }
+        } else {
+            CliScreenEvidence::default()
+        }
+    }
+
+    fn launch(&self) -> Option<CliLaunchProgram> {
+        Some(CliLaunchProgram::new("codex"))
     }
 
     fn subscribe(

@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cli::CliSessionEvidence;
 use crate::IdentityError;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -68,6 +69,7 @@ pub struct CliSessionDescriptor {
     pub display_name: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub evidence: CliSessionEvidence,
 }
 
 fn valid_tool_id(value: &str) -> bool {

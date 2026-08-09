@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
+use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::PiEnvironment;
@@ -211,6 +212,49 @@ fn matches_only_pi_processes() {
     assert!(!strategy.matches(&other));
 }
 
+#[test]
+fn launch_program_is_the_pi_executable_without_arguments() {
+    assert_eq!(
+        PiStrategy::default().launch(),
+        Some(CliLaunchProgram::new("pi"))
+    );
+}
+
+#[test]
+fn screen_classification_distinguishes_work_choices_and_startup_banner() {
+    let strategy = PiStrategy::default();
+    let facts = session();
+
+    assert_eq!(
+        strategy.classify_screen(&facts, "\u{2800}\u{2801} thinking..."),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::Working,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, "\u{2191}\u{2193} to navigate, \u{21B5} to select"),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            "pi \u{03C0} \u{2014} press ? to show full startup help"
+        ),
+        CliScreenEvidence {
+            viewport: CliViewportState::Historical,
+            runtime: CliRuntimeState::Unknown,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, "plain output"),
+        CliScreenEvidence::default()
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),
@@ -222,5 +266,6 @@ fn session() -> SessionFacts {
         foreground_basenames: vec!["zsh".to_owned(), "pi".to_owned()],
         foreground_pids: vec![22],
         capabilities: SessionCapabilities::ALL,
+        spawn_identity: None,
     }
 }

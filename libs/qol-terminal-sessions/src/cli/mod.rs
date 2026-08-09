@@ -1,7 +1,9 @@
 mod activity;
 mod builtins;
+mod evidence;
 mod interpreter;
 mod model;
+mod screen;
 mod subscription;
 
 use std::sync::Arc;
@@ -12,6 +14,10 @@ pub use builtins::{
     claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID,
     CODEX_TOOL_ACCENT, CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID, KIMI_TOOL_ACCENT,
     KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
+};
+pub use evidence::{
+    CliActivityEvidence, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
+    CliViewportState,
 };
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
 pub use model::{CliSessionDescriptor, CliTool, CliToolColor, CliToolId};
@@ -40,5 +46,13 @@ pub trait CliSessionStrategy: Send + Sync {
         _on_change: CliSessionChangeHandler,
     ) -> Result<Option<CliSessionSubscription>, CliSessionSubscriptionError> {
         Ok(None)
+    }
+
+    fn classify_screen(&self, _session: &SessionFacts, _screen: &str) -> CliScreenEvidence {
+        CliScreenEvidence::default()
+    }
+
+    fn launch(&self) -> Option<CliLaunchProgram> {
+        None
     }
 }

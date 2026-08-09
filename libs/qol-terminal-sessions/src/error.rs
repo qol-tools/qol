@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use crate::{BackendId, SessionBinding, SessionId};
+use crate::{BackendId, SessionBinding, SessionId, SpawnSurface};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdentityError {
@@ -64,6 +64,14 @@ pub enum TerminalError {
         target: SessionId,
         capability: &'static str,
     },
+    SpawnUnsupported {
+        backend: BackendId,
+        surface: SpawnSurface,
+    },
+    SpawnFailed {
+        backend: BackendId,
+        message: String,
+    },
 }
 
 impl Display for TerminalError {
@@ -106,6 +114,14 @@ impl Display for TerminalError {
             Self::Unsupported { target, capability } => {
                 write!(formatter, "terminal session `{target}` does not support {capability}")
             }
+            Self::SpawnUnsupported { backend, surface } => write!(
+                formatter,
+                "terminal backend `{backend}` cannot spawn a {surface} terminal"
+            ),
+            Self::SpawnFailed { backend, message } => write!(
+                formatter,
+                "terminal backend `{backend}` failed to spawn a terminal: {message}"
+            ),
         }
     }
 }
@@ -120,7 +136,9 @@ impl std::error::Error for TerminalError {
             | Self::UnknownBackend(_)
             | Self::TargetMissing(_)
             | Self::TargetChanged { .. }
-            | Self::Unsupported { .. } => None,
+            | Self::Unsupported { .. }
+            | Self::SpawnUnsupported { .. }
+            | Self::SpawnFailed { .. } => None,
         }
     }
 }

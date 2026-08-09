@@ -103,6 +103,18 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _
     },
 "#;
 
+const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+      const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
+      if (params.surface != null) args.push("--surface", params.surface);
+      const stdout = run(args, 60_000);
+      const outcome = JSON.parse(stdout);
+      const text = outcome.reused
+        ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
+        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`;
+      return { content: [{ type: "text", text }], details: { outcome } };
+    },
+"#;
+
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
@@ -158,6 +170,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let parameters = typebox_object(&spec.input_schema)?;
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
+        "session_spawn" => EXECUTE_SPAWN,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         other => bail!("no pi adapter template for contract tool `{other}`"),
@@ -262,6 +275,29 @@ mod tests {
         assert!(source.contains("recovered the previous implementation response"));
         assert!(source.contains("pi.on(\"agent_settled\""));
         assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
+    }
+
+    #[test]
+    fn pi_schema_maps_the_spawn_tool_with_required_key() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .expect("spawn in contract");
+        let source = render_tool_block(spec).expect("render");
+        assert!(source.contains(
+            "tool: Type.String({ description: \"Registered CLI tool to spawn (codex, claude, pi, kimi)\" }),"
+        ));
+        assert!(source.contains(
+            "cwd: Type.String({ description: \"Working directory for the spawned session\" }),"
+        ));
+        assert!(source.contains(
+            "key: Type.String({ description: \"Stable spawn key; required so retries are idempotent\" }),"
+        ));
+        assert!(source.contains("surface: Type.Optional(Type.String"));
+        assert!(EXECUTE_SPAWN.contains("args.push(\"--surface\", params.surface)"));
+        assert!(EXECUTE_SPAWN.contains("outcome.reused"));
+        assert!(EXECUTE_SPAWN.contains("spawned session ${outcome.session}"));
     }
 
     #[test]

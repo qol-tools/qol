@@ -33,6 +33,7 @@ fn classify_picks_agent_from_process_group() {
             foreground_basenames: names.clone(),
             foreground_pids: Vec::new(),
             capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
         };
         let descriptor = CliSessionInterpreter::system().describe(&pane);
         assert_eq!(
