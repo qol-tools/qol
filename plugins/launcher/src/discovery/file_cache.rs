@@ -13,7 +13,11 @@ const CACHE_FILE_NAME: &str = "launcher-files-index-v1.tsv";
 
 pub fn load(roots: &[PathBuf]) -> Option<Vec<FileEntry>> {
     let path = cache_path()?;
-    if is_stale(&path) {
+    load_from_path(&path, roots)
+}
+
+fn load_from_path(path: &Path, roots: &[PathBuf]) -> Option<Vec<FileEntry>> {
+    if is_stale(path) {
         return None;
     }
     let file = fs::File::open(path).ok()?;
@@ -35,9 +39,13 @@ pub fn load(roots: &[PathBuf]) -> Option<Vec<FileEntry>> {
         if name.is_empty() || path.is_empty() {
             continue;
         }
+        let path = PathBuf::from(path);
+        if super::file_scan::file_path_is_junk(&path) {
+            continue;
+        }
         entries.push(FileEntry {
             name: name.to_string(),
-            path: PathBuf::from(path),
+            path,
         });
     }
     if entries.is_empty() {
@@ -93,7 +101,7 @@ fn is_stale(path: &Path) -> bool {
     age > CACHE_TTL
 }
 
-fn roots_fingerprint(roots: &[PathBuf]) -> u64 {
+pub(super) fn roots_fingerprint(roots: &[PathBuf]) -> u64 {
     let mut normalized: Vec<String> = roots
         .iter()
         .map(|p| p.to_string_lossy().to_lowercase())
@@ -102,4 +110,28 @@ fn roots_fingerprint(roots: &[PathBuf]) -> u64 {
     let mut hasher = DefaultHasher::new();
     normalized.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_from_path, roots_fingerprint, CACHE_VERSION};
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cache_load_drops_legacy_backup_entries_and_keeps_real_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("files.tsv");
+        let roots = vec![PathBuf::from("/scan")];
+        let contents = format!(
+            "{CACHE_VERSION}\t{}\nBudget.bak\t/scan/Budget.bak\nBudget.ods\t/scan/Budget.ods\n",
+            roots_fingerprint(&roots)
+        );
+        fs::write(&cache, contents).unwrap();
+
+        let entries = load_from_path(&cache, &roots).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Budget.ods");
+    }
 }

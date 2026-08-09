@@ -10,7 +10,9 @@ use std::io;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub const PROCESS_TREE_GUARDIAN_COMMAND: &str = "__process-tree-guardian";
 
@@ -348,6 +350,47 @@ pub fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<()> {
     platform::terminate_owned(child, grace)
 }
 
+pub fn wait_for_exit_or_terminate(child: &mut Child, timeout: Duration) -> io::Result<ExitStatus> {
+    wait_for_exit_or_terminate_with(
+        child,
+        timeout,
+        |child| child.try_wait(),
+        |child| terminate_owned(child, Duration::ZERO),
+    )
+}
+
+fn wait_for_exit_or_terminate_with<T, TryWait, Terminate>(
+    child: &mut T,
+    timeout: Duration,
+    mut try_wait: TryWait,
+    mut terminate: Terminate,
+) -> io::Result<ExitStatus>
+where
+    TryWait: FnMut(&mut T) -> io::Result<Option<ExitStatus>>,
+    Terminate: FnMut(&mut T) -> io::Result<()>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = try_wait(child)? {
+            return Ok(status);
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            let message = match terminate(child) {
+                Ok(()) => format!("process did not exit within {} ms", timeout.as_millis()),
+                Err(error) => format!(
+                    "process did not exit within {} ms; termination failed: {error}",
+                    timeout.as_millis()
+                ),
+            };
+            return Err(io::Error::new(io::ErrorKind::TimedOut, message));
+        }
+
+        std::thread::sleep(WAIT_POLL_INTERVAL.min(deadline.duration_since(now)));
+    }
+}
+
 /// Spawns a command without inherited standard streams or a parent-owned child
 /// process that needs later cleanup.
 pub fn spawn_detached(command: &mut Command) -> io::Result<()> {
@@ -587,5 +630,23 @@ mod tests {
             spawn_detached(&mut command).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn bounded_wait_terminates_on_timeout() {
+        let mut terminated = false;
+        let error = wait_for_exit_or_terminate_with(
+            &mut terminated,
+            Duration::ZERO,
+            |_| Ok(None),
+            |terminated| {
+                *terminated = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(terminated);
     }
 }

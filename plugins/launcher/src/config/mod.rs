@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DisplayConfig {
@@ -9,6 +10,8 @@ pub struct DisplayConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LauncherConfig {
     pub display: DisplayConfig,
+    #[serde(default)]
+    pub extra_file_scan_roots: Vec<PathBuf>,
 }
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
@@ -38,11 +41,6 @@ fn contract_defaults() -> LauncherConfig {
     qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
 }
 
-/// Reload the launcher config and push the ghost debug opacity/colour into the
-/// shared popup layer. Called at boot (for the pre-created ghost) and on every
-/// show, so changing the values in qol-tray takes effect without restarting the
-/// daemon. The ghost debug visual is debug-only, so this compiles out (no config
-/// IO) in release builds, keeping show a pure reveal.
 pub fn apply_ghost_debug() {
     #[cfg(debug_assertions)]
     {
@@ -69,5 +67,6 @@ mod tests {
             defaults.display.ghost_debug_color.as_deref(),
             Some("00ff00")
         );
+        assert!(defaults.extra_file_scan_roots.is_empty());
     }
 }

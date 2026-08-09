@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::sync::LazyLock;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::theme::{launcher_runtime, LauncherPalette};
 
@@ -18,6 +19,7 @@ pub fn search_bar(
     mode_label: &'static str,
     fuzziness_label: &'static str,
     query: &str,
+    launch_error: Option<&str>,
     cursor: usize,
     selection: Option<(usize, usize)>,
     selected: usize,
@@ -71,12 +73,30 @@ pub fn search_bar(
             div()
                 .flex_1()
                 .overflow_hidden()
-                .rounded_full()
                 .font_family(SharedString::from("Menlo"))
-                .text_size(px(14.))
                 .flex()
-                .items_center()
-                .child(search_bar_content(query, cursor, selection)),
+                .flex_col()
+                .justify_center()
+                .child(
+                    div()
+                        .h(px(18.))
+                        .overflow_hidden()
+                        .rounded_full()
+                        .text_size(px(14.))
+                        .flex()
+                        .items_center()
+                        .child(search_bar_content(query, cursor, selection)),
+                )
+                .when_some(launch_error, |field, error| {
+                    field.child(
+                        div()
+                            .h(px(12.))
+                            .overflow_hidden()
+                            .text_color(rgb(current_palette().highlight_warm))
+                            .text_size(px(10.))
+                            .child(error.to_owned()),
+                    )
+                }),
         )
         .child(compass_widget(hidden_above, hidden_below))
         .child(browse_status(

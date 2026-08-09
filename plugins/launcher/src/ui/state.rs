@@ -47,6 +47,7 @@ pub struct LauncherState {
     pub last_nav_at: Option<Instant>,
     pub scroll_offset: usize,
     pub boost_adjusting: bool,
+    pub launch_error: Option<String>,
 }
 
 impl LauncherState {
@@ -66,6 +67,7 @@ impl LauncherState {
             last_nav_at: None,
             scroll_offset: 0,
             boost_adjusting: false,
+            launch_error: None,
         }
     }
 
@@ -75,6 +77,7 @@ impl LauncherState {
 
     pub fn cycle_mode(&mut self, _reverse: bool) {
         self.mode = self.mode.next();
+        self.clear_launch_error();
     }
 
     pub fn increase_fuzziness(&mut self) -> bool {
@@ -125,6 +128,7 @@ impl LauncherState {
         self.query.insert_str(idx, text);
         self.cursor += text.chars().count();
         self.clear_selection();
+        self.clear_launch_error();
         true
     }
 
@@ -144,7 +148,16 @@ impl LauncherState {
         self.query.replace_range(start_b..end_b, "");
         self.cursor = start;
         self.clear_selection();
+        self.clear_launch_error();
         true
+    }
+
+    pub fn set_launch_error(&mut self, error: String) {
+        self.launch_error = Some(error);
+    }
+
+    pub fn clear_launch_error(&mut self) {
+        self.launch_error = None;
     }
 
     pub fn reset_results_position(&mut self) {

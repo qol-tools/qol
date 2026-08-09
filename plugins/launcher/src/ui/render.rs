@@ -218,6 +218,7 @@ impl Render for LauncherView {
                 },
                 self.state.fuzziness.label(),
                 &self.state.query,
+                self.state.launch_error.as_deref(),
                 self.state.cursor,
                 self.state.selected_range(),
                 self.state.selected,

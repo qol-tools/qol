@@ -165,6 +165,7 @@ impl LauncherState {
         self.query.insert(idx, ch);
         self.cursor += 1;
         self.clear_selection();
+        self.clear_launch_error();
     }
 
     fn backspace(&mut self) -> bool {
@@ -179,6 +180,7 @@ impl LauncherState {
         let end_b = Self::char_to_byte_index(&self.query, self.cursor);
         self.query.replace_range(start_b..end_b, "");
         self.cursor = start;
+        self.clear_launch_error();
         true
     }
 
@@ -193,6 +195,7 @@ impl LauncherState {
         let start_b = Self::char_to_byte_index(&self.query, self.cursor);
         let end_b = Self::char_to_byte_index(&self.query, self.cursor + 1);
         self.query.replace_range(start_b..end_b, "");
+        self.clear_launch_error();
         true
     }
 
@@ -246,6 +249,25 @@ pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
 mod tests {
     use super::*;
     use crate::discovery::search::Fuzziness;
+
+    #[test]
+    fn query_and_mode_changes_clear_launch_errors() {
+        let mut state = LauncherState::new();
+        state.set_launch_error("failed".to_string());
+
+        assert_eq!(
+            state.apply_key("x", false, false, false, false, 0),
+            InputEffect::QueryChanged
+        );
+        assert!(state.launch_error.is_none());
+
+        state.set_launch_error("failed again".to_string());
+        assert_eq!(
+            state.apply_key("tab", false, false, false, false, 0),
+            InputEffect::QueryChanged
+        );
+        assert!(state.launch_error.is_none());
+    }
 
     #[test]
     fn control_arrow_right_boosts() {
