@@ -11,7 +11,7 @@ use crate::cli::{CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
-use crate::cli::activity::recently_active;
+use crate::cli::activity::{quiet_secs, recently_active};
 
 const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -72,6 +72,7 @@ impl CodexMetadataResolver {
                 Some(CliActivityEvidence {
                     file_fresh: recently_active(signature.modified),
                     file_has_work: Some(rollout_has_work(path)),
+                    file_quiet_secs: quiet_secs(signature.modified),
                 })
             })
             .unwrap_or_default();
@@ -79,8 +80,10 @@ impl CodexMetadataResolver {
             .as_mut()
             .zip(external_id.as_deref())
             .and_then(|(cache, id)| thread_name(id, self.environment.as_ref(), cache));
+        let title_name = title_thread_name(&session.title, &session.cwd)
+            .filter(|name| Some(name.as_str()) != external_id.as_deref());
         CodexMetadata {
-            thread_name: title_thread_name(&session.title).or(indexed_name),
+            thread_name: indexed_name.or(title_name),
             external_id,
             has_activity: title_activity(&session.title).or_else(|| activity.combined()),
             runtime: title_runtime(&session.title).unwrap_or_default(),
@@ -213,15 +216,27 @@ fn title_runtime(title: &str) -> Option<CliRuntimeState> {
     None
 }
 
-fn title_thread_name(title: &str) -> Option<String> {
+fn title_thread_name(title: &str, cwd: &str) -> Option<String> {
     let items = title_items(title)?;
     let state = items
         .iter()
         .copied()
         .find(|item| matches!(*item, "Working" | "Thinking" | "Ready" | "Action Required"))?;
+    let leading = items.first().copied()?;
+    if super::super::project_name(cwd).as_deref() != Some(leading) {
+        return (!leading.is_empty() && !is_thread_id(leading)).then(|| leading.to_owned());
+    }
     let name = items.last().copied()?;
-    let project = items.first().copied()?;
-    (state != name && name != project).then(|| name.to_owned())
+    (state != name && name != leading).then(|| name.to_owned())
+}
+
+fn is_thread_id(value: &str) -> bool {
+    let groups = value.split('-').collect::<Vec<_>>();
+    groups.len() == 5
+        && [8, 4, 4, 4, 12] == groups.iter().map(|group| group.len()).collect::<Vec<_>>()[..]
+        && groups
+            .iter()
+            .all(|group| group.chars().all(|character| character.is_ascii_hexdigit()))
 }
 
 fn rollout_has_work(path: &Path) -> bool {

@@ -49,6 +49,7 @@ fn main() {
         screen_runtime: screen_evidence.runtime,
         viewport: screen_evidence.viewport,
         file_fresh: cli_session.evidence.activity.file_fresh,
+        file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
         screen_changed: true,
         at_prompt: frame.at_prompt,
         is_generic: tool == Tool::Generic,

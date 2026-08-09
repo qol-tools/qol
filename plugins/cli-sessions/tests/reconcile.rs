@@ -216,6 +216,8 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         screen_hash: None,
         working_since: None,
         settled_since: None,
+        bridged: false,
+        driving: Vec::new(),
     }
 }
 
@@ -953,6 +955,8 @@ fn tick_refreshes_restored_identity_fields() {
         screen_hash: None,
         working_since: None,
         settled_since: None,
+        bridged: false,
+        driving: Vec::new(),
     }]);
     let host = FakeHost {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
@@ -1020,6 +1024,7 @@ fn transition_diagnostics_are_redacted_and_carry_the_reason() {
         screen_runtime: CliRuntimeState::Ready,
         viewport: CliViewportState::Unknown,
         file_fresh: None,
+        file_quiet_secs: None,
         screen_changed: false,
         at_prompt: false,
         is_generic: false,
@@ -1164,6 +1169,8 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         screen_hash: hash,
         working_since: None,
         settled_since: None,
+        bridged: false,
+        driving: Vec::new(),
     }]);
     let mut caches = ReconcileCaches::default();
 

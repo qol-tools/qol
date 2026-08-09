@@ -31,6 +31,7 @@ fn evidence(
         screen_runtime: screen,
         viewport,
         file_fresh: fresh,
+        file_quiet_secs: fresh.map(|is_fresh| if is_fresh { 0 } else { 600 }),
         screen_changed: changed,
         at_prompt: false,
         is_generic: false,
@@ -435,9 +436,7 @@ fn exhausted_evidence_matrix_never_creates_attention_without_strong_evidence_or_
                         let strong_work = descriptor == RT::Working
                             || (screen == RT::Working && fresh != Some(false));
                         let strong_input = descriptor == RT::NeedsInput
-                            || (screen == RT::NeedsInput
-                                && fresh != Some(false)
-                                && !(prev == Status::Working && fresh == Some(true)));
+                            || (screen == RT::NeedsInput && fresh != Some(false));
                         if out.attention.status != prev && out.attention.status.is_attention() {
                             let allowed = strong_work
                                 || strong_input
@@ -490,17 +489,21 @@ proptest! {
         let prev = working(Status::Working, started_at.min(now));
         let ev = evidence(descriptor, screen, viewport, fresh, moved);
         let out = reduce(&prev, &ev, now);
+        let writing = fresh == Some(true)
+            && prev
+                .settled_since
+                .is_some_and(|start| now.saturating_sub(start) > 0);
         let strong_work = descriptor == RT::Working
             || (screen == RT::Working && fresh != Some(false));
         let strong_input = descriptor == RT::NeedsInput
-            || (screen == RT::NeedsInput && fresh != Some(false) && !(fresh == Some(true)));
+            || (screen == RT::NeedsInput && fresh != Some(false) && !writing);
         let grace_ok = prev
             .settled_since
             .is_some_and(|start| now.saturating_sub(start) >= GRACE_SECS);
         let decayed_completion = out.attention.status == Status::YourTurn
             && grace_ok
             && !moved
-            && (fresh != Some(true) || descriptor == RT::Ready)
+            && (!writing || descriptor == RT::Ready)
             && viewport != VP::Historical;
         if out.attention.status.is_attention() {
             prop_assert!(

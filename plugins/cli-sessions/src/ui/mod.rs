@@ -6,6 +6,7 @@ pub mod run;
 pub mod selection;
 mod trace;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
@@ -16,6 +17,8 @@ use crate::session::registry::Registry;
 use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
+
+static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
@@ -117,11 +120,23 @@ impl SessionsView {
         let host = self.host.clone();
         trace::focus_start(reason, target.session_id());
         let result_id = target.session_id().clone();
+        let retain_panel_focus = reason == "cycle-implementer";
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
                 let result = async_cx
-                    .background_spawn(async move { host.focus(&target) })
+                    .background_spawn(async move {
+                        let result = host.focus(&target);
+                        if retain_panel_focus {
+                            let commit = CYCLE_FOCUS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+                            qol_gpui::popup_window::reassert_focus_until_held(
+                                WINDOW_TITLE,
+                                &CYCLE_FOCUS_GEN,
+                                commit,
+                            );
+                        }
+                        result
+                    })
                     .await;
                 trace::focus_result(reason, &result_id, &result);
             }
@@ -142,6 +157,54 @@ impl SessionsView {
         if let Some(id) = self.selection.resolved(&order) {
             self.acknowledge(&id);
         }
+    }
+
+    pub fn cycle_implementers(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let rows = self.rows();
+        let order = self.order();
+        let driver = self
+            .selection
+            .resolved(&order)
+            .filter(|id| {
+                rows.iter()
+                    .any(|row| &row.id == id && !row.driving.is_empty())
+            })
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| !row.driving.is_empty())
+                    .map(|row| row.id.clone())
+            });
+        if let Some(driver) = driver {
+            self.cycle_implementers_of(&driver, forward, cx);
+        }
+    }
+
+    pub fn cycle_implementers_of(
+        &mut self,
+        driver: &SessionId,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let driven = self
+            .rows()
+            .iter()
+            .find(|row| &row.id == driver)
+            .map(|row| row.driving.clone())
+            .unwrap_or_default();
+        if driven.is_empty() {
+            return;
+        }
+        let current = self
+            .last_jumped
+            .as_ref()
+            .and_then(|id| driven.iter().position(|d| d == id));
+        let index = match (current, forward) {
+            (Some(i), true) => (i + 1) % driven.len(),
+            (Some(i), false) => (i + driven.len() - 1) % driven.len(),
+            (None, true) => 0,
+            (None, false) => driven.len() - 1,
+        };
+        self.jump_to_session(driven[index].clone(), "cycle-implementer", cx);
     }
 
     pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {

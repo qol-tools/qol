@@ -1,4 +1,5 @@
 const STATUS_TAIL: usize = 8;
+const CLAUDE_STATUS_TAIL: usize = 16;
 const KIMI_STATUS_TAIL: usize = 30;
 const CHOICE_HINTS: [&str; 6] = [
     "enter to",
@@ -15,13 +16,23 @@ pub(super) fn has_interrupt_hint(text: &str) -> bool {
         .any(|line| line.contains("esc to interrupt"))
 }
 
-pub(super) fn has_live_spinner(text: &str) -> bool {
-    tail(text, STATUS_TAIL).iter().any(|line| {
+pub(super) fn claude_working(text: &str) -> bool {
+    tail(text, CLAUDE_STATUS_TAIL).iter().any(|line| {
         let trimmed = line.trim();
-        starts_with_glyph(trimmed, 0x2722..=0x273F)
-            && trimmed.contains("\u{2026} (")
-            && trimmed.ends_with(')')
+        trimmed.contains("esc to interrupt") || is_status_spinner(trimmed)
     })
+}
+
+fn is_status_spinner(trimmed: &str) -> bool {
+    let Some((glyph, rest)) = trimmed.split_once(' ') else {
+        return false;
+    };
+    let single = glyph.chars().count() == 1;
+    single
+        && !glyph.chars().all(char::is_alphanumeric)
+        && !starts_with_glyph(glyph, 0x2800..=0x28FF)
+        && rest.contains("\u{2026} (")
+        && trimmed.ends_with(')')
 }
 
 pub(super) fn has_braille_spinner(text: &str) -> bool {
@@ -46,7 +57,7 @@ pub(super) fn has_numbered_choice(text: &str) -> bool {
 }
 
 pub(super) fn has_done_marker(text: &str) -> bool {
-    tail(text, STATUS_TAIL).iter().any(|line| {
+    tail(text, CLAUDE_STATUS_TAIL).iter().any(|line| {
         let trimmed = line.trim();
         starts_with_glyph(trimmed, 0x2733..=0x273F)
             && trimmed.contains(" for ")
@@ -210,8 +221,8 @@ fn is_choice_affordance(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_any, has_braille_spinner, has_choice_arrows, has_done_marker, has_interrupt_hint,
-        has_live_spinner, has_numbered_choice, kimi_questionnaire, kimi_working,
+        claude_working, contains_any, has_braille_spinner, has_choice_arrows, has_done_marker,
+        has_interrupt_hint, has_numbered_choice, kimi_questionnaire, kimi_working,
     };
 
     fn screen(tail: &[&str]) -> String {
@@ -247,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn live_spinner_requires_the_ellipsis_badge_shape() {
+    fn claude_work_needs_an_interrupt_hint_or_an_ellipsis_badge() {
         let cases = [
             ("\u{2728} Working \u{2026} (2s)", true),
             ("\u{2728} Working... (2s)", false),
@@ -255,10 +266,14 @@ mod tests {
             ("working \u{2026} (2s)", false),
             ("\u{273F} thinking \u{2026} (12s)", true),
             ("\u{2800} \u{2026} (1s)", false),
+            (
+                "* Pontificating\u{2026} (49s \u{b7} \u{2193} 6.4k tokens)",
+                true,
+            ),
         ];
         for (line, expected) in cases {
             let text = screen(&[line]);
-            assert_eq!(has_live_spinner(&text), expected, "line: {line}");
+            assert_eq!(claude_working(&text), expected, "line: {line}");
         }
     }
 
@@ -410,7 +425,7 @@ mod tests {
                 text.push('\n');
                 let _ = (
                     has_interrupt_hint(&text),
-                    has_live_spinner(&text),
+                    claude_working(&text),
                     has_braille_spinner(&text),
                     has_choice_arrows(&text),
                     has_numbered_choice(&text),

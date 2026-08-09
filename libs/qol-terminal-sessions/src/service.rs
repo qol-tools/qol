@@ -18,6 +18,10 @@ pub trait SessionFocus {
     fn focus(&self, target: &SessionBinding) -> Result<(), TerminalError>;
 }
 
+pub trait SessionCloser {
+    fn close(&self, target: &SessionBinding) -> Result<(), TerminalError>;
+}
+
 pub trait TextInput {
     fn send_text(
         &self,
@@ -45,6 +49,10 @@ pub trait TerminalBackend:
     }
 
     fn spawner(&self) -> Option<&dyn SessionSpawner> {
+        None
+    }
+
+    fn closer(&self) -> Option<&dyn SessionCloser> {
         None
     }
 }
@@ -180,6 +188,15 @@ impl TerminalSessionService {
             snapshot.age_ms()
         );
         Ok(screen)
+    }
+
+    pub fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+        let backend = self.backend_for(target.session_id())?;
+        let closer = backend.closer().ok_or_else(|| TerminalError::Unsupported {
+            target: target.session_id().clone(),
+            capability: "close",
+        })?;
+        closer.close(target)
     }
 
     pub fn is_current(&self, target: &SessionBinding) -> Result<bool, TerminalError> {

@@ -20,6 +20,7 @@ pub struct Evidence {
     pub screen_runtime: CliRuntimeState,
     pub viewport: CliViewportState,
     pub file_fresh: Option<bool>,
+    pub file_quiet_secs: Option<u64>,
     pub screen_changed: bool,
     pub at_prompt: bool,
     pub is_generic: bool,
@@ -72,16 +73,20 @@ pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
     let fresh = ev.file_fresh == Some(true);
     let stale = ev.file_fresh == Some(false);
     let authoritative_ready = ev.descriptor_runtime == CliRuntimeState::Ready;
-    let next_settled_since = if settled && (!fresh || authoritative_ready) {
-        Some(settled_since.unwrap_or(now))
+    let settle_start = settled_since.unwrap_or(now);
+    let writing_during_settle = fresh
+        && ev
+            .file_quiet_secs
+            .is_some_and(|quiet| now.saturating_sub(settle_start) > quiet);
+    let next_settled_since = if settled && (!writing_during_settle || authoritative_ready) {
+        Some(settle_start)
     } else {
         None
     };
     let grace_elapsed =
         next_settled_since.is_some_and(|start| now.saturating_sub(start) >= GRACE_SECS);
-    let screen_working = ev.screen_runtime == CliRuntimeState::Working
-        && !(settled && !fresh)
-        && !(settled && authoritative_ready);
+    let screen_working =
+        ev.screen_runtime == CliRuntimeState::Working && next_settled_since.is_none();
     if ev.descriptor_runtime == CliRuntimeState::Working || screen_working {
         return Reduction {
             attention: Attention {
@@ -106,7 +111,7 @@ pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
     }
     let screen_needs_input = ev.screen_runtime == CliRuntimeState::NeedsInput
         && !stale
-        && !(prev.status == Status::Working && fresh)
+        && !(prev.status == Status::Working && (writing_during_settle || !settled))
         && !(prev.status == Status::Working && ev.file_fresh.is_none() && !grace_elapsed);
     let needs_input = ev.descriptor_runtime == CliRuntimeState::NeedsInput || screen_needs_input;
     if needs_input {
@@ -239,6 +244,7 @@ mod tests {
             screen_runtime: screen,
             viewport,
             file_fresh: fresh,
+            file_quiet_secs: fresh.map(|is_fresh| if is_fresh { 0 } else { 600 }),
             screen_changed: changed,
             at_prompt: false,
             is_generic: false,
@@ -352,19 +358,34 @@ mod tests {
     }
 
     #[test]
-    fn fresh_activity_blocks_completion_past_grace() {
-        let ready = evidence(RT::Unknown, RT::Ready, VP::Unknown, Some(true), false);
+    fn writes_during_the_settle_stretch_block_completion() {
+        let mut ready = evidence(RT::Unknown, RT::Ready, VP::Unknown, Some(true), false);
+        ready.file_quiet_secs = Some(2);
         let mut prev = working(Status::Working, 0);
-        prev.settled_since = None;
-        let out = reduce(&prev, &ready, 200);
+        prev.settled_since = Some(100);
+        let out = reduce(&prev, &ready, 110);
         assert_eq!(
             out.attention.status,
             Status::Working,
-            "fresh transcript blocks completion"
+            "a write landing mid-settle proves quiet work"
         );
         assert_eq!(
             out.attention.settled_since, None,
-            "freshness resets the settle stretch"
+            "the mid-settle write resets the settle stretch"
+        );
+    }
+
+    #[test]
+    fn a_final_write_before_the_settle_stretch_completes_at_grace() {
+        let mut ready = evidence(RT::Unknown, RT::Ready, VP::Unknown, Some(true), false);
+        ready.file_quiet_secs = Some(20);
+        let mut prev = working(Status::Working, 0);
+        prev.settled_since = Some(100);
+        let out = reduce(&prev, &ready, 105);
+        assert_eq!(
+            out.attention.status,
+            Status::YourTurn,
+            "a still-fresh final write must not delay completion"
         );
     }
 

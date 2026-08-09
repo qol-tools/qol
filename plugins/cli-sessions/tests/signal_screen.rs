@@ -98,6 +98,7 @@ fn a_settled_pi_screen_with_stable_footer_completes_after_grace() {
         screen_runtime: screen_evidence.runtime,
         viewport: screen_evidence.viewport,
         file_fresh: Some(false),
+        file_quiet_secs: Some(600),
         screen_changed: false,
         at_prompt: false,
         is_generic: false,

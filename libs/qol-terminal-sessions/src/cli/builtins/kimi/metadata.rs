@@ -10,10 +10,11 @@ use crate::cli::CliActivityEvidence;
 use crate::{SessionBinding, SessionFacts};
 
 use super::environment::{newest_write, KimiEnvironment, KimiSessionLocation};
-use crate::cli::activity::recently_active;
+use crate::cli::activity::{quiet_secs, recently_active};
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const NEW_SESSION_TITLE: &str = "New Session";
+const MAX_SESSION_NAME_CHARS: usize = 80;
 
 pub(super) struct KimiMetadata {
     pub session_name: Option<String>,
@@ -71,14 +72,12 @@ impl KimiMetadataResolver {
         });
         let activity = match (facts.as_ref(), location.as_ref()) {
             (Some(facts), Some(location)) => {
-                let fresh = location
-                    .state_path
-                    .parent()
-                    .and_then(newest_write)
-                    .is_some_and(|write| recently_active(Some(write)) == Some(true));
+                let newest = location.state_path.parent().and_then(newest_write);
+                let fresh = newest.is_some_and(|write| recently_active(Some(write)) == Some(true));
                 CliActivityEvidence {
                     file_fresh: Some(fresh),
                     file_has_work: Some(facts.has_prompt),
+                    file_quiet_secs: quiet_secs(newest),
                 }
             }
             _ => CliActivityEvidence::default(),
@@ -179,7 +178,11 @@ fn parse_state(path: &Path) -> Option<ParsedState> {
     let session_name = record
         .title
         .map(|title| title.trim().to_owned())
-        .filter(|title| !title.is_empty() && title != NEW_SESSION_TITLE);
+        .filter(|title| {
+            !title.is_empty()
+                && title != NEW_SESSION_TITLE
+                && title.chars().count() <= MAX_SESSION_NAME_CHARS
+        });
     let has_prompt = record
         .last_prompt
         .is_some_and(|prompt| !prompt.trim().is_empty());

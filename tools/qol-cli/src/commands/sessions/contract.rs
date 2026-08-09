@@ -182,6 +182,21 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["session", "completion_marker", "outcome", "landed", "before", "now", "verification", "remaining"],
             }),
         },
+        ToolSpec {
+            name: "session_close",
+            label: "Close an implementation session",
+            description: "Terminate a spawned implementation session's terminal after its feature loop is closed. Refuses the calling terminal, sessions without a spawn identity, and sessions whose loop is still open; close the loop via session_loop_close first.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Stable session token of the spawned implementation session to close",
+                    },
+                },
+                "required": ["session"],
+            }),
+        },
     ]
 }
 
@@ -201,7 +216,8 @@ mod tests {
                 "sessions_list",
                 "session_spawn",
                 "session_bridge",
-                "session_loop_close"
+                "session_loop_close",
+                "session_close"
             ]
         );
     }

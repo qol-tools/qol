@@ -65,6 +65,7 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         screen_runtime: screen_evidence.runtime,
         viewport: screen_evidence.viewport,
         file_fresh: cli_session.evidence.activity.file_fresh,
+        file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
         screen_changed: meta.screen_changed,
         at_prompt: meta.at_prompt,
         is_generic: tool == Tool::Generic,

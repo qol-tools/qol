@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc e0505371dd0c0d2933003cf95cc42cb5b472affbfaab6bcf021faac8201d8ba3 # shrinks to descriptor = Ready, screen = Ready, viewport = Unknown, fresh = Some(true), moved = false, started_at = 0, now = 5
+cc e0d0bc25a5b61135bb68d3e4d69bc249feda5c4aa9c050d6f23745b7e0d230ee # shrinks to descriptor = Unknown, screen = Working, fresh = Some(false), moved = false, now = 601
+cc 2f3961e6685277ded7e1b4e755f9464ba851a6aed92e52dd800bba4e043a12fe # shrinks to descriptor = Unknown, screen = NeedsInput, viewport = Unknown, fresh = Some(true), moved = false, started_at = 2665, now = 0

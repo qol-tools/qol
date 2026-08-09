@@ -649,6 +649,7 @@ pub struct CliSessionsPalette {
     pub your_turn: u32,
     pub working: u32,
     pub service: u32,
+    pub bridged: u32,
     pub unknown: u32,
     pub needs_you_tint_rgba: u32,
     pub your_turn_tint_rgba: u32,
@@ -656,6 +657,9 @@ pub struct CliSessionsPalette {
     pub your_turn_hover_rgba: u32,
     pub working_tint_rgba: u32,
     pub service_tint_rgba: u32,
+    pub bridged_tint_rgba: u32,
+    pub bridged_badge_rgba: u32,
+    pub bridged_hover_rgba: u32,
     pub transparent_rgba: u32,
 }
 
@@ -677,6 +681,7 @@ impl CliSessionsPalette {
             your_turn: system.warning,
             working: system.success,
             service: system.info,
+            bridged: system.accent,
             unknown: system.text_faint,
             needs_you_tint_rgba: with_alpha(system.danger, 0x22),
             your_turn_tint_rgba: with_alpha(system.warning, 0x22),
@@ -684,6 +689,9 @@ impl CliSessionsPalette {
             your_turn_hover_rgba: with_alpha(system.warning, 0x55),
             working_tint_rgba: with_alpha(system.success, 0x1e),
             service_tint_rgba: with_alpha(system.info, 0x14),
+            bridged_tint_rgba: with_alpha(system.accent, 0x1e),
+            bridged_badge_rgba: with_alpha(system.accent, 0x33),
+            bridged_hover_rgba: with_alpha(system.accent, 0x55),
             transparent_rgba: 0x00000000,
         }
     }

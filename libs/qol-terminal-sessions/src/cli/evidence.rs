@@ -23,6 +23,7 @@ pub enum CliViewportState {
 pub struct CliActivityEvidence {
     pub file_fresh: Option<bool>,
     pub file_has_work: Option<bool>,
+    pub file_quiet_secs: Option<u64>,
 }
 
 impl CliActivityEvidence {
@@ -128,26 +129,32 @@ mod tests {
     fn weak_activity_never_implies_a_runtime_state() {
         let combinations = [
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: None,
                 file_has_work: None,
             },
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: Some(true),
                 file_has_work: None,
             },
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: None,
                 file_has_work: Some(true),
             },
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: Some(true),
                 file_has_work: Some(true),
             },
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: Some(false),
                 file_has_work: Some(true),
             },
             CliActivityEvidence {
+                file_quiet_secs: None,
                 file_fresh: Some(true),
                 file_has_work: Some(false),
             },
@@ -166,6 +173,7 @@ mod tests {
         let cases = [
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: Some(true),
                     file_has_work: Some(true),
                 },
@@ -173,6 +181,7 @@ mod tests {
             ),
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: Some(false),
                     file_has_work: Some(true),
                 },
@@ -180,6 +189,7 @@ mod tests {
             ),
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: Some(true),
                     file_has_work: Some(false),
                 },
@@ -187,6 +197,7 @@ mod tests {
             ),
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: None,
                     file_has_work: Some(true),
                 },
@@ -194,6 +205,7 @@ mod tests {
             ),
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: Some(true),
                     file_has_work: None,
                 },
@@ -201,6 +213,7 @@ mod tests {
             ),
             (
                 CliActivityEvidence {
+                    file_quiet_secs: None,
                     file_fresh: None,
                     file_has_work: None,
                 },

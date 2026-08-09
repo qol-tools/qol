@@ -151,6 +151,7 @@ impl McpSessionServer {
             "session_spawn" => self.tool_spawn(arguments),
             "session_bridge" => self.tool_bridge(arguments),
             "session_loop_close" => self.close_loop(arguments),
+            "session_close" => self.tool_close(arguments),
             other => {
                 return error(
                     Some(id),
@@ -245,6 +246,13 @@ impl McpSessionServer {
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
+    fn tool_close(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let outcome = super::close::execute(self.terminals.as_ref(), &self.pending, &binding)
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
     fn close_loop(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
         let completion_marker = string_argument(&arguments, "completion_marker")?;
@@ -305,7 +313,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts.\n  session_bridge submits once and waits for the implementation terminal's\n  generated completion signal before returning. A reviewed completion marker\n  explicitly acknowledges the prior response before another task can be\n  submitted. session_loop_close acknowledges the final response and records\n  the architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close,\n  session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts.\n  session_bridge submits once and waits for the implementation terminal's\n  generated completion signal before returning. A reviewed completion marker\n  explicitly acknowledges the prior response before another task can be\n  submitted. session_loop_close acknowledges the final response and records\n  the architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -429,6 +437,7 @@ mod tests {
         spawn_count: std::sync::atomic::AtomicUsize,
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
         spawn_cwd: Mutex<Option<std::path::PathBuf>>,
+        closed: Mutex<Vec<SessionBinding>>,
     }
 
     impl FakeBackend {
@@ -445,6 +454,7 @@ mod tests {
                 spawn_count: std::sync::atomic::AtomicUsize::new(0),
                 spawn_identity: Mutex::new(None),
                 spawn_cwd: Mutex::new(None),
+                closed: Mutex::new(Vec::new()),
             }
         }
 
@@ -593,6 +603,17 @@ mod tests {
 
         fn spawner(&self) -> Option<&dyn qol_terminal_sessions::SessionSpawner> {
             self.spawner_enabled.load(Ordering::Relaxed).then_some(self)
+        }
+
+        fn closer(&self) -> Option<&dyn qol_terminal_sessions::SessionCloser> {
+            Some(self)
+        }
+    }
+
+    impl qol_terminal_sessions::SessionCloser for FakeBackend {
+        fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+            self.closed.lock().unwrap().push(target.clone());
+            Ok(())
         }
     }
 
@@ -825,7 +846,8 @@ mod tests {
                 "sessions_list",
                 "session_spawn",
                 "session_bridge",
-                "session_loop_close"
+                "session_loop_close",
+                "session_close"
             ]
         );
     }
@@ -1028,7 +1050,7 @@ mod tests {
             let binding: SessionBinding = token().parse().unwrap();
             server
                 .pending
-                .start(&binding, "QOL_BRIDGE_DONE_final")
+                .start(&binding, "QOL_BRIDGE_DONE_final", "")
                 .unwrap();
             server
                 .pending
@@ -1116,6 +1138,85 @@ mod tests {
     fn run_rejects_unknown_arguments_instead_of_blocking() {
         let error = run(&[std::ffi::OsString::from("--port")]).unwrap_err();
         assert!(error.to_string().contains("usage"));
+    }
+
+    #[test]
+    fn session_close_requires_a_spawned_session_with_a_closed_loop() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let unspawned = tool_call(
+            &server,
+            "session_close",
+            json!({ "session": FakeBackend::session().binding().unwrap().token() }),
+        );
+        assert_eq!(unspawned["result"]["isError"], true);
+        assert!(unspawned["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("was not spawned"));
+
+        tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        let spawned = "v1:kitty:spawn-mcp-lane:200";
+        let binding: SessionBinding = spawned.parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        let open_loop = tool_call(&server, "session_close", json!({ "session": spawned }));
+        assert_eq!(open_loop["result"]["isError"], true);
+        assert!(open_loop["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("open feature loop"));
+        assert!(backend.closed.lock().unwrap().is_empty());
+
+        server
+            .pending
+            .acknowledge(&binding, "QOL_BRIDGE_DONE_final", false)
+            .unwrap();
+        let closed = tool_call(&server, "session_close", json!({ "session": spawned }));
+        assert_eq!(closed["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(closed["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(outcome["closed"], true);
+        assert_eq!(outcome["key"], "mcp-lane");
+        assert_eq!(outcome["tool"], "codex");
+        assert_eq!(backend.closed.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_close_refuses_the_calling_terminal_and_dead_targets() {
+        let (server, backend) = server(Vec::new(), false, false);
+        *backend.current.lock().unwrap() = true;
+        let refused = tool_call(&server, "session_close", json!({ "session": token() }));
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("calling terminal"));
+
+        *backend.current.lock().unwrap() = false;
+        let missing = tool_call(
+            &server,
+            "session_close",
+            json!({ "session": "v1:fake:999:1" }),
+        );
+        assert_eq!(missing["result"]["isError"], true);
+        assert!(missing["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not a live session"));
+        assert!(backend.closed.lock().unwrap().is_empty());
     }
 
     fn spawn_arguments(tool: &str, key: &str, surface: Option<&str>, cwd: &str) -> Value {

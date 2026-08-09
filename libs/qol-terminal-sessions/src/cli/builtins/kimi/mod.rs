@@ -15,7 +15,7 @@ use crate::SessionFacts;
 
 use self::environment::{KimiEnvironment, SystemKimiEnvironment};
 use self::metadata::KimiMetadataResolver;
-use super::{kimi_tool, project_name};
+use super::{fallback_name, kimi_tool};
 
 pub(super) struct KimiStrategy {
     tool: CliTool,
@@ -57,7 +57,7 @@ impl CliSessionStrategy for KimiStrategy {
         let metadata = self.metadata.resolve(session);
         CliSessionDescriptor {
             tool: self.tool.clone(),
-            display_name: metadata.session_name.or_else(|| project_name(&session.cwd)),
+            display_name: metadata.session_name.or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {

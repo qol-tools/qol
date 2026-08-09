@@ -155,6 +155,16 @@ const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, _sign
     },
 "#;
 
+const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+      const stdout = run(["close", params.session], 30_000);
+      const outcome = JSON.parse(stdout);
+      return {
+        content: [{ type: "text", text: `closed session ${outcome.session} (${outcome.tool}, key ${outcome.key})` }],
+        details: { outcome },
+      };
+    },
+"#;
+
 pub(crate) fn pi_extension() -> Result<String> {
     let blocks = tool_specs()
         .iter()
@@ -173,6 +183,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "session_spawn" => EXECUTE_SPAWN,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
+        "session_close" => EXECUTE_CLOSE,
         other => bail!("no pi adapter template for contract tool `{other}`"),
     };
     Ok(format!(

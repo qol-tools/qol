@@ -11,7 +11,7 @@ use crate::cli::CliActivityEvidence;
 use crate::SessionFacts;
 
 use super::environment::PiEnvironment;
-use crate::cli::activity::recently_active;
+use crate::cli::activity::{quiet_secs, recently_active};
 
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
@@ -74,6 +74,7 @@ impl PiMetadataResolver {
             .map(|facts| CliActivityEvidence {
                 file_fresh: recently_active(facts.signature.modified),
                 file_has_work: Some(facts.has_message),
+                file_quiet_secs: quiet_secs(facts.signature.modified),
             })
             .unwrap_or_default();
         PiMetadata {
