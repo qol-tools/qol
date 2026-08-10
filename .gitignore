@@ -5,3 +5,4 @@ __pycache__/
 .playwright-mcp/
 verify/reports/
 /reports/
+tools/qol-memory/
