@@ -7,11 +7,21 @@ use qol_diff::{DiffError, FileDiff};
 use qol_git::{NumstatEntry, StatusEntry};
 
 pub const DEFAULT_RANGE: &str = "HEAD";
+pub const HISTORY_LIMIT: usize = 64;
 
 #[derive(Debug, Clone)]
 pub enum GitRequest {
-    Refresh { generation: u64 },
-    SelectFile { generation: u64, path: String },
+    Refresh {
+        generation: u64,
+    },
+    SelectFile {
+        generation: u64,
+        path: String,
+        range: String,
+    },
+    History {
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +39,10 @@ pub enum GitResult {
         path: String,
         diff: Result<FileDiff, DiffError>,
     },
+    History {
+        generation: u64,
+        commits: Vec<qol_git::LogEntry>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,6 +53,13 @@ pub struct Facts {
 
 pub fn file_range(path: &str) -> String {
     format!("{DEFAULT_RANGE} -- {path}")
+}
+
+pub fn commit_range(index: usize) -> String {
+    match index {
+        0 => DEFAULT_RANGE.to_string(),
+        _ => format!("HEAD~{}..HEAD~{}", index, index - 1),
+    }
 }
 
 pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBuf> {
@@ -58,6 +79,11 @@ pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBu
         }
     }
     None
+}
+
+pub fn send_history(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
+    let g = generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = git_tx.send(GitRequest::History { generation: g });
 }
 
 pub fn send_refresh(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
@@ -116,11 +142,12 @@ pub fn spawn_git_facts_thread(
                     GitRequest::SelectFile {
                         generation: g,
                         path,
+                        range,
                     } => {
                         if !is_live(g, &generation) {
                             continue;
                         }
-                        let diff = selected_file_diff(&repo, &path);
+                        let diff = selected_file_diff(&repo, &path, &range);
                         if !is_live(g, &generation) {
                             continue;
                         }
@@ -128,6 +155,19 @@ pub fn spawn_git_facts_thread(
                             generation: g,
                             path,
                             diff,
+                        });
+                    }
+                    GitRequest::History { generation: g } => {
+                        if !is_live(g, &generation) {
+                            continue;
+                        }
+                        let commits = qol_git::log(&repo, HISTORY_LIMIT).unwrap_or_default();
+                        if !is_live(g, &generation) {
+                            continue;
+                        }
+                        let _ = results.send(GitResult::History {
+                            generation: g,
+                            commits,
                         });
                     }
                 }
@@ -146,8 +186,8 @@ fn refresh_facts(repo: &Path) -> Result<Facts, String> {
     Ok(Facts { status, numstat })
 }
 
-fn selected_file_diff(repo: &Path, path: &str) -> Result<FileDiff, DiffError> {
-    let patch = qol_git::diff_patch(repo, DEFAULT_RANGE, &[path]).map_err(|_| DiffError::Other)?;
+fn selected_file_diff(repo: &Path, path: &str, range: &str) -> Result<FileDiff, DiffError> {
+    let patch = qol_git::diff_patch(repo, range, &[path]).map_err(|_| DiffError::Other)?;
     let mut diff = qol_diff::engine::parse_patch(path, path, &patch)?;
     qol_diff::engine::apply_heat(&mut diff);
     Ok(diff)
@@ -229,7 +269,7 @@ mod tests {
         run(&["add", "a.txt"]);
         run(&["commit", "-q", "-m", "first"]);
         std::fs::write(dir.join("a.txt"), "let x = 2;\n").expect("write");
-        let diff = selected_file_diff(&dir, "a.txt").expect("diff");
+        let diff = selected_file_diff(&dir, "a.txt", DEFAULT_RANGE).expect("diff");
         assert!(!diff.is_empty());
         assert_eq!(diff.hunks.len(), 1);
         let added = diff.hunks[0]

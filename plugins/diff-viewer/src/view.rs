@@ -6,15 +6,17 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, AnyElement, App, Context, FocusHandle, Focusable, HighlightStyle, KeyDownEvent,
-    ScrollDelta, ScrollWheelEvent, SharedString, StyledText, WhiteSpace, Window,
+    div, px, rgb, AnyElement, App, Context, Entity, FocusHandle, Focusable, HighlightStyle,
+    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, WhiteSpace, Window,
 };
 use qol_cache::TtlCache;
-use qol_diff::{DiffError, FileDiff, LineChange};
+use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::surface::SurfaceDismisser;
 
-use crate::pipeline::{self, Facts, GitRequest, GitResult};
+use crate::overview::{HunkMarker, OverviewView};
+use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
+use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
 use crate::surface::{self, CodeSurface};
 
 pub const WINDOW_WIDTH: f32 = 960.0;
@@ -103,13 +105,15 @@ impl FileListState {
 enum ActivePane {
     Files,
     Code,
+    Scrubber,
 }
 
 impl ActivePane {
     fn other(self) -> Self {
         match self {
             Self::Files => Self::Code,
-            Self::Code => Self::Files,
+            Self::Code => Self::Scrubber,
+            Self::Scrubber => Self::Files,
         }
     }
 }
@@ -137,6 +141,11 @@ pub struct DiffView {
     font_family: SharedString,
     focus_handle: FocusHandle,
     dismisser: SurfaceDismisser,
+    scrubber_view: Entity<ScrubberView>,
+    overview_view: Entity<OverviewView>,
+    jump_rx: Option<mpsc::Receiver<f32>>,
+    scrub_commits: Vec<ScrubCommit>,
+    last_scrub_selected: Option<usize>,
 }
 
 impl DiffView {
@@ -148,6 +157,14 @@ impl DiffView {
         results: mpsc::Receiver<GitResult>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (jump_tx, jump_rx) = mpsc::channel::<f32>();
+        let scrubber_view = cx.new(|cx| ScrubberView::new(cx, None));
+        let overview_view = cx.new(|_cx| {
+            let tx = jump_tx.clone();
+            OverviewView::new(move |ratio, _app| {
+                let _ = tx.send(ratio);
+            })
+        });
         let mut view = Self {
             repo,
             files: FileListState::new(list_max_visible()),
@@ -164,6 +181,11 @@ impl DiffView {
             font_family: pick_monospace(cx),
             focus_handle: cx.focus_handle(),
             dismisser,
+            scrubber_view,
+            overview_view,
+            jump_rx: Some(jump_rx),
+            scrub_commits: Vec::new(),
+            last_scrub_selected: None,
         };
         if view.repo.is_none() {
             view.facts_error =
@@ -172,6 +194,7 @@ impl DiffView {
         }
         view.spawn_loops(cx);
         pipeline::send_refresh(&view.git_tx, &view.generation);
+        pipeline::send_history(&view.git_tx, &view.generation);
         view
     }
 
@@ -182,6 +205,7 @@ impl DiffView {
 
     fn spawn_result_poll(&mut self, cx: &mut Context<Self>) {
         let rx = self.results.take().expect("result poll spawned once");
+        let jump_rx = self.jump_rx.take().expect("jump poll spawned once");
         let this = cx.weak_entity();
         let generation = self.generation.clone();
         cx.spawn(async move |_view, cx| loop {
@@ -190,12 +214,24 @@ impl DiffView {
             while let Ok(result) = rx.try_recv() {
                 results.push(result);
             }
-            if results.is_empty() {
+            let mut jumps = Vec::new();
+            while let Ok(ratio) = jump_rx.try_recv() {
+                jumps.push(ratio);
+            }
+            if results.is_empty() && jumps.is_empty() {
                 continue;
             }
             let current = generation.load(Ordering::SeqCst);
             let _ = this.update(cx, |view, cx| {
-                if view.apply_results(results, current) {
+                let mut changed = view.apply_results(results, current, cx);
+                if let Some(ratio) = jumps.last().copied() {
+                    view.apply_jump(ratio);
+                    changed = true;
+                }
+                if view.poll_scrubber(cx) {
+                    changed = true;
+                }
+                if changed {
                     cx.notify();
                 }
             });
@@ -235,7 +271,12 @@ impl DiffView {
         true
     }
 
-    fn apply_results(&mut self, results: Vec<GitResult>, current: u64) -> bool {
+    fn apply_results(
+        &mut self,
+        results: Vec<GitResult>,
+        current: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let mut changed = false;
         for result in results {
             match result {
@@ -258,12 +299,61 @@ impl DiffView {
                     self.apply_diff(diff);
                     changed = true;
                 }
+                GitResult::History {
+                    generation,
+                    commits,
+                } if generation == current => {
+                    let commits: Vec<ScrubCommit> = commits
+                        .into_iter()
+                        .map(|entry| ScrubCommit::new(entry.sha, entry.subject))
+                        .collect();
+                    self.scrub_commits = commits;
+                    let commits = self.scrub_commits.clone();
+                    self.scrubber_view.update(cx, |view, cx| {
+                        view.set_commits(commits, cx);
+                    });
+                    self.last_scrub_selected = None;
+                    changed = true;
+                }
                 GitResult::Facts { .. }
                 | GitResult::FactsFailed { .. }
-                | GitResult::Diff { .. } => {}
+                | GitResult::Diff { .. }
+                | GitResult::History { .. } => {}
             }
         }
         changed
+    }
+
+    fn apply_jump(&mut self, ratio: f32) {
+        let total = self.lines.len().max(1);
+        let target = (ratio * total as f32) as usize;
+        let max = self.lines.len().saturating_sub(self.last_fit.max(1));
+        self.surface.set_scroll_offset(target.min(max));
+    }
+
+    fn poll_scrubber(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.scrub_commits.is_empty() {
+            return false;
+        }
+        let selected = self.scrubber_view.read(cx).state().selected();
+        if self.last_scrub_selected == Some(selected) {
+            return false;
+        }
+        self.last_scrub_selected = Some(selected);
+        self.request_scrub_diff(selected);
+        true
+    }
+
+    fn request_scrub_diff(&mut self, index: usize) {
+        let Some(path) = self.files.selected_path() else {
+            return;
+        };
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.git_tx.send(GitRequest::SelectFile {
+            generation,
+            path: path.to_owned(),
+            range: commit_range(index),
+        });
     }
 
     fn apply_facts(&mut self, facts: Facts) {
@@ -314,6 +404,7 @@ impl DiffView {
         let _ = self.git_tx.send(GitRequest::SelectFile {
             generation,
             path: path.to_owned(),
+            range: pipeline::DEFAULT_RANGE.to_string(),
         });
     }
 
@@ -321,7 +412,10 @@ impl DiffView {
         let key = event.keystroke.key.as_str();
         let page = self.page_size();
         match (self.active_pane, key) {
-            (_, "tab") => self.active_pane = self.active_pane.other(),
+            (_, "tab") => {
+                self.active_pane = self.active_pane.other();
+                self.refocus(_window, cx);
+            }
             (_, "escape") | (_, "esc") => {
                 self.dismisser.dismiss(cx);
                 return;
@@ -346,6 +440,18 @@ impl DiffView {
             _ => return,
         }
         cx.notify();
+    }
+
+    fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.active_pane {
+            ActivePane::Scrubber => {
+                let handle = self
+                    .scrubber_view
+                    .update(cx, |view, cx| view.focus_handle(cx));
+                window.focus(&handle);
+            }
+            _ => window.focus(&self.focus_handle),
+        }
     }
 
     fn on_scroll(
@@ -516,6 +622,13 @@ impl DiffView {
                     HighlightStyle {
                         background_color: surface::token_background(span.heat)
                             .map(|hex| rgb(hex).into()),
+                        color: match (span.heat, span.kind) {
+                            (HeatLevel::Cool, TokenKind::Plain) => None,
+                            (HeatLevel::Cool, kind) => {
+                                surface::token_kind_color(kind).map(|hex| rgb(hex).into())
+                            }
+                            _ => None,
+                        },
                         ..HighlightStyle::default()
                     },
                 ))
@@ -534,18 +647,77 @@ impl Focusable for DiffView {
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_fit = visible_fit(window.viewport_size().height.to_f64() as f32, LINE_HEIGHT);
+        self.update_overview(cx);
+        let scrubber = if self.scrub_commits.is_empty() {
+            div().h(px(0.0)).into_any_element()
+        } else {
+            self.scrubber_view.clone().into_any_element()
+        };
         div()
             .id("diff-viewer")
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
             .bg(rgb(surface::CANVAS_BG))
             .font_family(self.font_family.clone())
             .text_size(px(FONT_SIZE))
             .on_key_down(cx.listener(Self::on_key))
-            .child(self.render_file_list())
-            .child(self.render_pane(window, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .h_full()
+                    .child(self.render_file_list())
+                    .child(self.render_pane(window, cx))
+                    .child(self.overview_view.clone()),
+            )
+            .child(scrubber)
+    }
+}
+
+impl DiffView {
+    fn update_overview(&mut self, cx: &mut Context<Self>) {
+        let (markers, total) = match &self.pane {
+            DiffPane::Ready(diff) => {
+                let mut markers = Vec::new();
+                let mut offset = 0usize;
+                let mut total = 0usize;
+                for hunk in &diff.hunks {
+                    total += hunk.lines.len();
+                }
+                for hunk in &diff.hunks {
+                    let weight = hunk
+                        .lines
+                        .iter()
+                        .filter(|line| line.kind != LineKind::Context)
+                        .count() as u32;
+                    markers.push(HunkMarker::new(
+                        if total == 0 {
+                            0.0
+                        } else {
+                            offset as f32 / total as f32
+                        },
+                        weight,
+                    ));
+                    offset += hunk.lines.len();
+                }
+                (markers, total)
+            }
+            _ => (Vec::new(), 0),
+        };
+        let viewport = if total == 0 {
+            (0.0f32, 1.0f32)
+        } else {
+            let start = self.surface.scroll_offset();
+            let end = (start + self.last_fit.max(1)).min(total);
+            (start as f32 / total as f32, end as f32 / total as f32)
+        };
+        self.overview_view.update(cx, |view, _cx| {
+            view.set_markers(markers);
+            view.set_viewport(viewport);
+        });
     }
 }
 
@@ -710,8 +882,9 @@ mod tests {
     }
 
     #[test]
-    fn active_pane_toggles_between_files_and_code() {
+    fn active_pane_cycles_files_code_scrubber() {
         assert_eq!(ActivePane::Files.other(), ActivePane::Code);
-        assert_eq!(ActivePane::Code.other(), ActivePane::Files);
+        assert_eq!(ActivePane::Code.other(), ActivePane::Scrubber);
+        assert_eq!(ActivePane::Scrubber.other(), ActivePane::Files);
     }
 }

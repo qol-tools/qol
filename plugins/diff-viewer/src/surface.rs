@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use qol_diff::{HeatLevel, LineChange, LineKind};
+use qol_diff::{HeatLevel, LineChange, LineKind, TokenKind};
 
 const DEFAULT_VISIBLE_LINES: usize = 24;
 
@@ -161,6 +161,15 @@ pub fn token_background(heat: HeatLevel) -> Option<u32> {
         HeatLevel::Cool => None,
         HeatLevel::Warm => Some(TOKEN_WARM),
         HeatLevel::Hot => Some(TOKEN_HOT),
+    }
+}
+
+pub fn token_kind_color(kind: TokenKind) -> Option<u32> {
+    match kind {
+        TokenKind::Plain => None,
+        TokenKind::String => Some(0x9ecb8f),
+        TokenKind::Comment => Some(0x7d8590),
+        TokenKind::Keyword => Some(0xc792ea),
     }
 }
 
