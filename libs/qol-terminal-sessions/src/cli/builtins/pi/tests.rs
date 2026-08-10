@@ -220,20 +220,29 @@ fn launch_program_is_the_pi_executable_without_arguments() {
     );
 }
 
+fn pi_screen(tail: &str) -> String {
+    format!(
+        "{tail}\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n/work/proj (main)\n$0.400 47.3%/1.0M (auto)"
+    )
+}
+
 #[test]
 fn screen_classification_distinguishes_work_choices_and_startup_banner() {
     let strategy = PiStrategy::default();
     let facts = session();
 
     assert_eq!(
-        strategy.classify_screen(&facts, "\u{2800}\u{2801} thinking..."),
+        strategy.classify_screen(&facts, &pi_screen("\u{2800}\u{2801} thinking...")),
         CliScreenEvidence {
             viewport: CliViewportState::Live,
             runtime: CliRuntimeState::Working,
         }
     );
     assert_eq!(
-        strategy.classify_screen(&facts, "\u{2191}\u{2193} to navigate, \u{21B5} to select"),
+        strategy.classify_screen(
+            &facts,
+            &pi_screen("\u{2191}\u{2193} to navigate, \u{21B5} to select")
+        ),
         CliScreenEvidence {
             viewport: CliViewportState::Live,
             runtime: CliRuntimeState::NeedsInput,
@@ -242,7 +251,19 @@ fn screen_classification_distinguishes_work_choices_and_startup_banner() {
     assert_eq!(
         strategy.classify_screen(
             &facts,
-            "pi \u{03C0} \u{2014} press ? to show full startup help"
+            &pi_screen(
+                ">\n\u{2192} deepseek-v4-flash [deepseek] \u{2713}\n  deepseek-v4-pro [deepseek]\n  (1/13)"
+            ),
+        ),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            &pi_screen("pi \u{03C0} \u{2014} press ? to show full startup help")
         ),
         CliScreenEvidence {
             viewport: CliViewportState::Historical,
@@ -252,6 +273,14 @@ fn screen_classification_distinguishes_work_choices_and_startup_banner() {
     assert_eq!(
         strategy.classify_screen(&facts, "plain output"),
         CliScreenEvidence::default()
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            "conversation output\n> blockquote in a transcript\n\u{2192} item from tool output\n  (1/13)\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  draft line\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n/work/proj (main)\n$0.400 47.3%/1.0M (auto)"
+        ),
+        CliScreenEvidence::default(),
+        "a transcript triple with a parseable counter is not a picker"
     );
 }
 

@@ -70,12 +70,17 @@ impl CliSessionStrategy for PiStrategy {
     }
 
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
+        if !crate::cli::screen::pi_live(screen) {
+            return CliScreenEvidence::default();
+        }
         if crate::cli::screen::has_braille_spinner(screen) {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::Working,
             }
-        } else if crate::cli::screen::has_choice_arrows(screen) {
+        } else if crate::cli::screen::has_choice_hint(screen)
+            || crate::cli::screen::has_picker_cluster(screen)
+        {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::NeedsInput,

@@ -68,12 +68,17 @@ impl CliSessionStrategy for KimiStrategy {
     }
 
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
+        if !crate::cli::screen::kimi_live(screen) {
+            return CliScreenEvidence::default();
+        }
         if crate::cli::screen::kimi_working(screen) {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::Working,
             }
-        } else if crate::cli::screen::kimi_questionnaire(screen) {
+        } else if crate::cli::screen::kimi_questionnaire(screen)
+            || crate::cli::screen::has_choice_hint(screen)
+        {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::NeedsInput,
