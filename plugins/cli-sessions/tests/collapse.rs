@@ -186,3 +186,16 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn reanchor_handles_a_strip_wider_than_the_panel() {
+    let expanded = expanded_bounds();
+    let wide_strip = Bounds::new(point(px(700.0), px(500.0)), size(px(420.0), px(32.0)));
+    let anchored = reanchor_expanded(expanded, wide_strip, Corner::TopRight);
+    assert_eq!(anchored.origin.x.to_f64(), 700.0 + 420.0 - 360.0);
+    assert_eq!(anchored.origin.y.to_f64(), 500.0);
+    let narrow_strip = Bounds::new(point(px(700.0), px(500.0)), size(px(200.0), px(32.0)));
+    let anchored = reanchor_expanded(expanded, narrow_strip, Corner::BottomRight);
+    assert_eq!(anchored.origin.x.to_f64(), 700.0 + 200.0 - 360.0);
+    assert_eq!(anchored.origin.y.to_f64(), 500.0 + 32.0 - 400.0);
+}

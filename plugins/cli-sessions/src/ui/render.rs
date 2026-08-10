@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    MouseButton, SharedString, Window,
+    KeyUpEvent, MouseButton, SharedString, Window,
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
@@ -562,7 +562,7 @@ impl SessionsView {
             .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 if strip_click_activates(event, &this.drag_gesture.borrow()) {
-                    this.expand_panel(window);
+                    this.expand_panel(window, cx);
                     cx.notify();
                 }
             }))
@@ -570,7 +570,7 @@ impl SessionsView {
                 |this, ev: &KeyDownEvent, window, cx| match strip_key_action(&ev.keystroke.key) {
                     Some(StripAction::Expand) => {
                         if this.key_repeat_guard(&ev.keystroke.key) {
-                            this.expand_panel(window);
+                            this.expand_panel(window, cx);
                             cx.notify();
                         }
                         cx.stop_propagation();
@@ -581,6 +581,9 @@ impl SessionsView {
                     None => {}
                 },
             ))
+            .on_key_up(cx.listener(|this, ev: &KeyUpEvent, _window, _cx| {
+                this.key_released(&ev.keystroke.key);
+            }))
             .child(summary_groups_el(&rows))
             .child(
                 div()
@@ -760,6 +763,28 @@ mod tests {
         assert!(strip_click_activates(
             &mouse_click((0.0, 0.0), (3.0, 0.0)),
             &gesture(false)
+        ));
+        assert!(!strip_click_activates(
+            &mouse_click((0.0, 0.0), (4.0, 0.0)),
+            &gesture(false)
+        ));
+    }
+
+    #[test]
+    fn a_gesture_that_crossed_the_threshold_never_expands_after_release() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(point(px(0.0), px(0.0)));
+        assert!(g.on_move(point(px(10.0), px(0.0)), true));
+        g.on_up();
+        assert!(!strip_click_activates(
+            &mouse_click((0.0, 0.0), (10.0, 0.0)),
+            &g
+        ));
+        g.on_down(point(px(0.0), px(0.0)));
+        g.on_up();
+        assert!(strip_click_activates(
+            &mouse_click((0.0, 0.0), (0.0, 0.0)),
+            &g
         ));
     }
 

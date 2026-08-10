@@ -24,7 +24,7 @@ use crate::session::registry::Registry;
 use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
-use crate::ui::placement::{corner_bounds, Corner};
+use crate::ui::placement::{corner_bounds, Corner, CORNER_MARGIN};
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
@@ -32,7 +32,6 @@ use qol_gpui::monitor::MonitorTracker;
 const APP_ID: &str = paths::PLUGIN_ID;
 const WINDOW_WIDTH: f32 = 360.0;
 const WINDOW_HEIGHT: f32 = 400.0;
-const CORNER_MARGIN: f32 = 16.0;
 const VISIBLE_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const VISIBLE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
 const HIDDEN_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
@@ -393,15 +392,16 @@ fn show_panel(handle: PanelHandle, cx: &mut gpui::App) -> bool {
     }
     let updated = handle
         .update(cx, |view, window, cx| {
-            if expand_on_open(view.is_collapsed()) {
-                view.expand_panel(window);
+            if expand_on_open(view.is_collapsed()) && !view.expand_panel(window, cx) {
+                return false;
             }
             view.set_showing(true);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
+            true
         })
-        .is_ok();
+        .unwrap_or(false);
     if updated {
         cx.activate(true);
     }

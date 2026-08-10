@@ -1,5 +1,7 @@
 use gpui::{point, px, Bounds, Pixels, Size};
 
+pub const CORNER_MARGIN: f32 = 16.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Corner {
     TopLeft,
@@ -37,4 +39,19 @@ pub fn corner_bounds(
         Corner::BottomRight => point(right, bottom),
     };
     Bounds::new(origin, win)
+}
+
+pub fn clamp_bounds(
+    monitor: Bounds<Pixels>,
+    bounds: Bounds<Pixels>,
+    margin: f32,
+) -> Bounds<Pixels> {
+    let m = px(margin);
+    let min_x = monitor.origin.x + m;
+    let min_y = monitor.origin.y + m;
+    let max_x = monitor.origin.x + monitor.size.width - bounds.size.width - m;
+    let max_y = monitor.origin.y + monitor.size.height - bounds.size.height - m;
+    let x = bounds.origin.x.min(max_x).max(min_x);
+    let y = bounds.origin.y.min(max_y).max(min_y);
+    Bounds::new(point(x, y), bounds.size)
 }
