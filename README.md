@@ -1,6 +1,6 @@
 <div align="center">
 
-# QoL Tools
+# qol
 
 [![tests](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
 [![Release Plugin](https://github.com/qol-tools/qol/actions/workflows/release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/release.yml)
