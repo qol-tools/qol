@@ -1,6 +1,8 @@
 const STATUS_TAIL: usize = 8;
 const CLAUDE_STATUS_TAIL: usize = 16;
 const KIMI_STATUS_TAIL: usize = 30;
+const FOOTER_BELOW_MIN: usize = 1;
+const FOOTER_BELOW_MAX: usize = 6;
 const CHOICE_HINTS: [&str; 6] = [
     "enter to",
     "to confirm",
@@ -43,10 +45,138 @@ pub(super) fn has_braille_spinner(text: &str) -> bool {
     })
 }
 
-pub(super) fn has_choice_arrows(text: &str) -> bool {
-    tail(text, STATUS_TAIL).iter().any(|line| {
+pub(super) fn has_choice_hint(text: &str) -> bool {
+    let region = chrome_region(text).unwrap_or_else(|| tail(text, STATUS_TAIL));
+    region.iter().any(|line| {
+        let lower = line.to_lowercase();
+        lower.contains('\u{2191}')
+            && lower.contains("select")
+            && ["choose", "confirm", "save", "navigate", "toggle"]
+                .iter()
+                .any(|word| lower.contains(word))
+    })
+}
+
+pub(super) fn pi_live(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let Some(last_rule) = lines.iter().rposition(|line| is_rule_line(line)) else {
+        return false;
+    };
+    let below = lines.len() - 1 - last_rule;
+    (FOOTER_BELOW_MIN..=FOOTER_BELOW_MAX).contains(&below)
+}
+
+pub(super) fn kimi_live(text: &str) -> bool {
+    let Some(last) = text.lines().rfind(|line| !line.trim().is_empty()) else {
+        return false;
+    };
+    let last = last.trim();
+    is_rule_line(last)
+        || (last.contains("context: ") && (last.ends_with('%') || last.ends_with(')')))
+        || (kimi_hint_line(last) && kimi_dialog_corpus(text))
+}
+
+fn is_rule_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|character| character == '\u{2500}')
+}
+
+fn chrome_region(text: &str) -> Option<Vec<&str>> {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let rules: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_rule_line(line))
+        .map(|(index, _)| index)
+        .collect();
+    let last_rule = *rules.last()?;
+    let start = match rules.len() {
+        0 => return None,
+        1 | 2 => 0,
+        3 => rules[0] + 1,
+        _ => rules[rules.len() - 4] + 1,
+    };
+    Some(lines[start..last_rule].to_vec())
+}
+
+pub(super) fn has_picker_cluster(text: &str) -> bool {
+    let Some(region) = chrome_region(text) else {
+        return false;
+    };
+    let mut search = None;
+    let mut selected = None;
+    let mut counter = None;
+    for (index, line) in region.iter().enumerate() {
         let trimmed = line.trim();
-        trimmed.contains('\u{2191}') && trimmed.contains("navigate") && trimmed.contains("select")
+        if trimmed == ">" || trimmed.starts_with("> ") {
+            search.get_or_insert(index);
+        } else if line.trim_start().starts_with('\u{2192}') {
+            selected.get_or_insert(index);
+        } else if counter_pair(trimmed).is_some() {
+            counter.get_or_insert(index);
+        }
+    }
+    let (Some(search), Some(selected), Some(counter)) = (search, selected, counter) else {
+        return false;
+    };
+    let after = &region[counter + 1..];
+    let info_lines = after.iter().take_while(|line| !is_rule_line(line.trim()));
+    let adjacent = info_lines.clone().count() <= 3
+        && info_lines
+            .clone()
+            .all(|line| !is_picker_marker(line.trim()))
+        && after
+            .iter()
+            .filter(|line| is_rule_line(line.trim()))
+            .count()
+            <= 2
+        && after
+            .iter()
+            .rev()
+            .take_while(|line| !is_rule_line(line.trim()))
+            .count()
+            <= 2;
+    search < selected && selected < counter && adjacent
+}
+
+fn is_picker_marker(trimmed: &str) -> bool {
+    counter_pair(trimmed).is_some()
+        || trimmed.starts_with('\u{2192}')
+        || trimmed == ">"
+        || trimmed.starts_with("> ")
+}
+
+fn counter_pair(trimmed: &str) -> Option<(&str, &str)> {
+    let inner = trimmed.strip_prefix('(')?;
+    let (count, rest) = inner.split_once('/')?;
+    let total = rest.strip_suffix(')')?;
+    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(count) || !digits(total) {
+        return None;
+    }
+    Some((count, total))
+}
+
+fn kimi_hint_line(line: &str) -> bool {
+    line.contains("esc cancel")
+        || line.contains("\u{21B5} confirm")
+        || line.contains("\u{21B5} choose")
+        || line.contains("\u{21B5} save")
+}
+
+fn kimi_dialog_corpus(text: &str) -> bool {
+    tail(text, KIMI_STATUS_TAIL).iter().any(|line| {
+        let trimmed = line.trim();
+        numbered_option(trimmed)
+            || trimmed.contains('\u{25B6}')
+            || trimmed.contains('\u{2713}')
+            || trimmed.contains('\u{25CB}')
     })
 }
 
@@ -221,13 +351,34 @@ fn is_choice_affordance(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_working, contains_any, has_braille_spinner, has_choice_arrows, has_done_marker,
-        has_interrupt_hint, has_numbered_choice, kimi_questionnaire, kimi_working,
+        claude_working, contains_any, has_braille_spinner, has_choice_hint, has_done_marker,
+        has_interrupt_hint, has_numbered_choice, has_picker_cluster, kimi_live, kimi_questionnaire,
+        kimi_working, pi_live,
     };
 
     fn screen(tail: &[&str]) -> String {
         let mut lines = vec!["$ echo done", "done", ""];
         lines.extend_from_slice(tail);
+        lines.join("\n")
+    }
+
+    fn pi_screen(tail: &[&str]) -> String {
+        let mut lines = vec!["conversation output", ""];
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.extend_from_slice(tail);
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("  draft line");
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("/work/proj (main)");
+        lines.push("$0.400 47.3%/1.0M (auto)");
+        lines.join("\n")
+    }
+
+    fn kimi_screen(tail: &[&str]) -> String {
+        let mut lines = vec!["conversation output", ""];
+        lines.extend_from_slice(tail);
+        lines.push("yolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]");
+        lines.push("context: 17% (41.1k/256k)");
         lines.join("\n")
     }
 
@@ -292,17 +443,286 @@ mod tests {
     }
 
     #[test]
-    fn choice_arrows_require_all_three_tokens() {
+    fn choice_hint_matches_every_real_arrow_hint_family() {
         let cases = [
-            ("\u{2191}\u{2193} to navigate, \u{21B5} to select", true),
-            ("\u{2191} navigate", false),
+            ("\u{2191}\u{2193} navigate, \u{21B5} to select", true),
+            (
+                "  \u{2191}\u{2193} select  1-3 / \u{21B5} choose  tab switch  esc cancel",
+                true,
+            ),
+            (
+                "  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm  tab switch  esc cancel",
+                true,
+            ),
+            (
+                "  \u{2191}\u{2193} select \u{00B7} 1/2 choose \u{00B7} \u{21B5} confirm",
+                true,
+            ),
+            ("\u{2191} navigate select", true),
             ("select with \u{2191}", false),
             ("navigate select", false),
+            ("\u{2191}\u{2193} scroll, then select a file", false),
         ];
         for (line, expected) in cases {
             let text = screen(&[line]);
-            assert_eq!(has_choice_arrows(&text), expected, "line: {line}");
+            assert_eq!(has_choice_hint(&text), expected, "line: {line}");
         }
+    }
+
+    #[test]
+    fn choice_hint_survives_a_tall_transcript_above_the_dialog() {
+        let mut lines =
+            vec!["\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string()];
+        for index in 0..40 {
+            lines.push(format!("older transcript line {index}"));
+        }
+        lines.push(
+            "  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm  tab switch  esc cancel"
+                .to_string(),
+        );
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let text = kimi_screen(&refs);
+        assert!(has_choice_hint(&text));
+    }
+
+    #[test]
+    fn picker_cluster_requires_selected_row_counter_and_search() {
+        let picker = vec![
+            ">",
+            "",
+            "\u{2192} deepseek-v4-flash [deepseek] \u{2713}",
+            "  deepseek-v4-pro [deepseek]",
+            "  k3 [kimi-coding]",
+            "  (1/13)",
+            "",
+        ];
+        let text = pi_screen(&picker);
+        assert!(has_picker_cluster(&text));
+
+        let mut missing_search = picker.clone();
+        missing_search[0] = "";
+        assert!(!has_picker_cluster(&pi_screen(&missing_search)));
+
+        let mut missing_counter = picker.clone();
+        missing_counter[5] = "  2 sessions";
+        assert!(!has_picker_cluster(&pi_screen(&missing_counter)));
+
+        let mut missing_arrow = picker.clone();
+        missing_arrow[2] = "  deepseek-v4-flash [deepseek]";
+        assert!(!has_picker_cluster(&pi_screen(&missing_arrow)));
+
+        let decoy = vec![
+            "> blockquote in a transcript",
+            "\u{2192} item from tool output",
+            "  (1/13)",
+        ];
+        let mut transcript = vec!["conversation output", ""];
+        transcript.extend_from_slice(&decoy);
+        transcript.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        transcript.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        transcript.push("  draft line");
+        transcript.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        transcript.push("/work/proj (main)");
+        transcript.push("$0.400 47.3%/1.0M (auto)");
+        assert!(
+            !has_picker_cluster(&transcript.join("\n")),
+            "a transcript triple with a parseable counter above the chat border is not a picker"
+        );
+
+        let mut in_region = vec!["conversation output", ""];
+        in_region.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        in_region.extend_from_slice(&decoy);
+        in_region.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        in_region.push("  draft line");
+        in_region.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        in_region.push("/work/proj (main)");
+        in_region.push("$0.400 47.3%/1.0M (auto)");
+        assert!(
+            has_picker_cluster(&in_region.join("\n")),
+            "a status-area triple is geometrically identical to a picker"
+        );
+
+        let mut unordered = picker.clone();
+        unordered[2] = "  (1/13)";
+        unordered[5] = "\u{2192} deepseek-v4-flash [deepseek] \u{2713}";
+        assert!(
+            !has_picker_cluster(&pi_screen(&unordered)),
+            "the counter must sit below the selected row"
+        );
+    }
+
+    #[test]
+    fn picker_cluster_tolerates_info_lines_below_the_counter() {
+        let picker = vec![
+            ">",
+            "\u{2192} deepseek-v4-flash [deepseek] \u{2713}",
+            "  k3 [kimi-coding]",
+            "  (1/13)",
+            "  Model Name: DeepSeek V4 Flash",
+            "  Model catalogs refreshed.",
+            "",
+        ];
+        let text = pi_screen(&picker);
+        assert!(has_picker_cluster(&text));
+    }
+
+    #[test]
+    fn picker_cluster_survives_a_rule_below_the_status_area() {
+        let mut lines = vec!["conversation output", ""];
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push(">");
+        lines.push("\u{2192} deepseek-v4-flash [deepseek] \u{2713}");
+        lines.push("  k3 [kimi-coding]");
+        lines.push("  (1/13)");
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("  draft line");
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("/work/proj (main)");
+        lines.push("$0.400 47.3%/1.0M (auto)");
+        assert!(
+            has_picker_cluster(&lines.join("\n")),
+            "a rule below the status area must not push the picker out of the region"
+        );
+    }
+
+    #[test]
+    fn picker_cluster_accepts_a_counter_shaped_draft_while_the_picker_is_open() {
+        let picker = vec![
+            ">",
+            "\u{2192} deepseek-v4-flash [deepseek] \u{2713}",
+            "  (1/13)",
+        ];
+        let mut lines = vec!["conversation output", ""];
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.extend_from_slice(&picker);
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("  (1/13)");
+        lines.push("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+        lines.push("/work/proj (main)");
+        lines.push("$0.400 47.3%/1.0M (auto)");
+        assert!(has_picker_cluster(&lines.join("\n")));
+    }
+
+    #[test]
+    fn picker_cluster_survives_a_tall_list() {
+        let mut picker = vec![">".to_string()];
+        picker.push("  deepseek-v4-flash [deepseek]".to_string());
+        picker.push("\u{2192} deepseek-v4-flash [deepseek] \u{2713}".to_string());
+        for index in 0..33 {
+            picker.push(format!("  option number {index}"));
+        }
+        picker.push("  (1/13)".to_string());
+        let refs: Vec<&str> = picker.iter().map(String::as_str).collect();
+        assert!(has_picker_cluster(&pi_screen(&refs)));
+    }
+
+    #[test]
+    fn picker_cluster_is_anchored_to_the_chrome_not_the_tail() {
+        let mut lines =
+            vec!["\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string()];
+        for index in 0..40 {
+            lines.push(format!("older transcript line {index}"));
+        }
+        lines.push(">".to_string());
+        lines.push(String::new());
+        lines.push("\u{2192} deepseek-v4-flash [deepseek] \u{2713}".to_string());
+        lines.push("  k3 [kimi-coding]".to_string());
+        lines.push("  (1/13)".to_string());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let text = pi_screen(&refs);
+        assert!(has_picker_cluster(&text));
+    }
+
+    #[test]
+    fn panned_frames_without_live_chrome_are_rejected() {
+        let mut lines =
+            vec!["\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string()];
+        for index in 0..40 {
+            lines.push(format!("panned history line {index}"));
+        }
+        let text = lines.join("\n");
+        assert!(!pi_live(&text));
+        assert!(!kimi_live(&text));
+        assert!(!has_picker_cluster(&text));
+        assert!(!has_choice_hint(&text));
+    }
+
+    #[test]
+    fn live_chrome_guards_pass_on_real_screen_shapes() {
+        assert!(pi_live(&pi_screen(&[])));
+        assert!(pi_live(&pi_screen(&["\u{2800} Working..."])));
+        assert!(!pi_live(&screen(&[])));
+
+        assert!(kimi_live(&kimi_screen(&[])));
+        assert!(kimi_live(&kimi_screen(&[
+            "\u{1F311}\u{FE0F} \u{00B7} building"
+        ])));
+        assert!(kimi_live(&kimi_screen(&[
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            "  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm",
+        ])));
+        let mut dialog = vec![
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            "  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm",
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        ];
+        dialog.insert(0, "conversation output");
+        assert!(
+            kimi_live(&dialog.join("\n")),
+            "a dialog frame without the footer"
+        );
+        let real_dialog = "question\n\u{2192} [5] Other: custom answer\n\ntype answer  \u{21B5} save  tab switch  esc cancel";
+        assert!(
+            kimi_live(real_dialog),
+            "the real captured dialog frame ends with the hint line"
+        );
+        let submit_dialog = "  [1] Submit\n  [2] Cancel\n  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm  tab switch  esc cancel";
+        assert!(
+            kimi_live(submit_dialog),
+            "a footer-less submit dialog is live via its own hint and options"
+        );
+        let approval_dialog = "  \u{25B6} 1. Allow\n    2. Deny\n  \u{2191}\u{2193} select \u{00B7} 1/2 choose \u{00B7} \u{21B5} confirm";
+        assert!(
+            kimi_live(approval_dialog),
+            "a footer-less approval dialog is live via its own hint and rows"
+        );
+        assert!(
+            !kimi_live(
+                "older transcript line\n  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm"
+            ),
+            "a panned frame ending in a stray hint without dialog rows must be rejected"
+        );
+        assert!(!kimi_live(&screen(&[])));
+    }
+
+    #[test]
+    fn pi_live_tolerates_a_clipped_footer_but_not_an_empty_one() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let mut frame = vec!["conversation output".to_string(), rule.to_string()];
+        assert!(
+            !pi_live(&frame.join("\n")),
+            "a bare rule has no footer below it"
+        );
+        frame.push("/work/proj (main)".to_string());
+        assert!(
+            pi_live(&frame.join("\n")),
+            "rule plus the cwd line is a clipped but live footer"
+        );
+        frame.push("$0.400 47.3%/1.0M (auto)".to_string());
+        assert!(pi_live(&frame.join("\n")));
+        for _ in 0..4 {
+            frame.push("extra status line".to_string());
+        }
+        assert!(
+            pi_live(&frame.join("\n")),
+            "six lines below the rule stay live"
+        );
+        frame.push("one too many".to_string());
+        assert!(
+            !pi_live(&frame.join("\n")),
+            "seven lines below the rule are not the footer"
+        );
     }
 
     #[test]
@@ -427,7 +847,8 @@ mod tests {
                     has_interrupt_hint(&text),
                     claude_working(&text),
                     has_braille_spinner(&text),
-                    has_choice_arrows(&text),
+                    has_choice_hint(&text),
+                    has_picker_cluster(&text),
                     has_numbered_choice(&text),
                     has_done_marker(&text),
                     kimi_working(&text),

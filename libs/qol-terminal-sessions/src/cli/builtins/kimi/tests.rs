@@ -155,13 +155,19 @@ fn launch_program_is_the_kimi_executable_without_arguments() {
     );
 }
 
+fn kimi_screen(tail: &str) -> String {
+    format!(
+        "{tail}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
+    )
+}
+
 #[test]
 fn screen_classification_distinguishes_work_and_questionnaires() {
     let strategy = KimiStrategy::default();
     let facts = session();
 
     assert_eq!(
-        strategy.classify_screen(&facts, "\u{1F311}\u{FE0F} \u{00B7} building"),
+        strategy.classify_screen(&facts, &kimi_screen("\u{1F311}\u{FE0F} \u{00B7} building")),
         CliScreenEvidence {
             viewport: CliViewportState::Live,
             runtime: CliRuntimeState::Working,
@@ -170,12 +176,44 @@ fn screen_classification_distinguishes_work_and_questionnaires() {
     assert_eq!(
         strategy.classify_screen(
             &facts,
-            "1) quick\n2) thorough\ntab switch to change, esc cancel, \u{21B5} save"
+            &kimi_screen("1) quick\n2) thorough\ntab switch to change, esc cancel, \u{21B5} save")
         ),
         CliScreenEvidence {
             viewport: CliViewportState::Live,
             runtime: CliRuntimeState::NeedsInput,
         }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            &kimi_screen(
+                "    [1] Submit\n    [2] Cancel\n  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm  tab switch  esc cancel"
+            ),
+        ),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            &kimi_screen(
+                "  \u{25B6} 1. Allow\n    2. Deny\n  \u{2191}\u{2193} select \u{00B7} 1/2 choose \u{00B7} \u{21B5} confirm"
+            ),
+        ),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+    assert_eq!(
+        strategy.classify_screen(
+            &facts,
+            "older transcript line\n  \u{2191}\u{2193} select  1/2 choose  \u{21B5} confirm"
+        ),
+        CliScreenEvidence::default(),
+        "a panned frame ending in a stray hint must hold instead of misreading"
     );
     assert_eq!(
         strategy.classify_screen(&facts, "plain output"),
