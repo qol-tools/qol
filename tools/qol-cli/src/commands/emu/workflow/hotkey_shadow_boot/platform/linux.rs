@@ -5,7 +5,7 @@ use crate::commands::emu::workflow::hotkey_shadow_boot::platform::desktop::{
     launch_tray_and_wait_api, require_exec, spawn, wait_for_command, wait_for_probe_line,
 };
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::Verdict;
-use crate::commands::emu::{qmp, BootedVm};
+use crate::commands::emu::BootedVm;
 use crate::progress::{step_label, StepKind};
 use qol_conventions::{local_base_url, TRACE_LOG_PATH};
 use qol_dev_guest::GuestControlClient;
@@ -91,7 +91,6 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     )
     .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
     require_boot_claim(&mut guest)?;
-    let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
     require_chord_reaches_qol(&mut guest).map_err(|error| {
         let error = diagnose_chord_eaten(&mut guest, error);
         boot_diagnostics(&mut guest, &auth, error)
