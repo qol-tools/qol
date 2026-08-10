@@ -25,3 +25,4 @@ items = []
 id = "open"
 name = "Diff Viewer"
 action = "open"
+export_to_launcher = true
