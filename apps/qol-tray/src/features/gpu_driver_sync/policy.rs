@@ -124,6 +124,7 @@ mod tests {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn query_emits_only_none_when_no_policy_is_readable() {
         let _serial = serialized_env_tests();
