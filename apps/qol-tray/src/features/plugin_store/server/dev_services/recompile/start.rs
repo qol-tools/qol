@@ -19,7 +19,12 @@ pub(super) fn queue_self_recompile(
 
     let repo_root = dev::resolve_qol_tray_self_root(worktree_path.as_deref());
     let branch = resolve_recompile_branch(worktree_path.as_deref(), &repo_root);
-    super::super::super::helpers::persist_worktree_branch(branch.as_deref());
+    if let Err(error) = super::super::super::helpers::persist_worktree_branch(branch.as_deref()) {
+        state.runtime.finish_self_recompile();
+        log::error!("Failed to persist worktree selection: {error}");
+        return Err("Failed to persist worktree selection");
+    }
+    super::super::refresh_discovery(state);
 
     tokio::spawn(run_self_recompile(SelfRecompileTask::from_state(
         state, repo_root, branch,

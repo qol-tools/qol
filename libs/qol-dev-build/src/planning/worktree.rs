@@ -8,69 +8,113 @@ pub fn resolve_worktree_paths(
 ) -> HashMap<String, PathBuf> {
     dev_links
         .iter()
-        .map(|(id, path)| (id.clone(), resolve_plugin_worktree(path, branch)))
+        .filter_map(|(id, path)| {
+            resolve_plugin_worktree(path, branch).map(|resolved| (id.clone(), resolved))
+        })
         .collect()
 }
 
-fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> PathBuf {
-    let target_root = match branch {
+fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> Option<PathBuf> {
+    let current_root = match git_toplevel(dev_link_path) {
+        Some(root) => root,
+        None => return Some(dev_link_path.to_path_buf()),
+    };
+    let relative = match dev_link_path.strip_prefix(&current_root) {
+        Ok(relative) => relative,
+        Err(_) => return Some(dev_link_path.to_path_buf()),
+    };
+
+    if let Some(target_root) = match branch {
         Some(b) => find_git_worktree_by_branch(dev_link_path, b),
         None => find_git_worktree_base(dev_link_path),
-    };
+    } {
+        let candidate = target_root.join(relative);
+        if candidate.exists() {
+            log::debug!(
+                "[worktree] resolved {} -> {}",
+                dev_link_path.display(),
+                candidate.display()
+            );
+            return Some(candidate);
+        }
+    }
 
-    let Some(target_root) = target_root else {
-        return dev_link_path.to_path_buf();
-    };
-
-    let current_root = git_toplevel(dev_link_path);
-    let resolved = remap_to_worktree(dev_link_path, current_root.as_deref(), &target_root);
-
-    if resolved == dev_link_path {
-        log::debug!("[worktree] already on target: {}", dev_link_path.display());
-        return resolved;
+    if let Some(base_root) = find_git_worktree_base(dev_link_path) {
+        let base_candidate = base_root.join(relative);
+        if base_candidate.exists() {
+            log::debug!(
+                "[worktree] {} missing in selection, falling back to {}",
+                dev_link_path.display(),
+                base_candidate.display()
+            );
+            return Some(base_candidate);
+        }
     }
 
     log::debug!(
-        "[worktree] resolved {} -> {}",
-        dev_link_path.display(),
-        resolved.display()
+        "[worktree] dropping {}: not present in the active selection",
+        dev_link_path.display()
     );
-    resolved
-}
-
-fn remap_to_worktree(
-    dev_link_path: &Path,
-    current_root: Option<&Path>,
-    target_root: &Path,
-) -> PathBuf {
-    let relative = current_root.and_then(|root| dev_link_path.strip_prefix(root).ok());
-    match relative {
-        Some(relative) => target_root.join(relative),
-        None => target_root.to_path_buf(),
-    }
+    None
 }
 
 fn git_toplevel(path: &Path) -> Option<PathBuf> {
-    Command::new("git")
+    let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(path)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+        .output();
+    match output {
+        Ok(output) if output.status.success() => Some(PathBuf::from(
+            String::from_utf8_lossy(&output.stdout).trim(),
+        )),
+        Ok(output) => {
+            log::debug!(
+                "[worktree] {} is not inside a git repo: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            log::warn!(
+                "[worktree] could not run git in {}: {}",
+                path.display(),
+                error
+            );
+            None
+        }
+    }
 }
 
 fn run_git_worktree_list(repo_path: &Path) -> Option<String> {
-    Command::new("git")
+    let output = Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repo_path)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Ok(output) => {
+            log::warn!(
+                "[worktree] git worktree list failed in {}: {}",
+                repo_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            log::warn!(
+                "[worktree] could not run git worktree list in {}: {}",
+                repo_path.display(),
+                error
+            );
+            None
+        }
+    }
 }
 
-fn find_git_worktree_by_branch(repo_path: &Path, branch: &str) -> Option<PathBuf> {
+pub fn find_git_worktree_by_branch(repo_path: &Path, branch: &str) -> Option<PathBuf> {
     run_git_worktree_list(repo_path).and_then(|stdout| parse_worktree_for_branch(&stdout, branch))
 }
 
@@ -147,40 +191,131 @@ mod tests {
     }
 
     #[test]
-    fn remap_preserves_plugin_subpath_within_monorepo() {
-        let cases = [
-            (
-                "/repo/plugins/plugin-x",
-                Some("/repo"),
-                "/wt/feat",
-                "/wt/feat/plugins/plugin-x",
-            ),
-            (
-                "/repo/plugins/plugin-x",
-                Some("/repo"),
-                "/repo",
-                "/repo/plugins/plugin-x",
-            ),
-            (
-                "/standalone-plugin",
-                Some("/standalone-plugin"),
-                "/standalone-plugin",
-                "/standalone-plugin",
-            ),
-            ("/repo/plugins/plugin-x", None, "/wt/feat", "/wt/feat"),
-        ];
-        for (dev_link, current_root, target_root, expected) in cases {
-            let got = remap_to_worktree(
-                Path::new(dev_link),
-                current_root.map(Path::new),
-                Path::new(target_root),
-            );
-            assert_eq!(
-                got,
-                PathBuf::from(expected),
-                "dev_link={dev_link} current_root={current_root:?} target_root={target_root}"
-            );
+    fn resolution_prefers_selected_worktree_copy() {
+        let repo = GitRepo::new();
+        let base_plugin = repo.plugin(&repo.root, "plugin-a");
+        let feat = repo.add_worktree("feat");
+        let feat_plugin = repo.plugin(&feat, "plugin-a");
+
+        let resolved = resolve_plugin_worktree(&base_plugin, Some("feat")).unwrap();
+        assert_eq!(resolved, feat_plugin);
+    }
+
+    #[test]
+    fn resolution_falls_back_to_main_when_worktree_copy_missing() {
+        let repo = GitRepo::new();
+        let base_plugin = repo.plugin(&repo.root, "plugin-a");
+        let _feat = repo.add_worktree("feat");
+
+        let resolved = resolve_plugin_worktree(&base_plugin, Some("feat")).unwrap();
+        assert_eq!(resolved, base_plugin);
+    }
+
+    #[test]
+    fn resolution_drops_worktree_link_outside_selection() {
+        let repo = GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        repo.add_worktree("other");
+        let feat_plugin = repo.plugin(&feat, "plugin-a");
+
+        assert_eq!(resolve_plugin_worktree(&feat_plugin, None), None);
+        assert_eq!(resolve_plugin_worktree(&feat_plugin, Some("other")), None);
+        assert_eq!(
+            resolve_plugin_worktree(&feat_plugin, Some("feat")),
+            Some(feat_plugin)
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_paths_drops_detached_id_from_map() {
+        let repo = GitRepo::new();
+        let base_plugin = repo.plugin(&repo.root, "plugin-base");
+        let feat = repo.add_worktree("feat");
+        let feat_plugin = repo.plugin(&feat, "plugin-feat");
+        let mut links = HashMap::new();
+        links.insert("plugin-base".to_string(), base_plugin);
+        links.insert("plugin-feat".to_string(), feat_plugin);
+
+        let resolved = resolve_worktree_paths(&links, None);
+        assert!(resolved.contains_key("plugin-base"));
+        assert!(
+            !resolved.contains_key("plugin-feat"),
+            "detached ids must be absent from the resolved map"
+        );
+    }
+
+    #[test]
+    fn resolution_keeps_origin_for_links_outside_any_git_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        let foreign = temp.path().join("standalone-plugin");
+        std::fs::create_dir_all(&foreign).unwrap();
+
+        assert_eq!(
+            resolve_plugin_worktree(&foreign, Some("feat")),
+            Some(foreign.clone())
+        );
+        assert_eq!(resolve_plugin_worktree(&foreign, None), Some(foreign));
+    }
+
+    #[test]
+    fn resolution_keeps_standalone_repo_link_on_its_own_root() {
+        let repo = GitRepo::new();
+        let standalone = repo.plugin(&repo.root, "standalone");
+        let resolved = resolve_plugin_worktree(&standalone, Some("unrelated")).unwrap();
+        assert_eq!(resolved, standalone);
+    }
+
+    struct GitRepo {
+        root: PathBuf,
+        _temp: tempfile::TempDir,
+    }
+
+    impl GitRepo {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("repo");
+            std::fs::create_dir_all(&root).unwrap();
+            git(&root, &["init", "-q"]);
+            git(&root, &["config", "user.email", "t@example.com"]);
+            git(&root, &["config", "user.name", "t"]);
+            git(&root, &["config", "commit.gpgsign", "false"]);
+            git(&root, &["config", "core.hooksPath", "/dev/null"]);
+            std::fs::write(root.join("README"), b"x").unwrap();
+            git(&root, &["add", "."]);
+            git(&root, &["commit", "-q", "-m", "init"]);
+            Self { root, _temp: temp }
         }
+
+        fn add_worktree(&self, branch: &str) -> PathBuf {
+            let worktree = self.root.parent().unwrap().join(format!("wt-{branch}"));
+            git(
+                &self.root,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    branch,
+                    worktree.to_str().unwrap(),
+                ],
+            );
+            worktree
+        }
+
+        fn plugin(&self, root: &Path, id: &str) -> PathBuf {
+            let dir = root.join("plugins").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
     }
 
     #[test]

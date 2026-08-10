@@ -28,12 +28,22 @@ impl DoctorCheck for DevLinkPathsCheck {
         let dev_root = qol_workspace::workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
             .ok()
             .map(|root| qol_workspace::plugins_dir(&root));
-        let findings = collect_findings(
+        let mut findings = collect_findings(
             registry,
             dev_root.as_deref(),
             &fs_manifest_probe,
             &fs_subplugins_probe,
         );
+        let config_dir = ctx.config_dir();
+        if let Some(branch) = crate::dev::get_active_worktree_branch(config_dir) {
+            let links = registry::dev_linked_paths(config_dir);
+            let resolved = crate::dev::resolve_worktree_paths(&links, Some(&branch));
+            for (plugin_id, path) in links {
+                if !resolved.contains_key(&plugin_id) {
+                    findings.push(Finding::Detached { plugin_id, path });
+                }
+            }
+        }
 
         if findings.is_empty() {
             return CheckReport::ok("no dev-link path corruption detected".to_string());
@@ -104,6 +114,10 @@ pub(crate) enum Finding {
         plugin_id: String,
         path: PathBuf,
     },
+    Detached {
+        plugin_id: String,
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +156,7 @@ impl Finding {
             } => Some(FixAction::RemoveDevLinkEntries {
                 ids: vec![plugin_id.clone()],
             }),
+            Finding::Detached { .. } => None,
             _ => None,
         }
     }
@@ -443,6 +458,10 @@ fn format_message(findings: &[Finding]) -> String {
                 .entry("dev-link plugin.toml unparseable")
                 .or_default()
                 .push(format!("{plugin_id} ({})", path.display())),
+            Finding::Detached { plugin_id, path } => by_kind
+                .entry("dev-link outside active selection")
+                .or_default()
+                .push(format!("{plugin_id} ({})", path.display())),
         }
     }
     let parts: Vec<String> = by_kind
@@ -455,7 +474,8 @@ fn format_message(findings: &[Finding]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::registry::{Entry, Slot};
+    use crate::doctor::framework::{DoctorCheck, DoctorContext};
+    use crate::plugins::registry::{Entry, Registry, Slot};
     use std::collections::HashMap;
 
     fn devlink(id: &str, path: &str) -> Entry {
@@ -1296,5 +1316,71 @@ mod tests {
             by_id["plugin-baz"].active.path,
             PathBuf::from("/installed/plugin-baz")
         );
+    }
+
+    #[test]
+    fn detached_finding_is_report_only() {
+        let finding = Finding::Detached {
+            plugin_id: "plugin-foo".to_string(),
+            path: PathBuf::from("/wt/plugin-foo"),
+        };
+        assert!(
+            finding.fix_action().is_none(),
+            "a selection change must never auto-remove registry entries"
+        );
+    }
+
+    #[test]
+    fn run_reports_detached_link_when_selection_moves_away() {
+        let repo = crate::test_support::GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        repo.add_worktree("other");
+        let link = repo.plugin(&feat, "plugin-foo");
+
+        let config_dir = tempfile::TempDir::new().unwrap();
+        let registry = Registry {
+            version: 1,
+            entries: vec![devlink("plugin-foo", link.to_str().unwrap())],
+        };
+        crate::plugins::registry::save_registry(config_dir.path(), &registry).unwrap();
+        qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("other")).unwrap();
+
+        let ctx = DoctorContext::with_config_dir(config_dir.path().to_path_buf());
+        let report = DevLinkPathsCheck.run(&ctx);
+
+        assert!(
+            report.summary.contains("outside active selection"),
+            "summary: {}",
+            report.summary
+        );
+        assert!(
+            report.fixes.is_empty(),
+            "detached links must be report-only, got fixes: {:?}",
+            report.fixes
+        );
+    }
+
+    #[test]
+    fn run_skips_detached_without_selection() {
+        let repo = crate::test_support::GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        let link = repo.plugin(&feat, "plugin-foo");
+
+        let config_dir = tempfile::TempDir::new().unwrap();
+        let registry = Registry {
+            version: 1,
+            entries: vec![devlink("plugin-foo", link.to_str().unwrap())],
+        };
+        crate::plugins::registry::save_registry(config_dir.path(), &registry).unwrap();
+
+        let ctx = DoctorContext::with_config_dir(config_dir.path().to_path_buf());
+        let report = DevLinkPathsCheck.run(&ctx);
+
+        assert!(
+            !report.summary.contains("outside active selection"),
+            "no selection must not report detached: {}",
+            report.summary
+        );
+        assert!(report.fixes.is_empty());
     }
 }

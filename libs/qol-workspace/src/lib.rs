@@ -542,6 +542,28 @@ mod tests {
     }
 
     #[test]
+    fn find_plugin_dirs_skips_worktrees_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree = tmp
+            .path()
+            .join("worktrees")
+            .join("diff-viewer")
+            .join("qol-monorepo")
+            .join("plugins")
+            .join("plugin-a");
+        write_plugin_dir(
+            &worktree,
+            "plugin-a",
+            &plugin_toml(
+                "plugin-a",
+                "\"linux\", \"macos\", \"windows\"",
+                "[runtime]\ncommand = \"a\"\n",
+            ),
+        );
+        assert!(find_plugin_dirs(&[tmp.path().to_path_buf()]).is_empty());
+    }
+
+    #[test]
     fn read_plugin_source_prefers_manifest_id() {
         let tmp = tempfile::tempdir().unwrap();
         let plugin = tmp.path().join("folder-name");
