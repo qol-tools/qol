@@ -34,6 +34,38 @@ pub trait PanelDragArea: InteractiveElement + Sized {
             crate::platform::start_window_move(window);
         })
     }
+
+    fn panel_drag_after(self, threshold: f32) -> Self {
+        let press: Rc<Cell<Option<Point<Pixels>>>> = Rc::new(Cell::new(None));
+        let moving: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        let threshold = Pixels::from(threshold);
+        let press_down = press.clone();
+        let moving_down = moving.clone();
+        let press_move = press.clone();
+        let moving_move = moving.clone();
+        let press_up = press;
+        self.on_mouse_down(MouseButton::Left, move |event, _, _| {
+            press_down.set(Some(event.position));
+            moving_down.set(false);
+        })
+        .on_mouse_move(move |event, window, _| {
+            let Some(start) = press_move.get() else {
+                return;
+            };
+            if !event.dragging() || moving_move.get() {
+                return;
+            }
+            let dx = event.position.x.to_f64() - start.x.to_f64();
+            let dy = event.position.y.to_f64() - start.y.to_f64();
+            if (dx * dx + dy * dy).sqrt() >= threshold.to_f64() {
+                moving_move.set(true);
+                crate::platform::start_window_move(window);
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, _| {
+            press_up.set(None);
+        })
+    }
 }
 
 impl<T: InteractiveElement> PanelDragArea for T {}

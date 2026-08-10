@@ -522,7 +522,8 @@ impl SessionsView {
             .border_color(rgb(palette.border))
             .bg(rgb(palette.chrome_bg))
             .font_family(SharedString::from("Menlo"))
-            .cursor(CursorStyle::PointingHand)
+            .cursor(CursorStyle::OpenHand)
+            .panel_drag_after(4.0)
             .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 if matches!(event, ClickEvent::Mouse(_)) {
