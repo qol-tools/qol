@@ -1,4 +1,6 @@
-use crate::{DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenSpan};
+use crate::{
+    DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenKind, TokenSpan,
+};
 
 pub fn parse_patch(old_path: &str, new_path: &str, patch: &str) -> Result<FileDiff, DiffError> {
     if patch.trim().is_empty() {
@@ -90,7 +92,12 @@ fn heat_spans(old: &str, new: &str) -> (Vec<TokenSpan>, Vec<TokenSpan>) {
 
 fn push_span(spans: &mut Vec<TokenSpan>, start: usize, len: usize, heat: HeatLevel) {
     if len > 0 {
-        spans.push(TokenSpan { start, len, heat });
+        spans.push(TokenSpan {
+            start,
+            len,
+            heat,
+            kind: TokenKind::Plain,
+        });
     }
 }
 
@@ -212,7 +219,9 @@ fn parse_range(s: &str) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{apply_heat, parse_patch};
-    use crate::{DiffError, DiffStatus, FileDiff, HeatLevel, LineChange, LineKind, TokenSpan};
+    use crate::{
+        DiffError, DiffStatus, FileDiff, HeatLevel, LineChange, LineKind, TokenKind, TokenSpan,
+    };
 
     const SIMPLE: &str = "\
 diff --git a/app.rs b/app.rs
@@ -634,17 +643,20 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 12,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 12,
                     len: 1,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 13,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
             ]
         );
@@ -655,17 +667,20 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 12,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 12,
                     len: 1,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 13,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
             ]
         );
@@ -687,7 +702,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
         let unpaired = &lines[2];
@@ -700,7 +716,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
     }
@@ -715,7 +732,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
         assert_eq!(lines[1].text, "b");
@@ -726,7 +744,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
         assert_eq!(lines[3].text, "x");
@@ -736,7 +755,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
         assert_eq!(
@@ -744,7 +764,8 @@ index 111..222 100644
             vec![TokenSpan {
                 start: 0,
                 len: 1,
-                heat: HeatLevel::Hot
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
             }]
         );
     }
@@ -780,12 +801,14 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 5,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 5,
                     len: 1,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
             ]
         );
@@ -797,12 +820,14 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 5,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 5,
                     len: 5,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
             ]
         );
@@ -829,17 +854,20 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 1,
                     len: 2,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 3,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
             ]
         );
@@ -850,17 +878,20 @@ index 111..222 100644
                 TokenSpan {
                     start: 0,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 1,
                     len: 2,
-                    heat: HeatLevel::Hot
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
                 },
                 TokenSpan {
                     start: 3,
                     len: 1,
-                    heat: HeatLevel::Cool
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Plain,
                 },
             ]
         );

@@ -25,11 +25,21 @@ pub enum HeatLevel {
     Hot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TokenKind {
+    #[default]
+    Plain,
+    String,
+    Comment,
+    Keyword,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenSpan {
     pub start: usize,
     pub len: usize,
     pub heat: HeatLevel,
+    pub kind: TokenKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +102,8 @@ impl std::error::Error for DiffError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenSpan,
+        DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenKind,
+        TokenSpan,
     };
 
     #[test]
@@ -121,6 +132,7 @@ mod tests {
                             start: 4,
                             len: 4,
                             heat: HeatLevel::Cool,
+                            kind: TokenKind::Plain,
                         }],
                         old_line_no: Some(1),
                         new_line_no: Some(1),

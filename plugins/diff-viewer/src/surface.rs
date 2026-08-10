@@ -389,6 +389,7 @@ mod tests {
             start: 0,
             len: 2,
             heat: HeatLevel::Hot,
+            kind: qol_diff::TokenKind::Plain,
         }];
         assert_eq!(
             style_from_line(&hot),
