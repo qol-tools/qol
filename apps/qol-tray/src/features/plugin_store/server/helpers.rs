@@ -66,22 +66,20 @@ pub(super) fn shared_config_dir_or_response(
 }
 
 #[cfg(feature = "dev")]
-pub(super) fn persist_worktree_branch(branch: Option<&str>) {
-    let Ok(config_dir) = shared_config_dir() else {
-        return;
-    };
+pub(super) fn persist_worktree_branch(branch: Option<&str>) -> Result<(), String> {
+    let config_dir = shared_config_dir()?;
     let env = crate::installer::boot_environment::default_boot_environment();
     let lister = crate::dev::boot_contract::GitWorktreeLister;
     let probe = crate::dev::boot_contract::FsBinaryProbe;
-    if let Err(e) = crate::dev::boot_contract::set_selected_worktree(
+    crate::dev::boot_contract::set_selected_worktree(
         env.as_ref(),
         &config_dir,
         branch,
         &lister,
         &probe,
-    ) {
-        log::error!("Failed to persist boot target: {}", e);
-    }
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 pub(super) fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {

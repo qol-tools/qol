@@ -1,6 +1,7 @@
 mod output;
 mod search;
 mod source;
+mod worktrees;
 
 pub use output::discover_plugins;
 
@@ -9,6 +10,7 @@ mod tests {
     use super::discover_plugins;
     use super::search::find_plugin_dirs;
     use crate::dev::DevConfig;
+    use crate::test_support::GitRepo;
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
@@ -199,5 +201,78 @@ version = "0.1.0"
             "Should find it even if TOML is minimal"
         );
         assert_eq!(discovered[0].name, "Minimal");
+    }
+
+    fn discover_with(
+        repo_root: &Path,
+        worktree_branch: Option<&str>,
+    ) -> Vec<crate::dev::discovery::output::DiscoveredPlugin> {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        if let Some(branch) = worktree_branch {
+            crate::dev::linking::set_active_worktree_branch(tmp.path(), Some(branch)).unwrap();
+        }
+        let config = DevConfig {
+            search_paths: vec![repo_root.to_path_buf()],
+        };
+        crate::dev::discovery::output::discover_plugins_with_anchor(
+            &config,
+            &plugins_dir,
+            repo_root,
+        )
+    }
+
+    #[test]
+    fn discovers_plugin_that_exists_only_in_active_worktree() {
+        let repo = GitRepo::new();
+        repo.plugin(&repo.root, "plugin-base");
+        let feat = repo.add_worktree("feat");
+        repo.plugin(&feat, "plugin-feat");
+
+        let discovered = discover_with(&repo.root, Some("feat"));
+        let feat_row = discovered
+            .iter()
+            .find(|p| p.id == "plugin-feat")
+            .expect("worktree-only plugin should be discovered");
+        assert!(feat_row.path.starts_with(feat.to_str().unwrap()));
+        assert!(!feat_row.already_linked);
+        assert!(discovered.iter().any(|p| p.id == "plugin-base"));
+    }
+
+    #[test]
+    fn dedupes_worktree_copy_when_plugin_exists_in_base() {
+        let repo = GitRepo::new();
+        let base_plugin = repo.plugin(&repo.root, "plugin-a");
+        let feat = repo.add_worktree("feat");
+        repo.plugin(&feat, "plugin-a");
+
+        let discovered = discover_with(&repo.root, Some("feat"));
+        let rows: Vec<_> = discovered.iter().filter(|p| p.id == "plugin-a").collect();
+        assert_eq!(rows.len(), 1, "worktree clone must not duplicate the row");
+        assert_eq!(rows[0].path, base_plugin.to_string_lossy());
+    }
+
+    #[test]
+    fn hides_worktree_plugin_when_no_branch_selected() {
+        let repo = GitRepo::new();
+        repo.plugin(&repo.root, "plugin-base");
+        let feat = repo.add_worktree("feat");
+        repo.plugin(&feat, "plugin-feat");
+
+        let discovered = discover_with(&repo.root, None);
+        assert!(!discovered.iter().any(|p| p.id == "plugin-feat"));
+        assert!(discovered.iter().any(|p| p.id == "plugin-base"));
+    }
+
+    #[test]
+    fn hides_worktree_plugin_when_marker_stale() {
+        let repo = GitRepo::new();
+        repo.add_worktree("feat");
+        repo.plugin(&repo.root.parent().unwrap().join("wt-feat"), "plugin-feat");
+        repo.remove_worktree("feat");
+
+        let discovered = discover_with(&repo.root, Some("feat"));
+        assert!(!discovered.iter().any(|p| p.id == "plugin-feat"));
     }
 }

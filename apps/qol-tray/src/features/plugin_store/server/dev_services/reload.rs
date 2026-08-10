@@ -20,7 +20,14 @@ pub(super) fn queue_reload(
 
     log::info!("Developer reload requested");
     if worktree_branch.is_some() {
-        super::super::helpers::persist_worktree_branch(worktree_branch.as_deref());
+        if let Err(error) =
+            super::super::helpers::persist_worktree_branch(worktree_branch.as_deref())
+        {
+            runtime.finish_build();
+            log::error!("Failed to persist worktree selection: {error}");
+            return Err("Failed to persist worktree selection");
+        }
+        super::refresh_discovery(state);
     }
 
     let task = reload_task(state, runtime.clone(), None, worktree_branch);
