@@ -801,7 +801,7 @@ mod tests {
             Some(StripAction::Dismiss)
         ));
         for key in ["tab", "down", "a", "x"] {
-            assert!(matches!(strip_key_action(key), None), "{key}");
+            assert!(strip_key_action(key).is_none(), "{key}");
         }
     }
 
