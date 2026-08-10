@@ -20,7 +20,6 @@ fn base_manifest() -> PluginManifest {
             version: "0.0.1".to_string(),
             author: None,
             platforms: None,
-            auto_install_host: false,
         },
         menu: MenuConfig {
             label: "M".to_string(),

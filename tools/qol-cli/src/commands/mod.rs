@@ -5,7 +5,6 @@ pub(crate) mod clean;
 pub(crate) mod dev;
 pub(crate) mod dev_bundle;
 pub(crate) mod dev_env;
-pub(crate) mod dev_install;
 pub(crate) mod doctor;
 pub(crate) mod emu;
 pub(crate) mod env;

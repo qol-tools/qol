@@ -38,9 +38,6 @@ pub(crate) struct TrayTarget {
 }
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
-    if args.first().is_some_and(|arg| arg == "install") {
-        return crate::commands::dev_install::run(&args[1..], verbose);
-    }
     if let Some(root) = std::env::var_os(ARTIFACT_ROOT_ENV) {
         return run_artifact(args, verbose, PathBuf::from(root));
     }

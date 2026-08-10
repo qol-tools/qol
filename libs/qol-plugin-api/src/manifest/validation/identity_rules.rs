@@ -47,7 +47,6 @@ mod tests {
             version: "1.0.0".into(),
             author: None,
             platforms: None,
-            auto_install_host: false,
         }
     }
 
