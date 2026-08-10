@@ -222,7 +222,8 @@ mod tests {
 
         assert_eq!(resolve_plugin_worktree(&feat_plugin, None), None);
         assert_eq!(resolve_plugin_worktree(&feat_plugin, Some("other")), None);
-        let resolved = resolve_plugin_worktree(&feat_plugin, Some("feat")).expect("feat copy resolves");
+        let resolved =
+            resolve_plugin_worktree(&feat_plugin, Some("feat")).expect("feat copy resolves");
         assert_eq!(canon(&resolved), canon(&feat_plugin));
     }
 
