@@ -210,7 +210,7 @@ mod tests {
         let _feat = repo.add_worktree("feat");
 
         let resolved = resolve_plugin_worktree(&base_plugin, Some("feat")).unwrap();
-        assert_eq!(resolved, base_plugin);
+        assert_eq!(canon(&resolved), canon(&base_plugin));
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
         let repo = GitRepo::new();
         let standalone = repo.plugin(&repo.root, "standalone");
         let resolved = resolve_plugin_worktree(&standalone, Some("unrelated")).unwrap();
-        assert_eq!(resolved, standalone);
+        assert_eq!(canon(&resolved), canon(&standalone));
     }
 
     struct GitRepo {
