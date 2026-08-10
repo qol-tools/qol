@@ -163,6 +163,8 @@ pub struct DiffView {
     jump_rx: Option<mpsc::Receiver<f32>>,
     scrub_commits: Vec<ScrubCommit>,
     last_scrub_selected: Option<usize>,
+    requested: Option<(String, String)>,
+    last_facts: Option<Facts>,
 }
 
 impl DiffView {
@@ -208,6 +210,8 @@ impl DiffView {
             jump_rx: Some(jump_rx),
             scrub_commits: Vec::new(),
             last_scrub_selected: None,
+            requested: None,
+            last_facts: None,
         };
         if view.repo.is_none() {
             view.facts_error =
@@ -314,10 +318,11 @@ impl DiffView {
                     changed = true;
                 }
                 GitResult::Diff {
-                    generation,
+                    generation: _,
                     path,
+                    range,
                     diff,
-                } if generation == current && self.files.selected_path() == Some(path.as_str()) => {
+                } if self.matches_request(&path, &range) => {
                     self.apply_diff(diff);
                     changed = true;
                 }
@@ -346,6 +351,21 @@ impl DiffView {
         changed
     }
 
+    fn matches_request(&self, path: &str, range: &str) -> bool {
+        self.requested
+            .as_ref()
+            .is_some_and(|(wanted_path, wanted_range)| wanted_path == path && wanted_range == range)
+    }
+
+    fn request_diff(&mut self, path: String, range: String) {
+        self.requested = Some((path.clone(), range.clone()));
+        let _ = self.git_tx.send(GitRequest::SelectFile {
+            generation: self.generation.load(Ordering::SeqCst),
+            path,
+            range,
+        });
+    }
+
     fn apply_jump(&mut self, ratio: f32) {
         let total = self.row_count().max(1);
         let target = (ratio * total as f32) as usize;
@@ -370,16 +390,15 @@ impl DiffView {
         let Some(path) = self.files.selected_path() else {
             return;
         };
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.git_tx.send(GitRequest::SelectFile {
-            generation,
-            path: path.to_owned(),
-            range: commit_range(index),
-        });
+        self.request_diff(path.to_owned(), commit_range(index));
     }
 
     fn apply_facts(&mut self, facts: Facts) {
         self.facts_error = None;
+        if self.last_facts.as_ref() == Some(&facts) {
+            return;
+        }
+        self.last_facts = Some(facts.clone());
         let files = facts
             .numstat
             .iter()
@@ -398,7 +417,13 @@ impl DiffView {
         );
         if self.files.files.is_empty() {
             self.pane = DiffPane::Empty;
-        } else if matches!(self.pane, DiffPane::Empty) {
+        } else if let Some((path, range)) = self.requested.clone() {
+            if self.files.files.iter().any(|file| file.path == path) {
+                self.request_diff(path, range);
+            } else {
+                self.select_current_file();
+            }
+        } else {
             self.select_current_file();
         }
     }
@@ -428,12 +453,7 @@ impl DiffView {
         let Some(path) = self.files.selected_path() else {
             return;
         };
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.git_tx.send(GitRequest::SelectFile {
-            generation,
-            path: path.to_owned(),
-            range: pipeline::DEFAULT_RANGE.to_string(),
-        });
+        self.request_diff(path.to_owned(), pipeline::DEFAULT_RANGE.to_string());
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {

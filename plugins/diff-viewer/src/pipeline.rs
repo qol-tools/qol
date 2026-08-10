@@ -37,6 +37,7 @@ pub enum GitResult {
     Diff {
         generation: u64,
         path: String,
+        range: String,
         diff: Result<FileDiff, DiffError>,
     },
     History {
@@ -45,7 +46,7 @@ pub enum GitResult {
     },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
     pub status: Vec<StatusEntry>,
     pub numstat: Vec<NumstatEntry>,
@@ -101,12 +102,21 @@ pub fn spawn_watch_bridge(
         .name("diff-viewer-watch-bridge".to_owned())
         .spawn(move || {
             while let Ok(paths) = batches.recv() {
-                if !paths.is_empty() {
+                if paths.iter().any(|path| !is_watch_noise(path)) {
                     send_refresh(&git_tx, &generation);
                 }
             }
         })
         .expect("spawn diff-viewer watch bridge")
+}
+
+fn is_watch_noise(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some(".git") | Some("target") | Some("node_modules")
+        )
+    })
 }
 
 pub fn spawn_git_facts_thread(
@@ -145,16 +155,11 @@ pub fn spawn_git_facts_thread(
                         path,
                         range,
                     } => {
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
                         let diff = selected_file_diff(&repo, &path, &range);
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
                         let _ = results.send(GitResult::Diff {
                             generation: g,
                             path,
+                            range,
                             diff,
                         });
                     }
@@ -199,6 +204,15 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn watch_noise_filters_build_and_vcs_output() {
+        assert!(is_watch_noise(Path::new("/repo/target/debug/plugin")),);
+        assert!(is_watch_noise(Path::new("/repo/.git/index")));
+        assert!(is_watch_noise(Path::new("/repo/src/node_modules/x")));
+        assert!(!is_watch_noise(Path::new("/repo/src/main.rs")));
+        assert!(!is_watch_noise(Path::new("/repo/targeted/x")));
+    }
 
     #[test]
     fn resolve_repo_walks_up_to_the_nearest_git_root() {
