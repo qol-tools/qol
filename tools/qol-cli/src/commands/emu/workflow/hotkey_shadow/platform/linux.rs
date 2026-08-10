@@ -23,6 +23,8 @@ const GTK_COMBO: &str = "['<Primary><Alt>F9']";
 const KEYBINDINGS: &str = "/org/cinnamon/desktop/keybindings";
 const MANAGED_KEY: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/binding";
 const ORPHAN_KEY: &str = "/org/cinnamon/desktop/keybindings/custom8/binding";
+const DESKLETS_KEY: &str = "/org/cinnamon/desktop/keybindings/show-desklets";
+const SUBSET_COMBO: &str = "Shift+Super+S";
 const CLAIMS_GLOB: &str = "*/host-takeover/qol-tray-hotkeys/takeover-*";
 const CLEARED: &str = "@as []";
 const PORT_CLOSED_SCRIPT: &str = r#"
@@ -60,6 +62,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
     super::super::super::hotkeys::require_passthrough(&mut guest, &mut qmp)?;
     require_chord_reaches_qol(&mut guest, &mut qmp)?;
+    require_subset_chord_reaches_qol(&mut guest, &mut qmp)?;
 
     set_hotkeys(&mut guest, &auth, &baseline)?;
     shutdown_tray(&mut guest, &auth)?;
@@ -81,6 +84,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         traces: vec![
             format!("{MANAGED_KEY} taken over and restored"),
             format!("{ORPHAN_KEY} cleared across a tray restart"),
+            format!("{DESKLETS_KEY} cleared and restored across the tray lifecycle"),
         ],
         artifacts,
     })
@@ -108,10 +112,11 @@ fn seed_conflicts(guest: &mut GuestControlClient) -> Result<()> {
     for (key, value) in writes {
         dconf_write(guest, key, value)?;
     }
+    dconf_reset(guest, DESKLETS_KEY)?;
     step_label(
         "seed",
         StepKind::Success,
-        "a schema-backed and an orphaned legacy shortcut both claim Ctrl+Alt+F9",
+        "a schema-backed, an orphaned legacy, and an unset show-desklets default all conflict with qol hotkeys",
     );
     Ok(())
 }
@@ -119,44 +124,91 @@ fn seed_conflicts(guest: &mut GuestControlClient) -> Result<()> {
 fn require_taken_over(guest: &mut GuestControlClient) -> Result<()> {
     require_binding(guest, MANAGED_KEY, CLEARED, "after the doctor pass")?;
     require_binding(guest, ORPHAN_KEY, CLEARED, "after the doctor pass")?;
+    require_binding(guest, DESKLETS_KEY, CLEARED, "after the doctor pass")?;
     let markers = claim_markers(guest)?;
-    if markers.len() != 2 {
-        bail!("expected 2 takeover claims to be recorded, found {markers:?}");
+    if markers.len() != 3 {
+        bail!("expected 3 takeover claims to be recorded, found {markers:?}");
     }
+    let mut exact_claims = 0;
+    let mut subset_claims = 0;
     for marker in &markers {
         let body = require_exec(guest, command("/usr/bin/cat", &[marker]), COMMAND_TIMEOUT)?;
-        if !body.stdout.contains(QOL_COMBO) || !body.stdout.contains("<Primary><Alt>F9") {
-            bail!("claim {marker} does not carry the combo and the value to restore: {body:?}");
+        if body.stdout.contains(QOL_COMBO) && body.stdout.contains("<Primary><Alt>F9") {
+            exact_claims += 1;
+        } else if body.stdout.contains(SUBSET_COMBO) && body.stdout.contains("previous_unset") {
+            subset_claims += 1;
+        } else {
+            bail!("claim {marker} carries no expected combo and restore value: {body:?}");
         }
+    }
+    if exact_claims != 2 || subset_claims != 1 {
+        bail!(
+            "expected 2 exact and 1 subset claim, found {exact_claims} exact and {subset_claims} subset"
+        );
     }
     step_label(
         "takeover",
         StepKind::Success,
-        "both shortcuts were cleared and their previous values recorded",
+        "all three shortcuts were cleared and their previous values recorded",
     );
     Ok(())
+}
+
+fn require_chord_opens_launcher(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    keys: &[&str],
+    what: &str,
+) -> Result<()> {
+    let mut last_error = None;
+    for _attempt in 0..3 {
+        let chord: Vec<String> = keys.iter().map(|key| key.to_string()).collect();
+        qmp.send_keys(&chord)?;
+        thread::sleep(KEY_SETTLE);
+        match wait_for_command(
+            guest,
+            command("/usr/bin/xdotool", &["search", "--name", "^qol-launcher@"]),
+            ACTION_TIMEOUT,
+            |outcome| !outcome.stdout.trim().is_empty(),
+            &format!("the launcher window opened by the {what} chord"),
+        ) {
+            Ok(_) => {
+                qmp.send_keys(&["esc".into()])?;
+                thread::sleep(KEY_SETTLE);
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = Some(error);
+                let _ = qmp.send_keys(&["esc".into()]);
+                thread::sleep(Duration::from_secs(3));
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "the {what} chord never opened the launcher{}",
+        last_error
+            .map(|error| format!(": {error:#}"))
+            .unwrap_or_default()
+    ))
 }
 
 fn require_chord_reaches_qol(
     guest: &mut GuestControlClient,
     qmp: &mut qmp::QmpClient,
 ) -> Result<()> {
-    qmp.send_keys(&["ctrl".into(), "alt".into(), "f9".into()])?;
-    thread::sleep(KEY_SETTLE);
-    wait_for_command(
-        guest,
-        command("/usr/bin/xdotool", &["search", "--name", "^qol-launcher@"]),
-        ACTION_TIMEOUT,
-        |outcome| !outcome.stdout.trim().is_empty(),
-        "the launcher window opened by the reclaimed chord",
-    )?;
-    qmp.send_keys(&["esc".into()])?;
-    thread::sleep(KEY_SETTLE);
-    Ok(())
+    require_chord_opens_launcher(guest, qmp, &["ctrl", "alt", "f9"], "reclaimed")
+}
+
+fn require_subset_chord_reaches_qol(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+) -> Result<()> {
+    require_chord_opens_launcher(guest, qmp, &["shift", "meta_l", "s"], "subset-modifier")
 }
 
 fn require_reconciled(guest: &mut GuestControlClient, phase: &str) -> Result<()> {
     require_binding(guest, MANAGED_KEY, GTK_COMBO, phase)?;
+    require_binding(guest, DESKLETS_KEY, "", phase)?;
     require_binding(guest, ORPHAN_KEY, CLEARED, phase)?;
     let markers = claim_markers(guest)?;
     if markers.len() != 1 {
@@ -226,6 +278,15 @@ fn dconf_write(guest: &mut GuestControlClient, key: &str, value: &str) -> Result
     Ok(())
 }
 
+fn dconf_reset(guest: &mut GuestControlClient, key: &str) -> Result<()> {
+    require_exec(
+        guest,
+        command("/usr/bin/dconf", &["reset", key]),
+        COMMAND_TIMEOUT,
+    )?;
+    Ok(())
+}
+
 fn restart_tray(guest: &mut GuestControlClient, auth: &mut String) -> Result<()> {
     shutdown_tray(guest, auth)?;
     *auth = launch_tray_and_wait_api(guest)?;
@@ -290,13 +351,22 @@ fn set_hotkeys(guest: &mut GuestControlClient, auth: &str, body: &str) -> Result
 
 fn hotkey_config() -> String {
     serde_json::json!({
-        "hotkeys": [{
-            "id": "hotkey-shadow-probe",
-            "key": QOL_COMBO,
-            "plugin_uid": LAUNCHER_UID,
-            "action": "open",
-            "enabled": true,
-        }]
+        "hotkeys": [
+            {
+                "id": "hotkey-shadow-probe",
+                "key": QOL_COMBO,
+                "plugin_uid": LAUNCHER_UID,
+                "action": "open",
+                "enabled": true,
+            },
+            {
+                "id": "hotkey-shadow-subset-probe",
+                "key": SUBSET_COMBO,
+                "plugin_uid": LAUNCHER_UID,
+                "action": "open",
+                "enabled": true,
+            },
+        ]
     })
     .to_string()
 }

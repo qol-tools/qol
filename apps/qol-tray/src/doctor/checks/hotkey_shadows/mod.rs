@@ -59,9 +59,15 @@ fn with_restart_advice(mut report: CheckReport, advice: String) -> CheckReport {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DetectedShadow {
-    pub qol_combo: String,
+    pub qol_combos: Vec<String>,
     pub source_label: String,
     pub kind: ShadowKind,
+}
+
+impl DetectedShadow {
+    fn combos_label(&self) -> String {
+        self.qol_combos.join(", ")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +151,7 @@ fn append_registration_failures(
 }
 
 fn format_registration_failure_message(shadows: &[DetectedShadow]) -> String {
-    let mut combos: Vec<&str> = shadows.iter().map(|s| s.qol_combo.as_str()).collect();
+    let mut combos: Vec<String> = shadows.iter().flat_map(|s| s.qol_combos.clone()).collect();
     combos.sort_unstable();
     combos.dedup();
     format!(
@@ -177,7 +183,7 @@ fn registration_failure_shadows(
             let normalized = normalize_combo(&error.key)?;
             let combo = qol_index.get(&normalized)?;
             Some(DetectedShadow {
-                qol_combo: combo.clone(),
+                qol_combos: vec![combo.clone()],
                 source_label: "active hotkey backend".to_string(),
                 kind: ShadowKind::RegistrationFailure {
                     hint: format!(
@@ -207,10 +213,12 @@ fn enabled_bindings() -> anyhow::Result<Vec<HotkeyBinding>> {
 fn format_fixable_message(shadows: &[DetectedShadow]) -> String {
     let mut by_combo: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for shadow in shadows {
-        by_combo
-            .entry(shadow.qol_combo.as_str())
-            .or_default()
-            .push(shadow.source_label.clone());
+        for combo in &shadow.qol_combos {
+            by_combo
+                .entry(combo.as_str())
+                .or_default()
+                .push(shadow.source_label.clone());
+        }
     }
     let parts: Vec<String> = by_combo
         .into_iter()
@@ -229,11 +237,12 @@ fn format_reserved_message(shadows: &[DetectedShadow]) -> String {
             ShadowKind::Reserved { hint } => {
                 format!(
                     "{} owned by {} ({hint})",
-                    shadow.qol_combo, shadow.source_label
+                    shadow.combos_label(),
+                    shadow.source_label
                 )
             }
             ShadowKind::Fixable(_) | ShadowKind::RegistrationFailure { .. } => {
-                shadow.qol_combo.clone()
+                shadow.combos_label()
             }
         })
         .collect();
@@ -267,12 +276,12 @@ mod tests {
     #[test]
     fn diagnose_returns_warn_with_fix_when_fixable_only() {
         let shadows = vec![DetectedShadow {
-            qol_combo: "Super+Space".into(),
+            qol_combos: vec!["Super+Space".into()],
             source_label: "schema.key".into(),
             kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
                 dir: "schema".into(),
                 key: "key".into(),
-                qol_combo: "Super+Space".into(),
+                qol_combos: vec!["Super+Space".into()],
                 orphaned: false,
             }),
         }];
@@ -285,7 +294,7 @@ mod tests {
     #[test]
     fn diagnose_returns_error_when_only_reserved_combos_clash() {
         let shadows = vec![DetectedShadow {
-            qol_combo: "Cmd+Tab".into(),
+            qol_combos: vec!["Cmd+Tab".into()],
             source_label: "macOS App Switcher".into(),
             kind: ShadowKind::Reserved {
                 hint: "remap qol-tray's plugin to a different combo".into(),
@@ -302,7 +311,7 @@ mod tests {
     #[test]
     fn diagnose_returns_warn_with_advice_when_only_registration_failures_remain() {
         let shadows = vec![DetectedShadow {
-            qol_combo: "Shift+Super+S".into(),
+            qol_combos: vec!["Shift+Super+S".into()],
             source_label: "active hotkey backend".into(),
             kind: ShadowKind::RegistrationFailure {
                 hint: "stop the application that owns the key".into(),
@@ -340,7 +349,7 @@ mod tests {
         let shadows = registration_failure_shadows(&index, &errors);
 
         assert_eq!(shadows.len(), 1, "only configured failures are actionable");
-        assert_eq!(shadows[0].qol_combo, "Shift+Super+S");
+        assert_eq!(shadows[0].qol_combos, vec!["Shift+Super+S"]);
         assert!(matches!(
             shadows[0].kind,
             ShadowKind::RegistrationFailure { .. }
@@ -351,17 +360,17 @@ mod tests {
     fn diagnose_mixes_fixable_and_reserved_into_warn_with_hint() {
         let shadows = vec![
             DetectedShadow {
-                qol_combo: "Super+Space".into(),
+                qol_combos: vec!["Super+Space".into()],
                 source_label: "schema.key".into(),
                 kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
                     dir: "schema".into(),
                     key: "key".into(),
-                    qol_combo: "Super+Space".into(),
+                    qol_combos: vec!["Super+Space".into()],
                     orphaned: false,
                 }),
             },
             DetectedShadow {
-                qol_combo: "Cmd+Tab".into(),
+                qol_combos: vec!["Cmd+Tab".into()],
                 source_label: "macOS App Switcher".into(),
                 kind: ShadowKind::Reserved {
                     hint: "manual remap required".into(),

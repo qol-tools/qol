@@ -21,12 +21,60 @@ pub(crate) fn dump(root: &str) -> Result<String, HostFailure> {
     run(&["dump", root])
 }
 
+pub(crate) fn list_schema(schema: &str) -> Result<String, HostFailure> {
+    let command = format!("gsettings list-recursively {schema}");
+    let output = Command::new("gsettings")
+        .args(["list-recursively", schema])
+        .output()
+        .map_err(|error| HostFailure {
+            command: command.clone(),
+            detail: error.to_string(),
+            tool_missing: true,
+        })?;
+    if !output.status.success() {
+        return Err(HostFailure {
+            command,
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            tool_missing: false,
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
+}
+
 pub(crate) fn read(full_key: &str) -> Result<String, HostFailure> {
     run(&["read", full_key])
 }
 
 pub(crate) fn write(full_key: &str, value: &str) -> Result<(), HostFailure> {
     run(&["write", full_key, value]).map(|_| ())
+}
+
+pub(crate) fn reset(full_key: &str) -> Result<(), HostFailure> {
+    run(&["reset", full_key]).map(|_| ())
+}
+
+pub(crate) fn get_schema_value(schema: &str, key: &str) -> Result<String, HostFailure> {
+    let command = format!("gsettings get {schema} {key}");
+    let output = Command::new("gsettings")
+        .args(["get", schema, key])
+        .output()
+        .map_err(|error| HostFailure {
+            command: command.clone(),
+            detail: error.to_string(),
+            tool_missing: true,
+        })?;
+    if !output.status.success() {
+        return Err(HostFailure {
+            command,
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            tool_missing: false,
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
 }
 
 fn run(args: &[&str]) -> Result<String, HostFailure> {

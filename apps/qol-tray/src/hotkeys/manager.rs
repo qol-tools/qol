@@ -75,6 +75,32 @@ impl HotkeyManager {
         Ok(())
     }
 
+    pub(super) fn reassert_all(&mut self) -> Result<()> {
+        let Some(manager) = self.manager.as_ref() else {
+            return Ok(());
+        };
+        let hotkeys: Vec<HotKey> = self.applied.values().map(|entry| entry.hotkey).collect();
+        for hotkey in &hotkeys {
+            if let Err(error) = manager.unregister(*hotkey) {
+                log::warn!(
+                    "Failed to release a hotkey grab during re-assert: {}",
+                    error
+                );
+            }
+        }
+        let mut errors = Vec::new();
+        for hotkey in hotkeys {
+            if let Err(error) = manager.register(hotkey) {
+                errors.push(RegistrationError {
+                    key: format!("{:?}", hotkey.key),
+                    error: error.to_string(),
+                });
+            }
+        }
+        registration_status::set_registration_errors(errors);
+        Ok(())
+    }
+
     fn with_config_path(config_path: PathBuf) -> Self {
         Self {
             manager: None,

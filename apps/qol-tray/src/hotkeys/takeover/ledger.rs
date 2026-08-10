@@ -17,6 +17,8 @@ pub(crate) struct Claim {
     pub reach: BindingReach,
     pub recorded_at: SystemTime,
     #[serde(default)]
+    pub previous_unset: bool,
+    #[serde(default)]
     pub custom_list: Option<CustomListClaim>,
 }
 
@@ -138,6 +140,7 @@ mod tests {
             applied: "@as []".into(),
             qol_combo: "Shift+Super+S".into(),
             reach,
+            previous_unset: false,
             recorded_at,
             custom_list: None,
         }
@@ -184,6 +187,26 @@ mod tests {
             BindingReach::LegacyOrphan,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         );
+        record(dir.path(), &entry).expect("record");
+        assert_eq!(outstanding(dir.path()), vec![entry.clone()]);
+        clear(dir.path(), &entry).expect("clear");
+        assert!(outstanding(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn record_round_trips_previous_unset_and_custom_list_claims() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut entry = claim(
+            "/org/cinnamon/desktop/keybindings/wm/",
+            BindingReach::Managed,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        );
+        entry.previous_unset = true;
+        entry.custom_list = Some(CustomListClaim {
+            key: "/org/cinnamon/desktop/keybindings/custom-list".into(),
+            previous: "['a', 'b']".into(),
+            applied: "['a']".into(),
+        });
         record(dir.path(), &entry).expect("record");
         assert_eq!(outstanding(dir.path()), vec![entry.clone()]);
         clear(dir.path(), &entry).expect("clear");

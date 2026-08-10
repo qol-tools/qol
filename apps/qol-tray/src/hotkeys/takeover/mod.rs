@@ -2,19 +2,76 @@ pub(crate) mod dconf;
 mod ledger;
 mod platform;
 
-pub(crate) use dconf::{BindingEntry, BindingReach};
+pub(crate) use dconf::{BindingEntry, BindingReach, MatchPolicy};
 
 use std::fmt;
 use std::time::SystemTime;
 
-const BINDING_ROOTS: &[&str] = &[
-    "/org/cinnamon/desktop/keybindings/",
-    "/org/cinnamon/muffin/keybindings/",
-    "/org/gnome/desktop/wm/keybindings/",
-    "/org/gnome/settings-daemon/plugins/media-keys/",
-    "/org/gnome/shell/keybindings/",
-    "/desktop/ibus/general/hotkey/",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BindingRoot {
+    pub dir: &'static str,
+    pub match_policy: MatchPolicy,
+    pub schema: Option<&'static str>,
+}
+
+const BINDING_ROOTS: &[BindingRoot] = &[
+    BindingRoot {
+        dir: "/org/cinnamon/desktop/keybindings/",
+        match_policy: MatchPolicy::Subset,
+        schema: Some("org.cinnamon.desktop.keybindings"),
+    },
+    BindingRoot {
+        dir: "/org/cinnamon/desktop/keybindings/wm/",
+        match_policy: MatchPolicy::Subset,
+        schema: Some("org.cinnamon.desktop.keybindings.wm"),
+    },
+    BindingRoot {
+        dir: "/org/cinnamon/desktop/keybindings/media-keys/",
+        match_policy: MatchPolicy::Subset,
+        schema: Some("org.cinnamon.desktop.keybindings.media-keys"),
+    },
+    BindingRoot {
+        dir: "/org/cinnamon/muffin/keybindings/",
+        match_policy: MatchPolicy::Exact,
+        schema: Some("org.cinnamon.muffin.keybindings"),
+    },
+    BindingRoot {
+        dir: "/org/gnome/desktop/wm/keybindings/",
+        match_policy: MatchPolicy::Exact,
+        schema: Some("org.gnome.desktop.wm.keybindings"),
+    },
+    BindingRoot {
+        dir: "/org/gnome/settings-daemon/plugins/media-keys/",
+        match_policy: MatchPolicy::Exact,
+        schema: Some("org.gnome.settings-daemon.plugins.media-keys"),
+    },
+    BindingRoot {
+        dir: "/org/gnome/shell/keybindings/",
+        match_policy: MatchPolicy::Exact,
+        schema: Some("org.gnome.shell.keybindings"),
+    },
+    BindingRoot {
+        dir: "/desktop/ibus/general/hotkey/",
+        match_policy: MatchPolicy::Exact,
+        schema: None,
+    },
 ];
+
+pub(crate) fn match_policy_for(dir: &str) -> MatchPolicy {
+    BINDING_ROOTS
+        .iter()
+        .filter(|root| dir.starts_with(root.dir))
+        .max_by_key(|root| root.dir.len())
+        .map_or(MatchPolicy::Exact, |root| root.match_policy)
+}
+
+pub(crate) fn schema_for(dir: &str) -> Option<&'static str> {
+    BINDING_ROOTS
+        .iter()
+        .filter(|root| dir.starts_with(root.dir))
+        .max_by_key(|root| root.dir.len())
+        .and_then(|root| root.schema)
+}
 
 const DEFAULT_RESTART_HINT: &str = "log out and back in";
 
@@ -110,37 +167,94 @@ pub struct RestoreSummary {
 }
 
 pub(crate) fn scan() -> Scan {
-    assemble_scan(
-        BINDING_ROOTS
-            .iter()
-            .map(|root| (*root, platform::dump(root))),
-    )
+    assemble_scan(BINDING_ROOTS.iter().map(|root| {
+        let sources = RootSources {
+            dconf: Some(platform::dump(root.dir)),
+            effective: root.schema.map(platform::list_schema),
+        };
+        (*root, sources)
+    }))
 }
 
-fn assemble_scan<'a>(dumps: impl Iterator<Item = (&'a str, Result<String, HostFailure>)>) -> Scan {
+#[derive(Clone, Debug, Default)]
+struct RootSources {
+    dconf: Option<Result<String, HostFailure>>,
+    effective: Option<Result<String, HostFailure>>,
+}
+
+fn assemble_scan(sources: impl Iterator<Item = (BindingRoot, RootSources)>) -> Scan {
     let mut scan = Scan::default();
-    for (root, result) in dumps {
-        match result {
-            Ok(dump) => {
-                scan.available = true;
-                scan.entries.extend(dconf::parse_dump(root, &dump));
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    for (root, sources) in sources {
+        if let Some(result) = sources.dconf {
+            match result {
+                Ok(dump) => {
+                    scan.available = true;
+                    extend_unique(
+                        &mut scan.entries,
+                        &mut seen,
+                        dconf::parse_dump(root.dir, root.match_policy, &dump),
+                    );
+                }
+                Err(failure) => {
+                    scan.available |= !failure.tool_missing;
+                    log_source_failure(&failure);
+                }
             }
-            Err(failure) => {
-                scan.available |= !failure.tool_missing;
-                log::debug!(
-                    "hotkey takeover: {} skipped: {}",
-                    failure.command,
-                    failure.detail
-                );
+        }
+        if let Some(result) = sources.effective {
+            match result {
+                Ok(output) => {
+                    scan.available = true;
+                    extend_unique(
+                        &mut scan.entries,
+                        &mut seen,
+                        dconf::parse_gsettings_list(root.dir, root.match_policy, &output),
+                    );
+                }
+                Err(failure) => {
+                    scan.available |= !failure.tool_missing;
+                    log_source_failure(&failure);
+                }
             }
         }
     }
     scan
 }
 
+fn log_source_failure(failure: &HostFailure) {
+    if failure.tool_missing {
+        log::debug!(
+            "hotkey takeover: {} skipped: {}",
+            failure.command,
+            failure.detail
+        );
+    } else {
+        log::warn!(
+            "hotkey takeover: {} failed, conflicts may be hidden: {}",
+            failure.command,
+            failure.detail
+        );
+    }
+}
+
+fn extend_unique(
+    entries: &mut Vec<BindingEntry>,
+    seen: &mut std::collections::BTreeSet<(String, String)>,
+    incoming: Vec<BindingEntry>,
+) {
+    for entry in incoming {
+        if seen.insert((entry.dir.clone(), entry.key.clone())) {
+            entries.push(entry);
+        }
+    }
+}
+
 pub(crate) trait BindingStore {
     fn read(&mut self, full_key: &str) -> Result<String, TakeoverError>;
+    fn read_effective(&mut self, dir: &str, key: &str) -> Result<String, TakeoverError>;
     fn write(&mut self, full_key: &str, value: &str) -> Result<(), TakeoverError>;
+    fn reset(&mut self, full_key: &str) -> Result<(), TakeoverError>;
 }
 
 struct HostStore;
@@ -150,13 +264,39 @@ impl BindingStore for HostStore {
         platform::read(full_key).map_err(TakeoverError::from)
     }
 
+    fn read_effective(&mut self, dir: &str, key: &str) -> Result<String, TakeoverError> {
+        let full_key = dconf::full_key(dir, key);
+        match schema_for(dir) {
+            None => self.read(&full_key),
+            Some(schema) => match platform::get_schema_value(schema, key) {
+                Ok(value) => Ok(value),
+                Err(failure) => {
+                    if failure.tool_missing {
+                        Err(TakeoverError::from(failure))
+                    } else {
+                        log::debug!(
+                            "hotkey takeover: {} failed for {full_key}, falling back to dconf: {}",
+                            failure.command,
+                            failure.detail
+                        );
+                        self.read(&full_key)
+                    }
+                }
+            },
+        }
+    }
+
     fn write(&mut self, full_key: &str, value: &str) -> Result<(), TakeoverError> {
         platform::write(full_key, value).map_err(TakeoverError::from)
     }
+
+    fn reset(&mut self, full_key: &str) -> Result<(), TakeoverError> {
+        platform::reset(full_key).map_err(TakeoverError::from)
+    }
 }
 
-pub(crate) fn read_binding(dir: &str, key: &str) -> Result<String, TakeoverError> {
-    HostStore.read(&dconf::full_key(dir, key))
+pub(crate) fn read_effective_binding(dir: &str, key: &str) -> Result<String, TakeoverError> {
+    HostStore.read_effective(dir, key)
 }
 
 pub(crate) fn take_over(mutation: &BindingMutation) -> Result<(), TakeoverError> {
@@ -179,16 +319,30 @@ fn take_over_in(
 ) -> Result<(), TakeoverError> {
     let full_key = dconf::full_key(&mutation.dir, &mutation.key);
     let current = store.read(&full_key)?;
-    if current.trim().is_empty() {
-        return Err(TakeoverError::HostRejected {
-            command: format!("dconf read {full_key}"),
-            detail: "key is unset, so there is nothing to take back".into(),
-        });
-    }
-    let previous = ledger::outstanding(root)
-        .into_iter()
-        .find(|claim| claim.dir == mutation.dir && claim.key == mutation.key)
-        .map_or(current, |claim| claim.previous);
+    let outstanding = ledger::outstanding(root);
+    let prior = outstanding
+        .iter()
+        .find(|claim| claim.dir == mutation.dir && claim.key == mutation.key);
+    let user_rebound = prior.is_some_and(|claim| {
+        claim.previous_unset && !current.trim().is_empty() && current.trim() != claim.applied.trim()
+    });
+    let previous = prior.map_or_else(
+        || current.clone(),
+        |claim| {
+            if user_rebound {
+                current.clone()
+            } else if claim.previous_unset {
+                String::new()
+            } else {
+                claim.previous.clone()
+            }
+        },
+    );
+    let current_unset = if user_rebound {
+        false
+    } else {
+        current.trim().is_empty() || prior.is_some_and(|claim| claim.previous_unset)
+    };
 
     let custom_list = withdrawn_custom_list(store, &mutation.dir);
     let claim = ledger::Claim {
@@ -199,13 +353,28 @@ fn take_over_in(
         qol_combo: mutation.qol_combo.clone(),
         reach: mutation.reach,
         recorded_at: SystemTime::now(),
+        previous_unset: current_unset,
         custom_list: custom_list.clone(),
     };
     ledger::record(root, &claim).map_err(|error| TakeoverError::Ledger(error.to_string()))?;
     if let Err(error) = store.write(&full_key, &mutation.next) {
         let _ = ledger::clear(root, &claim);
+        qol_runtime::probe!(
+            "HOTKEY_TAKEOVER",
+            "phase=takeover-failed key={} combo={} reason={}",
+            qol_runtime::probe::token(&full_key),
+            qol_runtime::probe::token(&mutation.qol_combo),
+            qol_runtime::probe::token(&error.to_string())
+        );
         return Err(error);
     }
+    qol_runtime::probe!(
+        "HOTKEY_TAKEOVER",
+        "phase=takeover key={} combo={} reach={}",
+        qol_runtime::probe::token(&full_key),
+        qol_runtime::probe::token(&mutation.qol_combo),
+        qol_runtime::probe::token(mutation.reach.label())
+    );
     if let Some(list) = custom_list {
         if let Err(error) = store.write(&list.key, &list.applied) {
             log::warn!(
@@ -255,7 +424,12 @@ fn restore_all_in(
                 true
             }
             ledger::RestoreDecision::Rewrite => {
-                if let Err(error) = store.write(&full_key, &claim.previous) {
+                let restore = if claim.previous_unset {
+                    store.reset(&full_key)
+                } else {
+                    store.write(&full_key, &claim.previous)
+                };
+                if let Err(error) = restore {
                     summary.failures.push(format!("{full_key}: {error}"));
                     continue;
                 }
@@ -364,13 +538,11 @@ mod tests {
 
     impl BindingStore for FakeStore {
         fn read(&mut self, full_key: &str) -> Result<String, TakeoverError> {
-            self.values
-                .get(full_key)
-                .cloned()
-                .ok_or_else(|| TakeoverError::HostRejected {
-                    command: format!("dconf read {full_key}"),
-                    detail: "unset".into(),
-                })
+            Ok(self.values.get(full_key).cloned().unwrap_or_default())
+        }
+
+        fn read_effective(&mut self, dir: &str, key: &str) -> Result<String, TakeoverError> {
+            self.read(&dconf::full_key(dir, key))
         }
 
         fn write(&mut self, full_key: &str, value: &str) -> Result<(), TakeoverError> {
@@ -381,6 +553,17 @@ mod tests {
                 });
             }
             self.values.insert(full_key.to_string(), value.to_string());
+            Ok(())
+        }
+
+        fn reset(&mut self, full_key: &str) -> Result<(), TakeoverError> {
+            if self.write_failure.as_deref() == Some(full_key) {
+                return Err(TakeoverError::HostRejected {
+                    command: format!("dconf reset {full_key}"),
+                    detail: "denied".into(),
+                });
+            }
+            self.values.remove(full_key);
             Ok(())
         }
     }
@@ -571,31 +754,50 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_is_unavailable_only_when_every_root_reports_a_missing_tool() {
-        type Dump = (&'static str, Result<String, HostFailure>);
-        let missing = |root: &'static str| {
+    fn a_scan_is_unavailable_only_when_every_source_reports_a_missing_tool() {
+        type Source = (BindingRoot, RootSources);
+        let root = |dir: &'static str| BindingRoot {
+            dir,
+            match_policy: MatchPolicy::Exact,
+            schema: None,
+        };
+        let missing = |dir: &'static str| {
             (
-                root,
-                Err(HostFailure {
-                    command: format!("dconf dump {root}"),
-                    detail: "not found".into(),
-                    tool_missing: true,
-                }),
+                root(dir),
+                RootSources {
+                    dconf: Some(Err(HostFailure {
+                        command: format!("dconf dump {dir}"),
+                        detail: "not found".into(),
+                        tool_missing: true,
+                    })),
+                    effective: None,
+                },
             )
         };
-        let refused = |root: &'static str| {
+        let refused = |dir: &'static str| {
             (
-                root,
-                Err(HostFailure {
-                    command: format!("dconf dump {root}"),
-                    detail: "denied".into(),
-                    tool_missing: false,
-                }),
+                root(dir),
+                RootSources {
+                    dconf: Some(Err(HostFailure {
+                        command: format!("dconf dump {dir}"),
+                        detail: "denied".into(),
+                        tool_missing: false,
+                    })),
+                    effective: None,
+                },
             )
         };
-        let dumped = |root: &'static str| (root, Ok("[wm]\nclose=['<Super>w']\n".to_string()));
+        let dumped = |dir: &'static str| {
+            (
+                root(dir),
+                RootSources {
+                    dconf: Some(Ok("[wm]\nclose=['<Super>w']\n".to_string())),
+                    effective: None,
+                },
+            )
+        };
 
-        type Case = (&'static str, Vec<Dump>, bool, usize);
+        type Case = (&'static str, Vec<Source>, bool, usize);
         let cases: [Case; 4] = [
             (
                 "no dconf at all",
@@ -617,27 +819,88 @@ mod tests {
                 2,
             ),
         ];
-        for (label, dumps, available, entries) in cases {
-            let scan = assemble_scan(dumps.into_iter());
+        for (label, sources, available, entries) in cases {
+            let scan = assemble_scan(sources.into_iter());
             assert_eq!(scan.available, available, "case: {label}");
             assert_eq!(scan.entries.len(), entries, "case: {label}");
         }
     }
 
     #[test]
-    fn an_unset_key_is_never_claimed_so_restore_cannot_write_an_empty_gvariant() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut store = FakeStore::with(&full_key(), "");
+    fn a_schema_default_binding_is_scanned_without_being_set_in_dconf() {
+        let root = BindingRoot {
+            dir: "/org/cinnamon/desktop/keybindings/",
+            match_policy: MatchPolicy::Subset,
+            schema: Some("org.cinnamon.desktop.keybindings"),
+        };
+        let sources = RootSources {
+            dconf: Some(Ok("[/]\n".to_string())),
+            effective: Some(Ok(
+                "org.cinnamon.desktop.keybindings show-desklets ['<Super>s']\norg.cinnamon.desktop.keybindings custom-list ['custom1']\n"
+                    .to_string(),
+            )),
+        };
+        let scan = assemble_scan(std::iter::once((root, sources)));
+        assert_eq!(scan.entries.len(), 1, "custom-list is not a binding");
+        assert_eq!(scan.entries[0].key, "show-desklets");
+        assert_eq!(scan.entries[0].values, vec!["<Super>s".to_string()]);
+        assert_eq!(scan.entries[0].match_policy, MatchPolicy::Subset);
+    }
 
-        let error = take_over_in(root.path(), &mut store, &orphan_mutation())
-            .expect_err("an unset key has nothing to take back");
-        assert!(
-            error.to_string().contains("nothing to take back"),
-            "{error}"
+    #[test]
+    fn an_effective_default_never_duplicates_an_explicitly_set_value() {
+        let root = BindingRoot {
+            dir: "/org/cinnamon/desktop/keybindings/",
+            match_policy: MatchPolicy::Subset,
+            schema: Some("org.cinnamon.desktop.keybindings"),
+        };
+        let sources = RootSources {
+            dconf: Some(Ok("[/]\nshow-desklets=['<Super>s']\n".to_string())),
+            effective: Some(Ok(
+                "org.cinnamon.desktop.keybindings show-desklets ['<Super>s']\n".to_string(),
+            )),
+        };
+        let scan = assemble_scan(std::iter::once((root, sources)));
+        assert_eq!(scan.entries.len(), 1, "set and effective must dedupe");
+    }
+
+    #[test]
+    fn taking_over_an_unset_key_restores_it_by_resetting_the_key() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::default();
+
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+
+        let summary = restore_all_in(root.path(), &mut store, None);
+        assert_eq!(summary.restored, 1);
+        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+        assert_eq!(
+            store.get(&full_key()),
+            None,
+            "an unset key must be reset, not written an empty value"
         );
         assert_eq!(
             restore_all_in(root.path(), &mut store, None),
             RestoreSummary::default()
+        );
+    }
+
+    #[test]
+    fn a_second_takeover_of_an_unset_key_keeps_reset_semantics() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::default();
+
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("first take over");
+        let mut second = managed_mutation();
+        second.next = "@as []".into();
+        take_over_in(root.path(), &mut store, &second).expect("second take over");
+
+        restore_all_in(root.path(), &mut store, None);
+        assert_eq!(
+            store.get(&full_key()),
+            None,
+            "re-applying must not turn a reset into a written empty value"
         );
     }
 
@@ -675,16 +938,83 @@ mod tests {
 
     #[test]
     fn binding_roots_cover_cinnamon_gnome_and_ibus_without_duplicates() {
-        let mut sorted = BINDING_ROOTS.to_vec();
+        let mut sorted: Vec<&str> = BINDING_ROOTS.iter().map(|root| root.dir).collect();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), BINDING_ROOTS.len(), "duplicate binding root");
         for root in BINDING_ROOTS {
-            assert!(root.starts_with('/'), "root must be absolute: {root}");
-            assert!(root.ends_with('/'), "root must be a dconf dir: {root}");
+            assert!(
+                root.dir.starts_with('/'),
+                "root must be absolute: {}",
+                root.dir
+            );
+            assert!(
+                root.dir.ends_with('/'),
+                "root must be a dconf dir: {}",
+                root.dir
+            );
         }
-        assert!(BINDING_ROOTS.contains(&"/org/cinnamon/desktop/keybindings/"));
-        assert!(BINDING_ROOTS.contains(&"/desktop/ibus/general/hotkey/"));
+        assert!(BINDING_ROOTS
+            .iter()
+            .any(|root| root.dir == "/org/cinnamon/desktop/keybindings/"
+                && root.match_policy == MatchPolicy::Subset));
+        assert!(BINDING_ROOTS
+            .iter()
+            .any(|root| root.dir == "/desktop/ibus/general/hotkey/"
+                && root.match_policy == MatchPolicy::Exact));
+    }
+
+    #[test]
+    fn schema_and_policy_for_sub_roots_resolve_to_the_longest_matching_root() {
+        assert_eq!(
+            schema_for("/org/cinnamon/desktop/keybindings/show-desklets"),
+            Some("org.cinnamon.desktop.keybindings")
+        );
+        assert_eq!(
+            schema_for("/org/cinnamon/desktop/keybindings/wm/close"),
+            Some("org.cinnamon.desktop.keybindings.wm")
+        );
+        assert_eq!(
+            schema_for("/org/cinnamon/desktop/keybindings/media-keys/screenshot"),
+            Some("org.cinnamon.desktop.keybindings.media-keys")
+        );
+        assert_eq!(
+            schema_for("/org/gnome/desktop/wm/keybindings/close"),
+            Some("org.gnome.desktop.wm.keybindings")
+        );
+        assert_eq!(schema_for("/desktop/ibus/general/hotkey/triggers"), None);
+        assert_eq!(schema_for("/org/unknown/root/key"), None);
+        assert_eq!(
+            match_policy_for("/org/cinnamon/desktop/keybindings/wm/close"),
+            MatchPolicy::Subset
+        );
+        assert_eq!(
+            match_policy_for("/org/cinnamon/muffin/keybindings/toggle-maximized"),
+            MatchPolicy::Exact
+        );
+    }
+
+    #[test]
+    fn re_takeover_after_unset_preserves_a_user_rebound_value() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::default();
+
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("first take over");
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+        assert!(ledger::outstanding(root.path())[0].previous_unset);
+
+        store.values.insert(full_key(), "['<Super>x']".into());
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("re take over");
+        let claims = ledger::outstanding(root.path());
+        assert_eq!(claims.len(), 1);
+        assert!(!claims[0].previous_unset);
+        assert_eq!(claims[0].previous, "['<Super>x']");
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+
+        let summary = restore_all_in(root.path(), &mut store, None);
+        assert_eq!(summary.restored, 1);
+        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+        assert_eq!(store.get(&full_key()), Some("['<Super>x']"));
     }
 
     #[test]

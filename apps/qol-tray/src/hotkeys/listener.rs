@@ -13,6 +13,14 @@ use std::time::{Duration, Instant};
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const REASSERT_SCHEDULE: &[Duration] = &[
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(240),
+    Duration::from_secs(420),
+];
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
@@ -101,6 +109,8 @@ fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<
         trace_session: 0,
         next_trace_session: 0,
         next_trace_sequence: 0,
+        reassert_schedule: REASSERT_SCHEDULE,
+        reassert_index: 0,
     }
     .run();
     Err(anyhow!("hotkey listener loop returned unexpectedly"))
@@ -116,12 +126,24 @@ struct HotkeyListenerLoop<'a> {
     trace_session: u64,
     next_trace_session: u64,
     next_trace_sequence: u64,
+    reassert_schedule: &'static [Duration],
+    reassert_index: usize,
 }
 
 impl<'a> HotkeyListenerLoop<'a> {
     fn register_initial_hotkeys(&mut self) {
-        if let Err(error) = self.reload_hotkeys() {
-            log::error!("Failed to register hotkeys: {}", error);
+        match self.reload_hotkeys() {
+            Ok(()) => {
+                qol_runtime::probe!("HOTKEY_LISTENER", "phase=initial-registration outcome=ok");
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "HOTKEY_LISTENER",
+                    "phase=initial-registration outcome=error reason={}",
+                    qol_runtime::probe::token(&error.to_string())
+                );
+                log::error!("Failed to register hotkeys: {}", error);
+            }
         }
     }
 
@@ -134,6 +156,7 @@ impl<'a> HotkeyListenerLoop<'a> {
     fn run(mut self) {
         self.register_initial_hotkeys();
         let hotkey_receiver: &GlobalHotKeyEventReceiver = GlobalHotKeyEvent::receiver();
+        qol_runtime::probe!("HOTKEY_LISTENER", "phase=select-entered");
 
         loop {
             let physical_state_rx: Receiver<Instant> =
@@ -141,6 +164,11 @@ impl<'a> HotkeyListenerLoop<'a> {
                     never()
                 } else {
                     after(super::platform::POLL_INTERVAL)
+                };
+            let reassert_rx: Receiver<Instant> =
+                match self.reassert_schedule.get(self.reassert_index) {
+                    Some(offset) => after(*offset),
+                    None => never(),
                 };
             select! {
                 recv(self.reload_rx) -> reload => {
@@ -155,9 +183,21 @@ impl<'a> HotkeyListenerLoop<'a> {
                     self.handle_hotkey_event(event);
                 }
                 recv(physical_state_rx) -> _ => self.poll_physical_state(),
+                recv(reassert_rx) -> _ => {
+                    self.reassert_index += 1;
+                    self.reassert_hotkeys();
+                }
             }
         }
         self.stop_held_actions(DispatchSource::ForcedStop);
+    }
+
+    fn reassert_hotkeys(&mut self) {
+        qol_runtime::probe!("HOTKEY_LISTENER", "phase=reassert");
+        match self.manager.reassert_all() {
+            Ok(()) => log::info!("Re-asserted hotkey grabs after the desktop settled"),
+            Err(error) => log::error!("Failed to re-assert hotkey grabs: {}", error),
+        }
     }
 
     fn drain_reload_signals(&self) {
@@ -165,15 +205,35 @@ impl<'a> HotkeyListenerLoop<'a> {
     }
 
     fn handle_reload(&mut self) {
+        qol_runtime::probe!("HOTKEY_LISTENER", "phase=reload-received");
         log::info!("Reloading hotkeys...");
         self.stop_held_actions(DispatchSource::ForcedStop);
         match self.reload_hotkeys() {
-            Ok(()) => log::info!("Hotkeys reloaded successfully"),
-            Err(error) => log::error!("Failed to register hotkeys: {}", error),
+            Ok(()) => {
+                qol_runtime::probe!("HOTKEY_LISTENER", "phase=reload-done outcome=ok");
+                log::info!("Hotkeys reloaded successfully");
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "HOTKEY_LISTENER",
+                    "phase=reload-done outcome=error reason={}",
+                    qol_runtime::probe::token(&error.to_string())
+                );
+                log::error!("Failed to register hotkeys: {}", error);
+            }
         }
     }
 
     fn handle_hotkey_event(&mut self, event: GlobalHotKeyEvent) {
+        qol_runtime::probe!(
+            "HOTKEY_LISTENER",
+            "phase=event-received id={} state={}",
+            event.id(),
+            match event.state {
+                global_hotkey::HotKeyState::Pressed => "pressed",
+                global_hotkey::HotKeyState::Released => "released",
+            }
+        );
         let action = self.manager.get_registration(&event).cloned();
         let Some(dispatch) = self.held_actions.handle_event(event, action.as_ref()) else {
             return;

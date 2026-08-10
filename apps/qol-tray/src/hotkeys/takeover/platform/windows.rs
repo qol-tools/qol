@@ -22,6 +22,18 @@ pub(crate) fn write(_full_key: &str, _value: &str) -> Result<(), HostFailure> {
     Err(unsupported("dconf"))
 }
 
+pub(crate) fn list_schema(_schema: &str) -> Result<String, HostFailure> {
+    Err(unsupported("gsettings"))
+}
+
+pub(crate) fn reset(_full_key: &str) -> Result<(), HostFailure> {
+    Err(unsupported("dconf"))
+}
+
+pub(crate) fn get_schema_value(_schema: &str, _key: &str) -> Result<String, HostFailure> {
+    Err(unsupported("gsettings"))
+}
+
 pub(crate) fn compositor() -> Option<Compositor> {
     None
 }

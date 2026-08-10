@@ -228,11 +228,11 @@ const CLAUDE_DONE: &str = "\u{273B} Brewed for 1m";
 const KIMI_PICKER: &str = "? Choose a repair strategy\n\n\u{2192} [1] Repair now\n  [2] Defer\n\n\u{2191}\u{2193} select 1-2 / \u{21B5} choose \u{2190}/\u{2192} tab switch esc cancel";
 const KIMI_TRANSITION: &str = "Collected your answers\nQ  Which repair?\n\u{2192} Repair now";
 const KIMI_WORKING: &str =
-    "Collected your answers\nQ  Which repair?\n\u{2192} Repair now\n\n\u{280B} thinking...";
+    "Collected your answers\nQ  Which repair?\n\u{2192} Repair now\n\n\u{280B} thinking...\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)";
 const KIMI_EDITING_QUESTIONNAIRE: &str =
     include_str!("fixtures/kimi_real/questionnaire_editing.txt");
 const KIMI_STALE_LINE: &str =
-    "\u{280B} working... \u{00B7} Tip: ask Kimi to schedule tasks\n\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]";
+    "\u{280B} working... \u{00B7} Tip: ask Kimi to schedule tasks\n\n\u{256D}\u{2500}\u{2500}\u{2500}\u{256E}\n\u{2502} >  \u{2502}\n\u{2570}\u{2500}\u{2500}\u{2500}\u{256F}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)";
 const CODEX_WORKING_LINE: &str = "  esc to interrupt ";
 const CODEX_ANSWER_LIST: &str = "What remains:\n1. Add golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag\n4. Rename the WIP commit";
 
