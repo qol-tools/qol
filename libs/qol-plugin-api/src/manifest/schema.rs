@@ -276,6 +276,8 @@ pub struct PluginInfo {
     pub author: Option<String>,
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub auto_install_host: bool,
 }
 
 impl PluginInfo {

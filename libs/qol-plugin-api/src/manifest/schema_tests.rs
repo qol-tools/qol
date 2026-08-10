@@ -10,7 +10,20 @@ fn make_plugin_info(platforms: Option<Vec<&str>>) -> PluginInfo {
         version: "1.0.0".to_string(),
         author: None,
         platforms: platforms.map(|items| items.into_iter().map(String::from).collect()),
+        auto_install_host: false,
     }
+}
+
+#[test]
+fn auto_install_host_defaults_to_false_and_parses_true() {
+    let manifest: PluginManifest = toml::from_str(TRAITS_MANIFEST_HEAD).unwrap();
+    assert!(!manifest.plugin.auto_install_host);
+    let opted_in = TRAITS_MANIFEST_HEAD.replace(
+        "version = \"0.0.0\"",
+        "version = \"0.0.0\"\nauto_install_host = true",
+    );
+    let manifest: PluginManifest = toml::from_str(&opted_in).unwrap();
+    assert!(manifest.plugin.auto_install_host);
 }
 
 #[test]
