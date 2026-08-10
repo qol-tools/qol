@@ -42,6 +42,14 @@ pub(super) fn dismiss(reason: &'static str, hidden: bool) {
     let _ = (reason, hidden);
 }
 
+pub(super) fn collapse(collapsed: bool) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!("CLI_SESSIONS_COLLAPSE", "collapsed={collapsed}");
+
+    #[cfg(not(debug_assertions))]
+    let _ = collapsed;
+}
+
 pub(super) fn focus_start(reason: &'static str, id: &SessionId) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!("CLI_SESSIONS_FOCUS", "phase=start reason={reason} id={id}");

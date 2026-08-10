@@ -1,3 +1,4 @@
+pub mod collapse;
 pub mod nav;
 pub mod notify;
 pub mod placement;
@@ -9,11 +10,14 @@ mod trace;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
+use gpui::{
+    App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, WeakEntity, Window,
+};
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
+use crate::ui::placement::Corner;
 use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
@@ -25,6 +29,7 @@ pub struct SessionsView {
     pub host: Arc<dyn TerminalHost + Send + Sync>,
     selection: Selection,
     is_showing: bool,
+    collapse_state: collapse::CollapseState,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -33,6 +38,7 @@ impl SessionsView {
     pub fn new(
         registry: Arc<Mutex<Registry>>,
         host: Arc<dyn TerminalHost + Send + Sync>,
+        corner: Corner,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -40,6 +46,7 @@ impl SessionsView {
             host,
             selection: Selection::default(),
             is_showing: true,
+            collapse_state: collapse::CollapseState::new(corner),
             last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
@@ -55,6 +62,28 @@ impl SessionsView {
 
     pub fn set_showing(&mut self, showing: bool) {
         self.is_showing = showing;
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.collapse_state.is_collapsed()
+    }
+
+    pub fn collapse_panel(&mut self, window: &mut Window) {
+        let expanded = window.bounds();
+        let strip = self.collapse_state.collapse(expanded);
+        trace::collapse(true);
+        apply_panel_bounds(window, strip);
+        window.focus(&self.focus_handle);
+    }
+
+    pub fn expand_panel(&mut self, window: &mut Window) -> bool {
+        let Some(expanded) = self.collapse_state.expand() else {
+            return false;
+        };
+        trace::collapse(false);
+        apply_panel_bounds(window, expanded);
+        window.focus(&self.focus_handle);
+        true
     }
 
     pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
@@ -227,4 +256,9 @@ impl Focusable for SessionsView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+fn apply_panel_bounds(window: &mut Window, bounds: Bounds<Pixels>) {
+    qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
+    qol_gpui::popup_window::sync_window_layout(WINDOW_TITLE, window, bounds.origin, bounds.size);
 }

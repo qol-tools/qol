@@ -2,8 +2,8 @@ use std::sync::LazyLock;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, SharedString,
-    Window,
+    div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
+    MouseButton, SharedString, Window,
 };
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
@@ -103,7 +103,68 @@ fn meta_value(s: &SessionState) -> String {
     format_elapsed(s.last_activity)
 }
 
-fn header(rows: &[SessionState]) -> impl IntoElement {
+fn summary_groups_el(rows: &[SessionState]) -> impl IntoElement {
+    let palette = current_palette();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(9.0))
+        .children(summary_groups(rows).into_iter().map(|(color, count)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(rgb(color)))
+                .child(
+                    div()
+                        .text_color(rgb(palette.text_secondary))
+                        .text_size(px(11.0))
+                        .child(format!("{count}")),
+                )
+        }))
+}
+
+fn header_button(
+    id: &'static str,
+    glyph: &'static str,
+    activate: fn(&mut SessionsView, &mut Window, &mut Context<SessionsView>),
+    cx: &mut Context<SessionsView>,
+) -> impl IntoElement {
+    let palette = current_palette();
+    div()
+        .id(id)
+        .focusable()
+        .tab_stop(true)
+        .w(px(24.0))
+        .h(px(24.0))
+        .rounded_md()
+        .border_1()
+        .border_color(rgba(palette.transparent_rgba))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(palette.text_secondary))
+        .text_size(px(13.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
+        .in_focus(|style| style.border_color(rgb(palette.selection_border)))
+        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
+        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            if matches!(event, ClickEvent::Mouse(_)) {
+                activate(this, window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
+            if matches!(ev.keystroke.key.as_str(), "enter" | "space") {
+                activate(this, window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(glyph)
+}
+
+fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoElement {
     let palette = current_palette();
     div()
         .h(px(34.0))
@@ -124,21 +185,31 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("CLI SESSIONS"),
         )
-        .child(div().flex().items_center().gap(px(9.0)).children(
-            summary_groups(rows).into_iter().map(|(color, count)| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(rgb(color)))
-                    .child(
-                        div()
-                            .text_color(rgb(palette.text_secondary))
-                            .text_size(px(11.0))
-                            .child(format!("{count}")),
-                    )
-            }),
-        ))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(9.0))
+                .child(summary_groups_el(rows))
+                .child(header_button(
+                    "collapse-panel-button",
+                    "\u{2581}",
+                    |this, window, cx| {
+                        this.collapse_panel(window);
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(header_button(
+                    "hide-panel-button",
+                    "\u{00D7}",
+                    |this, _window, cx| {
+                        this.dismiss_with_reason("hide-button");
+                        cx.notify();
+                    },
+                    cx,
+                )),
+        )
 }
 
 fn empty_state() -> impl IntoElement {
@@ -402,28 +473,87 @@ fn session_row(
         } else {
             rgba(palette.transparent_rgba)
         })
+        .cursor(CursorStyle::PointingHand)
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }))
         .child(
             div()
+                .relative()
                 .w_full()
                 .bg(rgba(tint))
                 .border_b_1()
                 .border_color(rgb(palette.divider))
-                .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .px(px(10.0))
-                .py(px(9.0))
-                .child(identity_line(s))
-                .child(status_line(s, index, cx)),
+                .child(
+                    div()
+                        .id(("row-hover", index))
+                        .absolute()
+                        .inset_0()
+                        .hover(|style| style.bg(rgba(palette.keycap_bg_rgba))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .child(identity_line(s))
+                        .child(status_line(s, index, cx)),
+                ),
         )
 }
 
-impl Render for SessionsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl SessionsView {
+    fn render_strip(&self, cx: &mut Context<Self>) -> AnyElement {
+        let rows = self.rows();
+        let palette = current_palette();
+        div()
+            .id("cli-sessions-strip")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(12.0))
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(palette.border))
+            .bg(rgb(palette.chrome_bg))
+            .font_family(SharedString::from("Menlo"))
+            .cursor(CursorStyle::PointingHand)
+            .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                if matches!(event, ClickEvent::Mouse(_)) {
+                    this.expand_panel(window);
+                    cx.notify();
+                }
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match ev.keystroke.key.as_str() {
+                    "enter" | "space" | "up" => {
+                        this.expand_panel(window);
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    "escape" => {
+                        this.dismiss_with_reason("escape");
+                    }
+                    _ => {}
+                }
+            }))
+            .child(summary_groups_el(&rows))
+            .child(
+                div()
+                    .text_color(rgb(palette.text_heading))
+                    .text_size(px(12.0))
+                    .child("\u{25B2}"),
+            )
+            .into_any_element()
+    }
+
+    fn render_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let rows = self.rows();
         let palette = current_palette();
         let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
@@ -447,8 +577,15 @@ impl Render for SessionsView {
             .border_color(rgb(palette.border))
             .bg(rgb(palette.panel_bg))
             .font_family(SharedString::from("Menlo"))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match ev.keystroke.key.as_str() {
+                    "tab" => {
+                        if ev.keystroke.modifiers.shift {
+                            window.focus_prev();
+                        } else {
+                            window.focus_next();
+                        }
+                    }
                     "down" | "j" => {
                         this.move_selection_down();
                         cx.notify();
@@ -479,7 +616,7 @@ impl Render for SessionsView {
                     _ => {}
                 }
             }))
-            .child(header(&rows))
+            .child(header(&rows, cx))
             .child(
                 div()
                     .id("cli-sessions-list")
@@ -491,5 +628,16 @@ impl Render for SessionsView {
                     .children(row_els),
             )
             .child(footer())
+            .into_any_element()
+    }
+}
+
+impl Render for SessionsView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.is_collapsed() {
+            self.render_strip(cx)
+        } else {
+            self.render_panel(cx)
+        }
     }
 }

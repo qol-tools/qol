@@ -186,7 +186,7 @@ fn open_panel(
     let title = WINDOW_TITLE.to_string();
     let result = qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
         window.set_window_title(WINDOW_TITLE);
-        SessionsView::new(registry, host, cx)
+        SessionsView::new(registry, host, corner, cx)
     });
     let handle = match result {
         Ok(h) => h,
@@ -386,6 +386,9 @@ fn show_panel(handle: PanelHandle, cx: &mut gpui::App) -> bool {
     trace::open_command(shown);
     let updated = handle
         .update(cx, |view, window, cx| {
+            if view.is_collapsed() {
+                view.expand_panel(window);
+            }
             view.set_showing(true);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
