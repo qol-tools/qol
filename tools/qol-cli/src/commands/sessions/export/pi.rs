@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::commands::sessions::contract::{tool_specs, ToolSpec};
 
 const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { Type } from "typebox";
 
 const BRIDGE_TIMEOUT_MS = 86_410_000;
@@ -13,20 +13,50 @@ const LOOP_PHASES = new Set(["idle", "waiting", "review", "closing", "paused"]);
 const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining. Do not stop at a round boundary.`;
 const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close. Do not add or remove sections.`;
 
-function run(args, timeoutMs, input) {
-  const result = spawnSync("qol", ["sessions", ...args], {
-    encoding: "utf-8",
-    timeout: timeoutMs ?? 60_000,
-    input,
+function run(args, timeoutMs, input, signal) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("qol", ["sessions", ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer = null;
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      fn();
+    };
+    const onAbort = () => {
+      child.kill("SIGTERM");
+      settle(() => reject(new Error("qol sessions aborted by the host")));
+    };
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle(() => reject(new Error(`qol sessions timed out after ${timeoutMs ?? 60_000}ms`)));
+    }, timeoutMs ?? 60_000);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => settle(() => reject(new Error(`qol sessions failed: ${error.message}`))));
+    child.on("close", (code, childSignal) => settle(() => {
+      if (childSignal) {
+        reject(new Error(`qol sessions exited with ${childSignal}`));
+        return;
+      }
+      if (code !== 0) {
+        const message = stderr.trim() || stdout.trim();
+        reject(new Error(message || `qol sessions exited with ${code}`));
+        return;
+      }
+      resolve(stdout.trim());
+    }));
+    child.stdin.end(input ?? "");
   });
-  if (result.error) {
-    throw new Error(`qol sessions failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const message = (result.stderr ?? "").trim() || (result.stdout ?? "").trim();
-    throw new Error(message || `qol sessions exited with ${result.status}`);
-  }
-  return (result.stdout ?? "").trim();
 }
 
 function assistantText(messages) {
@@ -90,8 +120,8 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
   });
 "#;
 
-const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _onUpdate) {
-      const stdout = run(["list", "--json"]);
+const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _onUpdate) {
+      const stdout = await run(["list", "--json"], 60_000, undefined, signal);
       const rows = JSON.parse(stdout);
       const text = rows
         .map(
@@ -103,10 +133,10 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, _signal, _
     },
 "#;
 
-const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
       if (params.surface != null) args.push("--surface", params.surface);
-      const stdout = run(args, 60_000);
+      const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       const text = outcome.reused
         ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
@@ -115,13 +145,13 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, _signal, _
     },
 "#;
 
-const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
       args.push("--", params.task);
       setLoopPhase("waiting");
       try {
-        const stdout = run(args, BRIDGE_TIMEOUT_MS);
+        const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
         const outcome = JSON.parse(stdout);
         setLoopPhase(outcome.completed ? "review" : "paused");
         const text = outcome.completed
@@ -140,9 +170,9 @@ const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, _signal, 
     },
 "#;
 
-const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
+const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_loop_close", arguments: params } };
-      const response = JSON.parse(run(["mcp"], 10_000, `${JSON.stringify(request)}\n`));
+      const response = JSON.parse(await run(["mcp"], 10_000, `${JSON.stringify(request)}\n`, signal));
       const result = response?.result;
       const text = result?.content?.[0]?.text;
       if (result?.isError || typeof text !== "string") throw new Error(text || "session_loop_close failed");
@@ -155,8 +185,8 @@ const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, _sign
     },
 "#;
 
-const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, _signal, _onUpdate) {
-      const stdout = run(["close", params.session], 30_000);
+const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const stdout = await run(["close", params.session], 30_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       return {
         content: [{ type: "text", text: `closed session ${outcome.session} (${outcome.tool}, key ${outcome.key})` }],
@@ -322,5 +352,27 @@ mod tests {
         assert!(source.contains("name: \"session_loop_close\""));
         assert!(source.contains("run([\"mcp\"], 10_000"));
         assert!(source.contains("setLoopPhase(\"closing\", receipt.final_report)"));
+    }
+
+    #[test]
+    fn pi_adapter_never_blocks_the_host_event_loop() {
+        let source = pi_extension().expect("render");
+        assert!(!source.contains("spawnSync"));
+        assert!(source.contains("import { spawn } from \"node:child_process\";"));
+        assert!(source.contains("signal?.addEventListener(\"abort\", onAbort"));
+        assert!(source.contains("await run(args, BRIDGE_TIMEOUT_MS, undefined, signal)"));
+        assert!(EXECUTE_BRIDGE.contains("setLoopPhase(\"waiting\")"));
+        for template in [
+            EXECUTE_LIST,
+            EXECUTE_SPAWN,
+            EXECUTE_BRIDGE,
+            EXECUTE_LOOP_CLOSE,
+            EXECUTE_CLOSE,
+        ] {
+            assert!(
+                template.contains("signal") && template.contains("await run("),
+                "every pi tool must await the async child run with the host signal"
+            );
+        }
     }
 }
