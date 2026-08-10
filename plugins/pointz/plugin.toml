@@ -40,5 +40,5 @@ protocol = "udp"
 
 [[dependencies.binaries]]
 name = "pointzerver"
-repo = "qol-tools/pointzerver"
+repo = "qol-tools/plugin-pointz"
 pattern = "pointzerver-{os}-{arch}"
