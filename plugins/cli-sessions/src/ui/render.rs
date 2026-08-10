@@ -5,7 +5,7 @@ use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
     MouseButton, SharedString, Window,
 };
-use qol_gpui::surface::PanelDragArea;
+use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 use qol_terminal_sessions::SessionId;
 
@@ -13,6 +13,10 @@ use crate::session::registry::SessionState;
 use crate::session::status::Status;
 use crate::session::tool::Tool;
 use crate::ui::SessionsView;
+
+const HIDE_BUTTON_REASON: &str = "hide-button";
+const ESCAPE_REASON: &str = "escape";
+const STRIP_ESCAPE_REASON: &str = "strip-escape";
 
 static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_runtime);
 
@@ -124,6 +128,10 @@ fn summary_groups_el(rows: &[SessionState]) -> impl IntoElement {
         }))
 }
 
+fn accepts_activation_click(event: &ClickEvent) -> bool {
+    matches!(event, ClickEvent::Mouse(_))
+}
+
 fn header_button(
     id: &'static str,
     glyph: &'static str,
@@ -150,13 +158,15 @@ fn header_button(
         .in_focus(|style| style.border_color(rgb(palette.selection_border)))
         .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-            if matches!(event, ClickEvent::Mouse(_)) {
+            if accepts_activation_click(event) {
                 activate(this, window, cx);
                 cx.stop_propagation();
             }
         }))
         .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
-            if matches!(ev.keystroke.key.as_str(), "enter" | "space") {
+            if matches!(ev.keystroke.key.as_str(), "enter" | "space")
+                && this.key_repeat_guard(&ev.keystroke.key)
+            {
                 activate(this, window, cx);
                 cx.stop_propagation();
             }
@@ -204,7 +214,7 @@ fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoEle
                     "hide-panel-button",
                     "\u{00D7}",
                     |this, _window, cx| {
-                        this.dismiss_with_reason("hide-button");
+                        this.dismiss_with_reason(HIDE_BUTTON_REASON);
                         cx.notify();
                     },
                     cx,
@@ -505,6 +515,31 @@ fn session_row(
         )
 }
 
+enum StripAction {
+    Expand,
+    Dismiss,
+}
+
+fn strip_key_action(key: &str) -> Option<StripAction> {
+    match key {
+        "enter" | "space" | "up" => Some(StripAction::Expand),
+        "escape" => Some(StripAction::Dismiss),
+        _ => None,
+    }
+}
+
+fn strip_click_activates(event: &ClickEvent, gesture: &DragGestureState) -> bool {
+    let ClickEvent::Mouse(click) = event else {
+        return false;
+    };
+    if gesture.is_moving() {
+        return false;
+    }
+    let dx = click.up.position.x.to_f64() - click.down.position.x.to_f64();
+    let dy = click.up.position.y.to_f64() - click.down.position.y.to_f64();
+    (dx * dx + dy * dy).sqrt() < gesture.threshold()
+}
+
 impl SessionsView {
     fn render_strip(&self, cx: &mut Context<Self>) -> AnyElement {
         let rows = self.rows();
@@ -523,27 +558,29 @@ impl SessionsView {
             .bg(rgb(palette.chrome_bg))
             .font_family(SharedString::from("Menlo"))
             .cursor(CursorStyle::OpenHand)
-            .panel_drag_after(4.0)
+            .panel_drag_after(&self.drag_gesture)
             .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                if matches!(event, ClickEvent::Mouse(_)) {
+                if strip_click_activates(event, &this.drag_gesture.borrow()) {
                     this.expand_panel(window);
                     cx.notify();
                 }
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                match ev.keystroke.key.as_str() {
-                    "enter" | "space" | "up" => {
-                        this.expand_panel(window);
-                        cx.notify();
+            .on_key_down(cx.listener(
+                |this, ev: &KeyDownEvent, window, cx| match strip_key_action(&ev.keystroke.key) {
+                    Some(StripAction::Expand) => {
+                        if this.key_repeat_guard(&ev.keystroke.key) {
+                            this.expand_panel(window);
+                            cx.notify();
+                        }
                         cx.stop_propagation();
                     }
-                    "escape" => {
-                        this.dismiss_with_reason("escape");
+                    Some(StripAction::Dismiss) => {
+                        this.dismiss_with_reason(STRIP_ESCAPE_REASON);
                     }
-                    _ => {}
-                }
-            }))
+                    None => {}
+                },
+            ))
             .child(summary_groups_el(&rows))
             .child(
                 div()
@@ -569,6 +606,7 @@ impl SessionsView {
         div()
             .id("cli-sessions")
             .track_focus(&self.focus_handle)
+            .tab_stop(true)
             .size_full()
             .flex()
             .flex_col()
@@ -604,15 +642,17 @@ impl SessionsView {
                         cx.notify();
                     }
                     "enter" => {
-                        this.focus_selected(cx);
-                        cx.notify();
+                        if this.key_repeat_guard("enter") {
+                            this.focus_selected(cx);
+                            cx.notify();
+                        }
                     }
                     "a" => {
                         this.acknowledge_selected();
                         cx.notify();
                     }
                     "escape" => {
-                        this.dismiss_with_reason("escape");
+                        this.dismiss_with_reason(ESCAPE_REASON);
                     }
                     _ => {}
                 }
@@ -640,5 +680,111 @@ impl Render for SessionsView {
         } else {
             self.render_panel(cx)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{
+        point, px, Bounds, KeyboardButton, KeyboardClickEvent, Modifiers, MouseButton,
+        MouseClickEvent, MouseDownEvent, MouseUpEvent,
+    };
+
+    fn mouse_down(x: f32, y: f32) -> MouseDownEvent {
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(x), px(y)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+    }
+
+    fn mouse_up(x: f32, y: f32) -> MouseUpEvent {
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position: point(px(x), px(y)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        }
+    }
+
+    fn mouse_click(down: (f32, f32), up: (f32, f32)) -> ClickEvent {
+        ClickEvent::Mouse(MouseClickEvent {
+            down: mouse_down(down.0, down.1),
+            up: mouse_up(up.0, up.1),
+        })
+    }
+
+    fn keyboard_click() -> ClickEvent {
+        ClickEvent::Keyboard(KeyboardClickEvent {
+            button: KeyboardButton::Enter,
+            bounds: Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(1.0), px(1.0))),
+        })
+    }
+
+    fn gesture(moving: bool) -> DragGestureState {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(point(px(0.0), px(0.0)));
+        if moving {
+            g.on_move(point(px(10.0), px(0.0)), true);
+        }
+        g
+    }
+
+    #[test]
+    fn activation_clicks_accept_mouse_and_reject_keyboard() {
+        assert!(accepts_activation_click(&mouse_click(
+            (1.0, 1.0),
+            (1.0, 1.0)
+        )));
+        assert!(!accepts_activation_click(&keyboard_click()));
+    }
+
+    #[test]
+    fn strip_clicks_expand_only_for_still_mouse_clicks() {
+        assert!(strip_click_activates(
+            &mouse_click((1.0, 1.0), (1.0, 1.0)),
+            &gesture(false)
+        ));
+        assert!(!strip_click_activates(&keyboard_click(), &gesture(false)));
+        assert!(!strip_click_activates(
+            &mouse_click((1.0, 1.0), (1.0, 1.0)),
+            &gesture(true)
+        ));
+        assert!(!strip_click_activates(
+            &mouse_click((0.0, 0.0), (6.0, 0.0)),
+            &gesture(false)
+        ));
+        assert!(strip_click_activates(
+            &mouse_click((0.0, 0.0), (3.0, 0.0)),
+            &gesture(false)
+        ));
+    }
+
+    #[test]
+    fn strip_key_mapping_keeps_the_panel_contract() {
+        for key in ["enter", "space", "up"] {
+            assert!(
+                matches!(strip_key_action(key), Some(StripAction::Expand)),
+                "{key}"
+            );
+        }
+        assert!(matches!(
+            strip_key_action("escape"),
+            Some(StripAction::Dismiss)
+        ));
+        for key in ["tab", "down", "a", "x"] {
+            assert!(matches!(strip_key_action(key), None), "{key}");
+        }
+    }
+
+    #[test]
+    fn dismiss_reasons_are_distinct_per_surface() {
+        assert_eq!(HIDE_BUTTON_REASON, "hide-button");
+        assert_eq!(ESCAPE_REASON, "escape");
+        assert_eq!(STRIP_ESCAPE_REASON, "strip-escape");
+        assert_ne!(ESCAPE_REASON, STRIP_ESCAPE_REASON);
     }
 }

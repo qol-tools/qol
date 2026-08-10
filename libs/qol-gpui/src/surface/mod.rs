@@ -23,6 +23,60 @@ pub enum SurfaceKind {
     Panel,
 }
 
+pub struct DragGestureState {
+    press: Option<Point<Pixels>>,
+    moving: bool,
+    threshold: f64,
+}
+
+impl DragGestureState {
+    pub fn new(threshold_px: f32) -> Self {
+        Self {
+            press: None,
+            moving: false,
+            threshold: f64::from(threshold_px),
+        }
+    }
+
+    pub fn on_down(&mut self, position: Point<Pixels>) {
+        self.press = Some(position);
+        self.moving = false;
+    }
+
+    pub fn on_move(&mut self, position: Point<Pixels>, dragging: bool) -> bool {
+        let Some(start) = self.press else {
+            return false;
+        };
+        if !dragging || self.moving {
+            return false;
+        }
+        if moved_past(start, position, self.threshold) {
+            self.moving = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn on_up(&mut self) {
+        self.press = None;
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.moving
+    }
+
+    pub fn threshold(&self) -> f64 {
+        self.threshold
+    }
+}
+
+fn moved_past(start: Point<Pixels>, current: Point<Pixels>, threshold: f64) -> bool {
+    let dx = current.x.to_f64() - start.x.to_f64();
+    let dy = current.y.to_f64() - start.y.to_f64();
+    (dx * dx + dy * dy).sqrt() >= threshold
+}
+
 /// Marks non-interactive panel chrome as a native window drag area.
 ///
 /// The surface root cannot safely own this listener because mouse events from
@@ -35,35 +89,23 @@ pub trait PanelDragArea: InteractiveElement + Sized {
         })
     }
 
-    fn panel_drag_after(self, threshold: f32) -> Self {
-        let press: Rc<Cell<Option<Point<Pixels>>>> = Rc::new(Cell::new(None));
-        let moving: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-        let threshold = Pixels::from(threshold);
-        let press_down = press.clone();
-        let moving_down = moving.clone();
-        let press_move = press.clone();
-        let moving_move = moving.clone();
-        let press_up = press;
+    fn panel_drag_after(self, gesture: &Rc<RefCell<DragGestureState>>) -> Self {
+        let down = gesture.clone();
+        let r#move = gesture.clone();
+        let up = gesture.clone();
         self.on_mouse_down(MouseButton::Left, move |event, _, _| {
-            press_down.set(Some(event.position));
-            moving_down.set(false);
+            down.borrow_mut().on_down(event.position);
         })
         .on_mouse_move(move |event, window, _| {
-            let Some(start) = press_move.get() else {
-                return;
-            };
-            if !event.dragging() || moving_move.get() {
-                return;
-            }
-            let dx = event.position.x.to_f64() - start.x.to_f64();
-            let dy = event.position.y.to_f64() - start.y.to_f64();
-            if (dx * dx + dy * dy).sqrt() >= threshold.to_f64() {
-                moving_move.set(true);
+            if r#move
+                .borrow_mut()
+                .on_move(event.position, event.dragging())
+            {
                 crate::platform::start_window_move(window);
             }
         })
         .on_mouse_up(MouseButton::Left, move |_, _, _| {
-            press_up.set(None);
+            up.borrow_mut().on_up();
         })
     }
 }
@@ -1159,13 +1201,71 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 #[cfg(test)]
 mod tests {
     use super::{
-        resolved_app_id, reveal_cancelled, viewport_matches, RevealReadiness, Surface,
-        SurfaceDismisser, SurfaceKind,
+        resolved_app_id, reveal_cancelled, viewport_matches, DragGestureState, RevealReadiness,
+        Surface, SurfaceDismisser, SurfaceKind,
     };
     use crate::placement::MonitorPlacement;
-    use gpui::{px, size, WindowKind};
+    use gpui::{point, px, size, Pixels, WindowKind};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    fn at(x: f32, y: f32) -> gpui::Point<Pixels> {
+        point(px(x), px(y))
+    }
+
+    #[test]
+    fn drag_gesture_plain_click_never_starts_a_move() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(10.0, 10.0));
+        assert!(!g.on_move(at(11.0, 10.0), true));
+        assert!(!g.is_moving());
+        g.on_up();
+        assert!(!g.is_moving());
+    }
+
+    #[test]
+    fn drag_gesture_starts_exactly_once_past_the_threshold() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(3.9, 0.0), true));
+        assert!(g.on_move(at(4.0, 0.0), true));
+        assert!(g.is_moving());
+        assert!(!g.on_move(at(100.0, 100.0), true));
+        assert!(!g.on_move(at(0.0, 0.0), true));
+        g.on_up();
+        assert!(g.is_moving());
+    }
+
+    #[test]
+    fn drag_gesture_ignores_moves_without_a_press_or_button() {
+        let mut g = DragGestureState::new(4.0);
+        assert!(!g.on_move(at(50.0, 50.0), true));
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(50.0, 50.0), false));
+        assert!(!g.is_moving());
+        g.on_up();
+        assert!(!g.on_move(at(50.0, 50.0), true));
+    }
+
+    #[test]
+    fn drag_gesture_next_press_resets_the_machine() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(g.on_move(at(10.0, 0.0), true));
+        assert!(g.is_moving());
+        g.on_down(at(30.0, 30.0));
+        assert!(!g.is_moving());
+        assert!(!g.on_move(at(32.0, 30.0), true));
+        assert!(g.on_move(at(35.0, 30.0), true));
+    }
+
+    #[test]
+    fn drag_gesture_threshold_uses_euclidean_distance() {
+        let mut g = DragGestureState::new(5.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(3.0, 3.0), true));
+        assert!(g.on_move(at(4.0, 3.0), true));
+    }
 
     #[test]
     fn surface_app_id_defaults_to_the_unique_title_and_accepts_a_stable_override() {

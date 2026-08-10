@@ -17,6 +17,26 @@ pub fn strip_bounds(expanded: Bounds<Pixels>, corner: Corner, strip_height: f32)
     )
 }
 
+pub fn reanchor_expanded(
+    expanded: Bounds<Pixels>,
+    strip: Bounds<Pixels>,
+    corner: Corner,
+) -> Bounds<Pixels> {
+    let x = match corner {
+        Corner::TopLeft | Corner::BottomLeft => strip.origin.x,
+        Corner::TopRight | Corner::BottomRight => {
+            strip.origin.x + strip.size.width - expanded.size.width
+        }
+    };
+    let y = match corner {
+        Corner::TopLeft | Corner::TopRight => strip.origin.y,
+        Corner::BottomLeft | Corner::BottomRight => {
+            strip.origin.y + strip.size.height - expanded.size.height
+        }
+    };
+    Bounds::new(point(x, y), expanded.size)
+}
+
 pub struct CollapseState {
     corner: Corner,
     collapsed: bool,
@@ -34,6 +54,10 @@ impl CollapseState {
 
     pub fn is_collapsed(&self) -> bool {
         self.collapsed
+    }
+
+    pub fn corner(&self) -> Corner {
+        self.corner
     }
 
     pub fn collapse(&mut self, expanded: Bounds<Pixels>) -> Bounds<Pixels> {

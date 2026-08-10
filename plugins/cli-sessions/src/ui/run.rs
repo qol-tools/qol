@@ -380,13 +380,20 @@ fn open_or_show_panel(
     *panel.borrow_mut() = open_panel(registry, host, corner, cx);
 }
 
+fn expand_on_open(collapsed: bool) -> bool {
+    collapsed
+}
+
 fn show_panel(handle: PanelHandle, cx: &mut gpui::App) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("open-command");
     let shown = qol_gpui::popup_window::show_window_by_title(WINDOW_TITLE);
     trace::open_command(shown);
+    if !shown {
+        return false;
+    }
     let updated = handle
         .update(cx, |view, window, cx| {
-            if view.is_collapsed() {
+            if expand_on_open(view.is_collapsed()) {
                 view.expand_panel(window);
             }
             view.set_showing(true);
@@ -454,6 +461,12 @@ fn next_attention_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_action_expands_only_a_collapsed_panel() {
+        assert!(expand_on_open(true));
+        assert!(!expand_on_open(false));
+    }
 
     #[test]
     fn hidden_reconcile_interval_is_slower_than_visible() {

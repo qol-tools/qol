@@ -1,5 +1,5 @@
 use gpui::{point, px, size, Bounds};
-use plugin_cli_sessions::collapse::{strip_bounds, CollapseState, STRIP_HEIGHT};
+use plugin_cli_sessions::collapse::{reanchor_expanded, strip_bounds, CollapseState, STRIP_HEIGHT};
 use plugin_cli_sessions::placement::Corner;
 use proptest::prelude::*;
 
@@ -87,6 +87,68 @@ fn open_while_collapsed_restores_the_expanded_bounds_exactly() {
     let shown = state.expand().expect("open expands");
     assert_eq!(shown, expanded);
     assert!(!state.is_collapsed());
+}
+
+#[test]
+fn collapse_anchors_the_strip_at_each_corner_through_the_state() {
+    let expanded = expanded_bounds();
+    let cases = [
+        (Corner::TopLeft, 80.0),
+        (Corner::TopRight, 80.0),
+        (Corner::BottomLeft, 80.0 + 400.0 - f64::from(STRIP_HEIGHT)),
+        (Corner::BottomRight, 80.0 + 400.0 - f64::from(STRIP_HEIGHT)),
+    ];
+    for (corner, expected_y) in cases {
+        let mut state = CollapseState::new(corner);
+        let strip = state.collapse(expanded);
+        assert_eq!(strip.origin.y.to_f64(), expected_y, "{corner:?} origin.y");
+        assert_eq!(
+            strip.size.height.to_f64(),
+            f64::from(STRIP_HEIGHT),
+            "{corner:?} height"
+        );
+        assert_eq!(
+            strip,
+            strip_bounds(expanded, corner, STRIP_HEIGHT),
+            "{corner:?} strip"
+        );
+    }
+}
+
+#[test]
+fn reanchor_keeps_an_unmoved_strip_at_the_same_bounds() {
+    let expanded = expanded_bounds();
+    for corner in [
+        Corner::TopLeft,
+        Corner::TopRight,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+    ] {
+        let strip = strip_bounds(expanded, corner, STRIP_HEIGHT);
+        assert_eq!(
+            reanchor_expanded(expanded, strip, corner),
+            expanded,
+            "{corner:?} unmoved strip"
+        );
+    }
+}
+
+#[test]
+fn reanchor_follows_a_dragged_strip_per_corner() {
+    let expanded = expanded_bounds();
+    let moved = Bounds::new(point(px(700.0), px(500.0)), size(px(360.0), px(32.0)));
+    let cases = [
+        (Corner::TopLeft, 700.0, 500.0),
+        (Corner::TopRight, 700.0, 500.0),
+        (Corner::BottomLeft, 700.0, 500.0 + 32.0 - 400.0),
+        (Corner::BottomRight, 700.0, 500.0 + 32.0 - 400.0),
+    ];
+    for (corner, expected_x, expected_y) in cases {
+        let anchored = reanchor_expanded(expanded, moved, corner);
+        assert_eq!(anchored.size, expanded.size, "{corner:?} size");
+        assert_eq!(anchored.origin.x.to_f64(), expected_x, "{corner:?} x");
+        assert_eq!(anchored.origin.y.to_f64(), expected_y, "{corner:?} y");
+    }
 }
 
 proptest! {

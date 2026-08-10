@@ -9,10 +9,12 @@ mod trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, WeakEntity, Window,
 };
+use qol_gpui::surface::DragGestureState;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
@@ -22,6 +24,8 @@ use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
 
+const KEY_REPEAT_WINDOW: Duration = Duration::from_millis(250);
+
 static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 
 pub struct SessionsView {
@@ -30,6 +34,8 @@ pub struct SessionsView {
     selection: Selection,
     is_showing: bool,
     collapse_state: collapse::CollapseState,
+    drag_gesture: std::rc::Rc<std::cell::RefCell<DragGestureState>>,
+    last_panel_key: Option<(String, Instant)>,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -47,6 +53,8 @@ impl SessionsView {
             selection: Selection::default(),
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
+            drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
+            last_panel_key: None,
             last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
@@ -80,8 +88,13 @@ impl SessionsView {
         let Some(expanded) = self.collapse_state.expand() else {
             return false;
         };
+        let anchored =
+            collapse::reanchor_expanded(expanded, window.bounds(), self.collapse_state.corner());
+        if !apply_panel_bounds(window, anchored) {
+            self.collapse_state.collapse(anchored);
+            return false;
+        }
         trace::collapse(false);
-        apply_panel_bounds(window, expanded);
         window.focus(&self.focus_handle);
         true
     }
@@ -89,9 +102,18 @@ impl SessionsView {
     pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let hidden = qol_gpui::popup_window::hide_window_by_title(WINDOW_TITLE);
-        self.is_showing = false;
+        if hidden {
+            self.is_showing = false;
+        }
         trace::dismiss(reason, hidden);
         hidden
+    }
+
+    fn key_repeat_guard(&mut self, key: &str) -> bool {
+        let now = Instant::now();
+        let repeat = matches!(&self.last_panel_key, Some((last, at)) if last == key && now.duration_since(*at) < KEY_REPEAT_WINDOW);
+        self.last_panel_key = Some((key.to_owned(), now));
+        !repeat
     }
 
     fn order(&self) -> Vec<SessionId> {
@@ -258,7 +280,13 @@ impl Focusable for SessionsView {
     }
 }
 
-fn apply_panel_bounds(window: &mut Window, bounds: Bounds<Pixels>) {
-    qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
-    qol_gpui::popup_window::sync_window_layout(WINDOW_TITLE, window, bounds.origin, bounds.size);
+fn apply_panel_bounds(window: &mut Window, bounds: Bounds<Pixels>) -> bool {
+    let locked = qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
+    let synced = qol_gpui::popup_window::sync_window_layout(
+        WINDOW_TITLE,
+        window,
+        bounds.origin,
+        bounds.size,
+    );
+    locked && synced
 }
