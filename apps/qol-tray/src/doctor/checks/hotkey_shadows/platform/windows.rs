@@ -102,7 +102,7 @@ pub(crate) fn collect_shadows_with_reader(
         }
         if let Some(qol_combo) = qol_index.get(&norm) {
             shadows.push(DetectedShadow {
-                qol_combo: qol_combo.clone(),
+                qol_combos: vec![qol_combo.clone()],
                 source_label: format!("AppKey/{}", entry.app_key),
                 kind: ShadowKind::Fixable(FixAction::ClearWindowsAppKey {
                     app_key: entry.app_key,
@@ -114,7 +114,7 @@ pub(crate) fn collect_shadows_with_reader(
     for (norm, reserved) in &reserved_combos {
         if let Some(qol_combo) = qol_index.get(norm) {
             shadows.push(DetectedShadow {
-                qol_combo: qol_combo.clone(),
+                qol_combos: vec![qol_combo.clone()],
                 source_label: reserved.label.to_string(),
                 kind: ShadowKind::Reserved {
                     hint: reserved.hint.to_string(),
@@ -268,7 +268,10 @@ mod tests {
             combo: Some("Ctrl+Shift+E".to_string()),
         }]);
         let shadows = collect_shadows_with_reader(&qol, &mut reader);
-        let mut combos: Vec<&str> = shadows.iter().map(|s| s.qol_combo.as_str()).collect();
+        let mut combos: Vec<&str> = shadows
+            .iter()
+            .flat_map(|s| s.qol_combos.iter().map(String::as_str))
+            .collect();
         combos.sort();
         assert_eq!(combos, ["Ctrl+Shift+E", "Win+Space"]);
     }

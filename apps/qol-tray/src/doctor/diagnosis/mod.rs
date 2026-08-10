@@ -1,6 +1,6 @@
 mod platform;
 
-use super::de_bindings::filter_unshadow;
+use super::de_bindings::filter_shadowed;
 use super::install_id::write_install_id_file;
 use crate::hotkeys::takeover::{self, BindingMutation, BindingReach};
 use crate::plugins::daemon_tracker::ManagedProcess;
@@ -28,7 +28,7 @@ pub(super) enum FixAction {
     UnshadowDeBinding {
         dir: String,
         key: String,
-        qol_combo: String,
+        qol_combos: Vec<String>,
         orphaned: bool,
     },
     DisableSymbolicHotkey {
@@ -155,13 +155,13 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::UnshadowDeBinding {
             dir,
             key,
-            qol_combo,
+            qol_combos,
             orphaned,
         } => apply_unshadow(
             &UnshadowRequest {
                 dir,
                 key,
-                qol_combo,
+                qol_combos: qol_combos.clone(),
                 orphaned: *orphaned,
             },
             &mut DconfTakeover,
@@ -404,20 +404,20 @@ pub(super) fn apply_clear_windows_app_key(
 pub(super) struct UnshadowRequest<'a> {
     pub dir: &'a str,
     pub key: &'a str,
-    pub qol_combo: &'a str,
+    pub qol_combos: Vec<String>,
     pub orphaned: bool,
 }
 
 pub(super) trait DeBindingStore {
-    fn read(&mut self, dir: &str, key: &str) -> Result<String>;
+    fn read_effective(&mut self, dir: &str, key: &str) -> Result<String>;
     fn take_over(&mut self, mutation: &BindingMutation) -> Result<()>;
 }
 
 struct DconfTakeover;
 
 impl DeBindingStore for DconfTakeover {
-    fn read(&mut self, dir: &str, key: &str) -> Result<String> {
-        takeover::read_binding(dir, key).map_err(Into::into)
+    fn read_effective(&mut self, dir: &str, key: &str) -> Result<String> {
+        takeover::read_effective_binding(dir, key).map_err(Into::into)
     }
 
     fn take_over(&mut self, mutation: &BindingMutation) -> Result<()> {
@@ -429,19 +429,25 @@ pub(super) fn apply_unshadow(
     request: &UnshadowRequest<'_>,
     store: &mut dyn DeBindingStore,
 ) -> Result<()> {
-    let raw = store.read(request.dir, request.key)?;
-    let entries = takeover::dconf::parse_string_array(&raw)
+    let effective = store.read_effective(request.dir, request.key)?;
+    let effective_entries = takeover::dconf::parse_string_array(&effective)
         .ok_or_else(|| anyhow!("{}{} is not a keybinding list", request.dir, request.key))?;
-    let filtered = filter_unshadow(&entries, request.qol_combo)
-        .ok_or_else(|| anyhow!("failed to normalize qol combo: {}", request.qol_combo))?;
-    if filtered.len() == entries.len() {
+    let policy = takeover::match_policy_for(request.dir);
+    let filtered = filter_shadowed(&effective_entries, &request.qol_combos, policy)
+        .ok_or_else(|| anyhow!("no qol combo normalized for {}{}", request.dir, request.key))?;
+    if filtered.len() == effective_entries.len() {
         return Ok(());
     }
+    let next = if filtered.is_empty() {
+        takeover::dconf::serialize_string_array(&[])
+    } else {
+        takeover::dconf::serialize_string_array(&filtered)
+    };
     store.take_over(&BindingMutation {
         dir: request.dir.to_string(),
         key: request.key.to_string(),
-        next: takeover::dconf::serialize_string_array(&filtered),
-        qol_combo: request.qol_combo.to_string(),
+        next,
+        qol_combo: request.qol_combos.join(", "),
         reach: reach_of(request.orphaned),
     })
 }
@@ -463,6 +469,7 @@ mod tests {
     #[derive(Default)]
     struct StubStore {
         values: BTreeMap<String, String>,
+        effective: BTreeMap<String, String>,
         mutations: RefCell<Vec<BindingMutation>>,
         read_failure: bool,
         write_failure: bool,
@@ -498,14 +505,15 @@ mod tests {
     }
 
     impl DeBindingStore for StubStore {
-        fn read(&mut self, dir: &str, key: &str) -> Result<String> {
+        fn read_effective(&mut self, dir: &str, key: &str) -> Result<String> {
             if self.read_failure {
                 return Err(anyhow!("read failed"));
             }
-            self.values
+            self.effective
                 .get(&format!("{dir}{key}"))
                 .cloned()
-                .ok_or_else(|| anyhow!("missing entry"))
+                .or_else(|| self.values.get(&format!("{dir}{key}")).cloned())
+                .ok_or_else(|| anyhow!("missing effective value"))
         }
 
         fn take_over(&mut self, mutation: &BindingMutation) -> Result<()> {
@@ -517,11 +525,11 @@ mod tests {
         }
     }
 
-    fn request<'a>(dir: &'a str, key: &'a str, combo: &'a str) -> UnshadowRequest<'a> {
+    fn request<'a>(dir: &'a str, key: &'a str, combos: &[&str]) -> UnshadowRequest<'a> {
         UnshadowRequest {
             dir,
             key,
-            qol_combo: combo,
+            qol_combos: combos.iter().map(|c| c.to_string()).collect(),
             orphaned: false,
         }
     }
@@ -642,7 +650,7 @@ mod tests {
                 FixAction::UnshadowDeBinding {
                     dir: "org.cinnamon.desktop.keybindings.wm".into(),
                     key: "switch-input-source".into(),
-                    qol_combo: "Super+Space".into(),
+                    qol_combos: vec!["Super+Space".into()],
                     orphaned: false,
                 },
                 FixApplicability::ReversibleHostMutation,
@@ -794,7 +802,7 @@ mod tests {
         let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "switch-input-source";
         let mut store = StubStore::with_value(dir, key, "['<Super>space', 'XF86Keyboard']");
-        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        apply_unshadow(&request(dir, key, &["Super+Space"]), &mut store).expect("apply ok");
         assert_eq!(store.applied(), vec!["['XF86Keyboard']".to_string()]);
     }
 
@@ -803,7 +811,7 @@ mod tests {
         let dir = "/desktop/ibus/general/hotkey/";
         let key = "triggers";
         let mut store = StubStore::with_value(dir, key, "['<Super>space']");
-        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        apply_unshadow(&request(dir, key, &["Super+Space"]), &mut store).expect("apply ok");
         assert_eq!(
             store.applied(),
             vec!["@as []".to_string()],
@@ -812,11 +820,55 @@ mod tests {
     }
 
     #[test]
+    fn apply_unshadow_materializes_an_empty_value_over_a_shadowing_schema_default() {
+        let dir = "/org/cinnamon/desktop/keybindings/";
+        let key = "show-desklets";
+        let mut store = StubStore::default();
+        store
+            .effective
+            .insert(format!("{dir}{key}"), "['<Super>s']".to_string());
+        apply_unshadow(&request(dir, key, &["Shift+Super+S"]), &mut store).expect("apply ok");
+        assert_eq!(
+            store.applied(),
+            vec!["@as []".to_string()],
+            "an unset key with a shadowing default must be overridden, not skipped"
+        );
+    }
+
+    #[test]
+    fn apply_unshadow_is_a_no_op_when_the_schema_default_does_not_shadow() {
+        let dir = "/org/cinnamon/desktop/keybindings/";
+        let key = "show-desklets";
+        let mut store = StubStore::default();
+        store
+            .effective
+            .insert(format!("{dir}{key}"), "['<Super>d']".to_string());
+        apply_unshadow(&request(dir, key, &["Shift+Super+S"]), &mut store).expect("apply ok");
+        assert!(
+            store.applied().is_empty(),
+            "a default that never intercepts the qol combo must be left alone"
+        );
+    }
+
+    #[test]
+    fn apply_unshadow_clears_a_host_binding_whose_modifiers_are_a_subset_of_the_qol_combo() {
+        let dir = "/org/cinnamon/desktop/keybindings/";
+        let key = "show-desklets";
+        let mut store = StubStore::with_value(dir, key, "['<Super>s']");
+        apply_unshadow(&request(dir, key, &["Shift+Super+S"]), &mut store).expect("apply ok");
+        assert_eq!(
+            store.applied(),
+            vec!["@as []".to_string()],
+            "Super+s must be withdrawn because it intercepts Shift+Super+S"
+        );
+    }
+
+    #[test]
     fn apply_unshadow_is_a_no_op_when_nothing_overlaps() {
         let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "panel-main-menu";
         let mut store = StubStore::with_value(dir, key, "['<Super>r','<Alt>F2','XF86Keyboard']");
-        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        apply_unshadow(&request(dir, key, &["Super+Space"]), &mut store).expect("apply ok");
         assert!(
             store.applied().is_empty(),
             "a no-op must not record a takeover claim the host would later restore"
@@ -837,7 +889,7 @@ mod tests {
                 &UnshadowRequest {
                     dir,
                     key,
-                    qol_combo: "Shift+Super+S",
+                    qol_combos: vec!["Shift+Super+S".to_string()],
                     orphaned,
                 },
                 &mut store,
@@ -855,7 +907,7 @@ mod tests {
         let dir = "/org/cinnamon/desktop/keybindings/custom2/";
         let key = "command";
         let mut store = StubStore::with_value(dir, key, "'flameshot gui'");
-        let err = apply_unshadow(&request(dir, key, "Super+Space"), &mut store)
+        let err = apply_unshadow(&request(dir, key, &["Super+Space"]), &mut store)
             .expect_err("a string value must not be rewritten as a list");
         assert!(
             err.to_string().contains("is not a keybinding list"),
@@ -869,10 +921,10 @@ mod tests {
         let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "switch-input-source";
         let mut store = StubStore::with_value(dir, key, "['<Super>space']");
-        let err = apply_unshadow(&request(dir, key, "<Super>"), &mut store)
+        let err = apply_unshadow(&request(dir, key, &["<Super>"]), &mut store)
             .expect_err("should reject unnormalizable combo");
         assert!(
-            err.to_string().contains("failed to normalize qol combo"),
+            err.to_string().contains("no qol combo normalized"),
             "actual: {err}"
         );
         assert!(store.applied().is_empty());
@@ -893,7 +945,7 @@ mod tests {
             ),
         ];
         for (mut store, expected) in cases {
-            let err = apply_unshadow(&request(dir, key, "Super+Space"), &mut store)
+            let err = apply_unshadow(&request(dir, key, &["Super+Space"]), &mut store)
                 .expect_err("failure must propagate");
             assert_eq!(err.to_string(), expected);
             assert!(store.applied().is_empty());

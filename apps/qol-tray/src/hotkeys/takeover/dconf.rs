@@ -1,11 +1,18 @@
 const NON_BINDING_KEYS: &[&str] = &["custom-list", "custom-keybindings"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MatchPolicy {
+    Exact,
+    Subset,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BindingEntry {
     pub dir: String,
     pub key: String,
     pub values: Vec<String>,
     pub reach: BindingReach,
+    pub match_policy: MatchPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -42,7 +49,7 @@ pub(crate) fn custom_entry(dir: &str) -> Option<CustomEntry> {
     })
 }
 
-pub(crate) fn parse_dump(root: &str, dump: &str) -> Vec<BindingEntry> {
+pub(crate) fn parse_dump(root: &str, match_policy: MatchPolicy, dump: &str) -> Vec<BindingEntry> {
     let mut entries = Vec::new();
     let mut dir = root.to_string();
     for line in dump.lines() {
@@ -69,6 +76,41 @@ pub(crate) fn parse_dump(root: &str, dump: &str) -> Vec<BindingEntry> {
             key: key.to_string(),
             values,
             reach: reach_of(root, &dir),
+            match_policy,
+        });
+    }
+    entries
+}
+
+pub(crate) fn parse_gsettings_list(
+    root: &str,
+    match_policy: MatchPolicy,
+    output: &str,
+) -> Vec<BindingEntry> {
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((_, rest)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some((key, raw)) = rest.split_once(' ') else {
+            continue;
+        };
+        if NON_BINDING_KEYS.contains(&key) {
+            continue;
+        }
+        let Some(values) = parse_string_array(raw.trim()) else {
+            continue;
+        };
+        entries.push(BindingEntry {
+            dir: root.to_string(),
+            key: key.to_string(),
+            values,
+            reach: BindingReach::Managed,
+            match_policy,
         });
     }
     entries
@@ -187,7 +229,7 @@ mod tests {
     #[test]
     fn parse_dump_reads_root_and_section_keys() {
         let dump = "[/]\ncustom-list=['custom1']\n\n[wm]\nclose=['<Super>w']\nmaximize=@as []\n\n[custom-keybindings/custom1]\nbinding=['<Super>t']\ncommand='xterm'\nname='Terminal'\n";
-        let entries = parse_dump(CINNAMON, dump);
+        let entries = parse_dump(CINNAMON, MatchPolicy::Subset, dump);
         let seen: Vec<(&str, &str, &[String])> = entries
             .iter()
             .map(|e| (e.dir.as_str(), e.key.as_str(), e.values.as_slice()))
@@ -218,7 +260,7 @@ mod tests {
     #[test]
     fn parse_dump_classifies_root_level_custom_sections_as_legacy_orphans() {
         let dump = "[custom2]\nbinding=['<Shift><Super>s']\ncommand='flameshot gui'\n\n[custom-keybindings/custom2]\nbinding=['<Super>e']\n\n[wm]\nclose=['<Super>w']\n";
-        let entries = parse_dump(CINNAMON, dump);
+        let entries = parse_dump(CINNAMON, MatchPolicy::Subset, dump);
         let reaches: Vec<(&str, BindingReach)> =
             entries.iter().map(|e| (e.dir.as_str(), e.reach)).collect();
         assert_eq!(
@@ -241,9 +283,45 @@ mod tests {
     }
 
     #[test]
+    fn parse_gsettings_list_reads_effective_values_including_defaults() {
+        let output = "org.cinnamon.desktop.keybindings show-desklets ['<Super>s']\norg.cinnamon.desktop.keybindings custom-list ['custom1']\norg.cinnamon.desktop.keybindings looking-glass-keybinding ['<Super>l']\norg.cinnamon.desktop.keybindings pointer-previous-monitor @as []\norg.cinnamon.desktop.keybindings something-else ''\n";
+        let entries = parse_gsettings_list(CINNAMON, MatchPolicy::Subset, output);
+        let seen: Vec<(&str, &[String])> = entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.values.as_slice()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("show-desklets", ["<Super>s".to_string()].as_slice()),
+                (
+                    "looking-glass-keybinding",
+                    ["<Super>l".to_string()].as_slice()
+                ),
+                ("pointer-previous-monitor", [].as_slice()),
+            ],
+            "custom-list is a name list, strings are not bindings, empty arrays are scanned"
+        );
+        assert!(entries.iter().all(|e| e.reach == BindingReach::Managed));
+        assert!(entries
+            .iter()
+            .all(|e| e.match_policy == MatchPolicy::Subset));
+    }
+
+    #[test]
+    fn parse_dump_carries_the_roots_match_policy_on_every_entry() {
+        let dump = "[wm]\nclose=['<Super>w']\n";
+        let subset = parse_dump(CINNAMON, MatchPolicy::Subset, dump);
+        assert_eq!(subset.len(), 1);
+        assert_eq!(subset[0].match_policy, MatchPolicy::Subset);
+        let exact = parse_dump("/desktop/ibus/general/hotkey/", MatchPolicy::Exact, dump);
+        assert_eq!(exact[0].match_policy, MatchPolicy::Exact);
+    }
+
+    #[test]
     fn parse_dump_never_marks_non_keybinding_roots_as_orphaned() {
         let dump = "[custom-thing]\ntriggers=['<Super>space']\n";
-        let entries = parse_dump("/desktop/ibus/general/hotkey/", dump);
+        let entries = parse_dump("/desktop/ibus/general/hotkey/", MatchPolicy::Exact, dump);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].reach, BindingReach::Managed);
     }

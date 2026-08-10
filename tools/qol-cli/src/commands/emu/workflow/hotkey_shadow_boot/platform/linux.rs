@@ -25,8 +25,11 @@ const ACTIVE_GRAB_POLL: Duration = Duration::from_secs(3);
 const LAUNCHER_UID: &str = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1";
 const QOL_COMBO: &str = "Shift+Super+S";
 const GTK_COMBO: &str = "['<Shift><Super>s']";
-const DISPATCH_NEEDLE: &str = "uid=e8208e3e-58b3-4f8c-ad4b-ddbecafa3375 action=open";
+const DISPATCH_NEEDLE: &str = "uid=5cc75f62-2e3b-463c-ac7b-ae269cff1ef1 action=open";
+const EVENT_NEEDLE: &str = "phase=event-received";
 const MANAGED_KEY: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/binding";
+const DESKLETS_KEY: &str = "/org/cinnamon/desktop/keybindings/show-desklets";
+const DESKLETS_COMBO: &str = "['<Super>s']";
 const MANAGED_COMMAND: &str =
     "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/command";
 const MANAGED_NAME: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/name";
@@ -80,10 +83,17 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         "after the boot doctor pass",
     )
     .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
+    require_binding(
+        &mut guest,
+        DESKLETS_KEY,
+        CLEARED,
+        "after the boot doctor pass",
+    )
+    .map_err(|error| boot_diagnostics(&mut guest, &auth, error))?;
     require_boot_claim(&mut guest)?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
-    require_chord_reaches_qol(&mut guest, &mut qmp).map_err(|error| {
-        let error = diagnose_chord_eaten(&mut guest, &mut qmp, error);
+    require_chord_reaches_qol(&mut guest).map_err(|error| {
+        let error = diagnose_chord_eaten(&mut guest, error);
         boot_diagnostics(&mut guest, &auth, error)
     })?;
     require_de_stays_quiet(&mut guest)
@@ -309,11 +319,12 @@ fn hotkey_config() -> String {
 }
 
 fn seed_de_conflict(guest: &mut GuestControlClient) -> Result<()> {
-    let writes: [(&str, &str); 4] = [
+    let writes: [(&str, &str); 5] = [
         (MANAGED_KEY, GTK_COMBO),
         (MANAGED_COMMAND, "'touch /tmp/de-shadow-evidence'"),
         (MANAGED_NAME, "'qol boot shadow probe'"),
         (CUSTOM_LIST, "['custom9']"),
+        (DESKLETS_KEY, DESKLETS_COMBO),
     ];
     for (key, value) in writes {
         dconf_write(guest, key, value)?;
@@ -443,40 +454,94 @@ fn require_binding(
 
 fn require_boot_claim(guest: &mut GuestControlClient) -> Result<()> {
     let markers = claim_markers(guest)?;
-    if markers.len() != 1 {
-        bail!("expected one boot takeover claim, found {markers:?}");
+    if markers.len() != 2 {
+        bail!("expected two boot takeover claims, found {markers:?}");
     }
-    let body = require_exec(
-        guest,
-        command("/usr/bin/cat", &[&markers[0]]),
-        COMMAND_TIMEOUT,
-    )?;
-    if !body.stdout.contains(QOL_COMBO) || !body.stdout.contains(GTK_COMBO) {
-        bail!("boot claim does not carry the combo and the value to restore: {body:?}");
+    let mut exact_claims = 0;
+    let mut subset_claims = 0;
+    for marker in &markers {
+        let body = require_exec(
+            guest,
+            command("/usr/bin/cat", &[marker.as_str()]),
+            COMMAND_TIMEOUT,
+        )?;
+        if body.stdout.contains(QOL_COMBO) && body.stdout.contains(GTK_COMBO) {
+            exact_claims += 1;
+        } else if body.stdout.contains(QOL_COMBO) && body.stdout.contains("<Super>s") {
+            subset_claims += 1;
+        } else {
+            bail!("boot claim does not carry the combo and the value to restore: {body:?}");
+        }
+    }
+    if exact_claims != 1 || subset_claims != 1 {
+        bail!("expected one exact and one subset boot claim, found {exact_claims} exact and {subset_claims} subset");
     }
     step_label(
         "claim",
         StepKind::Success,
-        "the boot doctor pass recorded the reversible takeover claim",
+        "the boot doctor pass recorded the reversible takeover claims",
     );
     Ok(())
 }
 
-fn require_chord_reaches_qol(
-    guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
-) -> Result<()> {
-    let cursor = current_trace_cursor(guest)?;
-    qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
-    thread::sleep(KEY_SETTLE);
-    wait_for_probe_line(
-        guest,
-        cursor,
-        "HOTKEY_DISPATCH",
-        DISPATCH_NEEDLE,
-        ACTION_TIMEOUT,
-    )
-    .context("the chord was not dispatched by the tray's hotkey listener")?;
+fn require_chord_reaches_qol(guest: &mut GuestControlClient) -> Result<()> {
+    kill_guest_screensaver(guest)?;
+    wait_for_no_active_grab(guest, &mut Vec::new());
+    let mut dispatched = false;
+    let mut event_received = false;
+    let mut last_error = None;
+    for _attempt in 0..12 {
+        wait_for_no_active_grab(guest, &mut Vec::new());
+        let cursor = current_trace_cursor(guest)?;
+        if !send_chord_xdotool(guest) {
+            last_error = Some(anyhow::anyhow!("the chord send itself timed out"));
+            thread::sleep(Duration::from_secs(5));
+            continue;
+        }
+        thread::sleep(KEY_SETTLE);
+        if wait_for_probe_line(
+            guest,
+            cursor,
+            "HOTKEY_LISTENER",
+            EVENT_NEEDLE,
+            CHORD_RETRY_TIMEOUT,
+        )
+        .is_ok()
+        {
+            event_received = true;
+            match wait_for_probe_line(
+                guest,
+                cursor,
+                "HOTKEY_DISPATCH",
+                DISPATCH_NEEDLE,
+                ACTION_TIMEOUT,
+            ) {
+                Ok(_) => {
+                    dispatched = true;
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        } else {
+            last_error = Some(anyhow::anyhow!(
+                "the listener never received the hotkey event"
+            ));
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+    if !dispatched {
+        let boundary = if event_received {
+            "the listener received the hotkey event but never dispatched it"
+        } else {
+            "no hotkey event ever reached the listener (phase=event-received absent)"
+        };
+        return Err(anyhow::anyhow!(
+            "the chord was not dispatched by the tray's hotkey listener: {boundary}{}",
+            last_error
+                .map(|error| format!(": {error:#}"))
+                .unwrap_or_default()
+        ));
+    }
     wait_for_command(
         guest,
         command("/usr/bin/xdotool", &["search", "--name", "^qol-launcher@"]),
@@ -484,7 +549,7 @@ fn require_chord_reaches_qol(
         |outcome| !outcome.stdout.trim().is_empty(),
         "the launcher window opened by the reclaimed chord",
     )?;
-    qmp.send_keys(&["esc".into()])?;
+    let _ = send_key_xdotool(guest, "esc");
     thread::sleep(KEY_SETTLE);
     step_label(
         "chord",
@@ -494,11 +559,53 @@ fn require_chord_reaches_qol(
     Ok(())
 }
 
-fn diagnose_chord_eaten(
-    guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
-    error: anyhow::Error,
-) -> anyhow::Error {
+fn send_chord_xdotool(guest: &mut GuestControlClient) -> bool {
+    exec(
+        guest,
+        command(
+            "/usr/bin/xdotool",
+            &["key", "--clearmodifiers", "shift+super+s"],
+        ),
+        Duration::from_secs(20),
+    )
+    .is_ok()
+}
+
+fn send_key_xdotool(guest: &mut GuestControlClient, key: &str) -> bool {
+    exec(
+        guest,
+        command("/usr/bin/xdotool", &["key", "--clearmodifiers", key]),
+        Duration::from_secs(20),
+    )
+    .is_ok()
+}
+
+fn kill_guest_screensaver(guest: &mut GuestControlClient) -> Result<()> {
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &["-lc", "pkill -9 -f 'cinnamon-screen[s]aver' 2>/dev/null; sleep 2; pgrep -f 'cinnamon-screen[s]aver' || true"],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    if outcome.stdout.trim().is_empty() {
+        step_label(
+            "screensaver",
+            StepKind::Success,
+            "the guest-only cinnamon-screensaver is dead, so its periodic keyboard grab cannot eat the chords",
+        );
+        Ok(())
+    } else {
+        eprintln!(
+            "cinnamon-screensaver respawned after the kill: {:?}",
+            outcome.stdout
+        );
+        Ok(())
+    }
+}
+
+fn diagnose_chord_eaten(guest: &mut GuestControlClient, error: anyhow::Error) -> anyhow::Error {
     let mut observations = vec![];
     let active_grab_before = active_grab_probe(guest);
     observations.push(format!("grab-state before: {}", grab_probe(guest)));
@@ -512,10 +619,9 @@ fn diagnose_chord_eaten(
     let mut dispatched = false;
     for attempt in 0..3 {
         let outcome = if attempt == 0 {
-            eavesdrop_chord(guest, qmp)
+            eavesdrop_chord(guest)
         } else {
-            resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT)
-                .map(|dispatched| (dispatched, String::new()))
+            resend_chord(guest, CHORD_RETRY_TIMEOUT).map(|dispatched| (dispatched, String::new()))
         };
         match outcome {
             Ok((true, events)) => {
@@ -553,12 +659,13 @@ fn diagnose_chord_eaten(
             "desktop input state at the eat: {}",
             desktop_input_state(guest)
         ));
+        let stand_in_with_tray = chord_reaches_a_stand_in_grabber(guest, &mut observations);
+        observations.push(format!(
+            "stand-in grabber WITH the tray alive sees the chord: {stand_in_with_tray}"
+        ));
         if active_grab_before != "none" {
-            dispatched_once_grab_cleared = Some(chord_after_active_grab_clears(
-                guest,
-                qmp,
-                &mut observations,
-            ));
+            dispatched_once_grab_cleared =
+                Some(chord_after_active_grab_clears(guest, &mut observations));
         }
     }
     if !dispatched && dispatched_once_grab_cleared != Some(true) {
@@ -576,11 +683,25 @@ fn diagnose_chord_eaten(
             "active-keyboard-grab with the tray dead: {}",
             active_grab_probe(guest)
         ));
-        stand_in_grabber_sees_chord = Some(chord_reaches_a_stand_in_grabber(
-            guest,
-            qmp,
-            &mut observations,
-        ));
+        wait_for_no_active_grab(guest, &mut observations);
+        stand_in_grabber_sees_chord =
+            Some(chord_reaches_a_stand_in_grabber(guest, &mut observations));
+        if stand_in_grabber_sees_chord == Some(false) {
+            observations.push(
+                "--- desklets toggle experiment ---\nwriting show-desklets back and clearing it again after the desktop settled, then retesting the stand-in grabber".to_string(),
+            );
+            match toggle_desklets(guest) {
+                Ok(()) => {
+                    let after_toggle = chord_reaches_a_stand_in_grabber(guest, &mut observations);
+                    observations.push(format!(
+                        "stand-in grabber sees the chord after the desklets toggle: {after_toggle}"
+                    ));
+                }
+                Err(toggle_error) => observations.push(format!(
+                    "desklets toggle experiment failed: {toggle_error:#}"
+                )),
+            }
+        }
         name_the_active_grab_owner(guest, &mut observations);
         if probe_without_tray == "held" {
             match poke_binding(guest) {
@@ -692,7 +813,6 @@ fn name_the_active_grab_owner(guest: &mut GuestControlClient, observations: &mut
 
 fn chord_reaches_a_stand_in_grabber(
     guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
     observations: &mut Vec<String>,
 ) -> bool {
     let script = r#"import os, time
@@ -732,8 +852,8 @@ d.close()
         }
     };
     thread::sleep(Duration::from_millis(1200));
-    if let Err(key_error) = qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()]) {
-        observations.push(format!("stand-in grabber chord aborted: {key_error:#}"));
+    if !send_chord_xdotool(guest) {
+        observations.push("stand-in grabber chord send timed out".to_string());
         return false;
     }
     thread::sleep(Duration::from_secs(2));
@@ -808,7 +928,6 @@ fn desktop_input_state(guest: &mut GuestControlClient) -> String {
 
 fn chord_after_active_grab_clears(
     guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
     observations: &mut Vec<String>,
 ) -> bool {
     let deadline = std::time::Instant::now() + ACTIVE_GRAB_WAIT;
@@ -838,7 +957,7 @@ fn chord_after_active_grab_clears(
         "desktop input state once the grab cleared: {}",
         desktop_input_state(guest)
     ));
-    match resend_chord(guest, qmp, CHORD_RETRY_TIMEOUT) {
+    match resend_chord(guest, CHORD_RETRY_TIMEOUT) {
         Ok(dispatched) => {
             observations.push(format!(
                 "chord once the active grab cleared dispatched: {dispatched}"
@@ -885,28 +1004,45 @@ fn poke_binding(guest: &mut GuestControlClient) -> Result<()> {
     Ok(())
 }
 
-fn resend_chord(
-    guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
-    timeout: Duration,
-) -> Result<bool> {
-    let cursor = current_trace_cursor(guest)?;
-    qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
-    thread::sleep(KEY_SETTLE);
-    Ok(wait_for_probe_line(guest, cursor, "HOTKEY_DISPATCH", DISPATCH_NEEDLE, timeout).is_ok())
+fn toggle_desklets(guest: &mut GuestControlClient) -> Result<()> {
+    dconf_write(guest, DESKLETS_KEY, DESKLETS_COMBO)?;
+    thread::sleep(POKE_SETTLE);
+    dconf_write(guest, DESKLETS_KEY, CLEARED)?;
+    thread::sleep(POKE_SETTLE);
+    Ok(())
 }
 
-fn eavesdrop_chord(
-    guest: &mut GuestControlClient,
-    qmp: &mut qmp::QmpClient,
-) -> Result<(bool, String)> {
+fn resend_chord(guest: &mut GuestControlClient, timeout: Duration) -> Result<bool> {
+    let cursor = current_trace_cursor(guest)?;
+    if !send_chord_xdotool(guest) {
+        return Ok(false);
+    }
+    thread::sleep(KEY_SETTLE);
+    let received =
+        wait_for_probe_line(guest, cursor, "HOTKEY_LISTENER", EVENT_NEEDLE, timeout).is_ok();
+    if !received {
+        return Ok(false);
+    }
+    Ok(wait_for_probe_line(
+        guest,
+        cursor,
+        "HOTKEY_DISPATCH",
+        DISPATCH_NEEDLE,
+        ACTION_TIMEOUT,
+    )
+    .is_ok())
+}
+
+fn eavesdrop_chord(guest: &mut GuestControlClient) -> Result<(bool, String)> {
     let pid = spawn(
         guest,
         command("/usr/bin/python3", &["/home/qol/key-eavesdrop.py"]),
     )?;
     thread::sleep(Duration::from_millis(700));
     let cursor = current_trace_cursor(guest)?;
-    qmp.send_keys(&["shift".into(), "meta_l".into(), "s".into()])?;
+    if !send_chord_xdotool(guest) {
+        return Ok((false, "chord send timed out".to_string()));
+    }
     thread::sleep(KEY_SETTLE);
     let dispatched = wait_for_probe_line(
         guest,
@@ -934,6 +1070,28 @@ fn eavesdrop_chord(
         .map(|outcome| outcome.stdout.trim().to_string())
         .unwrap_or_else(|_| "probe-error".to_string());
     Ok((dispatched, events))
+}
+
+fn wait_for_no_active_grab(guest: &mut GuestControlClient, observations: &mut Vec<String>) {
+    let deadline = std::time::Instant::now() + ACTIVE_GRAB_WAIT;
+    let mut polls = 0;
+    while std::time::Instant::now() < deadline {
+        let state = active_grab_probe(guest);
+        if state == "none" {
+            if polls > 0 {
+                observations.push(format!(
+                    "active keyboard grab cleared after {polls} polls; the chord tests below are uncontaminated"
+                ));
+            }
+            return;
+        }
+        polls += 1;
+        let _ = send_key_xdotool(guest, "esc");
+        thread::sleep(ACTIVE_GRAB_POLL);
+    }
+    observations.push(format!(
+        "active keyboard grab never cleared within {ACTIVE_GRAB_WAIT:?}; passive-grab readings below are contaminated"
+    ));
 }
 
 fn active_grab_probe(guest: &mut GuestControlClient) -> String {

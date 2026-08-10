@@ -257,7 +257,7 @@ fn log_applied(action: &FixAction) {
         FixAction::UnshadowDeBinding {
             dir,
             key,
-            qol_combo,
+            qol_combos,
             orphaned,
         } => {
             let lifecycle = if *orphaned {
@@ -267,7 +267,7 @@ fn log_applied(action: &FixAction) {
             };
             log::info!(
                 "doctor: took {} back from {}{} (orphaned={}, {})",
-                qol_combo,
+                qol_combos.join(", "),
                 dir,
                 key,
                 orphaned,
@@ -410,7 +410,7 @@ mod tests {
                     vec![FixAction::UnshadowDeBinding {
                         dir: "org.cinnamon.desktop.keybindings.wm".into(),
                         key: "switch-input-source".into(),
-                        qol_combo: "Super+Space".into(),
+                        qol_combos: vec!["Super+Space".into()],
                         orphaned: false,
                     }],
                 )
@@ -539,7 +539,7 @@ mod tests {
                 FixAction::UnshadowDeBinding {
                     dir: "x".into(),
                     key: "y".into(),
-                    qol_combo: "Super+Space".into(),
+                    qol_combos: vec!["Super+Space".into()],
                     orphaned: false,
                 },
                 FixPolicy::safe(),
@@ -549,7 +549,7 @@ mod tests {
                 FixAction::UnshadowDeBinding {
                     dir: "x".into(),
                     key: "y".into(),
-                    qol_combo: "Super+Space".into(),
+                    qol_combos: vec!["Super+Space".into()],
                     orphaned: false,
                 },
                 FixPolicy::startup(),

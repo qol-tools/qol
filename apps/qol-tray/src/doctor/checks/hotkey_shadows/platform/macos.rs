@@ -110,7 +110,7 @@ pub(crate) fn collect_shadows_with_reader(
                 qol_index.get(&normalize_combo(reserved.combo).unwrap_or_default())
             {
                 shadows.push(DetectedShadow {
-                    qol_combo: qol_combo.clone(),
+                    qol_combos: vec![qol_combo.clone()],
                     source_label: reserved.label.to_string(),
                     kind: ShadowKind::Reserved {
                         hint: reserved.hint.to_string(),
@@ -124,7 +124,7 @@ pub(crate) fn collect_shadows_with_reader(
                 qol_index.get(&normalize_combo(fixable.combo).unwrap_or_default())
             {
                 shadows.push(DetectedShadow {
-                    qol_combo: qol_combo.clone(),
+                    qol_combos: vec![qol_combo.clone()],
                     source_label: fixable.label.to_string(),
                     kind: ShadowKind::Fixable(FixAction::DisableSymbolicHotkey {
                         hotkey_id: fixable.id,
