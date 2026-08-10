@@ -1,0 +1,15 @@
+[package]
+name = "qol-diff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Change model for the diff viewer: file diffs, hunks, lines, and token spans"
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

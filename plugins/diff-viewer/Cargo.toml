@@ -1,0 +1,25 @@
+[package]
+name = "plugin-diff-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "Hotkey-summoned GPUI diff viewer: change as motion and heat"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[[bin]]
+name = "diff-viewer"
+path = "src/main.rs"
+
+[lib]
+name = "plugin_diff_viewer"
+path = "src/lib.rs"
+
+[dependencies]
+gpui.workspace = true
+qol-cache.workspace = true
+qol-diff.workspace = true
+qol-git.workspace = true
+qol-gpui.workspace = true
+qol-watch.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true

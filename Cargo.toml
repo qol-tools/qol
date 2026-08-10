@@ -12,6 +12,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 # internal crates - the single source of truth for every cross-crate path
 qol-artifact = { path = "libs/qol-artifact" }
 qol-build-identity = { path = "libs/qol-build-identity" }
+qol-cache = { path = "libs/qol-cache" }
 qol-color = { path = "libs/qol-color" }
 qol-config = { path = "libs/qol-config" }
 qol-conventions = { path = "libs/qol-conventions" }
@@ -19,8 +20,10 @@ qol-dev-build = { path = "libs/qol-dev-build" }
 qol-dev-env = { path = "libs/qol-dev-env" }
 qol-dev-guest = { path = "libs/qol-dev-guest" }
 qol-dev-orchestrator = { path = "libs/qol-dev-orchestrator" }
+qol-diff = { path = "libs/qol-diff" }
 qol-frecency = { path = "libs/qol-frecency" }
 qol-fs = { path = "libs/qol-fs" }
+qol-git = { path = "libs/qol-git" }
 qol-platform = { path = "libs/qol-platform" }
 qol-watch = { path = "libs/qol-watch" }
 qol-process = { path = "libs/qol-process" }

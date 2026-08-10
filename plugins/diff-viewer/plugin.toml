@@ -1,0 +1,27 @@
+[plugin]
+id = "plugin-diff-viewer"
+uid = "eb6c29a7-b4cf-4bf9-8723-d3ea980f576b"
+name = "Diff Viewer"
+description = "Hotkey-summoned GPUI diff viewer: change as motion and heat"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "diff-viewer"
+
+[action.open]
+label = "Open Diff Viewer"
+args = ["open"]
+
+[capabilities]
+gpui = true
+
+[menu]
+label = "Diff Viewer"
+items = []
+
+[[shortcuts]]
+id = "open"
+name = "Diff Viewer"
+action = "open"

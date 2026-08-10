@@ -1,0 +1,9 @@
+[package]
+name = "qol-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local-read git porcelain wrapper spawning the git CLI"
+
+[lints.rust]
+unsafe_code = "forbid"

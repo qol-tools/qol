@@ -1,0 +1,717 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use gpui::prelude::*;
+use gpui::{
+    div, px, rgb, AnyElement, App, Context, FocusHandle, Focusable, HighlightStyle, KeyDownEvent,
+    ScrollDelta, ScrollWheelEvent, SharedString, StyledText, WhiteSpace, Window,
+};
+use qol_cache::TtlCache;
+use qol_diff::{DiffError, FileDiff, LineChange};
+use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::surface::SurfaceDismisser;
+
+use crate::pipeline::{self, Facts, GitRequest, GitResult};
+use crate::surface::{self, CodeSurface};
+
+pub const WINDOW_WIDTH: f32 = 960.0;
+pub const WINDOW_HEIGHT: f32 = 640.0;
+const LIST_WIDTH: f32 = 340.0;
+const ROW_HEIGHT: f32 = 26.0;
+const LINE_HEIGHT: f32 = 18.0;
+const FONT_SIZE: f32 = 13.0;
+const GLYPH_WIDTH: f32 = 12.0;
+const PIXELS_PER_NOTCH: f32 = 50.0;
+const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+const FACTS_TTL: Duration = Duration::from_secs(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRow {
+    pub path: String,
+    pub added: Option<u64>,
+    pub deleted: Option<u64>,
+}
+
+impl FileRow {
+    pub fn counts(&self) -> (Option<String>, Option<String>) {
+        (
+            self.added.map(|count| format!("+{count}")),
+            self.deleted.map(|count| format!("-{count}")),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FileListState {
+    pub files: Vec<FileRow>,
+    pub list: ScrollList,
+}
+impl FileListState {
+    pub fn new(max_visible: usize) -> Self {
+        Self {
+            files: Vec::new(),
+            list: ScrollList::new(max_visible),
+        }
+    }
+
+    pub fn set_files(&mut self, files: Vec<FileRow>) {
+        let selected = self.selected_path().map(str::to_owned);
+        self.files = files;
+        self.list.sync(self.files.len());
+        if let Some(path) = selected {
+            if let Some(index) = self.files.iter().position(|file| file.path == path) {
+                self.list.selected = index;
+                self.list.sync(self.files.len());
+            }
+        }
+    }
+
+    pub fn selected_path(&self) -> Option<&str> {
+        self.files
+            .get(self.list.selected)
+            .map(|file| file.path.as_str())
+    }
+
+    pub fn move_up(&mut self) {
+        self.list.move_up();
+    }
+
+    pub fn move_down(&mut self) {
+        self.list.move_down(self.files.len());
+    }
+
+    pub fn page(&mut self, delta: isize) {
+        if self.files.is_empty() {
+            return;
+        }
+        let window = self.list.max_visible as isize;
+        let target = self.list.selected as isize + delta * window;
+        self.list.selected = target.clamp(0, self.files.len() as isize - 1) as usize;
+        self.list.sync(self.files.len());
+    }
+
+    pub fn visible_range(&self) -> std::ops::Range<usize> {
+        self.list.visible_range(self.files.len())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivePane {
+    Files,
+    Code,
+}
+
+impl ActivePane {
+    fn other(self) -> Self {
+        match self {
+            Self::Files => Self::Code,
+            Self::Code => Self::Files,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum DiffPane {
+    Empty,
+    Error(DiffError),
+    Ready(FileDiff),
+}
+
+pub struct DiffView {
+    repo: Option<PathBuf>,
+    files: FileListState,
+    pane: DiffPane,
+    surface: CodeSurface,
+    lines: Vec<LineChange>,
+    active_pane: ActivePane,
+    facts_error: Option<String>,
+    last_fit: usize,
+    generation: Arc<AtomicU64>,
+    git_tx: mpsc::Sender<GitRequest>,
+    results: Option<mpsc::Receiver<GitResult>>,
+    facts_cache: TtlCache<PathBuf, Facts>,
+    font_family: SharedString,
+    focus_handle: FocusHandle,
+    dismisser: SurfaceDismisser,
+}
+
+impl DiffView {
+    pub fn new(
+        repo: Option<PathBuf>,
+        dismisser: SurfaceDismisser,
+        git_tx: mpsc::Sender<GitRequest>,
+        generation: Arc<AtomicU64>,
+        results: mpsc::Receiver<GitResult>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self {
+            repo,
+            files: FileListState::new(list_max_visible()),
+            pane: DiffPane::Empty,
+            surface: CodeSurface::new(),
+            lines: Vec::new(),
+            active_pane: ActivePane::Files,
+            facts_error: None,
+            last_fit: 0,
+            generation,
+            git_tx,
+            results: Some(results),
+            facts_cache: TtlCache::new(FACTS_TTL),
+            font_family: pick_monospace(cx),
+            focus_handle: cx.focus_handle(),
+            dismisser,
+        };
+        if view.repo.is_none() {
+            view.facts_error =
+                Some("no repository: set QOL_DIFF_REPO or launch from a git worktree".to_string());
+            return view;
+        }
+        view.spawn_loops(cx);
+        pipeline::send_refresh(&view.git_tx, &view.generation);
+        view
+    }
+
+    fn spawn_loops(&mut self, cx: &mut Context<Self>) {
+        self.spawn_result_poll(cx);
+        self.spawn_backstop(cx);
+    }
+
+    fn spawn_result_poll(&mut self, cx: &mut Context<Self>) {
+        let rx = self.results.take().expect("result poll spawned once");
+        let this = cx.weak_entity();
+        let generation = self.generation.clone();
+        cx.spawn(async move |_view, cx| loop {
+            cx.background_executor().timer(POLL_INTERVAL).await;
+            let mut results = Vec::new();
+            while let Ok(result) = rx.try_recv() {
+                results.push(result);
+            }
+            if results.is_empty() {
+                continue;
+            }
+            let current = generation.load(Ordering::SeqCst);
+            let _ = this.update(cx, |view, cx| {
+                if view.apply_results(results, current) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_backstop(&self, cx: &mut Context<Self>) {
+        let git_tx = self.git_tx.clone();
+        let generation = self.generation.clone();
+        let this = cx.weak_entity();
+        cx.spawn(async move |_view, cx| loop {
+            cx.background_executor().timer(REFRESH_INTERVAL).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.apply_cached_facts() {
+                    cx.notify();
+                }
+            });
+            pipeline::send_refresh(&git_tx, &generation);
+        })
+        .detach();
+    }
+
+    fn apply_cached_facts(&mut self) -> bool {
+        let Some(facts) = self
+            .facts_cache
+            .get(
+                self.repo
+                    .as_ref()
+                    .expect("repo present when facts are cached"),
+            )
+            .cloned()
+        else {
+            return false;
+        };
+        self.apply_facts(facts);
+        true
+    }
+
+    fn apply_results(&mut self, results: Vec<GitResult>, current: u64) -> bool {
+        let mut changed = false;
+        for result in results {
+            match result {
+                GitResult::Facts { generation, facts } if generation == current => {
+                    self.apply_facts(facts);
+                    changed = true;
+                }
+                GitResult::FactsFailed {
+                    generation,
+                    message,
+                } if generation == current => {
+                    self.facts_error = Some(message);
+                    changed = true;
+                }
+                GitResult::Diff {
+                    generation,
+                    path,
+                    diff,
+                } if generation == current && self.files.selected_path() == Some(path.as_str()) => {
+                    self.apply_diff(diff);
+                    changed = true;
+                }
+                GitResult::Facts { .. }
+                | GitResult::FactsFailed { .. }
+                | GitResult::Diff { .. } => {}
+            }
+        }
+        changed
+    }
+
+    fn apply_facts(&mut self, facts: Facts) {
+        self.facts_error = None;
+        let files = facts
+            .numstat
+            .iter()
+            .map(|entry| FileRow {
+                path: entry.path.clone(),
+                added: entry.added,
+                deleted: entry.deleted,
+            })
+            .collect();
+        self.files.set_files(files);
+        self.facts_cache.insert(
+            self.repo
+                .clone()
+                .expect("repo present when facts are cached"),
+            facts,
+        );
+        if self.files.files.is_empty() {
+            self.pane = DiffPane::Empty;
+        }
+    }
+
+    fn apply_diff(&mut self, diff: Result<FileDiff, DiffError>) {
+        match diff {
+            Ok(diff) if diff.is_empty() => {
+                self.lines.clear();
+                self.surface.set_lines(Vec::new());
+                self.pane = DiffPane::Empty;
+            }
+            Ok(diff) => {
+                let lines = flatten(&diff);
+                self.surface.set_lines(lines.clone());
+                self.lines = lines;
+                self.pane = DiffPane::Ready(diff);
+            }
+            Err(error) => self.pane = DiffPane::Error(error),
+        }
+    }
+
+    fn select_current_file(&mut self) {
+        let Some(path) = self.files.selected_path() else {
+            return;
+        };
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.git_tx.send(GitRequest::SelectFile {
+            generation,
+            path: path.to_owned(),
+        });
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let page = self.page_size();
+        match (self.active_pane, key) {
+            (_, "tab") => self.active_pane = self.active_pane.other(),
+            (_, "escape") | (_, "esc") => {
+                self.dismisser.dismiss(cx);
+                return;
+            }
+            (ActivePane::Files, "down") | (ActivePane::Files, "j") => self.files.move_down(),
+            (ActivePane::Files, "up") | (ActivePane::Files, "k") => self.files.move_up(),
+            (ActivePane::Files, "pagedown") | (ActivePane::Files, "page_down") => {
+                self.files.page(1)
+            }
+            (ActivePane::Files, "pageup") | (ActivePane::Files, "page_up") => self.files.page(-1),
+            (ActivePane::Files, "enter") | (ActivePane::Files, "return") => {
+                self.select_current_file();
+            }
+            (ActivePane::Code, "down") | (ActivePane::Code, "j") => self.scroll_lines(1),
+            (ActivePane::Code, "up") | (ActivePane::Code, "k") => self.scroll_lines(-1),
+            (ActivePane::Code, "pagedown") | (ActivePane::Code, "page_down") => {
+                self.scroll_lines(page as isize)
+            }
+            (ActivePane::Code, "pageup") | (ActivePane::Code, "page_up") => {
+                self.scroll_lines(-(page as isize))
+            }
+            _ => return,
+        }
+        cx.notify();
+    }
+
+    fn on_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let notches = match event.delta {
+            ScrollDelta::Lines(lines) => lines.y,
+            ScrollDelta::Pixels(pixels) => pixels.y.to_f64() as f32 / PIXELS_PER_NOTCH,
+        };
+        if notches == 0.0 {
+            return;
+        }
+        self.scroll_lines(-(notches.round() as isize));
+        cx.notify();
+    }
+
+    fn scroll_lines(&mut self, delta: isize) {
+        let max = self.lines.len().saturating_sub(self.last_fit.max(1));
+        let target = self.surface.scroll_offset() as isize + delta;
+        self.surface
+            .set_scroll_offset(target.clamp(0, max as isize) as usize);
+    }
+
+    fn page_size(&self) -> usize {
+        self.last_fit.max(1)
+    }
+
+    fn render_file_list(&self) -> AnyElement {
+        let rows: Vec<AnyElement> = self
+            .files
+            .visible_range()
+            .map(|index| self.file_row(index))
+            .collect();
+        let mut list = div()
+            .id("file-list")
+            .flex_none()
+            .w(px(LIST_WIDTH))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(surface::LIST_BG))
+            .border_r_1()
+            .border_color(rgb(surface::BORDER))
+            .overflow_hidden();
+        if let Some(error) = &self.facts_error {
+            list = list.child(center_message(error, surface::ERROR_TEXT));
+        } else if self.files.files.is_empty() {
+            list = list.child(center_message("No changed files", surface::TEXT_MUTED));
+        } else {
+            list = list.children(rows);
+        }
+        list.into_any_element()
+    }
+
+    fn file_row(&self, index: usize) -> AnyElement {
+        let file = &self.files.files[index];
+        let selected = index == self.files.list.selected;
+        let (added, deleted) = file.counts();
+        let mut row = div()
+            .h(px(ROW_HEIGHT))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .text_size(px(12.0));
+        if selected {
+            row = row.bg(rgb(surface::LIST_SELECTED_BG));
+        }
+        row.child(
+            div()
+                .flex_1()
+                .truncate()
+                .text_color(rgb(if selected {
+                    surface::TEXT_SELECTED
+                } else {
+                    surface::TEXT_PRIMARY
+                }))
+                .child(file.path.clone()),
+        )
+        .child(count_cell(added, surface::TEXT_ADDED))
+        .child(count_cell(deleted, surface::TEXT_REMOVED))
+        .into_any_element()
+    }
+
+    fn render_pane(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let pane = div()
+            .id("diff-pane")
+            .flex_1()
+            .h_full()
+            .overflow_hidden()
+            .bg(rgb(surface::CANVAS_BG))
+            .on_scroll_wheel(cx.listener(Self::on_scroll));
+        match &self.pane {
+            DiffPane::Empty => pane
+                .child(center_message("No changes", surface::TEXT_MUTED))
+                .into_any_element(),
+            DiffPane::Error(error) => pane
+                .child(center_message(&error.to_string(), surface::ERROR_TEXT))
+                .into_any_element(),
+            DiffPane::Ready(_) => pane.children(self.code_rows(window)).into_any_element(),
+        }
+    }
+
+    fn code_rows(&self, window: &Window) -> Vec<AnyElement> {
+        let start = self.surface.scroll_offset();
+        let end = (start + self.last_fit.max(1)).min(self.surface.line_count());
+        (start..end)
+            .map(|index| self.code_row(index, window))
+            .collect()
+    }
+
+    fn code_row(&self, index: usize, window: &Window) -> AnyElement {
+        let line = &self.lines[index];
+        let style = self.surface.line_style(index);
+        let mut row = div()
+            .h(px(LINE_HEIGHT))
+            .w_full()
+            .flex()
+            .flex_row()
+            .overflow_hidden()
+            .line_height(px(LINE_HEIGHT))
+            .text_size(px(FONT_SIZE));
+        if let Some(bg) = surface::line_background(style) {
+            row = row.bg(rgb(bg));
+        }
+        let (old, new) = surface::gutter_labels(
+            line.old_line_no,
+            line.new_line_no,
+            self.surface.gutter_width(),
+        );
+        row.child(
+            div()
+                .flex_none()
+                .px_1()
+                .text_color(rgb(surface::GUTTER_TEXT))
+                .child(format!("{old}  {new}")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(GLYPH_WIDTH))
+                .text_color(rgb(surface::kind_color(line.kind)))
+                .child(surface::kind_glyph(line.kind)),
+        )
+        .child(self.code_text(line, style.dimmed, window))
+        .into_any_element()
+    }
+
+    fn code_text(&self, line: &LineChange, dimmed: bool, window: &Window) -> StyledText {
+        let mut text_style = window.text_style();
+        text_style.font_family = self.font_family.clone();
+        text_style.font_size = px(FONT_SIZE).into();
+        text_style.line_height = px(LINE_HEIGHT).into();
+        text_style.color = rgb(surface::text_color(dimmed)).into();
+        text_style.white_space = WhiteSpace::Nowrap;
+        let highlights = line
+            .token_spans
+            .iter()
+            .filter_map(|span| {
+                let start = span.start.min(line.text.len());
+                let end = (span.start + span.len).min(line.text.len());
+                (start < end).then_some((
+                    start..end,
+                    HighlightStyle {
+                        background_color: surface::token_background(span.heat)
+                            .map(|hex| rgb(hex).into()),
+                        ..HighlightStyle::default()
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        StyledText::new(line.text.clone()).with_default_highlights(&text_style, highlights)
+    }
+}
+
+impl Focusable for DiffView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for DiffView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.last_fit = visible_fit(window.viewport_size().height.to_f64() as f32, LINE_HEIGHT);
+        div()
+            .id("diff-viewer")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .flex_row()
+            .bg(rgb(surface::CANVAS_BG))
+            .font_family(self.font_family.clone())
+            .text_size(px(FONT_SIZE))
+            .on_key_down(cx.listener(Self::on_key))
+            .child(self.render_file_list())
+            .child(self.render_pane(window, cx))
+    }
+}
+
+fn flatten(diff: &FileDiff) -> Vec<LineChange> {
+    diff.hunks
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter().cloned())
+        .collect()
+}
+
+fn pick_monospace(cx: &App) -> SharedString {
+    const CHAIN: [&str; 4] = [
+        "Noto Sans Mono",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        ".SystemUIFont",
+    ];
+    let names = cx.text_system().all_font_names();
+    CHAIN
+        .iter()
+        .find(|candidate| names.iter().any(|name| name.as_str() == **candidate))
+        .map(|name| SharedString::from(*name))
+        .unwrap_or_else(|| SharedString::from(".SystemUIFont"))
+}
+
+fn visible_fit(height: f32, row_height: f32) -> usize {
+    (height / row_height).floor().max(1.0) as usize
+}
+
+fn list_max_visible() -> usize {
+    (WINDOW_HEIGHT / ROW_HEIGHT).floor() as usize
+}
+
+fn center_message(label: &str, color: u32) -> AnyElement {
+    div()
+        .flex_1()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p_2()
+        .text_color(rgb(color))
+        .child(label.to_string())
+        .into_any_element()
+}
+
+fn count_cell(label: Option<String>, color: u32) -> AnyElement {
+    let (label, color) = label
+        .map(|label| (label, color))
+        .unwrap_or_else(|| ("bin".to_string(), surface::TEXT_MUTED));
+    div()
+        .flex_none()
+        .text_color(rgb(color))
+        .child(label)
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(path: &str, added: Option<u64>, deleted: Option<u64>) -> FileRow {
+        FileRow {
+            path: path.to_string(),
+            added,
+            deleted,
+        }
+    }
+
+    #[test]
+    fn count_labels_format_added_and_deleted() {
+        assert_eq!(
+            row("a.rs", Some(3), Some(2)).counts(),
+            (Some("+3".to_string()), Some("-2".to_string()))
+        );
+        assert_eq!(
+            row("logo.png", None, None).counts(),
+            (None, None),
+            "binary files carry no counts"
+        );
+    }
+
+    #[test]
+    fn file_list_navigation_clamps_at_both_ends() {
+        let mut state = FileListState::new(5);
+        state.set_files(vec![
+            row("a.rs", Some(1), Some(0)),
+            row("b.rs", Some(2), Some(1)),
+            row("c.rs", Some(3), Some(2)),
+        ]);
+        state.move_down();
+        state.move_down();
+        state.move_down();
+        assert_eq!(state.selected_path(), Some("c.rs"));
+        state.move_up();
+        state.move_up();
+        state.move_up();
+        assert_eq!(state.selected_path(), Some("a.rs"));
+    }
+
+    #[test]
+    fn file_list_page_moves_by_the_visible_window() {
+        let mut state = FileListState::new(5);
+        let files: Vec<FileRow> = (0..20)
+            .map(|i| row(&format!("f{i}.rs"), Some(1), Some(0)))
+            .collect();
+        state.set_files(files);
+        state.page(1);
+        assert_eq!(state.selected_path(), Some("f5.rs"));
+        state.page(1);
+        assert_eq!(state.selected_path(), Some("f10.rs"));
+        state.page(-1);
+        assert_eq!(state.selected_path(), Some("f5.rs"));
+        state.page(1);
+        state.page(1);
+        assert_eq!(state.selected_path(), Some("f15.rs"));
+        state.page(1);
+        assert_eq!(
+            state.selected_path(),
+            Some("f19.rs"),
+            "page clamps at the end"
+        );
+    }
+
+    #[test]
+    fn file_list_selection_survives_a_refresh_by_path() {
+        let mut state = FileListState::new(5);
+        state.set_files(vec![
+            row("a.rs", Some(1), Some(0)),
+            row("b.rs", Some(2), Some(0)),
+        ]);
+        state.move_down();
+        assert_eq!(state.selected_path(), Some("b.rs"));
+        state.set_files(vec![
+            row("a.rs", Some(4), Some(1)),
+            row("b.rs", Some(9), Some(3)),
+            row("c.rs", Some(1), Some(0)),
+        ]);
+        assert_eq!(state.selected_path(), Some("b.rs"));
+    }
+
+    #[test]
+    fn file_list_selection_resets_when_files_disappear() {
+        let mut state = FileListState::new(5);
+        state.set_files(vec![row("a.rs", Some(1), Some(0))]);
+        state.move_down();
+        state.set_files(Vec::new());
+        assert_eq!(state.selected_path(), None);
+        state.set_files(vec![row("b.rs", Some(1), Some(0))]);
+        assert_eq!(
+            state.selected_path(),
+            Some("b.rs"),
+            "fresh lists restart at the top"
+        );
+    }
+
+    #[test]
+    fn page_size_and_visible_fit_follow_the_viewport() {
+        assert_eq!(visible_fit(640.0, 18.0), 35);
+        assert_eq!(visible_fit(18.0, 18.0), 1);
+        assert_eq!(list_max_visible(), 24);
+    }
+
+    #[test]
+    fn active_pane_toggles_between_files_and_code() {
+        assert_eq!(ActivePane::Files.other(), ActivePane::Code);
+        assert_eq!(ActivePane::Code.other(), ActivePane::Files);
+    }
+}
