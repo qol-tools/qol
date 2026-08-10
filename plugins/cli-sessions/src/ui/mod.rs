@@ -1,3 +1,4 @@
+pub mod collapse;
 pub mod nav;
 pub mod notify;
 pub mod placement;
@@ -9,11 +10,16 @@ mod trace;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
+use gpui::{
+    App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, WeakEntity, Window,
+};
+use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::surface::DragGestureState;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
+use crate::ui::placement::{Corner, CORNER_MARGIN};
 use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
@@ -25,6 +31,9 @@ pub struct SessionsView {
     pub host: Arc<dyn TerminalHost + Send + Sync>,
     selection: Selection,
     is_showing: bool,
+    collapse_state: collapse::CollapseState,
+    drag_gesture: std::rc::Rc<std::cell::RefCell<DragGestureState>>,
+    key_hold: KeyHold,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -33,6 +42,7 @@ impl SessionsView {
     pub fn new(
         registry: Arc<Mutex<Registry>>,
         host: Arc<dyn TerminalHost + Send + Sync>,
+        corner: Corner,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -40,6 +50,9 @@ impl SessionsView {
             host,
             selection: Selection::default(),
             is_showing: true,
+            collapse_state: collapse::CollapseState::new(corner),
+            drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
+            key_hold: KeyHold::default(),
             last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
@@ -57,12 +70,55 @@ impl SessionsView {
         self.is_showing = showing;
     }
 
+    pub fn is_collapsed(&self) -> bool {
+        self.collapse_state.is_collapsed()
+    }
+
+    pub fn collapse_panel(&mut self, window: &mut Window) -> bool {
+        let expanded = window.bounds();
+        let strip = self.collapse_state.collapse(expanded);
+        trace::collapse(true);
+        if !apply_panel_bounds(window, strip) {
+            self.collapse_state.expand();
+            trace::collapse(false);
+            return false;
+        }
+        window.focus(&self.focus_handle);
+        true
+    }
+
+    pub fn expand_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(expanded) = self.collapse_state.expand() else {
+            return false;
+        };
+        let anchored =
+            collapse::reanchor_expanded(expanded, window.bounds(), self.collapse_state.corner());
+        let anchored = clamp_to_monitor(anchored, cx);
+        if !apply_panel_bounds(window, anchored) {
+            self.collapse_state.collapse(anchored);
+            return false;
+        }
+        trace::collapse(false);
+        window.focus(&self.focus_handle);
+        true
+    }
+
     pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let hidden = qol_gpui::popup_window::hide_window_by_title(WINDOW_TITLE);
-        self.is_showing = false;
+        if hidden {
+            self.is_showing = false;
+        }
         trace::dismiss(reason, hidden);
         hidden
+    }
+
+    fn key_repeat_guard(&mut self, key: &str) -> bool {
+        self.key_hold.press(key)
+    }
+
+    fn key_released(&mut self, key: &str) {
+        self.key_hold.release(key);
     }
 
     fn order(&self) -> Vec<SessionId> {
@@ -226,5 +282,77 @@ impl SessionsView {
 impl Focusable for SessionsView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+fn apply_panel_bounds(window: &mut Window, bounds: Bounds<Pixels>) -> bool {
+    let locked = qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
+    let synced = qol_gpui::popup_window::sync_window_layout(
+        WINDOW_TITLE,
+        window,
+        bounds.origin,
+        bounds.size,
+    );
+    locked && synced
+}
+
+fn clamp_to_monitor(bounds: Bounds<Pixels>, cx: &mut Context<SessionsView>) -> Bounds<Pixels> {
+    match MonitorTracker::start(cx).snapshot_monitor() {
+        Some(monitor) => placement::clamp_bounds(monitor.bounds(), bounds, CORNER_MARGIN),
+        None => bounds,
+    }
+}
+
+use std::collections::HashSet;
+
+#[derive(Default)]
+struct KeyHold {
+    held: HashSet<String>,
+}
+
+impl KeyHold {
+    fn press(&mut self, key: &str) -> bool {
+        self.held.insert(key.to_owned())
+    }
+
+    fn release(&mut self, key: &str) {
+        self.held.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyHold;
+
+    #[test]
+    fn key_hold_accepts_fresh_presses_and_denies_repeats_until_release() {
+        let mut hold = KeyHold::default();
+        assert!(hold.press("enter"));
+        assert!(!hold.press("enter"));
+        assert!(!hold.press("enter"));
+        hold.release("enter");
+        assert!(hold.press("enter"));
+    }
+
+    #[test]
+    fn key_hold_tracks_keys_independently() {
+        let mut hold = KeyHold::default();
+        assert!(hold.press("enter"));
+        assert!(hold.press("space"));
+        assert!(!hold.press("enter"));
+        assert!(!hold.press("space"));
+        hold.release("space");
+        assert!(hold.press("space"));
+        assert!(!hold.press("enter"));
+        hold.release("enter");
+        assert!(hold.press("enter"));
+    }
+
+    #[test]
+    fn key_hold_ignores_releases_of_other_keys() {
+        let mut hold = KeyHold::default();
+        assert!(hold.press("enter"));
+        hold.release("space");
+        assert!(!hold.press("enter"));
     }
 }
