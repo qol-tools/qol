@@ -58,6 +58,7 @@ pub fn file_range(path: &str) -> String {
 pub fn commit_range(index: usize) -> String {
     match index {
         0 => DEFAULT_RANGE.to_string(),
+        1 => "HEAD~1..HEAD".to_string(),
         _ => format!("HEAD~{}..HEAD~{}", index, index - 1),
     }
 }
@@ -239,6 +240,13 @@ mod tests {
         assert_eq!(resolve_repo(&bare.join("x"), None), None);
         let _ = std::fs::remove_dir_all(&bare);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_range_maps_scrub_index_to_git_range() {
+        assert_eq!(commit_range(0), "HEAD");
+        assert_eq!(commit_range(1), "HEAD~1..HEAD");
+        assert_eq!(commit_range(3), "HEAD~3..HEAD~2");
     }
 
     #[test]
