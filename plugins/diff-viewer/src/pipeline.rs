@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use qol_diff::{DiffError, FileDiff};
 use qol_git::{NumstatEntry, StatusEntry};
 
 pub const DEFAULT_RANGE: &str = "HEAD";
 pub const HISTORY_LIMIT: usize = 64;
+const WATCH_MAX_LATENCY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub enum GitRequest {
@@ -101,9 +104,26 @@ pub fn spawn_watch_bridge(
     thread::Builder::new()
         .name("diff-viewer-watch-bridge".to_owned())
         .spawn(move || {
-            while let Ok(paths) = batches.recv() {
-                if paths.iter().any(|path| !is_watch_noise(path)) {
-                    send_refresh(&git_tx, &generation);
+            let mut deadline: Option<Instant> = None;
+            loop {
+                let timeout = match deadline {
+                    Some(deadline) => deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                    None => Duration::from_secs(3600),
+                };
+                match batches.recv_timeout(timeout) {
+                    Ok(paths) => {
+                        if deadline.is_none() && paths.iter().any(|path| !is_watch_noise(path)) {
+                            deadline = Some(Instant::now() + WATCH_MAX_LATENCY);
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        if deadline.take().is_some() {
+                            send_refresh(&git_tx, &generation);
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
         })

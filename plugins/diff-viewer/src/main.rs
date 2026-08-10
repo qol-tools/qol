@@ -1,15 +1,12 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
 
 use gpui::{px, size, Application};
 use plugin_diff_viewer::pipeline::{self, GitRequest};
 use plugin_diff_viewer::view::{DiffView, WINDOW_HEIGHT, WINDOW_WIDTH};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Surface, SurfaceKind};
-use qol_watch::{settled, WatchRoot};
-
-const SETTLE_QUIET: Duration = Duration::from_millis(300);
+use qol_watch::{watch, WatchNotice, WatchRoot};
 
 fn main() {
     let cwd = std::env::current_dir().expect("diff-viewer needs a working directory");
@@ -21,8 +18,13 @@ fn main() {
         let (git_tx, requests) = mpsc::channel::<GitRequest>();
         let (result_tx, results) = mpsc::channel();
         if let Some(repo) = &repo {
-            let (watch, batches) = settled(&[WatchRoot::deep(repo)], SETTLE_QUIET)
-                .expect("diff-viewer could not watch the repo root");
+            let (watch_tx, batches) = mpsc::channel::<Vec<std::path::PathBuf>>();
+            let watch = watch(&[WatchRoot::deep(repo)], move |notice| {
+                if let WatchNotice::Changed(paths) = notice {
+                    let _ = watch_tx.send(paths);
+                }
+            })
+            .expect("diff-viewer could not watch the repo root");
             let _watch = watch;
             let _facts_thread = pipeline::spawn_git_facts_thread(
                 repo.clone(),
