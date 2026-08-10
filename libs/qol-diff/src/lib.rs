@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod engine;
+pub mod lexer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DiffStatus {

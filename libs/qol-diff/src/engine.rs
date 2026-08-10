@@ -1,3 +1,4 @@
+use crate::lexer::{classify, merge_heat, Lang};
 use crate::{
     DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenKind, TokenSpan,
 };
@@ -24,6 +25,10 @@ pub fn parse_patch(old_path: &str, new_path: &str, patch: &str) -> Result<FileDi
 }
 
 pub fn apply_heat(diff: &mut FileDiff) {
+    apply_heat_with_lang(diff, Lang::Generic);
+}
+
+pub fn apply_heat_with_lang(diff: &mut FileDiff, lang: Lang) {
     for hunk in &mut diff.hunks {
         let mut removed: Vec<usize> = Vec::new();
         let mut added: Vec<usize> = Vec::new();
@@ -33,23 +38,33 @@ pub fn apply_heat(diff: &mut FileDiff) {
                 LineKind::Removed => removed.push(idx),
                 LineKind::Added => added.push(idx),
                 LineKind::Context => {
-                    pair_block(&mut hunk.lines, &removed, &added);
+                    pair_block(&mut hunk.lines, &removed, &added, lang);
                     removed.clear();
                     added.clear();
                 }
             }
         }
-        pair_block(&mut hunk.lines, &removed, &added);
+        pair_block(&mut hunk.lines, &removed, &added, lang);
     }
 }
 
-fn pair_block(lines: &mut [LineChange], removed: &[usize], added: &[usize]) {
+fn pair_block(lines: &mut [LineChange], removed: &[usize], added: &[usize], lang: Lang) {
     for k in 0..removed.len().min(added.len()) {
         let old_text = lines[removed[k]].text.clone();
         let new_text = lines[added[k]].text.clone();
         let (old_spans, new_spans) = heat_spans(&old_text, &new_text);
-        lines[removed[k]].token_spans = old_spans;
-        lines[added[k]].token_spans = new_spans;
+        lines[removed[k]].token_spans = with_kinds(&old_text, old_spans, lang);
+        lines[added[k]].token_spans = with_kinds(&new_text, new_spans, lang);
+    }
+}
+
+fn with_kinds(text: &str, heat: Vec<TokenSpan>, lang: Lang) -> Vec<TokenSpan> {
+    match lang {
+        Lang::Generic => heat,
+        _ => {
+            let mut lexed = classify(text, lang);
+            merge_heat(&mut lexed, &heat)
+        }
     }
 }
 
@@ -218,7 +233,8 @@ fn parse_range(s: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_heat, parse_patch};
+    use super::{apply_heat, apply_heat_with_lang, parse_patch};
+    use crate::lexer::Lang;
     use crate::{
         DiffError, DiffStatus, FileDiff, HeatLevel, LineChange, LineKind, TokenKind, TokenSpan,
     };
@@ -768,6 +784,58 @@ index 111..222 100644
                 kind: TokenKind::Plain,
             }]
         );
+    }
+
+    #[test]
+    fn apply_heat_with_lang_sets_kinds_on_changed_lines() {
+        let mut diff = parse_patch("app.rs", "app.rs", SIMPLE).expect("parse");
+        apply_heat_with_lang(&mut diff, Lang::Rust);
+        let lines = lines_of(&diff, 0);
+        let expected = vec![
+            TokenSpan {
+                start: 0,
+                len: 4,
+                heat: HeatLevel::Cool,
+                kind: TokenKind::Plain,
+            },
+            TokenSpan {
+                start: 4,
+                len: 3,
+                heat: HeatLevel::Cool,
+                kind: TokenKind::Keyword,
+            },
+            TokenSpan {
+                start: 7,
+                len: 5,
+                heat: HeatLevel::Cool,
+                kind: TokenKind::Plain,
+            },
+            TokenSpan {
+                start: 12,
+                len: 1,
+                heat: HeatLevel::Hot,
+                kind: TokenKind::Plain,
+            },
+            TokenSpan {
+                start: 13,
+                len: 1,
+                heat: HeatLevel::Cool,
+                kind: TokenKind::Plain,
+            },
+        ];
+        assert_eq!(lines[2].token_spans, expected);
+        assert_eq!(lines[3].token_spans, expected);
+        assert!(lines[0].token_spans.is_empty());
+        assert!(lines[4].token_spans.is_empty());
+    }
+
+    #[test]
+    fn apply_heat_with_lang_generic_matches_apply_heat() {
+        let mut plain = parse_patch("app.rs", "app.rs", SIMPLE).expect("parse");
+        apply_heat(&mut plain);
+        let mut generic = parse_patch("app.rs", "app.rs", SIMPLE).expect("parse");
+        apply_heat_with_lang(&mut generic, Lang::Generic);
+        assert_eq!(plain, generic);
     }
 
     #[test]
