@@ -4,3 +4,4 @@ __pycache__/
 **/.claude/agent-memory/**/.reflect-last.log
 .playwright-mcp/
 verify/reports/
+/reports/
