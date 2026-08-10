@@ -1113,6 +1113,7 @@ mod lifecycle_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn stop_returns_bounded_while_a_gate_blocked_probe_outlives_the_backstop() {
         let _serial = serialized_watch_tests();
