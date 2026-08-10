@@ -15,20 +15,16 @@ pub fn resolve_worktree_paths(
 }
 
 fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> Option<PathBuf> {
-    let current_root = match git_toplevel(dev_link_path) {
-        Some(root) => root,
+    let relative = match git_relative_path(dev_link_path) {
+        Some(relative) => relative,
         None => return Some(dev_link_path.to_path_buf()),
-    };
-    let relative = match dev_link_path.strip_prefix(&current_root) {
-        Ok(relative) => relative,
-        Err(_) => return Some(dev_link_path.to_path_buf()),
     };
 
     if let Some(target_root) = match branch {
         Some(b) => find_git_worktree_by_branch(dev_link_path, b),
         None => find_git_worktree_base(dev_link_path),
     } {
-        let candidate = target_root.join(relative);
+        let candidate = target_root.join(&relative);
         if candidate.exists() {
             log::debug!(
                 "[worktree] resolved {} -> {}",
@@ -40,7 +36,7 @@ fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> Option
     }
 
     if let Some(base_root) = find_git_worktree_base(dev_link_path) {
-        let base_candidate = base_root.join(relative);
+        let base_candidate = base_root.join(&relative);
         if base_candidate.exists() {
             log::debug!(
                 "[worktree] {} missing in selection, falling back to {}",
@@ -58,15 +54,17 @@ fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> Option
     None
 }
 
-fn git_toplevel(path: &Path) -> Option<PathBuf> {
+fn git_relative_path(path: &Path) -> Option<PathBuf> {
     let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+        .args(["rev-parse", "--show-toplevel", "--show-prefix"])
         .current_dir(path)
         .output();
     match output {
-        Ok(output) if output.status.success() => Some(PathBuf::from(
-            String::from_utf8_lossy(&output.stdout).trim(),
-        )),
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let relative = stdout.lines().nth(1).unwrap_or_default();
+            Some(PathBuf::from(relative.trim()))
+        }
         Ok(output) => {
             log::debug!(
                 "[worktree] {} is not inside a git repo: {}",
@@ -150,6 +148,10 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    fn canon(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).expect("resolved path must exist on disk")
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(200))]
 
@@ -198,7 +200,7 @@ mod tests {
         let feat_plugin = repo.plugin(&feat, "plugin-a");
 
         let resolved = resolve_plugin_worktree(&base_plugin, Some("feat")).unwrap();
-        assert_eq!(resolved, feat_plugin);
+        assert_eq!(canon(&resolved), canon(&feat_plugin));
     }
 
     #[test]
@@ -220,10 +222,8 @@ mod tests {
 
         assert_eq!(resolve_plugin_worktree(&feat_plugin, None), None);
         assert_eq!(resolve_plugin_worktree(&feat_plugin, Some("other")), None);
-        assert_eq!(
-            resolve_plugin_worktree(&feat_plugin, Some("feat")),
-            Some(feat_plugin)
-        );
+        let resolved = resolve_plugin_worktree(&feat_plugin, Some("feat")).expect("feat copy resolves");
+        assert_eq!(canon(&resolved), canon(&feat_plugin));
     }
 
     #[test]
