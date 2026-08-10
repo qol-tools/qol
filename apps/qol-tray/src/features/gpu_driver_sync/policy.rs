@@ -116,6 +116,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn serialized_env_tests() -> std::sync::MutexGuard<'static, ()> {
         static GUARD: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
         GUARD
