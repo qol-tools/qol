@@ -125,6 +125,18 @@ enum DiffPane {
     Ready(FileDiff),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    Unified,
+    Split,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinePair {
+    old: Option<usize>,
+    new: Option<usize>,
+}
+
 pub struct DiffView {
     repo: Option<PathBuf>,
     files: FileListState,
@@ -132,6 +144,10 @@ pub struct DiffView {
     surface: CodeSurface,
     lines: Vec<LineChange>,
     active_pane: ActivePane,
+    layout: Layout,
+    pairs: Vec<LinePair>,
+    hunk_pair_starts: Vec<usize>,
+    hunk_line_starts: Vec<usize>,
     facts_error: Option<String>,
     last_fit: usize,
     generation: Arc<AtomicU64>,
@@ -172,6 +188,10 @@ impl DiffView {
             surface: CodeSurface::new(),
             lines: Vec::new(),
             active_pane: ActivePane::Files,
+            layout: Layout::Split,
+            pairs: Vec::new(),
+            hunk_pair_starts: Vec::new(),
+            hunk_line_starts: Vec::new(),
             facts_error: None,
             last_fit: 0,
             generation,
@@ -325,9 +345,9 @@ impl DiffView {
     }
 
     fn apply_jump(&mut self, ratio: f32) {
-        let total = self.lines.len().max(1);
+        let total = self.row_count().max(1);
         let target = (ratio * total as f32) as usize;
-        let max = self.lines.len().saturating_sub(self.last_fit.max(1));
+        let max = self.row_count().saturating_sub(self.last_fit.max(1));
         self.surface.set_scroll_offset(target.min(max));
     }
 
@@ -388,8 +408,12 @@ impl DiffView {
             }
             Ok(diff) => {
                 let lines = flatten(&diff);
+                let (pairs, hunk_pair_starts, hunk_line_starts) = build_pairs(&diff.hunks);
                 self.surface.set_lines(lines.clone());
                 self.lines = lines;
+                self.pairs = pairs;
+                self.hunk_pair_starts = hunk_pair_starts;
+                self.hunk_line_starts = hunk_line_starts;
                 self.pane = DiffPane::Ready(diff);
             }
             Err(error) => self.pane = DiffPane::Error(error),
@@ -431,6 +455,12 @@ impl DiffView {
             }
             (ActivePane::Code, "down") | (ActivePane::Code, "j") => self.scroll_lines(1),
             (ActivePane::Code, "up") | (ActivePane::Code, "k") => self.scroll_lines(-1),
+            (ActivePane::Code, "s") => {
+                self.layout = match self.layout {
+                    Layout::Unified => Layout::Split,
+                    Layout::Split => Layout::Unified,
+                };
+            }
             (ActivePane::Code, "pagedown") | (ActivePane::Code, "page_down") => {
                 self.scroll_lines(page as isize)
             }
@@ -472,10 +502,17 @@ impl DiffView {
     }
 
     fn scroll_lines(&mut self, delta: isize) {
-        let max = self.lines.len().saturating_sub(self.last_fit.max(1));
+        let max = self.row_count().saturating_sub(self.last_fit.max(1));
         let target = self.surface.scroll_offset() as isize + delta;
         self.surface
             .set_scroll_offset(target.clamp(0, max as isize) as usize);
+    }
+
+    fn row_count(&self) -> usize {
+        match self.layout {
+            Layout::Unified => self.lines.len(),
+            Layout::Split => self.pairs.len(),
+        }
     }
 
     fn page_size(&self) -> usize {
@@ -555,7 +592,119 @@ impl DiffView {
             DiffPane::Error(error) => pane
                 .child(center_message(&error.to_string(), surface::ERROR_TEXT))
                 .into_any_element(),
-            DiffPane::Ready(_) => pane.children(self.code_rows(window)).into_any_element(),
+            DiffPane::Ready(_) => match self.layout {
+                Layout::Split => pane.child(self.split_columns(window)).into_any_element(),
+                Layout::Unified => pane.children(self.code_rows(window)).into_any_element(),
+            },
+        }
+    }
+
+    fn split_columns(&self, window: &Window) -> AnyElement {
+        let start = self.surface.scroll_offset();
+        let end = (start + self.last_fit.max(1)).min(self.row_count());
+        let mut old_rows = Vec::new();
+        let mut new_rows = Vec::new();
+        for row in start..end {
+            old_rows.push(self.split_row(row, true, window));
+            new_rows.push(self.split_row(row, false, window));
+        }
+        div()
+            .flex()
+            .flex_row()
+            .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .border_r_1()
+                    .border_color(rgb(surface::BORDER))
+                    .children(old_rows),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .children(new_rows),
+            )
+            .into_any_element()
+    }
+
+    fn split_row(&self, row: usize, is_old: bool, window: &Window) -> AnyElement {
+        let pair = self.pairs.get(row).copied().unwrap_or(LinePair {
+            old: None,
+            new: None,
+        });
+        let line_index = if is_old { pair.old } else { pair.new };
+        let counterpart = if is_old { pair.new } else { pair.old };
+        let mut row_el = div()
+            .h(px(LINE_HEIGHT))
+            .w_full()
+            .flex()
+            .flex_row()
+            .overflow_hidden()
+            .line_height(px(LINE_HEIGHT))
+            .text_size(px(FONT_SIZE));
+        let style = line_index
+            .and_then(|index| self.lines.get(index))
+            .map(surface::style_from_line)
+            .unwrap_or_default();
+        let blank_bg = counterpart
+            .and_then(|index| self.lines.get(index))
+            .and_then(|line| surface::line_background(surface::style_from_line(line)));
+        if let Some(bg) = surface::line_background(style) {
+            row_el = row_el.bg(rgb(bg));
+        } else if let Some(bg) = blank_bg {
+            row_el = row_el.bg(rgb(bg));
+        }
+        let width = self.surface.gutter_width();
+        match line_index {
+            Some(index) => {
+                let line = &self.lines[index];
+                let label = if is_old {
+                    line.old_line_no
+                } else {
+                    line.new_line_no
+                };
+                let glyph = match (is_old, line.kind) {
+                    (true, LineKind::Removed) => "-",
+                    (false, LineKind::Added) => "+",
+                    _ => " ",
+                };
+                row_el
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .text_color(rgb(surface::GUTTER_TEXT))
+                            .child(side_gutter(label, width)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(GLYPH_WIDTH))
+                            .text_color(rgb(surface::kind_color(line.kind)))
+                            .child(glyph),
+                    )
+                    .child(self.code_text(line, style.dimmed, window))
+                    .into_any_element()
+            }
+            None => row_el
+                .child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .text_color(rgb(surface::GUTTER_TEXT))
+                        .child(side_gutter(None, width)),
+                )
+                .child(div().flex_none().w(px(GLYPH_WIDTH)).child(" "))
+                .child(div().flex_1().child(" "))
+                .into_any_element(),
         }
     }
 
@@ -681,27 +830,27 @@ impl DiffView {
     fn update_overview(&mut self, cx: &mut Context<Self>) {
         let (markers, total) = match &self.pane {
             DiffPane::Ready(diff) => {
+                let starts = match self.layout {
+                    Layout::Unified => self.hunk_line_starts.clone(),
+                    Layout::Split => self.hunk_pair_starts.clone(),
+                };
+                let total = self.row_count();
                 let mut markers = Vec::new();
-                let mut offset = 0usize;
-                let mut total = 0usize;
-                for hunk in &diff.hunks {
-                    total += hunk.lines.len();
-                }
-                for hunk in &diff.hunks {
+                for (index, hunk) in diff.hunks.iter().enumerate() {
                     let weight = hunk
                         .lines
                         .iter()
                         .filter(|line| line.kind != LineKind::Context)
                         .count() as u32;
+                    let start = starts.get(index).copied().unwrap_or(0);
                     markers.push(HunkMarker::new(
                         if total == 0 {
                             0.0
                         } else {
-                            offset as f32 / total as f32
+                            start as f32 / total as f32
                         },
                         weight,
                     ));
-                    offset += hunk.lines.len();
                 }
                 (markers, total)
             }
@@ -726,6 +875,56 @@ fn flatten(diff: &FileDiff) -> Vec<LineChange> {
         .iter()
         .flat_map(|hunk| hunk.lines.iter().cloned())
         .collect()
+}
+
+fn build_pairs(hunks: &[qol_diff::Hunk]) -> (Vec<LinePair>, Vec<usize>, Vec<usize>) {
+    let mut pairs = Vec::new();
+    let mut hunk_pair_starts = Vec::new();
+    let mut hunk_line_starts = Vec::new();
+    let mut flat = 0usize;
+    for hunk in hunks {
+        hunk_line_starts.push(flat);
+        hunk_pair_starts.push(pairs.len());
+        let mut cursor = 0usize;
+        while cursor < hunk.lines.len() {
+            if hunk.lines[cursor].kind == LineKind::Context {
+                let index = flat;
+                flat += 1;
+                cursor += 1;
+                pairs.push(LinePair {
+                    old: Some(index),
+                    new: Some(index),
+                });
+                continue;
+            }
+            let mut removed = Vec::new();
+            let mut added = Vec::new();
+            while cursor < hunk.lines.len() && hunk.lines[cursor].kind != LineKind::Context {
+                let index = flat;
+                flat += 1;
+                match hunk.lines[cursor].kind {
+                    LineKind::Removed => removed.push(index),
+                    _ => added.push(index),
+                }
+                cursor += 1;
+            }
+            let width = removed.len().max(added.len());
+            for index in 0..width {
+                pairs.push(LinePair {
+                    old: removed.get(index).copied(),
+                    new: added.get(index).copied(),
+                });
+            }
+        }
+    }
+    (pairs, hunk_pair_starts, hunk_line_starts)
+}
+
+fn side_gutter(label: Option<u32>, width: usize) -> String {
+    match label {
+        Some(number) => format!("{number:>width$}"),
+        None => " ".repeat(width),
+    }
 }
 
 fn pick_monospace(cx: &App) -> SharedString {
@@ -886,5 +1085,142 @@ mod tests {
         assert_eq!(ActivePane::Files.other(), ActivePane::Code);
         assert_eq!(ActivePane::Code.other(), ActivePane::Scrubber);
         assert_eq!(ActivePane::Scrubber.other(), ActivePane::Files);
+    }
+
+    fn change(kind: LineKind, old: Option<u32>, new: Option<u32>) -> LineChange {
+        LineChange {
+            kind,
+            text: String::new(),
+            token_spans: Vec::new(),
+            old_line_no: old,
+            new_line_no: new,
+        }
+    }
+
+    fn hunks(blocks: Vec<Vec<LineChange>>) -> Vec<qol_diff::Hunk> {
+        blocks
+            .into_iter()
+            .map(|lines| qol_diff::Hunk {
+                old_start: 1,
+                old_lines: 0,
+                new_start: 1,
+                new_lines: 0,
+                lines,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn split_pairs_align_context_one_to_one() {
+        let (pairs, pair_starts, line_starts) = build_pairs(&hunks(vec![vec![
+            change(LineKind::Context, Some(1), Some(1)),
+            change(LineKind::Context, Some(2), Some(2)),
+        ]]));
+        assert_eq!(
+            pairs,
+            vec![
+                LinePair {
+                    old: Some(0),
+                    new: Some(0)
+                },
+                LinePair {
+                    old: Some(1),
+                    new: Some(1)
+                },
+            ]
+        );
+        assert_eq!(pair_starts, vec![0]);
+        assert_eq!(line_starts, vec![0]);
+    }
+
+    #[test]
+    fn split_pairs_align_change_runs_by_position() {
+        let (pairs, ..) = build_pairs(&hunks(vec![vec![
+            change(LineKind::Removed, Some(1), None),
+            change(LineKind::Removed, Some(2), None),
+            change(LineKind::Added, None, Some(2)),
+            change(LineKind::Added, None, Some(3)),
+            change(LineKind::Added, None, Some(4)),
+        ]]));
+        assert_eq!(
+            pairs,
+            vec![
+                LinePair {
+                    old: Some(0),
+                    new: Some(2)
+                },
+                LinePair {
+                    old: Some(1),
+                    new: Some(3)
+                },
+                LinePair {
+                    old: None,
+                    new: Some(4)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn split_pairs_interleave_removed_and_added() {
+        let (pairs, ..) = build_pairs(&hunks(vec![vec![
+            change(LineKind::Removed, Some(1), None),
+            change(LineKind::Added, None, Some(1)),
+            change(LineKind::Removed, Some(2), None),
+            change(LineKind::Added, None, Some(2)),
+        ]]));
+        assert_eq!(
+            pairs,
+            vec![
+                LinePair {
+                    old: Some(0),
+                    new: Some(1)
+                },
+                LinePair {
+                    old: Some(2),
+                    new: Some(3)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn split_pairs_track_hunk_starts_across_hunks() {
+        let (pairs, pair_starts, line_starts) = build_pairs(&hunks(vec![
+            vec![change(LineKind::Context, Some(1), Some(1))],
+            vec![
+                change(LineKind::Removed, Some(2), None),
+                change(LineKind::Added, None, Some(2)),
+                change(LineKind::Context, Some(3), Some(3)),
+            ],
+        ]));
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pair_starts, vec![0, 1]);
+        assert_eq!(line_starts, vec![0, 1]);
+    }
+
+    #[test]
+    fn split_pair_count_is_max_of_sides_per_run() {
+        let (pairs, ..) = build_pairs(&hunks(vec![vec![
+            change(LineKind::Removed, Some(1), None),
+            change(LineKind::Context, Some(2), Some(2)),
+            change(LineKind::Added, None, Some(3)),
+        ]]));
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(
+            pairs[1],
+            LinePair {
+                old: Some(1),
+                new: Some(1)
+            },
+            "context between one-sided runs stays aligned"
+        );
+    }
+
+    #[test]
+    fn side_gutter_pads_and_blanks() {
+        assert_eq!(side_gutter(Some(7), 4), "   7");
+        assert_eq!(side_gutter(None, 4), "    ");
+        assert_eq!(side_gutter(Some(300), 3), "300");
     }
 }
