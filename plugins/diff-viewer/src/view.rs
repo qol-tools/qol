@@ -144,6 +144,7 @@ pub struct DiffView {
     surface: CodeSurface,
     lines: Vec<LineChange>,
     active_pane: ActivePane,
+    files_collapsed: bool,
     layout: Layout,
     pairs: Vec<LinePair>,
     hunk_pair_starts: Vec<usize>,
@@ -188,6 +189,7 @@ impl DiffView {
             surface: CodeSurface::new(),
             lines: Vec::new(),
             active_pane: ActivePane::Files,
+            files_collapsed: true,
             layout: Layout::Split,
             pairs: Vec::new(),
             hunk_pair_starts: Vec::new(),
@@ -396,6 +398,8 @@ impl DiffView {
         );
         if self.files.files.is_empty() {
             self.pane = DiffPane::Empty;
+        } else if matches!(self.pane, DiffPane::Empty) {
+            self.select_current_file();
         }
     }
 
@@ -437,12 +441,18 @@ impl DiffView {
         let page = self.page_size();
         match (self.active_pane, key) {
             (_, "tab") => {
-                self.active_pane = self.active_pane.other();
+                self.active_pane = next_pane(self.active_pane, self.files_collapsed);
                 self.refocus(_window, cx);
             }
             (_, "escape") | (_, "esc") => {
                 self.dismisser.dismiss(cx);
                 return;
+            }
+            (_, "f") => {
+                self.files_collapsed = !self.files_collapsed;
+                if self.files_collapsed && self.active_pane == ActivePane::Files {
+                    self.active_pane = ActivePane::Code;
+                }
             }
             (ActivePane::Files, "down") | (ActivePane::Files, "j") => self.files.move_down(),
             (ActivePane::Files, "up") | (ActivePane::Files, "k") => self.files.move_up(),
@@ -812,16 +822,14 @@ impl Render for DiffView {
             .font_family(self.font_family.clone())
             .text_size(px(FONT_SIZE))
             .on_key_down(cx.listener(Self::on_key))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .h_full()
-                    .child(self.render_file_list())
-                    .child(self.render_pane(window, cx))
-                    .child(self.overview_view.clone()),
-            )
+            .child({
+                let mut row = div().flex().flex_row().flex_1().h_full();
+                if !self.files_collapsed {
+                    row = row.child(self.render_file_list());
+                }
+                row.child(self.render_pane(window, cx))
+                    .child(self.overview_view.clone())
+            })
             .child(scrubber)
     }
 }
@@ -867,6 +875,15 @@ impl DiffView {
             view.set_markers(markers);
             view.set_viewport(viewport);
         });
+    }
+}
+
+fn next_pane(active: ActivePane, files_collapsed: bool) -> ActivePane {
+    let next = active.other();
+    if files_collapsed && next == ActivePane::Files {
+        next.other()
+    } else {
+        next
     }
 }
 
@@ -1085,6 +1102,16 @@ mod tests {
         assert_eq!(ActivePane::Files.other(), ActivePane::Code);
         assert_eq!(ActivePane::Code.other(), ActivePane::Scrubber);
         assert_eq!(ActivePane::Scrubber.other(), ActivePane::Files);
+    }
+
+    #[test]
+    fn tab_cycle_skips_the_hidden_file_list() {
+        assert_eq!(next_pane(ActivePane::Code, true), ActivePane::Scrubber);
+        assert_eq!(next_pane(ActivePane::Scrubber, true), ActivePane::Code);
+        assert_eq!(next_pane(ActivePane::Files, true), ActivePane::Code);
+        assert_eq!(next_pane(ActivePane::Code, false), ActivePane::Scrubber);
+        assert_eq!(next_pane(ActivePane::Scrubber, false), ActivePane::Files);
+        assert_eq!(next_pane(ActivePane::Files, false), ActivePane::Code);
     }
 
     fn change(kind: LineKind, old: Option<u32>, new: Option<u32>) -> LineChange {
