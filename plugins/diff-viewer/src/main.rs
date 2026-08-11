@@ -38,6 +38,7 @@ fn main() {
         match Surface::new(SurfaceKind::Panel)
             .title("Diff Viewer")
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+            .reveal_gate(false)
             .show_focused(&tracker, cx, move |dismisser, _window, cx| {
                 DiffView::new(repo.clone(), dismisser, git_tx, generation, results, cx)
             }) {

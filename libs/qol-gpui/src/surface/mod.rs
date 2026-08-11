@@ -120,6 +120,7 @@ pub struct Surface {
     timeout: Option<Duration>,
     size: Size<Pixels>,
     retain_on_dismiss: bool,
+    reveal_gate: bool,
 }
 
 pub struct OpenedSurface<V> {
@@ -238,6 +239,7 @@ impl Surface {
             timeout: None,
             size: size(px(320.0), px(72.0)),
             retain_on_dismiss: false,
+            reveal_gate: true,
         }
     }
 
@@ -263,6 +265,11 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn reveal_gate(mut self, enabled: bool) -> Self {
+        self.reveal_gate = enabled;
         self
     }
 
@@ -333,7 +340,8 @@ impl Surface {
         let title = unique_surface_title(&self.title);
         let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
-        let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
+        let native_reveal_gate =
+            reveal_after_move && supports_native_reveal_gate() && self.reveal_gate;
         let passive_reveal_gate =
             matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
