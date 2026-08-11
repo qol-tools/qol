@@ -277,8 +277,9 @@ impl ScrubberView {
     }
 
     fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.drag = None;
-        cx.stop_propagation();
+        if self.drag.take().is_some() {
+            cx.stop_propagation();
+        }
     }
 
     fn dot(&self, index: usize, cx: &mut Context<Self>) -> Div {

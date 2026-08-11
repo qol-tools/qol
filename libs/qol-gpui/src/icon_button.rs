@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, ClickEvent, CursorStyle, KeyDownEvent, MouseButton, Window};
+use gpui::{div, px, rgb, rgba, App, ClickEvent, CursorStyle, KeyDownEvent, Window};
 
 use crate::theme::{SystemPalette, DARK_REFERENCE};
 
@@ -70,7 +70,6 @@ impl RenderOnce for IconButton {
             .cursor(CursorStyle::PointingHand)
             .hover(|style| style.bg(rgba(self.hover)))
             .in_focus(|style| style.border_color(rgb(self.focus)))
-            .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
             .on_click(move |event, window, app| {
                 if accepts_activation_click(event) {
                     if let Some(action) = &*click_action {

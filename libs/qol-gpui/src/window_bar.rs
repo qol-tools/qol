@@ -1,14 +1,17 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, CursorStyle, FontWeight, SharedString, Window};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::icon_button::IconButton;
-use crate::surface::PanelDragArea;
+use crate::surface::{DragGestureState, PanelDragArea};
 use crate::theme::{SystemPalette, DARK_REFERENCE};
 
 const BAR_HEIGHT: f32 = 34.0;
 const BAR_PADDING_X: f32 = 12.0;
 const TRAILING_GAP: f32 = 9.0;
 const TITLE_SIZE: f32 = 11.0;
+const DRAG_THRESHOLD_PX: f32 = 4.0;
 
 const fn chrome_defaults() -> (u32, u32, u32) {
     let system = SystemPalette::from_reference(DARK_REFERENCE);
@@ -129,7 +132,9 @@ impl RenderOnce for WindowBar {
             .border_b_1()
             .border_color(rgb(self.border))
             .cursor(CursorStyle::OpenHand)
-            .panel_drag_area()
+            .panel_drag_after(&Rc::new(RefCell::new(DragGestureState::new(
+                DRAG_THRESHOLD_PX,
+            ))))
             .on_click(|event, window, _| {
                 if is_double_click(event.click_count()) {
                     window.toggle_fullscreen();
