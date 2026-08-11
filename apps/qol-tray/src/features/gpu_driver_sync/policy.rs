@@ -104,6 +104,7 @@ pub(crate) fn notification_text(loaded: &str, on_disk: &str, intent: &PolicyInte
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::sync::OnceLock;
 
     fn view(state: PolicyState, module: Option<&str>) -> PolicyStatusView {
