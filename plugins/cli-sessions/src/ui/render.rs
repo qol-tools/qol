@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    KeyUpEvent, MouseButton, SharedString, Window,
+    KeyUpEvent, SharedString, Window,
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
@@ -129,77 +129,33 @@ fn summary_groups_el(rows: &[SessionState]) -> impl IntoElement {
         }))
 }
 
-fn accepts_activation_click(event: &ClickEvent) -> bool {
-    matches!(event, ClickEvent::Mouse(_))
-}
-
-fn header_button(
-    id: &'static str,
-    glyph: &'static str,
-    activate: fn(&mut SessionsView, &mut Window, &mut Context<SessionsView>),
-    cx: &mut Context<SessionsView>,
-) -> impl IntoElement {
-    let palette = current_palette();
-    div()
-        .id(id)
-        .focusable()
-        .tab_stop(true)
-        .w(px(24.0))
-        .h(px(24.0))
-        .rounded_md()
-        .border_1()
-        .border_color(rgba(palette.transparent_rgba))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(palette.text_secondary))
-        .text_size(px(13.0))
-        .cursor(CursorStyle::PointingHand)
-        .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
-        .in_focus(|style| style.border_color(rgb(palette.selection_border)))
-        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-            if accepts_activation_click(event) {
-                activate(this, window, cx);
-                cx.stop_propagation();
-            }
-        }))
-        .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
-            if matches!(ev.keystroke.key.as_str(), "enter" | "space")
-                && this.key_repeat_guard(&ev.keystroke.key)
-            {
-                activate(this, window, cx);
-                cx.stop_propagation();
-            }
-        }))
-        .child(glyph)
-}
-
 fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoElement {
     let palette = current_palette();
+    let view = cx.entity();
+    let collapse = view.clone();
+    let hide = view;
     WindowBar::new("CLI SESSIONS")
         .background(palette.chrome_bg)
         .border(palette.divider)
         .title_color(palette.text_heading)
+        .button_style(
+            palette.text_secondary,
+            palette.keycap_bg_rgba,
+            palette.selection_border,
+        )
         .child(summary_groups_el(rows))
-        .child(header_button(
-            "collapse-panel-button",
-            "\u{2581}",
-            |this, window, cx| {
+        .on_collapse(move |window, app| {
+            collapse.update(app, |this, cx| {
                 this.collapse_panel(window);
                 cx.notify();
-            },
-            cx,
-        ))
-        .child(header_button(
-            "hide-panel-button",
-            "\u{00D7}",
-            |this, _window, cx| {
+            });
+        })
+        .on_hide(move |_window, app| {
+            hide.update(app, |this, cx| {
                 this.dismiss_with_reason(HIDE_BUTTON_REASON);
                 cx.notify();
-            },
-            cx,
-        ))
+            });
+        })
 }
 
 fn empty_state() -> impl IntoElement {
@@ -714,15 +670,6 @@ mod tests {
             g.on_move(point(px(10.0), px(0.0)), true);
         }
         g
-    }
-
-    #[test]
-    fn activation_clicks_accept_mouse_and_reject_keyboard() {
-        assert!(accepts_activation_click(&mouse_click(
-            (1.0, 1.0),
-            (1.0, 1.0)
-        )));
-        assert!(!accepts_activation_click(&keyboard_click()));
     }
 
     #[test]

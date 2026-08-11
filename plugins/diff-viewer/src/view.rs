@@ -900,7 +900,12 @@ impl Render for DiffView {
                 WindowBar::new("DIFF VIEWER")
                     .background(surface::CANVAS_BG)
                     .border(surface::BORDER)
-                    .title_color(surface::TEXT_PRIMARY),
+                    .title_color(surface::TEXT_PRIMARY)
+                    .button_style(surface::GUTTER_TEXT, surface::BORDER, surface::BORDER)
+                    .on_hide({
+                        let dismisser = self.dismisser.clone();
+                        move |_window, app| dismisser.dismiss(app)
+                    }),
             )
             .child({
                 let mut row = div().flex().flex_row().flex_1().h_full();
