@@ -19,9 +19,11 @@ pub mod status_indicator;
 pub mod surface;
 pub mod toast;
 pub mod window;
+pub mod window_bar;
 
 pub use spinner::Spinner;
 pub use status_indicator::StatusIndicator;
+pub use window_bar::WindowBar;
 
 pub mod theme {
     pub use qol_theme::*;

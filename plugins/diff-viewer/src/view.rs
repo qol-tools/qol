@@ -15,6 +15,7 @@ use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::surface::SurfaceDismisser;
+use qol_gpui::WindowBar;
 
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
@@ -895,6 +896,12 @@ impl Render for DiffView {
             .font_family(self.font_family.clone())
             .text_size(px(FONT_SIZE))
             .on_key_down(cx.listener(Self::on_key))
+            .child(
+                WindowBar::new("DIFF VIEWER")
+                    .background(surface::CANVAS_BG)
+                    .border(surface::BORDER)
+                    .title_color(surface::TEXT_PRIMARY),
+            )
             .child({
                 let mut row = div().flex().flex_row().flex_1().h_full();
                 if !self.files_collapsed {

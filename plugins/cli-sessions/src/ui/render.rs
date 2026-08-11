@@ -7,6 +7,7 @@ use gpui::{
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
+use qol_gpui::WindowBar;
 use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::{meaningful_name, SessionState};
@@ -176,50 +177,29 @@ fn header_button(
 
 fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoElement {
     let palette = current_palette();
-    div()
-        .h(px(34.0))
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_between()
-        .px(px(12.0))
-        .bg(rgb(palette.chrome_bg))
-        .border_b_1()
-        .border_color(rgb(palette.divider))
-        .cursor(CursorStyle::OpenHand)
-        .panel_drag_area()
-        .child(
-            div()
-                .text_color(rgb(palette.text_heading))
-                .text_size(px(11.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("CLI SESSIONS"),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(9.0))
-                .child(summary_groups_el(rows))
-                .child(header_button(
-                    "collapse-panel-button",
-                    "\u{2581}",
-                    |this, window, cx| {
-                        this.collapse_panel(window);
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .child(header_button(
-                    "hide-panel-button",
-                    "\u{00D7}",
-                    |this, _window, cx| {
-                        this.dismiss_with_reason(HIDE_BUTTON_REASON);
-                        cx.notify();
-                    },
-                    cx,
-                )),
-        )
+    WindowBar::new("CLI SESSIONS")
+        .background(palette.chrome_bg)
+        .border(palette.divider)
+        .title_color(palette.text_heading)
+        .child(summary_groups_el(rows))
+        .child(header_button(
+            "collapse-panel-button",
+            "\u{2581}",
+            |this, window, cx| {
+                this.collapse_panel(window);
+                cx.notify();
+            },
+            cx,
+        ))
+        .child(header_button(
+            "hide-panel-button",
+            "\u{00D7}",
+            |this, _window, cx| {
+                this.dismiss_with_reason(HIDE_BUTTON_REASON);
+                cx.notify();
+            },
+            cx,
+        ))
 }
 
 fn empty_state() -> impl IntoElement {

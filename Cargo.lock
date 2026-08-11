@@ -5835,6 +5835,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-diff-viewer"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "qol-cache",
+ "qol-diff",
+ "qol-git",
+ "qol-gpui",
+ "qol-plugin-api",
+ "qol-watch",
+]
+
+[[package]]
 name = "plugin-lights"
 version = "1.29.0"
 dependencies = [
@@ -6313,6 +6326,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-cache"
+version = "1.0.0"
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 
@@ -6401,6 +6418,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-diff"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qol-frecency"
 version = "0.2.0"
 dependencies = [
@@ -6418,6 +6443,10 @@ dependencies = [
  "libc",
  "tempfile",
 ]
+
+[[package]]
+name = "qol-git"
+version = "1.0.0"
 
 [[package]]
 name = "qol-gpui"
