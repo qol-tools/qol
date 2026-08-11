@@ -1,8 +1,4 @@
-use std::ops::Range;
-
 use qol_diff::{HeatLevel, LineChange, LineKind, TokenKind};
-
-const DEFAULT_VISIBLE_LINES: usize = 24;
 
 pub const CANVAS_BG: u32 = 0x14181f;
 pub const LIST_BG: u32 = 0x11141a;
@@ -38,11 +34,10 @@ impl Default for LineStyle {
 }
 
 pub struct CodeSurface {
-    lines: Vec<LineChange>,
     styles: Vec<LineStyle>,
     scroll_offset: usize,
-    visible_lines: usize,
     gutter_enabled: bool,
+    gutter_width: usize,
 }
 
 impl Default for CodeSurface {
@@ -54,28 +49,21 @@ impl Default for CodeSurface {
 impl CodeSurface {
     pub fn new() -> Self {
         Self {
-            lines: Vec::new(),
             styles: Vec::new(),
             scroll_offset: 0,
-            visible_lines: DEFAULT_VISIBLE_LINES,
             gutter_enabled: true,
+            gutter_width: 0,
         }
     }
 
-    pub fn set_lines(&mut self, lines: Vec<LineChange>) {
+    pub fn set_lines(&mut self, lines: &[LineChange]) {
         self.styles = lines.iter().map(style_from_line).collect();
-        self.lines = lines;
+        self.gutter_width = if self.gutter_enabled {
+            gutter_digit_width(lines)
+        } else {
+            0
+        };
         self.scroll_offset = 0;
-    }
-
-    pub fn line_count(&self) -> usize {
-        self.lines.len()
-    }
-
-    pub fn set_line_style(&mut self, index: usize, style: LineStyle) {
-        if let Some(slot) = self.styles.get_mut(index) {
-            *slot = style;
-        }
     }
 
     pub fn line_style(&self, index: usize) -> LineStyle {
@@ -83,21 +71,18 @@ impl CodeSurface {
     }
 
     pub fn set_scroll_offset(&mut self, offset: usize) {
-        self.scroll_offset = offset.min(self.line_count().saturating_sub(1));
+        self.scroll_offset = offset;
     }
 
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
-    pub fn visible_range(&self) -> Range<usize> {
-        let start = self.scroll_offset.min(self.line_count());
-        let end = (start + self.visible_lines).min(self.line_count());
-        start..end
-    }
-
     pub fn set_gutter_enabled(&mut self, enabled: bool) {
         self.gutter_enabled = enabled;
+        if !enabled {
+            self.gutter_width = 0;
+        }
     }
 
     pub fn gutter_enabled(&self) -> bool {
@@ -105,10 +90,7 @@ impl CodeSurface {
     }
 
     pub fn gutter_width(&self) -> usize {
-        if !self.gutter_enabled {
-            return 0;
-        }
-        gutter_digit_width(&self.lines)
+        self.gutter_width
     }
 }
 
@@ -293,11 +275,14 @@ mod tests {
     #[test]
     fn gutter_width_is_zero_when_disabled() {
         let mut surface = CodeSurface::new();
-        surface.set_lines(vec![line(LineKind::Context, Some(1234), Some(1234))]);
+        surface.set_lines(&[line(LineKind::Context, Some(1234), Some(1234))]);
         assert_eq!(surface.gutter_width(), 4);
         surface.set_gutter_enabled(false);
         assert_eq!(surface.gutter_width(), 0);
         assert!(!surface.gutter_enabled());
+        surface.set_gutter_enabled(true);
+        surface.set_lines(&[line(LineKind::Context, Some(12), Some(12))]);
+        assert_eq!(surface.gutter_width(), 2);
     }
 
     #[test]
@@ -412,11 +397,10 @@ mod tests {
     #[test]
     fn set_lines_derives_default_styles() {
         let mut surface = CodeSurface::new();
-        surface.set_lines(vec![
+        surface.set_lines(&[
             line(LineKind::Context, Some(1), Some(1)),
             line(LineKind::Added, None, Some(2)),
         ]);
-        assert_eq!(surface.line_count(), 2);
         assert_eq!(
             surface.line_style(0),
             style_from_line(&line(LineKind::Context, Some(1), Some(1)))
@@ -432,66 +416,34 @@ mod tests {
 
     #[test]
     fn line_style_defaults_and_out_of_range_are_harmless() {
-        let mut surface = CodeSurface::new();
-        assert_eq!(surface.line_style(0), LineStyle::default());
-        surface.set_line_style(
-            0,
-            LineStyle {
-                background_heat: HeatLevel::Hot,
-                dimmed: false,
-            },
-        );
+        let surface = CodeSurface::new();
         assert_eq!(surface.line_style(0), LineStyle::default());
     }
 
     #[test]
-    fn set_line_style_round_trips() {
+    fn set_lines_resets_scroll() {
         let mut surface = CodeSurface::new();
-        surface.set_lines(vec![line(LineKind::Context, Some(1), Some(1))]);
-        let style = LineStyle {
-            background_heat: HeatLevel::Hot,
-            dimmed: true,
-        };
-        surface.set_line_style(0, style);
-        assert_eq!(surface.line_style(0), style);
-        surface.set_line_style(9, style);
-        assert_eq!(surface.line_style(0), style);
-    }
-
-    #[test]
-    fn set_lines_resets_scroll_and_styles() {
-        let mut surface = CodeSurface::new();
-        surface.set_lines(vec![line(LineKind::Added, None, Some(1)); 10]);
+        surface.set_lines(&vec![line(LineKind::Added, None, Some(1)); 10]);
         surface.set_scroll_offset(7);
         assert_eq!(surface.scroll_offset(), 7);
-        surface.set_lines(Vec::new());
+        surface.set_lines(&[]);
         assert_eq!(surface.scroll_offset(), 0);
-        assert_eq!(surface.line_count(), 0);
     }
 
     #[test]
-    fn scroll_offset_clamps_into_the_surface() {
+    fn scroll_offset_stores_what_it_is_given() {
         let mut surface = CodeSurface::new();
-        surface.set_lines(vec![line(LineKind::Added, None, Some(1)); 10]);
+        surface.set_lines(&vec![line(LineKind::Added, None, Some(1)); 10]);
         surface.set_scroll_offset(usize::MAX);
-        assert_eq!(surface.scroll_offset(), 9);
+        assert_eq!(
+            surface.scroll_offset(),
+            usize::MAX,
+            "clamping lives in the view"
+        );
         surface.set_scroll_offset(3);
         assert_eq!(surface.scroll_offset(), 3);
         surface.set_scroll_offset(0);
         assert_eq!(surface.scroll_offset(), 0);
-    }
-
-    #[test]
-    fn visible_range_stays_inside_the_line_count() {
-        let mut surface = CodeSurface::new();
-        surface.set_lines(vec![line(LineKind::Added, None, Some(1)); 10]);
-        assert_eq!(surface.visible_range(), 0..10);
-        surface.set_scroll_offset(5);
-        assert_eq!(surface.visible_range(), 5..10);
-        surface.set_scroll_offset(usize::MAX);
-        assert_eq!(surface.visible_range(), 9..10);
-        surface.set_lines(Vec::new());
-        assert_eq!(surface.visible_range(), 0..0);
     }
 
     fn luminance(hex: u32) -> f32 {

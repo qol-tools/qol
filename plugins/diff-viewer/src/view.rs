@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -7,7 +8,8 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, AnyElement, App, Context, Entity, FocusHandle, Focusable, HighlightStyle,
-    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, WhiteSpace, Window,
+    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, TextStyle, WhiteSpace,
+    Window,
 };
 use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
@@ -28,7 +30,7 @@ const FONT_SIZE: f32 = 13.0;
 const GLYPH_WIDTH: f32 = 12.0;
 const PIXELS_PER_NOTCH: f32 = 50.0;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
-const FACTS_TTL: Duration = Duration::from_secs(10);
+const DIFF_TTL: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,14 +38,19 @@ pub struct FileRow {
     pub path: String,
     pub added: Option<u64>,
     pub deleted: Option<u64>,
+    pub added_label: Option<String>,
+    pub deleted_label: Option<String>,
 }
 
 impl FileRow {
-    pub fn counts(&self) -> (Option<String>, Option<String>) {
-        (
-            self.added.map(|count| format!("+{count}")),
-            self.deleted.map(|count| format!("-{count}")),
-        )
+    pub fn new(path: String, added: Option<u64>, deleted: Option<u64>) -> Self {
+        Self {
+            added_label: added.map(|count| format!("+{count}")),
+            deleted_label: deleted.map(|count| format!("-{count}")),
+            path,
+            added,
+            deleted,
+        }
     }
 }
 
@@ -64,11 +71,16 @@ impl FileListState {
         let selected = self.selected_path().map(str::to_owned);
         self.files = files;
         self.list.sync(self.files.len());
-        if let Some(path) = selected {
-            if let Some(index) = self.files.iter().position(|file| file.path == path) {
+        match selected
+            .as_deref()
+            .and_then(|path| self.files.iter().position(|file| file.path == path))
+        {
+            Some(index) => {
                 self.list.selected = index;
                 self.list.sync(self.files.len());
             }
+            None if selected.is_some() => self.list.selected = 0,
+            None => {}
         }
     }
 
@@ -122,7 +134,7 @@ impl ActivePane {
 enum DiffPane {
     Empty,
     Error(DiffError),
-    Ready(FileDiff),
+    Ready(Arc<FileDiff>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +166,14 @@ pub struct DiffView {
     generation: Arc<AtomicU64>,
     git_tx: mpsc::Sender<GitRequest>,
     results: Option<mpsc::Receiver<GitResult>>,
-    facts_cache: TtlCache<PathBuf, Facts>,
+    diff_cache: TtlCache<(String, String), Arc<FileDiff>>,
+    in_flight: Option<(String, String)>,
+    line_text: Vec<SharedString>,
+    line_highlights: Vec<Vec<(Range<usize>, HighlightStyle)>>,
+    unified_gutters: Vec<String>,
+    side_gutters: Vec<(String, String)>,
+    last_markers_diff: Option<Arc<FileDiff>>,
+    last_markers_layout: Layout,
     font_family: SharedString,
     focus_handle: FocusHandle,
     dismisser: SurfaceDismisser,
@@ -201,7 +220,14 @@ impl DiffView {
             generation,
             git_tx,
             results: Some(results),
-            facts_cache: TtlCache::new(FACTS_TTL),
+            diff_cache: TtlCache::new(DIFF_TTL),
+            in_flight: None,
+            line_text: Vec::new(),
+            line_highlights: Vec::new(),
+            unified_gutters: Vec::new(),
+            side_gutters: Vec::new(),
+            last_markers_diff: None,
+            last_markers_layout: Layout::Split,
             font_family: pick_monospace(cx),
             focus_handle: cx.focus_handle(),
             dismisser,
@@ -219,8 +245,7 @@ impl DiffView {
             return view;
         }
         view.spawn_loops(cx);
-        pipeline::send_refresh(&view.git_tx, &view.generation);
-        pipeline::send_history(&view.git_tx, &view.generation);
+        pipeline::send_boot(&view.git_tx, &view.generation);
         view
     }
 
@@ -268,33 +293,11 @@ impl DiffView {
     fn spawn_backstop(&self, cx: &mut Context<Self>) {
         let git_tx = self.git_tx.clone();
         let generation = self.generation.clone();
-        let this = cx.weak_entity();
         cx.spawn(async move |_view, cx| loop {
             cx.background_executor().timer(REFRESH_INTERVAL).await;
-            let _ = this.update(cx, |view, cx| {
-                if view.apply_cached_facts() {
-                    cx.notify();
-                }
-            });
             pipeline::send_refresh(&git_tx, &generation);
         })
         .detach();
-    }
-
-    fn apply_cached_facts(&mut self) -> bool {
-        let Some(facts) = self
-            .facts_cache
-            .get(
-                self.repo
-                    .as_ref()
-                    .expect("repo present when facts are cached"),
-            )
-            .cloned()
-        else {
-            return false;
-        };
-        self.apply_facts(facts);
-        true
     }
 
     fn apply_results(
@@ -307,8 +310,7 @@ impl DiffView {
         for result in results {
             match result {
                 GitResult::Facts { generation, facts } if generation == current => {
-                    self.apply_facts(facts);
-                    changed = true;
+                    changed |= self.apply_facts(facts);
                 }
                 GitResult::FactsFailed {
                     generation,
@@ -323,8 +325,13 @@ impl DiffView {
                     range,
                     diff,
                 } if self.matches_request(&path, &range) => {
-                    self.apply_diff(diff);
-                    changed = true;
+                    let diff = diff.map(Arc::new);
+                    if let Ok(diff) = &diff {
+                        self.diff_cache
+                            .insert((path.clone(), range.clone()), Arc::clone(diff));
+                    }
+                    changed |= self.apply_diff(diff);
+                    self.in_flight = None;
                 }
                 GitResult::History {
                     generation,
@@ -334,6 +341,9 @@ impl DiffView {
                         .into_iter()
                         .map(|entry| ScrubCommit::new(entry.sha, entry.subject))
                         .collect();
+                    if commits != self.scrub_commits {
+                        self.diff_cache.clear();
+                    }
                     self.scrub_commits = commits;
                     let commits = self.scrub_commits.clone();
                     self.scrubber_view.update(cx, |view, cx| {
@@ -358,12 +368,28 @@ impl DiffView {
     }
 
     fn request_diff(&mut self, path: String, range: String) {
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|(in_path, in_range)| *in_path == path && *in_range == range)
+        {
+            return;
+        }
+        self.in_flight = Some((path.clone(), range.clone()));
         self.requested = Some((path.clone(), range.clone()));
         let _ = self.git_tx.send(GitRequest::SelectFile {
             generation: self.generation.load(Ordering::SeqCst),
             path,
             range,
         });
+    }
+
+    fn request_diff_cached(&mut self, path: String, range: String) {
+        if let Some(diff) = self.diff_cache.get(&(path.clone(), range.clone())).cloned() {
+            self.apply_diff(Ok(diff));
+            return;
+        }
+        self.request_diff(path, range);
     }
 
     fn apply_jump(&mut self, ratio: f32) {
@@ -390,55 +416,96 @@ impl DiffView {
         let Some(path) = self.files.selected_path() else {
             return;
         };
-        self.request_diff(path.to_owned(), commit_range(index));
+        self.request_diff_cached(path.to_owned(), commit_range(index));
     }
 
-    fn apply_facts(&mut self, facts: Facts) {
+    fn apply_facts(&mut self, facts: Facts) -> bool {
         self.facts_error = None;
-        if self.last_facts.as_ref() == Some(&facts) {
-            return;
+        let facts_equal = self
+            .last_facts
+            .as_ref()
+            .is_some_and(|last| last.numstat == facts.numstat);
+        let mut changed = false;
+        if !facts_equal {
+            changed = true;
+            self.last_facts = Some(facts.clone());
+            let files = facts
+                .numstat
+                .iter()
+                .map(|entry| FileRow::new(entry.path.clone(), entry.added, entry.deleted))
+                .collect();
+            self.files.set_files(files);
+            if self.files.files.is_empty() {
+                self.pane = DiffPane::Empty;
+                return true;
+            }
         }
-        self.last_facts = Some(facts.clone());
-        let files = facts
-            .numstat
-            .iter()
-            .map(|entry| FileRow {
-                path: entry.path.clone(),
-                added: entry.added,
-                deleted: entry.deleted,
-            })
-            .collect();
-        self.files.set_files(files);
-        self.facts_cache.insert(
-            self.repo
-                .clone()
-                .expect("repo present when facts are cached"),
-            facts,
-        );
-        if self.files.files.is_empty() {
-            self.pane = DiffPane::Empty;
-        } else if let Some((path, range)) = self.requested.clone() {
+        let Some(path) = self.files.selected_path().map(str::to_owned) else {
+            return changed;
+        };
+        let is_worktree_range = self
+            .requested
+            .as_ref()
+            .is_none_or(|(_, range)| range == pipeline::DEFAULT_RANGE);
+        let refetch = is_worktree_range
+            && (facts
+                .changed
+                .iter()
+                .any(|changed_path| *changed_path == path)
+                || (facts.changed.is_empty() && !facts_equal));
+        if refetch {
             if self.files.files.iter().any(|file| file.path == path) {
+                let range = self
+                    .requested
+                    .as_ref()
+                    .map(|(_, range)| range.clone())
+                    .unwrap_or_else(|| pipeline::DEFAULT_RANGE.to_string());
                 self.request_diff(path, range);
             } else {
                 self.select_current_file();
             }
-        } else {
-            self.select_current_file();
+            changed = true;
         }
+        changed
     }
 
-    fn apply_diff(&mut self, diff: Result<FileDiff, DiffError>) {
+    fn apply_diff(&mut self, diff: Result<Arc<FileDiff>, DiffError>) -> bool {
         match diff {
             Ok(diff) if diff.is_empty() => {
+                if matches!(self.pane, DiffPane::Empty) {
+                    return false;
+                }
                 self.lines.clear();
-                self.surface.set_lines(Vec::new());
+                self.line_text.clear();
+                self.line_highlights.clear();
+                self.unified_gutters.clear();
+                self.side_gutters.clear();
+                self.surface.set_lines(&[]);
                 self.pane = DiffPane::Empty;
             }
             Ok(diff) => {
+                if let DiffPane::Ready(previous) = &self.pane {
+                    if Arc::ptr_eq(previous, &diff) || **previous == *diff {
+                        return false;
+                    }
+                }
                 let lines = flatten(&diff);
                 let (pairs, hunk_pair_starts, hunk_line_starts) = build_pairs(&diff.hunks);
-                self.surface.set_lines(lines.clone());
+                let gutter_width = self.surface.gutter_width();
+                self.line_text = lines
+                    .iter()
+                    .map(|line| SharedString::from(line.text.clone()))
+                    .collect();
+                self.line_highlights = lines.iter().map(highlight_ranges).collect();
+                self.unified_gutters = lines
+                    .iter()
+                    .map(|line| unified_gutter(line, gutter_width))
+                    .collect();
+                self.side_gutters = lines
+                    .iter()
+                    .map(|line| side_gutter_labels(line, gutter_width))
+                    .collect();
+                self.surface.set_lines(&lines);
                 self.lines = lines;
                 self.pairs = pairs;
                 self.hunk_pair_starts = hunk_pair_starts;
@@ -447,6 +514,7 @@ impl DiffView {
             }
             Err(error) => self.pane = DiffPane::Error(error),
         }
+        true
     }
 
     fn select_current_file(&mut self) {
@@ -490,6 +558,9 @@ impl DiffView {
                     Layout::Unified => Layout::Split,
                     Layout::Split => Layout::Unified,
                 };
+                let max = self.row_count().saturating_sub(self.last_fit.max(1));
+                self.surface
+                    .set_scroll_offset(self.surface.scroll_offset().min(max));
             }
             (ActivePane::Code, "pagedown") | (ActivePane::Code, "page_down") => {
                 self.scroll_lines(page as isize)
@@ -579,7 +650,6 @@ impl DiffView {
     fn file_row(&self, index: usize) -> AnyElement {
         let file = &self.files.files[index];
         let selected = index == self.files.list.selected;
-        let (added, deleted) = file.counts();
         let mut row = div()
             .h(px(ROW_HEIGHT))
             .w_full()
@@ -602,8 +672,11 @@ impl DiffView {
                 }))
                 .child(file.path.clone()),
         )
-        .child(count_cell(added, surface::TEXT_ADDED))
-        .child(count_cell(deleted, surface::TEXT_REMOVED))
+        .child(count_cell(file.added_label.as_deref(), surface::TEXT_ADDED))
+        .child(count_cell(
+            file.deleted_label.as_deref(),
+            surface::TEXT_REMOVED,
+        ))
         .into_any_element()
     }
 
@@ -622,21 +695,32 @@ impl DiffView {
             DiffPane::Error(error) => pane
                 .child(center_message(&error.to_string(), surface::ERROR_TEXT))
                 .into_any_element(),
-            DiffPane::Ready(_) => match self.layout {
-                Layout::Split => pane.child(self.split_columns(window)).into_any_element(),
-                Layout::Unified => pane.children(self.code_rows(window)).into_any_element(),
-            },
+            DiffPane::Ready(_) => {
+                let mut text_style = window.text_style();
+                text_style.font_family = self.font_family.clone();
+                text_style.font_size = px(FONT_SIZE).into();
+                text_style.line_height = px(LINE_HEIGHT).into();
+                text_style.white_space = WhiteSpace::Nowrap;
+                match self.layout {
+                    Layout::Split => pane
+                        .child(self.split_columns(&text_style))
+                        .into_any_element(),
+                    Layout::Unified => pane
+                        .children(self.code_rows(&text_style))
+                        .into_any_element(),
+                }
+            }
         }
     }
 
-    fn split_columns(&self, window: &Window) -> AnyElement {
+    fn split_columns(&self, base: &TextStyle) -> AnyElement {
         let start = self.surface.scroll_offset();
         let end = (start + self.last_fit.max(1)).min(self.row_count());
         let mut old_rows = Vec::new();
         let mut new_rows = Vec::new();
         for row in start..end {
-            old_rows.push(self.split_row(row, true, window));
-            new_rows.push(self.split_row(row, false, window));
+            old_rows.push(self.split_row(row, true, base));
+            new_rows.push(self.split_row(row, false, base));
         }
         div()
             .flex()
@@ -665,7 +749,7 @@ impl DiffView {
             .into_any_element()
     }
 
-    fn split_row(&self, row: usize, is_old: bool, window: &Window) -> AnyElement {
+    fn split_row(&self, row: usize, is_old: bool, base: &TextStyle) -> AnyElement {
         let pair = self.pairs.get(row).copied().unwrap_or(LinePair {
             old: None,
             new: None,
@@ -697,9 +781,9 @@ impl DiffView {
             Some(index) => {
                 let line = &self.lines[index];
                 let label = if is_old {
-                    line.old_line_no
+                    &self.side_gutters[index].0
                 } else {
-                    line.new_line_no
+                    &self.side_gutters[index].1
                 };
                 let glyph = match (is_old, line.kind) {
                     (true, LineKind::Removed) => "-",
@@ -712,7 +796,7 @@ impl DiffView {
                             .flex_none()
                             .px_1()
                             .text_color(rgb(surface::GUTTER_TEXT))
-                            .child(side_gutter(label, width)),
+                            .child(label.clone()),
                     )
                     .child(
                         div()
@@ -721,7 +805,7 @@ impl DiffView {
                             .text_color(rgb(surface::kind_color(line.kind)))
                             .child(glyph),
                     )
-                    .child(self.code_text(line, style.dimmed, window))
+                    .child(self.code_text(index, style.dimmed, base))
                     .into_any_element()
             }
             None => row_el
@@ -730,7 +814,7 @@ impl DiffView {
                         .flex_none()
                         .px_1()
                         .text_color(rgb(surface::GUTTER_TEXT))
-                        .child(side_gutter(None, width)),
+                        .child(" ".repeat(width)),
                 )
                 .child(div().flex_none().w(px(GLYPH_WIDTH)).child(" "))
                 .child(div().flex_1().child(" "))
@@ -738,15 +822,15 @@ impl DiffView {
         }
     }
 
-    fn code_rows(&self, window: &Window) -> Vec<AnyElement> {
+    fn code_rows(&self, base: &TextStyle) -> Vec<AnyElement> {
         let start = self.surface.scroll_offset();
-        let end = (start + self.last_fit.max(1)).min(self.surface.line_count());
+        let end = (start + self.last_fit.max(1)).min(self.lines.len());
         (start..end)
-            .map(|index| self.code_row(index, window))
+            .map(|index| self.code_row(index, base))
             .collect()
     }
 
-    fn code_row(&self, index: usize, window: &Window) -> AnyElement {
+    fn code_row(&self, index: usize, base: &TextStyle) -> AnyElement {
         let line = &self.lines[index];
         let style = self.surface.line_style(index);
         let mut row = div()
@@ -760,17 +844,12 @@ impl DiffView {
         if let Some(bg) = surface::line_background(style) {
             row = row.bg(rgb(bg));
         }
-        let (old, new) = surface::gutter_labels(
-            line.old_line_no,
-            line.new_line_no,
-            self.surface.gutter_width(),
-        );
         row.child(
             div()
                 .flex_none()
                 .px_1()
                 .text_color(rgb(surface::GUTTER_TEXT))
-                .child(format!("{old}  {new}")),
+                .child(self.unified_gutters[index].clone()),
         )
         .child(
             div()
@@ -779,41 +858,15 @@ impl DiffView {
                 .text_color(rgb(surface::kind_color(line.kind)))
                 .child(surface::kind_glyph(line.kind)),
         )
-        .child(self.code_text(line, style.dimmed, window))
+        .child(self.code_text(index, style.dimmed, base))
         .into_any_element()
     }
 
-    fn code_text(&self, line: &LineChange, dimmed: bool, window: &Window) -> StyledText {
-        let mut text_style = window.text_style();
-        text_style.font_family = self.font_family.clone();
-        text_style.font_size = px(FONT_SIZE).into();
-        text_style.line_height = px(LINE_HEIGHT).into();
+    fn code_text(&self, index: usize, dimmed: bool, base: &TextStyle) -> StyledText {
+        let mut text_style = base.clone();
         text_style.color = rgb(surface::text_color(dimmed)).into();
-        text_style.white_space = WhiteSpace::Nowrap;
-        let highlights = line
-            .token_spans
-            .iter()
-            .filter_map(|span| {
-                let start = span.start.min(line.text.len());
-                let end = (span.start + span.len).min(line.text.len());
-                (start < end).then_some((
-                    start..end,
-                    HighlightStyle {
-                        background_color: surface::token_background(span.heat)
-                            .map(|hex| rgb(hex).into()),
-                        color: match (span.heat, span.kind) {
-                            (HeatLevel::Cool, TokenKind::Plain) => None,
-                            (HeatLevel::Cool, kind) => {
-                                surface::token_kind_color(kind).map(|hex| rgb(hex).into())
-                            }
-                            _ => None,
-                        },
-                        ..HighlightStyle::default()
-                    },
-                ))
-            })
-            .collect::<Vec<_>>();
-        StyledText::new(line.text.clone()).with_default_highlights(&text_style, highlights)
+        StyledText::new(self.line_text[index].clone())
+            .with_default_highlights(&text_style, self.line_highlights[index].clone())
     }
 }
 
@@ -856,34 +909,52 @@ impl Render for DiffView {
 
 impl DiffView {
     fn update_overview(&mut self, cx: &mut Context<Self>) {
-        let (markers, total) = match &self.pane {
-            DiffPane::Ready(diff) => {
-                let starts = match self.layout {
-                    Layout::Unified => self.hunk_line_starts.clone(),
-                    Layout::Split => self.hunk_pair_starts.clone(),
-                };
-                let total = self.row_count();
-                let mut markers = Vec::new();
-                for (index, hunk) in diff.hunks.iter().enumerate() {
-                    let weight = hunk
-                        .lines
-                        .iter()
-                        .filter(|line| line.kind != LineKind::Context)
-                        .count() as u32;
-                    let start = starts.get(index).copied().unwrap_or(0);
-                    markers.push(HunkMarker::new(
-                        if total == 0 {
-                            0.0
-                        } else {
-                            start as f32 / total as f32
-                        },
-                        weight,
-                    ));
-                }
-                (markers, total)
-            }
-            _ => (Vec::new(), 0),
+        let current = match &self.pane {
+            DiffPane::Ready(diff) => Some(Arc::clone(diff)),
+            _ => None,
         };
+        let diff_changed = match (&current, &self.last_markers_diff) {
+            (Some(diff), Some(previous)) => !Arc::ptr_eq(previous, diff),
+            (Some(_), None) => true,
+            (None, Some(_)) => true,
+            (None, None) => false,
+        };
+        if diff_changed || self.layout != self.last_markers_layout {
+            let markers = match &self.pane {
+                DiffPane::Ready(diff) => {
+                    let starts = match self.layout {
+                        Layout::Unified => &self.hunk_line_starts,
+                        Layout::Split => &self.hunk_pair_starts,
+                    };
+                    let total = self.row_count();
+                    let mut markers = Vec::new();
+                    for (index, hunk) in diff.hunks.iter().enumerate() {
+                        let weight = hunk
+                            .lines
+                            .iter()
+                            .filter(|line| line.kind != LineKind::Context)
+                            .count() as u32;
+                        let start = starts.get(index).copied().unwrap_or(0);
+                        markers.push(HunkMarker::new(
+                            if total == 0 {
+                                0.0
+                            } else {
+                                start as f32 / total as f32
+                            },
+                            weight,
+                        ));
+                    }
+                    markers
+                }
+                _ => Vec::new(),
+            };
+            self.last_markers_diff = current;
+            self.last_markers_layout = self.layout;
+            self.overview_view.update(cx, |view, _cx| {
+                view.set_markers(markers);
+            });
+        }
+        let total = self.row_count();
         let viewport = if total == 0 {
             (0.0f32, 1.0f32)
         } else {
@@ -892,7 +963,6 @@ impl DiffView {
             (start as f32 / total as f32, end as f32 / total as f32)
         };
         self.overview_view.update(cx, |view, _cx| {
-            view.set_markers(markers);
             view.set_viewport(viewport);
         });
     }
@@ -957,11 +1027,45 @@ fn build_pairs(hunks: &[qol_diff::Hunk]) -> (Vec<LinePair>, Vec<usize>, Vec<usiz
     (pairs, hunk_pair_starts, hunk_line_starts)
 }
 
-fn side_gutter(label: Option<u32>, width: usize) -> String {
-    match label {
-        Some(number) => format!("{number:>width$}"),
-        None => " ".repeat(width),
-    }
+fn highlight_ranges(line: &LineChange) -> Vec<(Range<usize>, HighlightStyle)> {
+    line.token_spans
+        .iter()
+        .filter_map(|span| {
+            let start = span.start.min(line.text.len());
+            let end = (span.start + span.len).min(line.text.len());
+            (start < end).then_some((
+                start..end,
+                HighlightStyle {
+                    background_color: surface::token_background(span.heat)
+                        .map(|hex| rgb(hex).into()),
+                    color: match (span.heat, span.kind) {
+                        (HeatLevel::Cool, TokenKind::Plain) => None,
+                        (HeatLevel::Cool, kind) => {
+                            surface::token_kind_color(kind).map(|hex| rgb(hex).into())
+                        }
+                        _ => None,
+                    },
+                    ..HighlightStyle::default()
+                },
+            ))
+        })
+        .collect()
+}
+
+fn unified_gutter(line: &LineChange, width: usize) -> String {
+    let (old, new) = surface::gutter_labels(line.old_line_no, line.new_line_no, width);
+    format!("{old}  {new}")
+}
+
+fn side_gutter_labels(line: &LineChange, width: usize) -> (String, String) {
+    (
+        line.old_line_no
+            .map(|number| format!("{number:>width$}"))
+            .unwrap_or_else(|| " ".repeat(width)),
+        line.new_line_no
+            .map(|number| format!("{number:>width$}"))
+            .unwrap_or_else(|| " ".repeat(width)),
+    )
 }
 
 fn pick_monospace(cx: &App) -> SharedString {
@@ -1000,14 +1104,14 @@ fn center_message(label: &str, color: u32) -> AnyElement {
         .into_any_element()
 }
 
-fn count_cell(label: Option<String>, color: u32) -> AnyElement {
+fn count_cell(label: Option<&str>, color: u32) -> AnyElement {
     let (label, color) = label
         .map(|label| (label, color))
-        .unwrap_or_else(|| ("bin".to_string(), surface::TEXT_MUTED));
+        .unwrap_or_else(|| ("bin", surface::TEXT_MUTED));
     div()
         .flex_none()
         .text_color(rgb(color))
-        .child(label)
+        .child(label.to_string())
         .into_any_element()
 }
 
@@ -1016,24 +1120,17 @@ mod tests {
     use super::*;
 
     fn row(path: &str, added: Option<u64>, deleted: Option<u64>) -> FileRow {
-        FileRow {
-            path: path.to_string(),
-            added,
-            deleted,
-        }
+        FileRow::new(path.to_string(), added, deleted)
     }
 
     #[test]
     fn count_labels_format_added_and_deleted() {
-        assert_eq!(
-            row("a.rs", Some(3), Some(2)).counts(),
-            (Some("+3".to_string()), Some("-2".to_string()))
-        );
-        assert_eq!(
-            row("logo.png", None, None).counts(),
-            (None, None),
-            "binary files carry no counts"
-        );
+        let file = row("a.rs", Some(3), Some(2));
+        assert_eq!(file.added_label, Some("+3".to_string()));
+        assert_eq!(file.deleted_label, Some("-2".to_string()));
+        let binary = row("logo.png", None, None);
+        assert_eq!(binary.added_label, None, "binary files carry no counts");
+        assert_eq!(binary.deleted_label, None);
     }
 
     #[test]
@@ -1093,6 +1190,20 @@ mod tests {
             row("c.rs", Some(1), Some(0)),
         ]);
         assert_eq!(state.selected_path(), Some("b.rs"));
+    }
+
+    #[test]
+    fn file_list_selection_restarts_at_the_top_when_the_path_vanishes() {
+        let mut state = FileListState::new(5);
+        state.set_files(vec![row("a.rs", Some(1), Some(0))]);
+        state.move_down();
+        assert_eq!(state.selected_path(), Some("a.rs"));
+        state.set_files(vec![row("c.rs", Some(1), Some(0))]);
+        assert_eq!(
+            state.selected_path(),
+            Some("c.rs"),
+            "a vanished path resets the selection to the top"
+        );
     }
 
     #[test]
@@ -1266,8 +1377,24 @@ mod tests {
 
     #[test]
     fn side_gutter_pads_and_blanks() {
-        assert_eq!(side_gutter(Some(7), 4), "   7");
-        assert_eq!(side_gutter(None, 4), "    ");
-        assert_eq!(side_gutter(Some(300), 3), "300");
+        let line = |old: Option<u32>, new: Option<u32>| LineChange {
+            kind: LineKind::Context,
+            text: String::new(),
+            token_spans: Vec::new(),
+            old_line_no: old,
+            new_line_no: new,
+        };
+        assert_eq!(
+            side_gutter_labels(&line(Some(7), Some(8)), 4),
+            ("   7".to_string(), "   8".to_string())
+        );
+        assert_eq!(
+            side_gutter_labels(&line(None, None), 4),
+            ("    ".to_string(), "    ".to_string())
+        );
+        assert_eq!(
+            unified_gutter(&line(Some(300), None), 3),
+            "300     ".to_string()
+        );
     }
 }

@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use qol_diff::{DiffError, FileDiff};
-use qol_git::{NumstatEntry, StatusEntry};
+use qol_git::NumstatEntry;
 
 pub const DEFAULT_RANGE: &str = "HEAD";
 pub const HISTORY_LIMIT: usize = 64;
@@ -16,14 +16,12 @@ const WATCH_MAX_LATENCY: Duration = Duration::from_secs(1);
 pub enum GitRequest {
     Refresh {
         generation: u64,
+        changed: Vec<PathBuf>,
     },
     SelectFile {
         generation: u64,
         path: String,
         range: String,
-    },
-    History {
-        generation: u64,
     },
 }
 
@@ -49,10 +47,16 @@ pub enum GitResult {
     },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Facts {
-    pub status: Vec<StatusEntry>,
     pub numstat: Vec<NumstatEntry>,
+    pub changed: Vec<PathBuf>,
+}
+
+impl PartialEq for Facts {
+    fn eq(&self, other: &Self) -> bool {
+        self.numstat == other.numstat
+    }
 }
 
 pub fn file_range(path: &str) -> String {
@@ -86,14 +90,28 @@ pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBu
     None
 }
 
-pub fn send_history(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
-    let g = generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = git_tx.send(GitRequest::History { generation: g });
-}
-
 pub fn send_refresh(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
     let g = generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = git_tx.send(GitRequest::Refresh { generation: g });
+    let _ = git_tx.send(GitRequest::Refresh {
+        generation: g,
+        changed: Vec::new(),
+    });
+}
+
+pub fn send_boot(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
+    send_refresh(git_tx, generation);
+}
+
+pub fn send_refresh_changed(
+    git_tx: &mpsc::Sender<GitRequest>,
+    generation: &AtomicU64,
+    changed: Vec<PathBuf>,
+) {
+    let g = generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = git_tx.send(GitRequest::Refresh {
+        generation: g,
+        changed,
+    });
 }
 
 pub fn spawn_watch_bridge(
@@ -104,6 +122,7 @@ pub fn spawn_watch_bridge(
     thread::Builder::new()
         .name("diff-viewer-watch-bridge".to_owned())
         .spawn(move || {
+            let mut changed: Vec<PathBuf> = Vec::new();
             let mut deadline: Option<Instant> = None;
             loop {
                 let timeout = match deadline {
@@ -114,13 +133,26 @@ pub fn spawn_watch_bridge(
                 };
                 match batches.recv_timeout(timeout) {
                     Ok(paths) => {
-                        if deadline.is_none() && paths.iter().any(|path| !is_watch_noise(path)) {
+                        let real: Vec<PathBuf> = paths
+                            .into_iter()
+                            .filter(|path| !is_watch_noise(path))
+                            .collect();
+                        if real.is_empty() {
+                            continue;
+                        }
+                        if deadline.is_none() {
                             deadline = Some(Instant::now() + WATCH_MAX_LATENCY);
+                        }
+                        for path in real {
+                            if !changed.contains(&path) {
+                                changed.push(path);
+                            }
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => {
                         if deadline.take().is_some() {
-                            send_refresh(&git_tx, &generation);
+                            let paths = std::mem::take(&mut changed);
+                            send_refresh_changed(&git_tx, &generation, paths);
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -148,68 +180,93 @@ pub fn spawn_git_facts_thread(
     thread::Builder::new()
         .name("diff-viewer-git-facts".to_owned())
         .spawn(move || {
-            for request in requests {
-                match request {
-                    GitRequest::Refresh { generation: g } => {
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
-                        let outcome = refresh_facts(&repo);
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
-                        let result = match outcome {
-                            Ok(facts) => GitResult::Facts {
-                                generation: g,
-                                facts,
-                            },
-                            Err(message) => GitResult::FactsFailed {
-                                generation: g,
-                                message,
-                            },
-                        };
-                        let _ = results.send(result);
+            let mut last_head: Option<String> = None;
+            while let Ok(first) = requests.recv() {
+                let mut pending = vec![first];
+                while let Ok(next) = requests.try_recv() {
+                    pending.push(next);
+                }
+                let mut latest_refresh = None;
+                let mut latest_select = None;
+                for request in pending {
+                    match request {
+                        GitRequest::Refresh { .. } => latest_refresh = Some(request),
+                        GitRequest::SelectFile { .. } => latest_select = Some(request),
                     }
-                    GitRequest::SelectFile {
-                        generation: g,
-                        path,
-                        range,
-                    } => {
-                        let diff = selected_file_diff(&repo, &path, &range);
-                        let _ = results.send(GitResult::Diff {
-                            generation: g,
-                            path,
-                            range,
-                            diff,
-                        });
-                    }
-                    GitRequest::History { generation: g } => {
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
-                        let commits = qol_git::log(&repo, HISTORY_LIMIT).unwrap_or_default();
-                        if !is_live(g, &generation) {
-                            continue;
-                        }
-                        let _ = results.send(GitResult::History {
-                            generation: g,
-                            commits,
-                        });
-                    }
+                }
+                for request in latest_refresh.into_iter().chain(latest_select) {
+                    handle_request(request, &repo, &results, &generation, &mut last_head);
                 }
             }
         })
         .expect("spawn diff-viewer git facts thread")
 }
 
+fn handle_request(
+    request: GitRequest,
+    repo: &Path,
+    results: &mpsc::Sender<GitResult>,
+    generation: &AtomicU64,
+    last_head: &mut Option<String>,
+) {
+    match request {
+        GitRequest::Refresh {
+            generation: g,
+            changed,
+        } => {
+            if !is_live(g, generation) {
+                return;
+            }
+            let outcome = refresh_facts(repo, changed);
+            if !is_live(g, generation) {
+                return;
+            }
+            let result = match outcome {
+                Ok(facts) => GitResult::Facts {
+                    generation: g,
+                    facts,
+                },
+                Err(message) => GitResult::FactsFailed {
+                    generation: g,
+                    message,
+                },
+            };
+            let _ = results.send(result);
+            let commits = qol_git::log(repo, HISTORY_LIMIT).unwrap_or_default();
+            let head = commits.first().map(|entry| entry.sha.clone());
+            if head != *last_head {
+                *last_head = head;
+                if is_live(g, generation) {
+                    let _ = results.send(GitResult::History {
+                        generation: g,
+                        commits,
+                    });
+                }
+            }
+        }
+        GitRequest::SelectFile {
+            generation: g,
+            path,
+            range,
+        } => {
+            let diff = selected_file_diff(repo, &path, &range);
+            let _ = results.send(GitResult::Diff {
+                generation: g,
+                path,
+                range,
+                diff,
+            });
+        }
+    }
+}
+
 fn is_live(generation: u64, current: &AtomicU64) -> bool {
     generation == current.load(Ordering::SeqCst)
 }
 
-fn refresh_facts(repo: &Path) -> Result<Facts, String> {
-    let status = qol_git::status_porcelain(repo).map_err(|error| error.to_string())?;
+fn refresh_facts(repo: &Path, changed: Vec<PathBuf>) -> Result<Facts, String> {
     let numstat = qol_git::diff_numstat(repo, DEFAULT_RANGE).map_err(|error| error.to_string())?;
-    Ok(Facts { status, numstat })
+    Ok(Facts { numstat, changed })
 }
 
 fn selected_file_diff(repo: &Path, path: &str, range: &str) -> Result<FileDiff, DiffError> {
@@ -337,10 +394,49 @@ mod tests {
             result_tx,
             generation.clone(),
         );
-        let _ = requests.send(GitRequest::Refresh { generation: 4 });
+        let _ = requests.send(GitRequest::Refresh {
+            generation: 4,
+            changed: Vec::new(),
+        });
         assert!(
             results.recv_timeout(Duration::from_millis(200)).is_err(),
             "a stale generation must never reach the git CLI"
         );
+    }
+
+    #[test]
+    fn coalescing_keeps_only_the_latest_request_of_each_kind() {
+        let generation = Arc::new(AtomicU64::new(6));
+        let (requests, request_rx) = mpsc::channel();
+        let (result_tx, results) = mpsc::channel();
+        let _thread = spawn_git_facts_thread(
+            PathBuf::from("/nonexistent"),
+            request_rx,
+            result_tx,
+            generation.clone(),
+        );
+        for index in 0..6 {
+            let _ = requests.send(GitRequest::Refresh {
+                generation: 1 + index,
+                changed: Vec::new(),
+            });
+            let _ = requests.send(GitRequest::SelectFile {
+                generation: 1 + index,
+                path: format!("path-{index}"),
+                range: "HEAD".to_string(),
+            });
+        }
+        drop(requests);
+        let mut refreshes = 0;
+        let mut diffs = 0;
+        while let Ok(result) = results.recv() {
+            match result {
+                GitResult::Facts { .. } | GitResult::FactsFailed { .. } => refreshes += 1,
+                GitResult::Diff { .. } => diffs += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(refreshes, 1, "only the latest refresh is processed");
+        assert_eq!(diffs, 1, "only the latest select is processed");
     }
 }

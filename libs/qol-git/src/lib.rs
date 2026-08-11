@@ -92,11 +92,15 @@ pub fn status_porcelain(repo: impl AsRef<Path>) -> Result<Vec<StatusEntry>, Erro
 }
 
 pub fn diff_numstat(repo: impl AsRef<Path>, range: &str) -> Result<Vec<NumstatEntry>, Error> {
-    let out = run_git(repo.as_ref(), &["diff", "--numstat", range])?;
-    out.lines()
-        .filter(|line| !line.is_empty())
-        .map(parse_numstat_line)
-        .collect()
+    let out = run_git(repo.as_ref(), &["diff", "--numstat", "--no-renames", range])?;
+    let mut entries = Vec::new();
+    for line in out.lines().filter(|line| !line.is_empty()) {
+        match parse_numstat_line(line) {
+            Ok(entry) => entries.push(entry),
+            Err(error) => eprintln!("qol-git: skipping unparsable numstat line: {error}"),
+        }
+    }
+    Ok(entries)
 }
 
 pub fn diff_patch(repo: impl AsRef<Path>, range: &str, paths: &[&str]) -> Result<String, Error> {
