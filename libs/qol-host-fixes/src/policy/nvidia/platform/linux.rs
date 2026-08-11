@@ -1,17 +1,249 @@
-use super::{
-    fragment_path, new_resource_identity, payload_of, render_fragment, sha256_hex, staged_path_for,
-    unix_millis, NvidiaPayload, PolicyStatusView,
+use super::super::{
+    fragment_path, new_resource_identity, render_fragment, sha256_hex, staged_path_for,
+    NvidiaPayload, PolicyStatusView,
 };
+use super::NvidiaPolicyBackend;
 use crate::policy::fail_next;
 use crate::policy::{
     cli, join_owner, lock, managed, read_journal, recover_stage_before_read, remove_owner,
-    transfer_ownership, JournalState, PolicyError, PolicyJournal, PolicyState, ReleaseFailure,
-    ReleaseStage, ResidencyOwnerId, ResidentPolicy,
+    transfer_ownership, JournalState, PolicyError, PolicyJournal, PolicyPayload, PolicyState,
+    ReleaseFailure, ReleaseStage, ResidencyOwnerId, ResidentPolicy,
 };
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::process::Command;
+
+fn payload_of(journal_payload: &PolicyPayload) -> Result<&NvidiaPayload> {
+    match journal_payload {
+        PolicyPayload::Nvidia(payload) => Ok(payload),
+    }
+}
+
+fn unix_millis() -> Result<u64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| anyhow::anyhow!("system clock before the unix epoch: {error}"))?
+        .as_millis() as u64)
+}
+
+fn sha256_bytes(content: &[u8]) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(content);
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) struct LinuxNvidia;
+
+impl super::NvidiaPolicyBackend for LinuxNvidia {
+    fn crash_point(point: &str) -> Result<()> {
+        #[cfg(any(test, feature = "sandbox"))]
+        if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
+            std::process::abort();
+        }
+        #[cfg(not(any(test, feature = "sandbox")))]
+        let _ = point;
+        Ok(())
+    }
+
+    fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView> {
+        let Some(journal) = read_journal(policy.id())? else {
+            let fragment = fragment_path();
+            let parent = fragment
+                .parent()
+                .context("fragment path has no parent directory")?;
+            let dir = match std::fs::symlink_metadata(parent) {
+                Ok(_) => fragment_dir_fd()?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(PolicyStatusView {
+                        policy: policy.id().to_string(),
+                        state: PolicyState::Absent,
+                        owners: Vec::new(),
+                        expected_module_version: None,
+                        detail: "no residency policy is active".to_string(),
+                    });
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let target = fragment_name()?;
+            return match entry_at(&dir, &target)? {
+                AtEntry::Missing => Ok(PolicyStatusView {
+                    policy: policy.id().to_string(),
+                    state: PolicyState::Absent,
+                    owners: Vec::new(),
+                    expected_module_version: None,
+                    detail: "no residency policy is active".to_string(),
+                }),
+                AtEntry::Regular { .. } | AtEntry::NotRegular | AtEntry::Oversized => {
+                    Ok(PolicyStatusView {
+                        policy: policy.id().to_string(),
+                        state: PolicyState::Unjournaled,
+                        owners: Vec::new(),
+                        expected_module_version: None,
+                        detail: format!(
+                            "{} exists without a residency journal; qol will never touch it",
+                            fragment_path().display()
+                        ),
+                    })
+                }
+            };
+        };
+        let owners = journal
+            .owners
+            .iter()
+            .map(ResidencyOwnerId::as_str)
+            .map(str::to_string)
+            .collect();
+        let payload = payload_of(&journal.payload)?;
+        let expected_module_version = Some(payload.expected_module_version.clone());
+        match journal.state {
+            JournalState::Preparing => Ok(PolicyStatusView {
+                policy: policy.id().to_string(),
+                state: PolicyState::Preparing,
+                owners,
+                expected_module_version,
+                detail: "adoption is in progress or was interrupted".to_string(),
+            }),
+            JournalState::Active => {
+                let dir = fragment_dir_fd()?;
+                let target = fragment_name()?;
+                match entry_at(&dir, &target)? {
+                AtEntry::Missing => Ok(PolicyStatusView {
+                    policy: policy.id().to_string(),
+                    state: PolicyState::MissingFragment,
+                    owners,
+                    expected_module_version,
+                    detail: "the owned fragment is absent; release will resume cleanup".to_string(),
+                }),
+                entry @ AtEntry::Regular { .. } if fingerprint_matches(payload, &entry) => {
+                    Ok(PolicyStatusView {
+                        policy: policy.id().to_string(),
+                        state: PolicyState::Active,
+                        owners,
+                        expected_module_version,
+                        detail: "exact adopted driver versions are pinned".to_string(),
+                    })
+                }
+                AtEntry::Regular { .. } | AtEntry::NotRegular | AtEntry::Oversized => Ok(PolicyStatusView {
+                    policy: policy.id().to_string(),
+                    state: PolicyState::Drifted,
+                    owners,
+                    expected_module_version,
+                    detail: "the fragment differs from the adopted identity; release refuses to delete it"
+                        .to_string(),
+                }),
+            }
+            }
+            JournalState::Releasing => Ok(PolicyStatusView {
+                policy: policy.id().to_string(),
+                state: PolicyState::Releasing,
+                owners,
+                expected_module_version,
+                detail: "release is in progress or was interrupted".to_string(),
+            }),
+            JournalState::ReleaseFailed => Ok(PolicyStatusView {
+                policy: policy.id().to_string(),
+                state: PolicyState::ReleaseFailed,
+                owners,
+                expected_module_version,
+                detail: journal
+                    .failure
+                    .as_ref()
+                    .map(|failure| {
+                        format!(
+                            "release was refused at {}: expected {} got {}; evidence preserved",
+                            failure.stage.as_str(),
+                            &failure.expected_sha256[..12],
+                            failure
+                                .actual_sha256
+                                .as_deref()
+                                .map(|actual| &actual[..12])
+                                .unwrap_or("absent")
+                        )
+                    })
+                    .unwrap_or_else(|| "release was refused; evidence preserved".to_string()),
+            }),
+        }
+    }
+
+    fn enable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+        let _guard = lock::acquire(policy)?;
+        if !managed::allows_enable()? {
+            return Err(PolicyError::NotManaged {
+                policy: policy.id().to_string(),
+            }
+            .into());
+        }
+        recover_stage_before_read(policy.id())?;
+        adopt(policy, owner)
+    }
+
+    fn disable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+        let _guard = lock::acquire(policy)?;
+        if !managed::allows_release()? {
+            return Err(PolicyError::NotManaged {
+                policy: policy.id().to_string(),
+            }
+            .into());
+        }
+        recover_stage_before_read(policy.id())?;
+        release(policy, owner)
+    }
+
+    fn join(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+        let _guard = lock::acquire(policy)?;
+        if !managed::allows_enable()? {
+            return Err(PolicyError::NotManaged {
+                policy: policy.id().to_string(),
+            }
+            .into());
+        }
+        recover_stage_before_read(policy.id())?;
+        let journal = read_journal(policy.id())?
+            .with_context(|| format!("no active residency policy `{}` to join", policy.id()))?;
+        if journal.state != JournalState::Active {
+            bail!(
+                "cannot join policy `{}` in state {}; join requires an Active policy",
+                policy.id(),
+                journal.state.as_str()
+            );
+        }
+        prove_active_fragment(policy)?;
+        join_owner(policy, owner)?
+            .with_context(|| format!("no active residency policy `{}` to join", policy.id()))?;
+        Ok(())
+    }
+
+    fn transfer(policy: &ResidentPolicy, new_owner: &ResidencyOwnerId) -> Result<()> {
+        let _guard = lock::acquire(policy)?;
+        if !managed::allows_enable()? {
+            return Err(PolicyError::NotManaged {
+                policy: policy.id().to_string(),
+            }
+            .into());
+        }
+        recover_stage_before_read(policy.id())?;
+        let journal = read_journal(policy.id())?
+            .with_context(|| format!("no active residency policy `{}` to transfer", policy.id()))?;
+        if journal.state != JournalState::Active {
+            bail!(
+                "cannot transfer policy `{}` in state {}; transfer requires an Active policy",
+                policy.id(),
+                journal.state.as_str()
+            );
+        }
+        prove_active_fragment(policy)?;
+        transfer_ownership(policy, new_owner)?
+            .with_context(|| format!("no active residency policy `{}` to transfer", policy.id()))?;
+        Ok(())
+    }
+
+    fn run_resident_policy_cli(args: &[String]) -> Result<i32> {
+        let parsed = cli::parse_args(args)?;
+        execute(&parsed.command)
+    }
+}
 
 const GUARD_PATTERNS: [&str; 6] = [
     "nvidia-driver",
@@ -210,7 +442,7 @@ fn verify_apt_preferences_consumer() -> Result<()> {
     Ok(())
 }
 
-pub(crate) const MODINFO_CANDIDATES: [&str; 2] = ["/usr/sbin/modinfo", "/sbin/modinfo"];
+const MODINFO_CANDIDATES: [&str; 2] = ["/usr/sbin/modinfo", "/sbin/modinfo"];
 #[cfg(not(test))]
 const HOST_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 #[cfg(test)]
@@ -275,7 +507,7 @@ fn module_path_from_probes(
     Ok(None)
 }
 
-pub(crate) fn module_path() -> Result<Option<String>> {
+fn module_path() -> Result<Option<String>> {
     #[cfg(any(test, feature = "sandbox"))]
     if let Some(path) = std::env::var_os("QOL_RESIDENT_MODULE_PATH") {
         let path = path.to_string_lossy().to_string();
@@ -310,7 +542,7 @@ fn is_approved_module_family(name: &str) -> bool {
         .any(|family| name.starts_with(family))
 }
 
-pub(crate) fn module_owner_packages(module_path: Option<&str>) -> Result<Vec<String>> {
+fn module_owner_packages(module_path: Option<&str>) -> Result<Vec<String>> {
     module_owner_packages_with(module_path, |args| {
         Command::new(crate::policy::managed::DPKG_QUERY)
             .args(args)
@@ -391,7 +623,7 @@ fn parse_dpkg_record(line: &str) -> Option<(managed::StatusAbbrev, String, Strin
 fn matching_entries_from_output(
     output: &str,
     patterns: &[String],
-) -> Result<Vec<super::PackageEntry>> {
+) -> Result<Vec<super::super::PackageEntry>> {
     let mut entries = Vec::new();
     for line in output.lines() {
         let (abbrev, name, version) = parse_dpkg_record(line).with_context(|| {
@@ -401,14 +633,14 @@ fn matching_entries_from_output(
             continue;
         }
         if matches_patterns(&name, patterns) {
-            entries.push(super::PackageEntry {
+            entries.push(super::super::PackageEntry {
                 package: name,
                 version,
             });
         }
     }
     entries.sort_by(|a, b| a.package.cmp(&b.package));
-    let mut deduped: Vec<super::PackageEntry> = Vec::with_capacity(entries.len());
+    let mut deduped: Vec<super::super::PackageEntry> = Vec::with_capacity(entries.len());
     for entry in entries {
         if let Some(previous) = deduped.last() {
             if previous.package == entry.package {
@@ -446,7 +678,7 @@ fn version_of_from_output(output: &str, package: &str) -> Result<Option<String>>
     }
 }
 
-fn installed_matching(patterns: &[String]) -> Result<Vec<super::PackageEntry>> {
+fn installed_matching(patterns: &[String]) -> Result<Vec<super::super::PackageEntry>> {
     let output = Command::new(crate::policy::managed::DPKG_QUERY)
         .args(["-W", "-f=${db:Status-Abbrev}\t${Package}\t${Version}\n"])
         .output()
@@ -483,7 +715,7 @@ fn dpkg_query_stdout(stdout: Vec<u8>) -> Result<String> {
 fn installed_versions_with(
     module_path: Option<&str>,
     module_owners: &[String],
-) -> Result<Vec<super::PackageEntry>> {
+) -> Result<Vec<super::super::PackageEntry>> {
     #[cfg(any(test, feature = "sandbox"))]
     if let Some(fixtures) = std::env::var_os("QOL_RESIDENT_FIXTURE_ENTRIES") {
         let mut entries = fixtures
@@ -494,7 +726,7 @@ fn installed_versions_with(
                 let (package, version) = entry
                     .split_once('=')
                     .context("fixture entry must be package=version")?;
-                Ok(super::PackageEntry {
+                Ok(super::super::PackageEntry {
                     package: package.to_string(),
                     version: version.to_string(),
                 })
@@ -511,7 +743,7 @@ fn installed_versions_with(
 }
 
 fn require_module_owner_entries(
-    entries: &mut Vec<super::PackageEntry>,
+    entries: &mut Vec<super::super::PackageEntry>,
     module_owners: &[String],
     mut version_of: impl FnMut(&str) -> Result<Option<String>>,
 ) -> Result<()> {
@@ -527,7 +759,7 @@ fn require_module_owner_entries(
                 "the module owner package `{owner}` is not activation-installed with a resolvable version; refusing to adopt an incomplete pin set"
             );
         };
-        entries.push(super::PackageEntry {
+        entries.push(super::super::PackageEntry {
             package: owner.clone(),
             version,
         });
@@ -670,7 +902,7 @@ fn entry_at(dir: &std::fs::File, name: &str) -> Result<AtEntry> {
     Ok(AtEntry::Regular {
         dev: metadata.dev(),
         ino: metadata.ino(),
-        sha256: super::sha256_bytes(&content),
+        sha256: sha256_bytes(&content),
         mode: metadata.mode(),
         uid: metadata.uid(),
         gid: metadata.gid(),
@@ -767,16 +999,6 @@ fn fingerprint_matches(payload: &NvidiaPayload, entry: &AtEntry) -> bool {
                 && fingerprint.ctime_sec == *ctime_sec
                 && fingerprint.ctime_nsec == *ctime_nsec
         })
-}
-
-pub fn crash_point(point: &str) -> Result<()> {
-    #[cfg(any(test, feature = "sandbox"))]
-    if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
-        std::process::abort();
-    }
-    #[cfg(not(any(test, feature = "sandbox")))]
-    let _ = point;
-    Ok(())
 }
 
 enum PublishState {
@@ -977,7 +1199,7 @@ fn remove_active_owned(dir: &std::fs::File, payload: &NvidiaPayload, name: &str)
 fn stage_content(
     dir: &std::fs::File,
     payload: &NvidiaPayload,
-) -> Result<(std::fs::File, super::StagedFileIdentity)> {
+) -> Result<(std::fs::File, super::super::StagedFileIdentity)> {
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::io::{AsRawFd, FromRawFd};
     let content = render_fragment(&payload.entries, &payload.resource_identity);
@@ -1042,10 +1264,10 @@ fn stage_content(
     if written.len() > MAX_FRAGMENT_ENTRY_BYTES {
         bail!("the rendered fragment exceeds the {MAX_FRAGMENT_ENTRY_BYTES}-byte staged bound");
     }
-    if super::sha256_bytes(&written) != payload.rendered_sha256 {
+    if sha256_bytes(&written) != payload.rendered_sha256 {
         bail!("the unnamed staged resource content does not match the planned fragment hash");
     }
-    let identity = super::StagedFileIdentity {
+    let identity = super::super::StagedFileIdentity {
         dev: metadata.dev(),
         ino: metadata.ino(),
     };
@@ -1127,7 +1349,7 @@ fn remove_owned_staged(dir: &std::fs::File, payload: &NvidiaPayload) -> Result<S
 
 fn record_staged_identity(
     policy: &ResidentPolicy,
-    identity: super::StagedFileIdentity,
+    identity: super::super::StagedFileIdentity,
 ) -> Result<()> {
     let mut journal =
         read_journal(policy.id())?.with_context(|| "residency journal vanished during adoption")?;
@@ -1170,7 +1392,7 @@ fn capture_active_fingerprint(
     }
     match &mut journal.payload {
         crate::policy::PolicyPayload::Nvidia(payload) => {
-            payload.active_fingerprint = Some(super::ActiveFileFingerprint {
+            payload.active_fingerprint = Some(super::super::ActiveFileFingerprint {
                 dev: *dev,
                 ino: *ino,
                 rendered_sha256: sha256.clone(),
@@ -1183,127 +1405,7 @@ fn capture_active_fingerprint(
         }
     }
     crate::policy::write_journal_durable(&journal)?;
-    crash_point("after-fingerprint")
-}
-
-pub fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView> {
-    let Some(journal) = read_journal(policy.id())? else {
-        let fragment = fragment_path();
-        let parent = fragment
-            .parent()
-            .context("fragment path has no parent directory")?;
-        let dir = match std::fs::symlink_metadata(parent) {
-            Ok(_) => fragment_dir_fd()?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(PolicyStatusView {
-                    policy: policy.id().to_string(),
-                    state: PolicyState::Absent,
-                    owners: Vec::new(),
-                    expected_module_version: None,
-                    detail: "no residency policy is active".to_string(),
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let target = fragment_name()?;
-        return match entry_at(&dir, &target)? {
-            AtEntry::Missing => Ok(PolicyStatusView {
-                policy: policy.id().to_string(),
-                state: PolicyState::Absent,
-                owners: Vec::new(),
-                expected_module_version: None,
-                detail: "no residency policy is active".to_string(),
-            }),
-            AtEntry::Regular { .. } | AtEntry::NotRegular | AtEntry::Oversized => {
-                Ok(PolicyStatusView {
-                    policy: policy.id().to_string(),
-                    state: PolicyState::Unjournaled,
-                    owners: Vec::new(),
-                    expected_module_version: None,
-                    detail: format!(
-                        "{} exists without a residency journal; qol will never touch it",
-                        fragment_path().display()
-                    ),
-                })
-            }
-        };
-    };
-    let owners = journal
-        .owners
-        .iter()
-        .map(ResidencyOwnerId::as_str)
-        .map(str::to_string)
-        .collect();
-    let payload = payload_of(&journal.payload)?;
-    let expected_module_version = Some(payload.expected_module_version.clone());
-    match journal.state {
-        JournalState::Preparing => Ok(PolicyStatusView {
-            policy: policy.id().to_string(),
-            state: PolicyState::Preparing,
-            owners,
-            expected_module_version,
-            detail: "adoption is in progress or was interrupted".to_string(),
-        }),
-        JournalState::Active => {
-            let dir = fragment_dir_fd()?;
-            let target = fragment_name()?;
-            match entry_at(&dir, &target)? {
-                AtEntry::Missing => Ok(PolicyStatusView {
-                    policy: policy.id().to_string(),
-                    state: PolicyState::MissingFragment,
-                    owners,
-                    expected_module_version,
-                    detail: "the owned fragment is absent; release will resume cleanup".to_string(),
-                }),
-                entry @ AtEntry::Regular { .. } if fingerprint_matches(payload, &entry) => {
-                    Ok(PolicyStatusView {
-                        policy: policy.id().to_string(),
-                        state: PolicyState::Active,
-                        owners,
-                        expected_module_version,
-                        detail: "exact adopted driver versions are pinned".to_string(),
-                    })
-                }
-                AtEntry::Regular { .. } | AtEntry::NotRegular | AtEntry::Oversized => Ok(PolicyStatusView {
-                    policy: policy.id().to_string(),
-                    state: PolicyState::Drifted,
-                    owners,
-                    expected_module_version,
-                    detail: "the fragment differs from the adopted identity; release refuses to delete it"
-                        .to_string(),
-                }),
-            }
-        }
-        JournalState::Releasing => Ok(PolicyStatusView {
-            policy: policy.id().to_string(),
-            state: PolicyState::Releasing,
-            owners,
-            expected_module_version,
-            detail: "release is in progress or was interrupted".to_string(),
-        }),
-        JournalState::ReleaseFailed => Ok(PolicyStatusView {
-            policy: policy.id().to_string(),
-            state: PolicyState::ReleaseFailed,
-            owners,
-            expected_module_version,
-            detail: journal
-                .failure
-                .as_ref()
-                .map(|failure| {
-                    format!(
-                        "release was refused at {}: expected {} got {}; evidence preserved",
-                        failure.stage.as_str(),
-                        &failure.expected_sha256[..12],
-                        failure
-                            .actual_sha256
-                            .as_deref()
-                            .map(|actual| &actual[..12])
-                            .unwrap_or("absent")
-                    )
-                })
-                .unwrap_or_else(|| "release was refused; evidence preserved".to_string()),
-        }),
-    }
+    <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-fingerprint")
 }
 
 fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
@@ -1343,8 +1445,8 @@ fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
             );
         }
     }
-    let module_path = crate::policy::nvidia::module_path()?;
-    let module_owners = crate::policy::nvidia::module_owner_packages(module_path.as_deref())?;
+    let module_path = module_path()?;
+    let module_owners = module_owner_packages(module_path.as_deref())?;
     let entries = installed_versions_with(module_path.as_deref(), &module_owners)?;
     if entries.is_empty() {
         bail!("no installed NVIDIA driver packages match the fixed target set; nothing to pin");
@@ -1383,7 +1485,7 @@ fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
         journal_file_identity: None,
     };
     crate::policy::write_journal_durable(&journal)?;
-    crash_point("after-journal")?;
+    <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-journal")?;
     let payload = payload_of(&journal.payload)?.clone();
     let staged_name = staged_name_of(&payload)?;
     let (staged_file, staged_identity) = match stage_content(&dir, &payload) {
@@ -1399,11 +1501,11 @@ fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
             .payload,
     )?
     .clone();
-    crash_point("after-staged-write")?;
+    <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-staged-write")?;
     if let Err(error) = link_staged(&dir, &staged_file, &payload, &staged_name) {
         return Err(rollback_adoption(policy, &payload, error));
     }
-    crash_point("after-link")?;
+    <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-link")?;
     match publish_no_replace(&dir, &payload, &staged_name, &target) {
         Ok(PublishState::Published) => {}
         Ok(PublishState::PublishedUnsynced(error)) => {
@@ -1411,7 +1513,7 @@ fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
         }
         Err(error) => return Err(rollback_adoption(policy, &payload, error)),
     }
-    crash_point("after-publish")?;
+    <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-publish")?;
     capture_active_fingerprint(policy, &dir, &target)?;
     finalize_active(policy)
 }
@@ -1660,18 +1762,6 @@ fn finalize_active(policy: &ResidentPolicy) -> Result<()> {
     crate::policy::write_journal_durable(&journal)
 }
 
-pub fn enable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
-    let _guard = lock::acquire(policy)?;
-    if !managed::allows_enable()? {
-        return Err(PolicyError::NotManaged {
-            policy: policy.id().to_string(),
-        }
-        .into());
-    }
-    recover_stage_before_read(policy.id())?;
-    adopt(policy, owner)
-}
-
 fn staged_cleanup_failure(
     journal: &PolicyJournal,
     expected: String,
@@ -1879,7 +1969,7 @@ fn release_fragment(journal: &PolicyJournal) -> Result<()> {
         journal.state = JournalState::Releasing;
         journal.failure = None;
         crate::policy::write_journal_durable(&journal)?;
-        crash_point("after-releasing-journal")?;
+        <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-releasing-journal")?;
     }
     let payload = payload_of(&journal.payload)?;
     let expected = payload.rendered_sha256.clone();
@@ -1919,7 +2009,7 @@ fn release_fragment(journal: &PolicyJournal) -> Result<()> {
                 );
                 return Err(combine_with_evidence(error, evidence));
             }
-            crash_point("after-fragment-removal")?;
+            <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-fragment-removal")?;
         }
         AtEntry::Regular { sha256, .. } => {
             write_release_failure(
@@ -1939,65 +2029,6 @@ fn release_fragment(journal: &PolicyJournal) -> Result<()> {
             );
         }
     }
-    Ok(())
-}
-pub fn disable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
-    let _guard = lock::acquire(policy)?;
-    if !managed::allows_release()? {
-        return Err(PolicyError::NotManaged {
-            policy: policy.id().to_string(),
-        }
-        .into());
-    }
-    recover_stage_before_read(policy.id())?;
-    release(policy, owner)
-}
-
-pub fn join(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
-    let _guard = lock::acquire(policy)?;
-    if !managed::allows_enable()? {
-        return Err(PolicyError::NotManaged {
-            policy: policy.id().to_string(),
-        }
-        .into());
-    }
-    recover_stage_before_read(policy.id())?;
-    let journal = read_journal(policy.id())?
-        .with_context(|| format!("no active residency policy `{}` to join", policy.id()))?;
-    if journal.state != JournalState::Active {
-        bail!(
-            "cannot join policy `{}` in state {}; join requires an Active policy",
-            policy.id(),
-            journal.state.as_str()
-        );
-    }
-    prove_active_fragment(policy)?;
-    join_owner(policy, owner)?
-        .with_context(|| format!("no active residency policy `{}` to join", policy.id()))?;
-    Ok(())
-}
-
-pub fn transfer(policy: &ResidentPolicy, new_owner: &ResidencyOwnerId) -> Result<()> {
-    let _guard = lock::acquire(policy)?;
-    if !managed::allows_enable()? {
-        return Err(PolicyError::NotManaged {
-            policy: policy.id().to_string(),
-        }
-        .into());
-    }
-    recover_stage_before_read(policy.id())?;
-    let journal = read_journal(policy.id())?
-        .with_context(|| format!("no active residency policy `{}` to transfer", policy.id()))?;
-    if journal.state != JournalState::Active {
-        bail!(
-            "cannot transfer policy `{}` in state {}; transfer requires an Active policy",
-            policy.id(),
-            journal.state.as_str()
-        );
-    }
-    prove_active_fragment(policy)?;
-    transfer_ownership(policy, new_owner)?
-        .with_context(|| format!("no active residency policy `{}` to transfer", policy.id()))?;
     Ok(())
 }
 
@@ -2033,32 +2064,6 @@ fn run_privileged_operation(
     }
 }
 
-pub fn run_resident_policy_cli(args: &[String]) -> Result<i32> {
-    let parsed = cli::parse_args(args)?;
-    execute(&parsed.command)
-}
-
-pub fn run_resident_policy_cli_traced(args: &[String]) -> Result<i32> {
-    run_resident_policy_cli_traced_with(args, &mut crate::policy::trace::NoopEmissionRecorder)
-}
-
-pub(crate) fn run_resident_policy_cli_traced_with<R>(
-    args: &[String],
-    recorder: &mut R,
-) -> Result<i32>
-where
-    R: crate::policy::trace::EmissionRecorder,
-{
-    let carrier = crate::policy::trace::cli_request(args);
-    recorder.on_request();
-    let result = run_resident_policy_cli(args);
-    let outcome = crate::policy::trace::outcome_of(&result);
-    let reason = crate::policy::trace::error_reason(&result);
-    crate::policy::trace::cli_result(args, &carrier, outcome, &reason);
-    recorder.on_result();
-    result
-}
-
 fn execute(command: &cli::ResidentCommand) -> Result<i32> {
     let policy = ResidentPolicy::nvidia();
     match command {
@@ -2076,7 +2081,7 @@ fn execute(command: &cli::ResidentCommand) -> Result<i32> {
             Ok(0)
         }
         cli::ResidentCommand::Help => {
-            super::print_help();
+            super::super::print_help();
             Ok(0)
         }
         cli::ResidentCommand::Enable => {
@@ -2113,9 +2118,9 @@ mod tests {
     use crate::policy::test_support;
     use std::sync::{Arc, Barrier};
 
-    const SUBPROCESS_TEST: &str = "policy::nvidia::linux::tests::subprocess_probe";
+    const SUBPROCESS_TEST: &str = "policy::nvidia::platform::linux::tests::subprocess_probe";
 
-    use super::super::NVIDIA_POLICY_ID;
+    use super::super::super::NVIDIA_POLICY_ID;
 
     fn test_dir() -> &'static std::path::Path {
         test_support::test_dir()
@@ -2269,11 +2274,11 @@ mod tests {
     #[test]
     fn render_fragment_pins_exact_versions_with_the_resource_identity() {
         let entries = vec![
-            super::super::PackageEntry {
+            super::super::super::PackageEntry {
                 package: "nvidia-driver-560".to_string(),
                 version: "560.35.03-0ubuntu1".to_string(),
             },
-            super::super::PackageEntry {
+            super::super::super::PackageEntry {
                 package: "linux-modules-nvidia-560".to_string(),
                 version: "560.35.03-0ubuntu1".to_string(),
             },
@@ -2345,9 +2350,9 @@ mod tests {
         let _guard = serialized_tests();
         test_support::reset_dir();
         std::env::remove_var("QOL_RESIDENT_CRASH_POINT");
-        crash_point("after-journal").unwrap();
+        <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-journal").unwrap();
         std::env::set_var("QOL_RESIDENT_CRASH_POINT", "elsewhere");
-        crash_point("after-journal").unwrap();
+        <LinuxNvidia as NvidiaPolicyBackend>::crash_point("after-journal").unwrap();
         clear_seams();
     }
 
@@ -2627,7 +2632,7 @@ mod tests {
 
     #[test]
     fn an_unresolved_module_owner_version_refuses_an_incomplete_pin_set() {
-        let mut entries = vec![super::super::PackageEntry {
+        let mut entries = vec![super::super::super::PackageEntry {
             package: "nvidia-driver-550".to_string(),
             version: "550.1".to_string(),
         }];
@@ -4520,7 +4525,7 @@ mod tests {
         };
         assert_eq!(
             *sha256,
-            super::super::sha256_bytes(b"regular bytes"),
+            super::sha256_bytes(b"regular bytes"),
             "the classified entry must carry the exact content hash"
         );
         assert_eq!(
@@ -4822,7 +4827,7 @@ mod tests {
             "the staged fragment must carry the exact owner"
         );
         assert_eq!(
-            super::super::sha256_bytes(&std::fs::read(&staged).unwrap()),
+            super::sha256_bytes(&std::fs::read(&staged).unwrap()),
             expected_hash,
             "the staged fragment must carry the planned hash"
         );
@@ -4840,7 +4845,7 @@ mod tests {
             "the active fragment must carry the exact owner"
         );
         assert_eq!(
-            super::super::sha256_bytes(&std::fs::read(&fragment).unwrap()),
+            super::sha256_bytes(&std::fs::read(&fragment).unwrap()),
             expected_hash,
             "the active fragment must carry the planned hash"
         );
@@ -5009,7 +5014,7 @@ mod tests {
 
 #[cfg(test)]
 mod collision_tests {
-    use super::super::NVIDIA_POLICY_ID;
+    use super::super::super::NVIDIA_POLICY_ID;
     use super::*;
     use crate::policy::test_support;
 
@@ -5047,7 +5052,7 @@ mod collision_tests {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "policy::nvidia::linux::tests::subprocess_probe",
+                "policy::nvidia::platform::linux::tests::subprocess_probe",
                 "--nocapture",
             ])
             .env("QOL_POLICY_SUBPROCESS", "1")
