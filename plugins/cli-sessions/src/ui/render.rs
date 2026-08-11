@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    KeyUpEvent, MouseButton, SharedString, Window,
+    KeyUpEvent, SharedString, Window,
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
@@ -156,7 +156,6 @@ fn header_button(
         .cursor(CursorStyle::PointingHand)
         .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
         .in_focus(|style| style.border_color(rgb(palette.selection_border)))
-        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if accepts_activation_click(event) {
                 activate(this, window, cx);
