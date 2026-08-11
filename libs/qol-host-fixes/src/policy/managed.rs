@@ -2026,6 +2026,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_deb_owner_is_stable_and_namespaced() {
         let lineage = Lineage(DEB_LINEAGE_ID.to_string());

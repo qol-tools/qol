@@ -1415,6 +1415,7 @@ pub(crate) fn transfer_ownership(
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    #[cfg(target_os = "linux")]
     use std::ffi::OsString;
     use std::path::Path;
     use std::path::PathBuf;
@@ -1493,10 +1494,12 @@ pub(crate) mod test_support {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) struct JournalDirOverride {
         previous: Option<OsString>,
     }
 
+    #[cfg(target_os = "linux")]
     impl Drop for JournalDirOverride {
         fn drop(&mut self) {
             match &self.previous {
@@ -1506,6 +1509,7 @@ pub(crate) mod test_support {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn override_journal_dir(dir: &Path) -> JournalDirOverride {
         let previous = std::env::var_os("QOL_POLICY_JOURNAL_DIR");
         std::env::set_var("QOL_POLICY_JOURNAL_DIR", dir);
@@ -1600,6 +1604,7 @@ mod tests {
         journal_stage_path("nvidia-driver-version-pin").unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn journal_round_trips_through_durable_write_and_read() {
         let _guard = serialized_journal_tests();
@@ -1671,6 +1676,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_first_write_never_clobbers_an_existing_canonical() {
         let _guard = serialized_journal_tests();
@@ -1693,6 +1699,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_update_refuses_to_clobber_a_changed_or_foreign_canonical() {
         let _guard = serialized_journal_tests();
@@ -1751,6 +1758,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_update_race_revalidates_the_name_and_refuses_to_clobber() {
         let _guard = serialized_journal_tests();
@@ -1841,6 +1849,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_override_parent_is_never_created() {
         let _guard = serialized_journal_tests();
@@ -1856,6 +1865,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_existing_stage_is_visible_to_read_only_status() {
         let _guard = serialized_journal_tests();
@@ -1869,6 +1879,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_wrong_inode_stage_copy_is_preserved_and_fails_closed() {
         let _guard = serialized_journal_tests();
@@ -1990,6 +2001,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn final_removal_never_sweeps_a_replaced_canonical() {
         let _guard = serialized_journal_tests();
@@ -2009,6 +2021,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn failure_seams_clean_only_the_exact_stage_and_report_cleanup_failures() {
         let _guard = serialized_journal_tests();
