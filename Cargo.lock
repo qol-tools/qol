@@ -5844,6 +5844,7 @@ dependencies = [
  "qol-git",
  "qol-gpui",
  "qol-plugin-api",
+ "qol-runtime",
  "qol-watch",
 ]
 

@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, AnyElement, App, Context, Entity, FocusHandle, Focusable, HighlightStyle,
-    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, TextStyle, WhiteSpace,
-    Window,
+    div, px, rgb, AnyElement, App, ClickEvent, Context, CursorStyle, Entity, FocusHandle,
+    Focusable, HighlightStyle, KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString,
+    StyledText, TextStyle, WhiteSpace, Window,
 };
 use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
@@ -164,6 +164,7 @@ pub struct DiffView {
     hunk_pair_starts: Vec<usize>,
     hunk_line_starts: Vec<usize>,
     facts_error: Option<String>,
+    rendered_once: bool,
     last_fit: usize,
     generation: Arc<AtomicU64>,
     git_tx: mpsc::Sender<GitRequest>,
@@ -212,12 +213,13 @@ impl DiffView {
             surface: CodeSurface::new(),
             lines: Vec::new(),
             active_pane: ActivePane::Files,
-            files_collapsed: true,
+            files_collapsed: false,
             layout: Layout::Split,
             pairs: Vec::new(),
             hunk_pair_starts: Vec::new(),
             hunk_line_starts: Vec::new(),
             facts_error: None,
+            rendered_once: false,
             last_fit: 0,
             generation,
             git_tx,
@@ -422,6 +424,7 @@ impl DiffView {
     }
 
     fn apply_facts(&mut self, facts: Facts) -> bool {
+        qol_runtime::probe!("DIFF_VIEWER", "facts numstat={}", facts.numstat.len());
         self.facts_error = None;
         let facts_equal = self
             .last_facts
@@ -520,7 +523,6 @@ impl DiffView {
     }
 
     fn hide_panel(&mut self, cx: &mut Context<Self>) {
-        self.chrome.hide_with_reason("hide-button");
         cx.quit();
     }
 
@@ -627,11 +629,11 @@ impl DiffView {
         self.last_fit.max(1)
     }
 
-    fn render_file_list(&self) -> AnyElement {
+    fn render_file_list(&self, cx: &Context<Self>) -> AnyElement {
         let rows: Vec<AnyElement> = self
             .files
             .visible_range()
-            .map(|index| self.file_row(index))
+            .map(|index| self.file_row(index, cx))
             .collect();
         let mut list = div()
             .id("file-list")
@@ -654,17 +656,25 @@ impl DiffView {
         list.into_any_element()
     }
 
-    fn file_row(&self, index: usize) -> AnyElement {
+    fn file_row(&self, index: usize, cx: &Context<Self>) -> AnyElement {
         let file = &self.files.files[index];
         let selected = index == self.files.list.selected;
         let mut row = div()
+            .id(("file-row", index))
+            .cursor(CursorStyle::PointingHand)
             .h(px(ROW_HEIGHT))
             .w_full()
             .flex()
             .items_center()
             .gap_2()
             .px_2()
-            .text_size(px(12.0));
+            .text_size(px(12.0))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _window, cx| {
+                view.files.list.selected = index;
+                view.files.list.sync(view.files.files.len());
+                view.select_current_file();
+                cx.notify();
+            }));
         if selected {
             row = row.bg(rgb(surface::LIST_SELECTED_BG));
         }
@@ -695,10 +705,20 @@ impl DiffView {
             .overflow_hidden()
             .bg(rgb(surface::CANVAS_BG))
             .on_scroll_wheel(cx.listener(Self::on_scroll));
+        if let Some(error) = &self.facts_error {
+            return pane
+                .child(center_message(error, surface::ERROR_TEXT))
+                .into_any_element();
+        }
         match &self.pane {
-            DiffPane::Empty => pane
-                .child(center_message("No changes", surface::TEXT_MUTED))
-                .into_any_element(),
+            DiffPane::Empty => {
+                let message = match &self.repo {
+                    Some(repo) => format!("No changes in {}", repo.display()),
+                    None => "No changes".to_string(),
+                };
+                pane.child(center_message(&message, surface::TEXT_MUTED))
+                    .into_any_element()
+            }
             DiffPane::Error(error) => pane
                 .child(center_message(&error.to_string(), surface::ERROR_TEXT))
                 .into_any_element(),
@@ -887,6 +907,38 @@ impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_fit = visible_fit(window.viewport_size().height.to_f64() as f32, LINE_HEIGHT);
         self.update_overview(cx);
+        if !self.rendered_once {
+            self.rendered_once = true;
+            qol_runtime::probe!(
+                "DIFF_VIEWER",
+                "rendered=true viewport={:?}x{:?}",
+                window.viewport_size().width,
+                window.viewport_size().height
+            );
+        }
+        let bar = WindowBar::new("DIFF VIEWER")
+            .on_collapse({
+                let this = cx.entity();
+                move |window, app| {
+                    this.update(app, |view, cx| {
+                        if view.chrome.is_collapsed() {
+                            view.chrome.expand(window, cx);
+                        } else {
+                            view.chrome.collapse(window);
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .on_hide({
+                let this = cx.entity();
+                move |_window, app| {
+                    this.update(app, |view, cx| view.hide_panel(cx));
+                }
+            });
+        if self.chrome.is_collapsed() {
+            return bar.into_any_element();
+        }
         let scrubber = if self.scrub_commits.is_empty() {
             div().h(px(0.0)).into_any_element()
         } else {
@@ -902,33 +954,17 @@ impl Render for DiffView {
             .font_family(self.font_family.clone())
             .text_size(px(FONT_SIZE))
             .on_key_down(cx.listener(Self::on_key))
-            .child(
-                WindowBar::new("DIFF VIEWER")
-                    .on_collapse({
-                        let this = cx.entity();
-                        move |window, app| {
-                            this.update(app, |view, cx| {
-                                view.chrome.collapse(window);
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .on_hide({
-                        let this = cx.entity();
-                        move |_window, app| {
-                            this.update(app, |view, cx| view.hide_panel(cx));
-                        }
-                    }),
-            )
+            .child(bar)
             .child({
                 let mut row = div().flex().flex_row().flex_1().h_full();
                 if !self.files_collapsed {
-                    row = row.child(self.render_file_list());
+                    row = row.child(self.render_file_list(cx));
                 }
                 row.child(self.render_pane(window, cx))
                     .child(self.overview_view.clone())
             })
             .child(scrubber)
+            .into_any_element()
     }
 }
 

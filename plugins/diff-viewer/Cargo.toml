@@ -19,6 +19,7 @@ qol-cache.workspace = true
 qol-diff.workspace = true
 qol-git.workspace = true
 qol-gpui.workspace = true
+qol-runtime.workspace = true
 qol-watch.workspace = true
 
 [dev-dependencies]

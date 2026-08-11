@@ -2,7 +2,7 @@ use super::resolution::ResolvedAction;
 use super::tracking::ProcessTracker;
 use super::ActionExecutionError;
 use crate::plugins::action_transport::DaemonActionDispatch;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(debug_assertions)]
 use std::time::Instant;
@@ -241,12 +241,34 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
         );
+    if let Some(repo) = summon_repo_hint(resolved) {
+        command.env("QOL_DIFF_REPO", repo);
+    }
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env(qol_conventions::ENV_DAEMON_SOCKET, socket_path);
     }
     command
+}
+
+fn summon_repo_hint(resolved: &ResolvedAction) -> Option<PathBuf> {
+    #[cfg(feature = "dev")]
+    {
+        let Ok(config_dir) = crate::paths::shared_config_dir() else {
+            return None;
+        };
+        let branch = crate::dev::get_active_worktree_branch(&config_dir)?;
+        return qol_dev_build::planning::worktree::find_git_worktree_by_branch(
+            &resolved.plugin_dir,
+            &branch,
+        );
+    }
+    #[cfg(not(feature = "dev"))]
+    {
+        let _ = resolved;
+        None
+    }
 }
 
 fn spawn_wait_untracker(
