@@ -1,8 +1,8 @@
 use x11rb::connection::Connection;
 use x11rb::properties::WmHints;
-use x11rb::protocol::shape;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
+use x11rb::protocol::{shape, xproto};
 use x11rb::wrapper::ConnectionExt as _;
 
 use std::collections::BTreeMap;
@@ -411,7 +411,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         return false;
     };
     release_input_focus(&conn, root, wid);
-    if opacity > 0.0 || !unmap_hide_enabled() {
+    if opacity > 0.0 {
         if cached_card(title) == Some(target) {
             return true;
         }
@@ -1577,14 +1577,20 @@ fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {
 
 fn set_input_passthrough(conn: &impl Connection, wid: u32, passthrough: bool) -> bool {
     if !passthrough {
-        return shape::mask(
+        return shape::rectangles(
             conn,
             shape::SO::SET,
             shape::SK::INPUT,
+            ClipOrdering::UNSORTED,
             wid,
             0,
             0,
-            x11rb::NONE,
+            &[xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width: u16::MAX,
+                height: u16::MAX,
+            }],
         )
         .is_ok();
     }
