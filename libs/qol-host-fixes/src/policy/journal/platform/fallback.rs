@@ -74,9 +74,12 @@ mod tests {
     #[test]
     fn fallback_read_rejects_an_embedded_policy_that_differs_from_requested() {
         let _guard = test_support::serialized();
-        let journal = test_support::journal("nvidia-driver-version-pin", &["owner-a"]);
-        write_durable(&journal).unwrap();
-        let error = read("some-other-policy").unwrap_err();
+        let mut mismatched = test_support::journal("nvidia-driver-version-pin", &["owner-a"]);
+        mismatched.policy = "other-policy".to_string();
+        let bytes = serde_json::to_vec(&mismatched).unwrap();
+        let path = crate::policy::journal_path("nvidia-driver-version-pin").unwrap();
+        qol_fs::atomic_write_durable_mode(&path, &bytes, 0o644).unwrap();
+        let error = read("nvidia-driver-version-pin").unwrap_err();
         assert!(format!("{error:#}").contains("embeds policy"), "{error:#}");
     }
 
