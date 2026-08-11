@@ -15,7 +15,7 @@ pub mod ui;
 pub use diagnostics::{anomaly, snapshot};
 pub use session::{git, registry, service, status, tool};
 pub use storage::{paths, persist};
-pub use ui::{collapse, nav, notify, placement, selection};
+pub use ui::{nav, notify, placement, selection};
 
 pub fn show_settings() -> anyhow::Result<()> {
     let runtime = qol_gpui::settings_panel::SettingsRuntime::empty();

@@ -201,6 +201,10 @@ impl SurfaceDismisser {
         *self.state.title.borrow_mut() = title;
     }
 
+    pub fn title(&self) -> String {
+        self.state.title.borrow().clone()
+    }
+
     pub fn dismiss(&self, cx: &mut App) {
         self.state
             .generation

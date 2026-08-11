@@ -13,8 +13,10 @@ use gpui::{
 };
 use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
+use qol_gpui::placement::Corner;
 use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::surface::SurfaceDismisser;
+use qol_gpui::window_chrome::PanelChrome;
 use qol_gpui::WindowBar;
 
 use crate::overview::{HunkMarker, OverviewView};
@@ -185,6 +187,7 @@ pub struct DiffView {
     last_scrub_selected: Option<usize>,
     requested: Option<(String, String)>,
     last_facts: Option<Facts>,
+    chrome: PanelChrome,
 }
 
 impl DiffView {
@@ -204,6 +207,7 @@ impl DiffView {
                 let _ = tx.send(ratio);
             })
         });
+        let chrome_title = dismisser.title();
         let mut view = Self {
             repo,
             files: FileListState::new(list_max_visible()),
@@ -239,6 +243,7 @@ impl DiffView {
             last_scrub_selected: None,
             requested: None,
             last_facts: None,
+            chrome: PanelChrome::new(chrome_title, Corner::TopLeft),
         };
         if view.repo.is_none() {
             view.facts_error =
@@ -518,6 +523,14 @@ impl DiffView {
         true
     }
 
+    fn hide_panel(&mut self, cx: &mut Context<Self>) {
+        if self.chrome.hide_with_reason("hide-button") {
+            cx.quit();
+            return;
+        }
+        self.dismisser.dismiss(cx);
+    }
+
     fn select_current_file(&mut self) {
         let Some(path) = self.files.selected_path() else {
             return;
@@ -534,7 +547,7 @@ impl DiffView {
                 self.refocus(_window, cx);
             }
             (_, "escape") | (_, "esc") => {
-                self.dismisser.dismiss(cx);
+                self.hide_panel(cx);
                 return;
             }
             (_, "f") => {
@@ -896,10 +909,24 @@ impl Render for DiffView {
             .font_family(self.font_family.clone())
             .text_size(px(FONT_SIZE))
             .on_key_down(cx.listener(Self::on_key))
-            .child(WindowBar::new("DIFF VIEWER").on_hide({
-                let dismisser = self.dismisser.clone();
-                move |_window, app| dismisser.dismiss(app)
-            }))
+            .child(
+                WindowBar::new("DIFF VIEWER")
+                    .on_collapse({
+                        let this = cx.entity();
+                        move |window, app| {
+                            this.update(app, |view, cx| {
+                                view.chrome.collapse(window);
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .on_hide({
+                        let this = cx.entity();
+                        move |_window, app| {
+                            this.update(app, |view, cx| view.hide_panel(cx));
+                        }
+                    }),
+            )
             .child({
                 let mut row = div().flex().flex_row().flex_1().h_full();
                 if !self.files_collapsed {

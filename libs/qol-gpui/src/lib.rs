@@ -21,11 +21,13 @@ pub mod surface;
 pub mod toast;
 pub mod window;
 pub mod window_bar;
+pub mod window_chrome;
 
 pub use icon_button::IconButton;
 pub use spinner::Spinner;
 pub use status_indicator::StatusIndicator;
 pub use window_bar::WindowBar;
+pub use window_chrome::PanelChrome;
 
 pub mod theme {
     pub use qol_theme::*;
