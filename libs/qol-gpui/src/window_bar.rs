@@ -1,23 +1,27 @@
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, AnyElement, App, ClickEvent, CursorStyle, FontWeight, KeyDownEvent,
-    MouseButton, SharedString, Window,
-};
+use gpui::{div, px, rgb, App, CursorStyle, FontWeight, SharedString, Window};
 
+use crate::icon_button::IconButton;
 use crate::surface::PanelDragArea;
+use crate::theme::{SystemPalette, DARK_REFERENCE};
 
 const BAR_HEIGHT: f32 = 34.0;
 const BAR_PADDING_X: f32 = 12.0;
 const TRAILING_GAP: f32 = 9.0;
 const TITLE_SIZE: f32 = 11.0;
-const BUTTON_SIZE: f32 = 24.0;
-const BUTTON_GLYPH_SIZE: f32 = 13.0;
-const DEFAULT_BACKGROUND: u32 = 0x14181f;
-const DEFAULT_BORDER: u32 = 0x2f3644;
-const DEFAULT_TITLE_COLOR: u32 = 0xd4dbea;
-const DEFAULT_BUTTON_TEXT: u32 = 0x67748f;
-const DEFAULT_BUTTON_HOVER: u32 = 0x2f3644;
-const DEFAULT_BUTTON_FOCUS: u32 = 0x8a93a8;
+
+const fn chrome_defaults() -> (u32, u32, u32) {
+    let system = SystemPalette::from_reference(DARK_REFERENCE);
+    (
+        system.surface_canvas,
+        system.text_secondary,
+        system.text_muted,
+    )
+}
+
+fn divider_default(system: &SystemPalette) -> u32 {
+    mix_rgb(system.surface_elevated, system.border_subtle, 0.5)
+}
 
 type BarAction = Box<dyn Fn(&mut Window, &mut App)>;
 
@@ -32,19 +36,22 @@ pub struct WindowBar {
     button_focus: u32,
     collapse: Option<BarAction>,
     hide: Option<BarAction>,
-    children: Vec<AnyElement>,
+    children: Vec<gpui::AnyElement>,
 }
 
 impl WindowBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
+        let system = SystemPalette::from_reference(DARK_REFERENCE);
+        let (background, title_color, button_text) = chrome_defaults();
+        let border = divider_default(&system);
         Self {
             title: title.into(),
-            background: DEFAULT_BACKGROUND,
-            border: DEFAULT_BORDER,
-            title_color: DEFAULT_TITLE_COLOR,
-            button_text: DEFAULT_BUTTON_TEXT,
-            button_hover: DEFAULT_BUTTON_HOVER,
-            button_focus: DEFAULT_BUTTON_FOCUS,
+            background,
+            border,
+            title_color,
+            button_text,
+            button_hover: 0xffffff0f,
+            button_focus: system.accent,
             collapse: None,
             hide: None,
             children: Vec::new(),
@@ -97,24 +104,18 @@ impl RenderOnce for WindowBar {
             .gap(px(TRAILING_GAP))
             .children(self.children);
         if let Some(action) = self.collapse {
-            trailing = trailing.child(control_button(
-                "window-bar-collapse",
-                "\u{2581}",
-                action,
-                self.button_text,
-                self.button_hover,
-                self.button_focus,
-            ));
+            trailing = trailing.child(
+                IconButton::new("window-bar-collapse", "\u{2581}")
+                    .style(self.button_text, self.button_hover, self.button_focus)
+                    .on_activate(action),
+            );
         }
         if let Some(action) = self.hide {
-            trailing = trailing.child(control_button(
-                "window-bar-hide",
-                "\u{00D7}",
-                action,
-                self.button_text,
-                self.button_hover,
-                self.button_focus,
-            ));
+            trailing = trailing.child(
+                IconButton::new("window-bar-hide", "\u{00D7}")
+                    .style(self.button_text, self.button_hover, self.button_focus)
+                    .on_activate(action),
+            );
         }
         div()
             .id("window-bar")
@@ -145,55 +146,18 @@ impl RenderOnce for WindowBar {
     }
 }
 
-fn control_button(
-    id: &'static str,
-    glyph: &'static str,
-    action: BarAction,
-    text: u32,
-    hover: u32,
-    focus: u32,
-) -> impl IntoElement {
-    let action = std::rc::Rc::new(action);
-    let click_action = std::rc::Rc::clone(&action);
-    div()
-        .id(id)
-        .focusable()
-        .tab_stop(true)
-        .w(px(BUTTON_SIZE))
-        .h(px(BUTTON_SIZE))
-        .rounded_md()
-        .border_1()
-        .border_color(rgba(0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(text))
-        .text_size(px(BUTTON_GLYPH_SIZE))
-        .cursor(CursorStyle::PointingHand)
-        .hover(|style| style.bg(rgba(hover)))
-        .in_focus(|style| style.border_color(rgb(focus)))
-        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-        .on_click(move |event, window, app| {
-            if accepts_activation_click(event) {
-                click_action(window, app);
-                app.stop_propagation();
-            }
-        })
-        .on_key_down(move |event: &KeyDownEvent, window, app| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") && !event.is_held {
-                action(window, app);
-                app.stop_propagation();
-            }
-        })
-        .child(glyph)
-}
-
-fn accepts_activation_click(event: &ClickEvent) -> bool {
-    matches!(event, ClickEvent::Mouse(_))
-}
-
 fn is_double_click(click_count: usize) -> bool {
     click_count >= 2
+}
+
+fn mix_rgb(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let channel = |shift: u32| {
+        let x = ((a >> shift) & 0xff) as f32;
+        let y = ((b >> shift) & 0xff) as f32;
+        ((x + (y - x) * t).round() as u32 & 0xff) << shift
+    };
+    channel(16) | channel(8) | channel(0)
 }
 
 #[cfg(test)]
@@ -206,19 +170,5 @@ mod tests {
         assert!(!is_double_click(1));
         assert!(is_double_click(2));
         assert!(is_double_click(3));
-    }
-
-    #[test]
-    fn only_mouse_clicks_activate_bar_buttons() {
-        use super::accepts_activation_click;
-        assert!(accepts_activation_click(&gpui::ClickEvent::Mouse(
-            Default::default()
-        )));
-        assert!(!accepts_activation_click(&gpui::ClickEvent::Keyboard(
-            gpui::KeyboardClickEvent {
-                button: gpui::KeyboardButton::Enter,
-                bounds: Default::default(),
-            }
-        )));
     }
 }

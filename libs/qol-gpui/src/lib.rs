@@ -5,6 +5,7 @@ pub mod event_router;
 pub mod gamepad;
 pub mod ghost;
 pub mod history;
+pub mod icon_button;
 pub mod keepalive;
 pub mod monitor;
 pub mod placement;
@@ -21,6 +22,7 @@ pub mod toast;
 pub mod window;
 pub mod window_bar;
 
+pub use icon_button::IconButton;
 pub use spinner::Spinner;
 pub use status_indicator::StatusIndicator;
 pub use window_bar::WindowBar;
