@@ -208,6 +208,7 @@ impl DiffView {
             })
         });
         let chrome_title = dismisser.title();
+        let _ = qol_gpui::popup_window::set_window_always_on_top_by_title(&chrome_title);
         let mut view = Self {
             repo,
             files: FileListState::new(list_max_visible()),

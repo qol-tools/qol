@@ -668,6 +668,18 @@ pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels
     set_window_fixed_size(&conn, wid, size) && conn.flush().is_ok()
 }
 
+pub fn set_window_always_on_top_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    add_window_state(&conn, root, wid);
+    conn.flush().is_ok()
+}
+
 fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
     let Some(state_atom) = intern(conn, b"_NET_WM_STATE") else {
         return;

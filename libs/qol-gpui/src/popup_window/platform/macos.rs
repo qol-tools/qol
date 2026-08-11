@@ -66,6 +66,10 @@ pub fn make_override_redirect(_title: &str) -> bool {
     false
 }
 
+pub fn set_window_always_on_top_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn focus_window_by_title(_title: &str) -> bool {
     false
 }
