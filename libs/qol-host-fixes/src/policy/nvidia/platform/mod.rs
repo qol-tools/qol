@@ -1,7 +1,7 @@
 use crate::policy::{ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 
-use super::PolicyStatusView;
+use super::{ActiveFileFingerprint, PolicyStatusView};
 
 pub trait NvidiaPolicyBackend {
     fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView>;
@@ -11,6 +11,7 @@ pub trait NvidiaPolicyBackend {
     fn transfer(policy: &ResidentPolicy, new_owner: &ResidencyOwnerId) -> Result<()>;
     fn run_resident_policy_cli(args: &[String]) -> Result<i32>;
     fn crash_point(point: &str) -> Result<()>;
+    fn validate_fingerprint_owner(fingerprint: &ActiveFileFingerprint) -> Result<()>;
 }
 
 #[cfg(target_os = "linux")]

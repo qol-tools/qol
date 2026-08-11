@@ -243,6 +243,20 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
         let parsed = cli::parse_args(args)?;
         execute(&parsed.command)
     }
+
+    fn validate_fingerprint_owner(fingerprint: &super::super::ActiveFileFingerprint) -> Result<()> {
+        let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
+        if fingerprint.uid != expected_uid || fingerprint.gid != expected_gid {
+            return Err(PolicyError::JournalInvalid {
+                policy: crate::policy::nvidia::NVIDIA_POLICY_ID.to_string(),
+                reason: format!(
+                    "the active fingerprint must encode the exact policy-file owner {expected_uid}:{expected_gid}"
+                ),
+            }
+            .into());
+        }
+        Ok(())
+    }
 }
 
 const GUARD_PATTERNS: [&str; 6] = [

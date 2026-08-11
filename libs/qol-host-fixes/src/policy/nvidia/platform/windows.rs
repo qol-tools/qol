@@ -1,6 +1,6 @@
 use super::{NvidiaPolicyBackend, PolicyStatusView};
 use crate::policy::cli::{self, ResidentCommand};
-use crate::policy::nvidia::{print_help, NVIDIA_POLICY_ID};
+use crate::policy::nvidia::{print_help, ActiveFileFingerprint, NVIDIA_POLICY_ID};
 use crate::policy::{PolicyError, ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 
@@ -61,6 +61,10 @@ impl NvidiaPolicyBackend for WindowsNvidia {
     }
 
     fn crash_point(_point: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn validate_fingerprint_owner(_fingerprint: &ActiveFileFingerprint) -> Result<()> {
         Ok(())
     }
 }

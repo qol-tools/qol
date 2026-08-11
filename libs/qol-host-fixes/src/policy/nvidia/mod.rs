@@ -309,19 +309,7 @@ pub fn validate_payload(payload: &NvidiaPayload) -> Result<()> {
             }
             .into());
         }
-        #[cfg(target_os = "linux")]
-        {
-            let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
-            if fingerprint.uid != expected_uid || fingerprint.gid != expected_gid {
-                return Err(PolicyError::JournalInvalid {
-                    policy: NVIDIA_POLICY_ID.to_string(),
-                    reason: format!(
-                        "the active fingerprint must encode the exact policy-file owner {expected_uid}:{expected_gid}"
-                    ),
-                }
-                .into());
-            }
-        }
+        Backend::validate_fingerprint_owner(fingerprint)?;
         if !(0..=999_999_999).contains(&fingerprint.ctime_nsec) {
             return Err(PolicyError::JournalInvalid {
                 policy: NVIDIA_POLICY_ID.to_string(),
