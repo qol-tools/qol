@@ -111,7 +111,6 @@ impl EmissionRecorder for NoopEmissionRecorder {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CountedEmissionRecorder {
     pub(crate) requests: usize,
@@ -119,7 +118,6 @@ pub(crate) struct CountedEmissionRecorder {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
 impl EmissionRecorder for CountedEmissionRecorder {
     fn on_request(&mut self) {
         self.requests += 1;
@@ -161,7 +159,6 @@ pub fn cli_result(args: &[String], carrier: &CarrierObservation, outcome: &str, 
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
     use super::super::test_support;
     use super::*;
 
@@ -274,9 +271,8 @@ mod tests {
         assert!(error_reason(&Err(anyhow::anyhow!("boom"))).contains("boom"));
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn a_traced_cli_attempt_emits_exactly_one_request_and_one_result() {
+    fn a_traced_malformed_attempt_emits_exactly_one_request_and_one_result() {
         let _guard = test_support::serialized();
         let mut recorder = CountedEmissionRecorder::default();
         let result = super::super::nvidia::run_resident_policy_cli_traced_with(
@@ -295,6 +291,12 @@ mod tests {
             },
             "a malformed attempt must still emit one request and one result"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_traced_status_attempt_emits_exactly_one_request_and_one_result() {
+        let _guard = test_support::serialized();
         let mut recorder = CountedEmissionRecorder::default();
         let result = super::super::nvidia::run_resident_policy_cli_traced_with(
             &["status".to_string()],

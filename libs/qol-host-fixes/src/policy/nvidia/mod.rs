@@ -309,9 +309,7 @@ pub fn validate_payload(payload: &NvidiaPayload) -> Result<()> {
             }
             .into());
         }
-        #[cfg(target_os = "linux")]
-        {
-            let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
+        if let Some((expected_uid, expected_gid)) = Backend::expected_fingerprint_owner() {
             if fingerprint.uid != expected_uid || fingerprint.gid != expected_gid {
                 return Err(PolicyError::JournalInvalid {
                     policy: NVIDIA_POLICY_ID.to_string(),

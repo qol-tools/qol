@@ -5,9 +5,9 @@ use super::super::{
 use super::NvidiaPolicyBackend;
 use crate::policy::fail_next;
 use crate::policy::{
-    cli, join_owner, lock, managed, read_journal, recover_stage_before_read, remove_owner,
-    transfer_ownership, JournalState, PolicyError, PolicyJournal, PolicyPayload, PolicyState,
-    ReleaseFailure, ReleaseStage, ResidencyOwnerId, ResidentPolicy,
+    cli, lock, managed, read_journal, recover_stage_before_read, JournalState, PolicyError,
+    PolicyJournal, PolicyPayload, PolicyState, ReleaseFailure, ReleaseStage, ResidencyOwnerId,
+    ResidentPolicy,
 };
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -243,6 +243,65 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
         let parsed = cli::parse_args(args)?;
         execute(&parsed.command)
     }
+
+    fn expected_fingerprint_owner() -> Option<(u32, u32)> {
+        Some(crate::policy::expected_policy_file_owner())
+    }
+}
+
+fn join_owner(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<Option<PolicyJournal>> {
+    let Some(journal) = read_journal(policy.id())? else {
+        return Ok(None);
+    };
+    if journal.state != JournalState::Active {
+        bail!(
+            "cannot join policy `{}` in state {}; join requires an Active policy",
+            policy.id(),
+            journal.state.as_str()
+        );
+    }
+    if journal.owners.iter().any(|existing| existing == owner) {
+        return Ok(Some(journal));
+    }
+    let mut journal = journal;
+    journal.owners.push(owner.clone());
+    crate::policy::write_journal_durable(&journal)?;
+    Ok(Some(journal))
+}
+
+fn remove_owner(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+    let Some(mut journal) = read_journal(policy.id())? else {
+        return Ok(());
+    };
+    let before = journal.owners.len();
+    journal.owners.retain(|existing| existing != owner);
+    if journal.owners.len() == before {
+        return Ok(());
+    }
+    if journal.owners.is_empty() {
+        return crate::policy::remove_journal_durable(policy.id());
+    }
+    crate::policy::write_journal_durable(&journal)
+}
+
+fn transfer_ownership(
+    policy: &ResidentPolicy,
+    new_owner: &ResidencyOwnerId,
+) -> Result<Option<PolicyJournal>> {
+    let Some(journal) = read_journal(policy.id())? else {
+        return Ok(None);
+    };
+    if journal.state != JournalState::Active {
+        bail!(
+            "cannot transfer policy `{}` in state {}; transfer requires an Active policy",
+            policy.id(),
+            journal.state.as_str()
+        );
+    }
+    let mut journal = journal;
+    journal.owners = vec![new_owner.clone()];
+    crate::policy::write_journal_durable(&journal)?;
+    Ok(Some(journal))
 }
 
 const GUARD_PATTERNS: [&str; 6] = [

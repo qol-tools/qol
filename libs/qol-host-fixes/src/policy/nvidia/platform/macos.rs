@@ -63,4 +63,8 @@ impl NvidiaPolicyBackend for MacosNvidia {
     fn crash_point(_point: &str) -> Result<()> {
         Ok(())
     }
+
+    fn expected_fingerprint_owner() -> Option<(u32, u32)> {
+        None
+    }
 }
