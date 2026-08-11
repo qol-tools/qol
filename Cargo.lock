@@ -5774,7 +5774,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-bluetooth"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "bluer",
@@ -5820,7 +5820,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-controllers"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6639,7 +6639,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.55.0"
+version = "3.55.1"
 dependencies = [
  "anyhow",
  "axum",
