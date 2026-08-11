@@ -1,4 +1,4 @@
-use crate::policy::{PolicyError, PolicyPayload};
+use crate::policy::{PolicyError, PolicyPayload, ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -8,15 +8,57 @@ pub const RESOURCE_IDENTITY_LINE: &str = "# qol-resource-identity: ";
 pub const STAGED_MARKER: &str = ".qol-stage-";
 pub const NONCE_HEX_LEN: usize = 32;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub use linux::*;
+mod platform;
+use platform::{Backend, NvidiaPolicyBackend};
 
-#[cfg(not(target_os = "linux"))]
-mod unsupported;
-#[cfg(not(target_os = "linux"))]
-pub use unsupported::*;
+pub fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView> {
+    Backend::status(policy)
+}
+
+pub fn enable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+    Backend::enable(policy, owner)
+}
+
+pub fn disable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+    Backend::disable(policy, owner)
+}
+
+pub fn join(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
+    Backend::join(policy, owner)
+}
+
+pub fn transfer(policy: &ResidentPolicy, new_owner: &ResidencyOwnerId) -> Result<()> {
+    Backend::transfer(policy, new_owner)
+}
+
+pub fn run_resident_policy_cli(args: &[String]) -> Result<i32> {
+    Backend::run_resident_policy_cli(args)
+}
+
+pub fn crash_point(point: &str) -> Result<()> {
+    Backend::crash_point(point)
+}
+
+pub fn run_resident_policy_cli_traced(args: &[String]) -> Result<i32> {
+    run_resident_policy_cli_traced_with(args, &mut crate::policy::trace::NoopEmissionRecorder)
+}
+
+pub(crate) fn run_resident_policy_cli_traced_with<R>(
+    args: &[String],
+    recorder: &mut R,
+) -> Result<i32>
+where
+    R: crate::policy::trace::EmissionRecorder,
+{
+    let carrier = crate::policy::trace::cli_request(args);
+    recorder.on_request();
+    let result = run_resident_policy_cli(args);
+    let outcome = crate::policy::trace::outcome_of(&result);
+    let reason = crate::policy::trace::error_reason(&result);
+    crate::policy::trace::cli_result(args, &carrier, outcome, &reason);
+    recorder.on_result();
+    result
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,14 +128,6 @@ pub fn render_fragment(entries: &[PackageEntry], resource_identity: &str) -> Str
         content.push_str("Pin-Priority: 1001\n");
     }
     content
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn sha256_bytes(content: &[u8]) -> String {
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(content);
-    format!("{:x}", hasher.finalize())
 }
 
 pub fn sha256_hex(content: &str) -> String {
@@ -309,21 +343,6 @@ pub fn validate_payload(payload: &NvidiaPayload) -> Result<()> {
         .into());
     }
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn payload_of(journal_payload: &PolicyPayload) -> Result<&NvidiaPayload> {
-    match journal_payload {
-        PolicyPayload::Nvidia(payload) => Ok(payload),
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn unix_millis() -> Result<u64> {
-    Ok(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| anyhow::anyhow!("system clock before the unix epoch: {error}"))?
-        .as_millis() as u64)
 }
 
 pub fn print_help() {
