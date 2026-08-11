@@ -153,6 +153,22 @@ test_check_subject() {
     "fix(alt-tab): trailing period.@@no@@trailing period"
     "fix(alt-tab): added the thing@@no@@imperative"
     "chore: tidy up loose ends@@ok@@"
+    "refactor(qol-tray): trait-based policy backends and journal split@@no@@imperative"
+    "feat(qol-cli): count-based line copy in the disk view@@no@@imperative"
+    "fix(qol-tray): top-anchored scroll for the disk view@@no@@imperative"
+    "fix(qol-cli): sessions wait skips the send echo@@no@@imperative"
+    "fix(qol-tray): unsupported rows save the contract default@@no@@imperative"
+    "feat(workspace): shared libs and headless profile sync@@no@@imperative"
+    "fix(qol-tray): removing the stale entry@@no@@imperative"
+    "fix(qol-tray): read the contract default@@ok@@"
+    "perf(qol-tray): speed up the first paint@@ok@@"
+    "fix(qol-tray): ping the daemon before dispatch@@ok@@"
+    "fix(qol-tray): embed the manifest in the binary@@ok@@"
+    "fix(qol-tray): pass the wid through@@ok@@"
+    "fix(qol-tray): address the review findings@@ok@@"
+    "fix(qol-tray): focus the picker on show@@ok@@"
+    "refactor(qol-tray): auto-prune orphaned links@@ok@@"
+    "fix(qol-tray): self-heal the stale fingerprint@@ok@@"
   )
   for c in "${cases[@]}"; do
     local subj="${c%%@@*}" rest="${c#*@@}" exp sub reason rc
