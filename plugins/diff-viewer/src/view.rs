@@ -15,7 +15,6 @@ use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::placement::Corner;
 use qol_gpui::scroll_list::ScrollList;
-use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::window_chrome::PanelChrome;
 use qol_gpui::WindowBar;
 
@@ -179,7 +178,6 @@ pub struct DiffView {
     last_markers_layout: Layout,
     font_family: SharedString,
     focus_handle: FocusHandle,
-    dismisser: SurfaceDismisser,
     scrubber_view: Entity<ScrubberView>,
     overview_view: Entity<OverviewView>,
     jump_rx: Option<mpsc::Receiver<f32>>,
@@ -193,7 +191,7 @@ pub struct DiffView {
 impl DiffView {
     pub fn new(
         repo: Option<PathBuf>,
-        dismisser: SurfaceDismisser,
+        window_title: String,
         git_tx: mpsc::Sender<GitRequest>,
         generation: Arc<AtomicU64>,
         results: mpsc::Receiver<GitResult>,
@@ -207,8 +205,6 @@ impl DiffView {
                 let _ = tx.send(ratio);
             })
         });
-        let chrome_title = dismisser.title();
-        let _ = qol_gpui::popup_window::set_window_always_on_top_by_title(&chrome_title);
         let mut view = Self {
             repo,
             files: FileListState::new(list_max_visible()),
@@ -236,7 +232,6 @@ impl DiffView {
             last_markers_layout: Layout::Split,
             font_family: pick_monospace(cx),
             focus_handle: cx.focus_handle(),
-            dismisser,
             scrubber_view,
             overview_view,
             jump_rx: Some(jump_rx),
@@ -244,7 +239,7 @@ impl DiffView {
             last_scrub_selected: None,
             requested: None,
             last_facts: None,
-            chrome: PanelChrome::new(chrome_title, Corner::TopLeft),
+            chrome: PanelChrome::new(window_title, Corner::TopLeft),
         };
         if view.repo.is_none() {
             view.facts_error =
@@ -525,11 +520,8 @@ impl DiffView {
     }
 
     fn hide_panel(&mut self, cx: &mut Context<Self>) {
-        if self.chrome.hide_with_reason("hide-button") {
-            cx.quit();
-            return;
-        }
-        self.dismisser.dismiss(cx);
+        self.chrome.hide_with_reason("hide-button");
+        cx.quit();
     }
 
     fn select_current_file(&mut self) {
