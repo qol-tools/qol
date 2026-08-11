@@ -331,24 +331,6 @@ pub(crate) fn sync_directory_fd_strict(dir_fd: &std::fs::File) -> Result<()> {
     Err(std::io::Error::last_os_error()).context("strict directory fsync failed")
 }
 
-#[cfg(all(target_os = "linux", any(test, feature = "sandbox")))]
-pub(crate) fn journal_crash_point(point: &str) -> Result<()> {
-    if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
-        unsafe { libc::abort() };
-    }
-    Ok(())
-}
-
-#[cfg(all(target_os = "linux", not(any(test, feature = "sandbox"))))]
-pub(crate) fn journal_crash_point(_point: &str) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn recover_stage_before_read(policy: &str) -> Result<()> {
-    journal::recover_stage(policy)
-}
-
 pub fn write_journal_durable(journal: &PolicyJournal) -> Result<()> {
     validate_journal_invariants(journal)?;
     journal::write_durable(journal)
@@ -700,6 +682,72 @@ pub(crate) mod test_support {
         std::env::set_var("QOL_POLICY_JOURNAL_DIR", dir);
         JournalDirOverride { previous }
     }
+
+    pub(crate) fn expected_policy_file_owner_for_tests() -> (u32, u32) {
+        #[cfg(target_os = "linux")]
+        {
+            crate::policy::expected_policy_file_owner()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            (0, 0)
+        }
+    }
+
+    pub(crate) fn nvidia_payload() -> crate::policy::nvidia::NvidiaPayload {
+        let (expected_uid, expected_gid) = expected_policy_file_owner_for_tests();
+        let rendered_sha256 = "a".repeat(64);
+        crate::policy::nvidia::NvidiaPayload {
+            entries: vec![crate::policy::nvidia::PackageEntry {
+                package: "nvidia-driver-560".to_string(),
+                version: "560.35.03-0ubuntu1".to_string(),
+            }],
+            expected_module_version: "580.159.02".to_string(),
+            resource_identity: format!(
+                "{}:{}",
+                crate::policy::nvidia::NVIDIA_POLICY_ID,
+                "a".repeat(32)
+            ),
+            staged_path: None,
+            staged_identity: None,
+            active_fingerprint: Some(crate::policy::nvidia::ActiveFileFingerprint {
+                dev: 1,
+                ino: 1,
+                rendered_sha256: rendered_sha256.clone(),
+                mode: 0o100644,
+                uid: expected_uid,
+                gid: expected_gid,
+                ctime_sec: 1,
+                ctime_nsec: 1,
+            }),
+            rendered_sha256,
+        }
+    }
+
+    pub(crate) fn journal(policy_id: &str, owners: &[&str]) -> crate::policy::PolicyJournal {
+        let mut payload = nvidia_payload();
+        let rendered = crate::policy::nvidia::sha256_hex(&crate::policy::nvidia::render_fragment(
+            &payload.entries,
+            &payload.resource_identity,
+        ));
+        payload.rendered_sha256 = rendered.clone();
+        if let Some(fingerprint) = &mut payload.active_fingerprint {
+            fingerprint.rendered_sha256 = rendered;
+        }
+        crate::policy::PolicyJournal {
+            schema_version: crate::policy::JOURNAL_SCHEMA_VERSION,
+            policy: policy_id.to_string(),
+            owners: owners
+                .iter()
+                .map(|owner| crate::policy::ResidencyOwnerId::parse(owner).unwrap())
+                .collect(),
+            state: crate::policy::JournalState::Active,
+            created_unix_ms: 1,
+            payload: crate::policy::PolicyPayload::Nvidia(payload),
+            failure: None,
+            journal_file_identity: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -720,65 +768,11 @@ mod tests {
     }
 
     fn nvidia_payload() -> nvidia::NvidiaPayload {
-        let (expected_uid, expected_gid) = expected_policy_file_owner_for_tests();
-        let rendered_sha256 = "a".repeat(64);
-        nvidia::NvidiaPayload {
-            entries: vec![nvidia::PackageEntry {
-                package: "nvidia-driver-560".to_string(),
-                version: "560.35.03-0ubuntu1".to_string(),
-            }],
-            expected_module_version: "580.159.02".to_string(),
-            resource_identity: format!("{}:{}", nvidia::NVIDIA_POLICY_ID, "a".repeat(32)),
-            staged_path: None,
-            staged_identity: None,
-            active_fingerprint: Some(nvidia::ActiveFileFingerprint {
-                dev: 1,
-                ino: 1,
-                rendered_sha256: rendered_sha256.clone(),
-                mode: 0o100644,
-                uid: expected_uid,
-                gid: expected_gid,
-                ctime_sec: 1,
-                ctime_nsec: 1,
-            }),
-            rendered_sha256,
-        }
-    }
-
-    fn expected_policy_file_owner_for_tests() -> (u32, u32) {
-        #[cfg(target_os = "linux")]
-        {
-            expected_policy_file_owner()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            (0, 0)
-        }
+        test_support::nvidia_payload()
     }
 
     fn journal(policy_id: &str, owners: &[&str]) -> PolicyJournal {
-        let mut payload = nvidia_payload();
-        let rendered = nvidia::sha256_hex(&nvidia::render_fragment(
-            &payload.entries,
-            &payload.resource_identity,
-        ));
-        payload.rendered_sha256 = rendered.clone();
-        if let Some(fingerprint) = &mut payload.active_fingerprint {
-            fingerprint.rendered_sha256 = rendered;
-        }
-        PolicyJournal {
-            schema_version: JOURNAL_SCHEMA_VERSION,
-            policy: policy_id.to_string(),
-            owners: owners
-                .iter()
-                .map(|owner| ResidencyOwnerId::parse(owner).unwrap())
-                .collect(),
-            state: JournalState::Active,
-            created_unix_ms: 1,
-            payload: PolicyPayload::Nvidia(payload),
-            failure: None,
-            journal_file_identity: None,
-        }
+        test_support::journal(policy_id, owners)
     }
 
     fn canonical_path() -> std::path::PathBuf {
@@ -1124,7 +1118,7 @@ mod tests {
                 stage_path().exists(),
                 "the crash must leave the linked update stage behind"
             );
-            recover_stage_before_read("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage("nvidia-driver-version-pin").unwrap();
             assert!(
                 !stage_path().exists(),
                 "the locked recovery must remove the exact recoverable stage"
@@ -1229,6 +1223,88 @@ mod tests {
                 "{point}: the failed write must not commit the canonical"
             );
         }
+        for point in [
+            "journal-update-revalidate",
+            "journal-update-rename",
+            "journal-dir-sync",
+        ] {
+            reset_journal_dir();
+            write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+            std::env::set_var("QOL_RESIDENT_FAIL_NEXT", point);
+            let error = write_journal_durable(&journal(
+                "nvidia-driver-version-pin",
+                &["owner-a", "owner-b"],
+            ))
+            .unwrap_err();
+            std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+            assert!(
+                format!("{error:#}").contains(&format!("injected {point} failure")),
+                "{point}: {error:#}"
+            );
+            assert!(
+                !stage_path().exists(),
+                "{point}: the failed update must clean the exact stage it created"
+            );
+            assert!(
+                canonical_path().exists(),
+                "{point}: the committed canonical must survive the refused update"
+            );
+        }
+        reset_journal_dir();
+        write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+        std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "journal-unlink");
+        let error = remove_journal_durable("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+        assert!(
+            format!("{error:#}").contains("injected journal-unlink failure"),
+            "{error:#}"
+        );
+        assert!(
+            canonical_path().exists(),
+            "the refused removal must preserve the canonical"
+        );
+        reset_journal_dir();
+        write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+        let dir = test_journal_dir();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "policy::tests::journal_subprocess_probe",
+                "--nocapture",
+            ])
+            .env("QOL_POLICY_SUBPROCESS", "1")
+            .env("QOL_RESIDENT_CRASH_POINT", "after-journal-stage-link")
+            .env("QOL_POLICY_JOURNAL_DIR", dir)
+            .output()
+            .unwrap();
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert!(
+                output.status.signal() == Some(libc::SIGABRT),
+                "the update probe must abort at the stage link"
+            );
+        }
+        assert!(
+            stage_path().exists(),
+            "the crash must leave the linked update stage behind"
+        );
+        std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "stage-recover-remove");
+        let error = journal::recover_stage("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+        assert!(
+            format!("{error:#}").contains("injected stage-recover-remove failure"),
+            "{error:#}"
+        );
+        assert!(
+            stage_path().exists(),
+            "the refused recovery must preserve the exact recoverable stage"
+        );
+        assert!(
+            canonical_path().exists(),
+            "the canonical must survive the refused recovery"
+        );
+        std::fs::remove_file(canonical_path()).unwrap();
+        std::fs::remove_file(stage_path()).unwrap();
     }
 
     #[test]
@@ -1450,7 +1526,7 @@ mod tests {
                 read_journal("nvidia-driver-version-pin").is_err(),
                 "the stage must be visible to read-only status, not Absent"
             );
-            recover_stage_before_read("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage("nvidia-driver-version-pin").unwrap();
             assert!(
                 !stage_path().exists(),
                 "recovery must remove the exact recoverable stage"
@@ -1514,8 +1590,8 @@ mod tests {
             ino: 1,
             rendered_sha256: payload.rendered_sha256.clone(),
             mode: 0o100644,
-            uid: expected_policy_file_owner_for_tests().0,
-            gid: expected_policy_file_owner_for_tests().1,
+            uid: test_support::expected_policy_file_owner_for_tests().0,
+            gid: test_support::expected_policy_file_owner_for_tests().1,
             ctime_sec: 1,
             ctime_nsec: 1,
         });
@@ -1748,7 +1824,9 @@ mod tests {
         {
             let mut wrong_owner = payload_with_shape(false, false, true);
             wrong_owner.active_fingerprint.as_mut().unwrap().uid =
-                expected_policy_file_owner_for_tests().0.wrapping_add(1);
+                test_support::expected_policy_file_owner_for_tests()
+                    .0
+                    .wrapping_add(1);
             assert!(nvidia::validate_payload(&wrong_owner).is_err());
         }
 

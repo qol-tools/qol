@@ -1,10 +1,23 @@
 use crate::policy::{
-    expected_policy_file_owner, fail_next, journal_crash_point, journal_path, journal_stage_path,
+    expected_policy_file_owner, fail_next, journal_path, journal_stage_path,
     sync_directory_fd_strict, validate_journal_invariants, JournalFileIdentity, PolicyError,
     PolicyJournal, JOURNAL_FILE_MODE,
 };
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+
+#[cfg(any(test, feature = "sandbox"))]
+fn journal_crash_point(point: &str) -> Result<()> {
+    if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
+        unsafe { libc::abort() };
+    }
+    Ok(())
+}
+
+#[cfg(not(any(test, feature = "sandbox")))]
+fn journal_crash_point(_point: &str) -> Result<()> {
+    Ok(())
+}
 
 pub(crate) fn read(policy: &str) -> Result<Option<PolicyJournal>> {
     let canonical = journal_path(policy)?;
