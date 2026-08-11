@@ -4,9 +4,9 @@ use crate::policy::nvidia::{print_help, NVIDIA_POLICY_ID};
 use crate::policy::{PolicyError, ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 
-pub(crate) struct WindowsNvidia;
+pub(crate) struct FallbackNvidia;
 
-impl NvidiaPolicyBackend for WindowsNvidia {
+impl NvidiaPolicyBackend for FallbackNvidia {
     fn status(_policy: &ResidentPolicy) -> Result<PolicyStatusView> {
         Err(PolicyError::PlatformUnsupported {
             policy: NVIDIA_POLICY_ID.to_string(),

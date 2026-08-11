@@ -1,7 +1,7 @@
 use crate::policy::{ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 
-use super::{ActiveFileFingerprint, PolicyStatusView};
+use super::PolicyStatusView;
 
 pub trait NvidiaPolicyBackend {
     fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView>;
@@ -11,7 +11,7 @@ pub trait NvidiaPolicyBackend {
     fn transfer(policy: &ResidentPolicy, new_owner: &ResidencyOwnerId) -> Result<()>;
     fn run_resident_policy_cli(args: &[String]) -> Result<i32>;
     fn crash_point(point: &str) -> Result<()>;
-    fn validate_fingerprint_owner(fingerprint: &ActiveFileFingerprint) -> Result<()>;
+    fn expected_fingerprint_owner() -> Option<(u32, u32)>;
 }
 
 #[cfg(target_os = "linux")]
@@ -28,3 +28,8 @@ pub(crate) use macos::MacosNvidia as Backend;
 mod windows;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::WindowsNvidia as Backend;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod fallback;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) use fallback::FallbackNvidia as Backend;
