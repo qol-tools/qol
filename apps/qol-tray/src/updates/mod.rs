@@ -1,16 +1,27 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 pub(crate) mod platform;
 pub mod version;
 
 static LATEST_VERSION: OnceLock<String> = OnceLock::new();
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static UPDATE_STATE: OnceLock<Mutex<UpdateState>> = OnceLock::new();
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60 * 60);
 
 pub(super) const GITHUB_REPO: &str = "qol-tools/qol";
 pub(super) const HOST_TAG_PREFIX: &str = "qol-tray";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+struct UpdateState {
+    last_check: Option<SystemTime>,
+    etag: Option<String>,
+    update_found: bool,
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -22,36 +33,108 @@ pub fn latest_version() -> Option<&'static str> {
 }
 
 pub async fn check_for_updates() -> Result<bool> {
+    check_for_updates_inner(false).await
+}
+
+pub async fn check_for_updates_force() -> Result<bool> {
+    check_for_updates_inner(true).await
+}
+
+async fn check_for_updates_inner(force: bool) -> Result<bool> {
+    let state = update_state();
+    if !force {
+        let guard = state.lock().expect("update state lock");
+        if let Some(last) = guard.last_check {
+            if last
+                .elapsed()
+                .map(|age| age < CHECK_INTERVAL)
+                .unwrap_or(false)
+            {
+                return Ok(guard.update_found);
+            }
+        }
+    }
+
     let url = format!(
         "https://api.github.com/repos/{}/releases?per_page={}",
         GITHUB_REPO,
         crate::features::plugin_store::source::RELEASES_PER_PAGE
     );
-
-    let client = reqwest::Client::new();
-    let request = crate::features::plugin_store::github::build_github_request(&client, &url, None);
-    let response = crate::features::plugin_store::github::send_checked(request).await?;
-
-    let releases: Vec<GitHubRelease> = response.json().await?;
-    if releases.len() == crate::features::plugin_store::source::RELEASES_PER_PAGE {
-        log::warn!(
-            "release list page is full ({} releases); the newest tag may be outside the fetched window",
-            releases.len()
-        );
+    let token = crate::credentials::github_bearer_token();
+    let etag = state.lock().expect("update state lock").etag.clone();
+    let mut request = crate::features::plugin_store::github::build_github_request(
+        http_client(),
+        &url,
+        token.as_deref(),
+    );
+    if let Some(etag) = &etag {
+        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
     }
-    let Some(latest) = pick_latest_host_version(&releases) else {
-        log::info!("No qol-tray-v* releases published yet (current: {CURRENT_VERSION})");
-        return Ok(false);
+    let response = request.send().await?;
+    let (update_found, new_etag) = if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        let guard = state.lock().expect("update state lock");
+        (guard.update_found, guard.etag.clone())
+    } else if response.status().is_success() {
+        let new_etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let releases: Vec<GitHubRelease> = response.json().await?;
+        if releases.len() == crate::features::plugin_store::source::RELEASES_PER_PAGE {
+            log::warn!(
+                    "release list page is full ({} releases); the newest tag may be outside the fetched window",
+                    releases.len()
+                );
+        }
+        let update_found = match pick_latest_host_version(&releases) {
+            Some(latest) => {
+                let newer = is_newer_version(&latest, CURRENT_VERSION);
+                if newer {
+                    log::info!("Update available: {} -> {}", CURRENT_VERSION, latest);
+                    let _ = LATEST_VERSION.set(latest);
+                } else {
+                    log::info!("No updates available (current: {})", CURRENT_VERSION);
+                }
+                newer
+            }
+            None => {
+                log::info!("No qol-tray-v* releases published yet (current: {CURRENT_VERSION})");
+                false
+            }
+        };
+        (update_found, new_etag)
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub API returned {}: {}", status, body);
     };
 
-    if is_newer_version(&latest, CURRENT_VERSION) {
-        let _ = LATEST_VERSION.set(latest.clone());
-        log::info!("Update available: {} -> {}", CURRENT_VERSION, latest);
-        return Ok(true);
-    }
+    let mut guard = state.lock().expect("update state lock");
+    guard.last_check = Some(SystemTime::now());
+    guard.etag = new_etag;
+    guard.update_found = update_found;
+    Ok(update_found)
+}
 
-    log::info!("No updates available (current: {})", CURRENT_VERSION);
-    Ok(false)
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+fn update_state() -> &'static Mutex<UpdateState> {
+    UPDATE_STATE.get_or_init(|| {
+        Mutex::new(UpdateState {
+            last_check: None,
+            etag: None,
+            update_found: false,
+        })
+    })
 }
 
 fn pick_latest_host_version(releases: &[GitHubRelease]) -> Option<String> {
