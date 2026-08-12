@@ -23,8 +23,9 @@ pub fn latest_version() -> Option<&'static str> {
 
 pub async fn check_for_updates() -> Result<bool> {
     let url = format!(
-        "https://api.github.com/repos/{}/releases?per_page=100",
-        GITHUB_REPO
+        "https://api.github.com/repos/{}/releases?per_page={}",
+        GITHUB_REPO,
+        crate::features::plugin_store::source::RELEASES_PER_PAGE
     );
 
     let client = reqwest::Client::new();
@@ -32,6 +33,12 @@ pub async fn check_for_updates() -> Result<bool> {
     let response = crate::features::plugin_store::github::send_checked(request).await?;
 
     let releases: Vec<GitHubRelease> = response.json().await?;
+    if releases.len() == crate::features::plugin_store::source::RELEASES_PER_PAGE {
+        log::warn!(
+            "release list page is full ({} releases); the newest tag may be outside the fetched window",
+            releases.len()
+        );
+    }
     let Some(latest) = pick_latest_host_version(&releases) else {
         log::info!("No qol-tray-v* releases published yet (current: {CURRENT_VERSION})");
         return Ok(false);
@@ -200,11 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn pick_latest_host_version_picks_first_host_tag_when_mixed() {
+    fn pick_latest_host_version_picks_max_host_version_when_mixed() {
         let releases = vec![
             rel("plugin-launcher-v1.8.0"),
-            rel("qol-tray-v3.2.1"),
             rel("qol-tray-v3.1.0"),
+            rel("qol-tray-v3.2.1"),
             rel("plugin-alt-tab-v2.0.1"),
         ];
         assert_eq!(

@@ -17,6 +17,12 @@ pub(super) async fn resolve_latest_plugin_version(
     let request = build_github_request(&client, &url, token.as_deref());
     let response = send_checked(request).await?;
     let releases: Vec<ReleaseListEntry> = response.json().await?;
+    if releases.len() == super::super::source::RELEASES_PER_PAGE {
+        log::warn!(
+            "release list page is full ({} releases); the newest tag may be outside the fetched window",
+            releases.len()
+        );
+    }
     let tags: Vec<&str> = releases.iter().map(|r| r.tag_name.as_str()).collect();
     let tag = super::super::source::select_release_tag(tags, plugin_id).ok_or_else(|| {
         anyhow::anyhow!(
