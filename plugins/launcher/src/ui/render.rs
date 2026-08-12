@@ -93,8 +93,7 @@ impl Render for LauncherView {
                 .track_focus(&self.focus_handle)
                 .w(px(WINDOW_WIDTH))
                 .h(px(window_height_for_rows(0)))
-                .overflow_hidden()
-                .bg(view::bg_color());
+                .overflow_hidden();
         }
 
         if self.is_showing {
