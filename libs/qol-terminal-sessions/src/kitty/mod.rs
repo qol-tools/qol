@@ -996,6 +996,7 @@ mod tests {
             launch: CliLaunchProgram {
                 program: "codex".to_owned(),
                 args: vec!["--full-auto".to_owned()],
+                env: Vec::new(),
             },
             cwd: "/work/project".into(),
             title: None,

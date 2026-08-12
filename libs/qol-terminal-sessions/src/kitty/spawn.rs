@@ -65,6 +65,10 @@ pub(super) fn launch_argv(
         argv.push("--env".to_owned());
         argv.push(format!("PATH={path}"));
     }
+    for (key, value) in &request.launch.env {
+        argv.push("--env".to_owned());
+        argv.push(format!("{key}={value}"));
+    }
     argv.push("--cwd".to_owned());
     argv.push(cwd_string(request)?);
     if let Some(title) = &request.title {
@@ -119,6 +123,7 @@ mod tests {
             launch: CliLaunchProgram {
                 program: "codex".to_owned(),
                 args: vec!["--full-auto".to_owned(), "dir with spaces".to_owned()],
+                env: Vec::new(),
             },
             cwd: "/work/project".into(),
             title: title.map(str::to_owned),
@@ -130,6 +135,24 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn launch_argv_emits_the_configured_launch_env() {
+        let mut request = request(SpawnSurface::Tab, None);
+        request.launch.env = vec![("PI_MODEL".to_owned(), "deepseek-v4-flash".to_owned())];
+        let argv = launch_argv(&request, None, Some(42)).unwrap();
+
+        let env_pos = argv
+            .iter()
+            .position(|arg| arg == "--env")
+            .expect("env pair present");
+        assert_eq!(argv[env_pos + 1], "PI_MODEL=deepseek-v4-flash");
+        let cwd_pos = argv
+            .iter()
+            .position(|arg| arg == "--cwd")
+            .expect("cwd flag present");
+        assert!(env_pos < cwd_pos, "env pairs precede the cwd flag");
     }
 
     #[test]

@@ -210,6 +210,9 @@ impl McpSessionServer {
             Some(key),
             surface.as_deref(),
             super::spawn::config_surface().map_err(|error| error.to_string())?,
+            super::spawn::config_model()
+                .map_err(|error| error.to_string())?
+                .as_deref(),
             &self.locks,
         )
         .map_err(|error| error.to_string())?;

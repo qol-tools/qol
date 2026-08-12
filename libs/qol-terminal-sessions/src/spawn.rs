@@ -173,6 +173,7 @@ mod tests {
             launch: CliLaunchProgram {
                 program: "codex".to_owned(),
                 args: vec!["--dangerously-skip-permissions".to_owned()],
+                env: Vec::new(),
             },
             cwd: std::path::PathBuf::from("/work/project"),
             title: Some("Codex".to_owned()),

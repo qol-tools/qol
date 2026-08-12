@@ -68,6 +68,7 @@ fn resolve_surface(flag: Option<&str>, config: Option<SpawnSurface>) -> Result<S
 #[derive(serde::Deserialize)]
 struct SpawnConfigFile {
     spawn_surface: Option<String>,
+    spawn_model: Option<String>,
 }
 
 pub(super) fn config_surface() -> Result<Option<SpawnSurface>> {
@@ -75,6 +76,13 @@ pub(super) fn config_surface() -> Result<Option<SpawnSurface>> {
         return Ok(None);
     };
     config_surface_at(&config_dir.join("sessions.toml"))
+}
+
+pub(super) fn config_model() -> Result<Option<String>> {
+    let Some(config_dir) = qol_config::config_dir() else {
+        return Ok(None);
+    };
+    config_model_at(&config_dir.join("sessions.toml"))
 }
 
 fn config_surface_at(path: &Path) -> Result<Option<SpawnSurface>> {
@@ -95,6 +103,17 @@ fn config_surface_at(path: &Path) -> Result<Option<SpawnSurface>> {
         )
     })?;
     Ok(Some(surface))
+}
+
+fn config_model_at(path: &Path) -> Result<Option<String>> {
+    let encoded = match fs::read_to_string(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to read spawn model config"),
+    };
+    let config: SpawnConfigFile =
+        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(config.spawn_model.filter(|model| !model.trim().is_empty()))
 }
 
 pub(super) struct SpawnLocks {
@@ -217,6 +236,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         key.as_deref(),
         surface.as_deref(),
         config_surface()?,
+        config_model()?.as_deref(),
         &SpawnLocks::system()?,
     )?;
     println!(
@@ -282,13 +302,17 @@ pub(super) fn spawn_or_reuse(
     key: Option<&str>,
     surface: Option<&str>,
     config: Option<SpawnSurface>,
+    model: Option<&str>,
     locks: &SpawnLocks,
 ) -> Result<SpawnOutcome> {
     let tool_id = CliToolId::new(tool.to_owned())
         .map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
-    let launch = interpreter.launch_for(&tool_id).ok_or_else(|| {
+    let mut launch = interpreter.launch_for(&tool_id).ok_or_else(|| {
         anyhow!("no launch strategy for tool `{tool}`; only registered tools with a launch program can spawn")
     })?;
+    if let Some(model) = model {
+        launch.env.push(("PI_MODEL".to_owned(), model.to_owned()));
+    }
     let key = match key {
         Some(key) => SpawnKey::new(key.to_owned())
             .map_err(|error| anyhow!("invalid spawn key `{key}`: {error}"))?,
@@ -724,6 +748,7 @@ mod tests {
             key,
             surface,
             config,
+            None,
             locks,
         )
     }
@@ -908,6 +933,50 @@ mod tests {
         assert!(request.launch.args.is_empty());
         assert_eq!(request.cwd, std::path::PathBuf::from(&cwd));
         assert_eq!(request.title, None);
+    }
+
+    #[test]
+    fn configured_spawn_model_injects_pi_model_into_the_launch_env() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("sessions.toml");
+        fs::write(&path, "spawn_model = \"deepseek-v4-flash\"\n").unwrap();
+        assert_eq!(
+            config_model_at(&path).unwrap().as_deref(),
+            Some("deepseek-v4-flash")
+        );
+
+        let (terminals, backend) = harness(vec![vec![]]);
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let outcome = spawn_or_reuse(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "codex",
+            &cwd,
+            Some("lane-model"),
+            None,
+            None,
+            Some("deepseek-v4-flash"),
+            &locks(&root),
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            request.launch.env,
+            vec![("PI_MODEL".to_owned(), "deepseek-v4-flash".to_owned())]
+        );
+    }
+
+    #[test]
+    fn missing_config_file_yields_no_spawn_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            config_model_at(&root.path().join("sessions.toml")).unwrap(),
+            None
+        );
     }
 
     #[test]
