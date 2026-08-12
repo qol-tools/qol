@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -15,6 +17,7 @@ use qol_cache::TtlCache;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::placement::Corner;
 use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::surface::{DragGestureState, DRAG_THRESHOLD_PX};
 use qol_gpui::window_chrome::PanelChrome;
 use qol_gpui::WindowBar;
 
@@ -187,6 +190,7 @@ pub struct DiffView {
     requested: Option<(String, String)>,
     last_facts: Option<Facts>,
     chrome: PanelChrome,
+    drag_gesture: Rc<RefCell<DragGestureState>>,
 }
 
 impl DiffView {
@@ -207,6 +211,7 @@ impl DiffView {
             })
         });
         let mut view = Self {
+            drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD_PX))),
             repo,
             files: FileListState::new(list_max_visible()),
             pane: DiffPane::Empty,
@@ -917,6 +922,7 @@ impl Render for DiffView {
             );
         }
         let bar = WindowBar::new("DIFF VIEWER")
+            .drag_gesture(self.drag_gesture.clone())
             .on_collapse({
                 let this = cx.entity();
                 move |window, app| {
