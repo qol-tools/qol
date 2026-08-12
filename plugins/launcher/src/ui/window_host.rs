@@ -45,7 +45,8 @@ pub(crate) fn pre_create_ghost(
         let _ = handle.update(cx, |view, _window, _cx| view.set_showing(false));
 
         popup_window::configure_popup_window(&title);
-        qol_gpui::ghost::hide_invisible(&title);
+        let _reason = popup_window::reason_scope("boot");
+        popup_window::conceal_window_by_title(&title);
     }
     let keys = active.borrow().keys();
     qol_gpui::ghost::reconcile_active(&keys, |key| {
@@ -236,7 +237,8 @@ fn open_hidden_ghost(
             }
         })
         .ok()?;
-    qol_gpui::ghost::hide_invisible(&title);
+    let _reason = popup_window::reason_scope("boot");
+    popup_window::conceal_window_by_title(&title);
     Some(handle)
 }
 

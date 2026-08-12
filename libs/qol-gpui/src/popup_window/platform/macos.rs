@@ -164,6 +164,10 @@ pub fn hide_invisible(title: &str) -> bool {
     true
 }
 
+pub fn conceal_window_by_title(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }

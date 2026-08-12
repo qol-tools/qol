@@ -249,6 +249,46 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
+const CONCEAL_RESOLVE_ATTEMPTS: u32 = 6;
+const CONCEAL_RESOLVE_RETRY_MS: u64 = 3;
+
+pub fn conceal_window_by_title(title: &str) -> bool {
+    #[cfg(debug_assertions)]
+    let reason = crate::popup_window::change_reason();
+    #[cfg(not(debug_assertions))]
+    let reason = "";
+    let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let mut wid = None;
+    let mut attempts = 0;
+    while wid.is_none() && attempts < CONCEAL_RESOLVE_ATTEMPTS {
+        attempts += 1;
+        wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title);
+        if wid.is_none() && attempts < CONCEAL_RESOLVE_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(CONCEAL_RESOLVE_RETRY_MS));
+        }
+    }
+    let Some(wid) = wid else {
+        qol_runtime::probe!(
+            "HIDE_WIN",
+            "title={title} wid=NONE path=conceal attempts={attempts} reason={reason}"
+        );
+        return false;
+    };
+    release_input_focus(&conn, root, wid);
+    let compositor = compositor_running(&conn, screen_num);
+    let opacity_ok = compositor && set_window_opacity(&conn, wid, 0.0);
+    let (unmapped, unmap_attempts) = hide_by_unmap(&conn, wid);
+    store_card(title, wid, None);
+    qol_runtime::probe!(
+        "HIDE_WIN",
+        "title={title} wid={wid} path=conceal compositor={compositor} opacity=0 opacity_ok={opacity_ok} unmapped={unmapped} attempts={attempts} unmap_attempts={unmap_attempts} reason={reason}",
+    );
+    unmapped
+}
+
 static UNMAP_HIDE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_unmap_hide(enabled: bool) {
