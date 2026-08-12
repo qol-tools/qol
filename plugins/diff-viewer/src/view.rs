@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
@@ -25,7 +25,7 @@ use qol_gpui::WindowBar;
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
 use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
-use crate::surface::{self, CodeSurface};
+use crate::surface::{self, CodeSurface, LineStyle};
 
 pub const WINDOW_WIDTH: f32 = 960.0;
 pub const WINDOW_HEIGHT: f32 = 640.0;
@@ -38,6 +38,7 @@ const PIXELS_PER_NOTCH: f32 = 50.0;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const DIFF_TTL: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const HEAT_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
@@ -190,6 +191,9 @@ pub struct DiffView {
     last_scrub_selected: Option<usize>,
     requested: Option<(String, String)>,
     last_facts: Option<Facts>,
+    heat_stamps: HashMap<String, Instant>,
+    heat_stamp: Option<Instant>,
+    heat_fingerprint: Vec<LineStyle>,
     chrome: PanelChrome,
     drag_gesture: Rc<RefCell<DragGestureState>>,
 }
@@ -247,6 +251,9 @@ impl DiffView {
             last_scrub_selected: None,
             requested: None,
             last_facts: None,
+            heat_stamps: HashMap::new(),
+            heat_stamp: None,
+            heat_fingerprint: Vec::new(),
             chrome: PanelChrome::new(window_title, Corner::TopLeft),
         };
         if view.repo.is_none() {
@@ -262,6 +269,7 @@ impl DiffView {
     fn spawn_loops(&mut self, cx: &mut Context<Self>) {
         self.spawn_result_poll(cx);
         self.spawn_backstop(cx);
+        self.spawn_heat_tick(cx);
     }
 
     fn spawn_result_poll(&mut self, cx: &mut Context<Self>) {
@@ -310,6 +318,54 @@ impl DiffView {
         .detach();
     }
 
+    fn spawn_heat_tick(&self, cx: &mut Context<Self>) {
+        let this = cx.weak_entity();
+        cx.spawn(async move |_view, cx| loop {
+            cx.background_executor().timer(HEAT_TICK).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.tick_heat() {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn tick_heat(&mut self) -> bool {
+        let Some(age) = self.heat_age() else {
+            if self.heat_fingerprint.is_empty() {
+                return false;
+            }
+            self.heat_fingerprint.clear();
+            return true;
+        };
+        let fingerprint: Vec<LineStyle> = self
+            .lines
+            .iter()
+            .map(|line| {
+                let fresh = surface::style_from_line(line);
+                LineStyle {
+                    background_heat: qol_diff::decayed_heat(fresh.background_heat, age),
+                    dimmed: fresh.dimmed,
+                }
+            })
+            .collect();
+        if fingerprint == self.heat_fingerprint {
+            return false;
+        }
+        self.heat_fingerprint = fingerprint;
+        qol_runtime::probe!("DIFF_VIEWER", "heat tick age={}s", age.as_secs());
+        true
+    }
+
+    fn heat_age(&self) -> Option<Duration> {
+        let stamp = self.heat_stamp?;
+        if !matches!(self.pane, DiffPane::Ready(_)) {
+            return None;
+        }
+        Some(stamp.elapsed())
+    }
+
     fn apply_results(
         &mut self,
         results: Vec<GitResult>,
@@ -334,11 +390,19 @@ impl DiffView {
                     path,
                     range,
                     diff,
+                    touched_at,
                 } if self.matches_request(&path, &range) => {
                     let diff = diff.map(Arc::new);
                     if let Ok(diff) = &diff {
                         self.diff_cache
                             .insert((path.clone(), range.clone()), Arc::clone(diff));
+                    }
+                    if range == pipeline::DEFAULT_RANGE {
+                        let stamp = touched_at.unwrap_or_else(Instant::now);
+                        self.heat_stamps.insert(path.clone(), stamp);
+                        self.heat_stamp = Some(stamp);
+                    } else {
+                        self.heat_stamp = None;
                     }
                     changed |= self.apply_diff(diff);
                     self.in_flight = None;
@@ -407,6 +471,11 @@ impl DiffView {
 
     fn request_diff_cached(&mut self, path: String, range: String) {
         if let Some(diff) = self.diff_cache.get(&(path.clone(), range.clone())).cloned() {
+            self.heat_stamp = if range == pipeline::DEFAULT_RANGE {
+                self.heat_stamps.get(&path).copied()
+            } else {
+                None
+            };
             self.apply_diff(Ok(diff));
             return;
         }
@@ -465,6 +534,13 @@ impl DiffView {
         let Some(path) = self.files.selected_path().map(str::to_owned) else {
             return changed;
         };
+        if facts
+            .changed
+            .iter()
+            .any(|changed_path| *changed_path == path)
+        {
+            self.heat_stamps.insert(path.clone(), Instant::now());
+        }
         let is_worktree_range = self
             .requested
             .as_ref()
@@ -518,7 +594,10 @@ impl DiffView {
                     .iter()
                     .map(|line| SharedString::from(line.text.clone()))
                     .collect();
-                self.line_highlights = lines.iter().map(highlight_ranges).collect();
+                self.line_highlights = lines
+                    .iter()
+                    .map(|line| highlight_ranges(line, None))
+                    .collect();
                 self.unified_gutters = lines
                     .iter()
                     .map(|line| unified_gutter(line, gutter_width))
@@ -745,26 +824,27 @@ impl DiffView {
                 text_style.font_size = px(FONT_SIZE).into();
                 text_style.line_height = px(LINE_HEIGHT).into();
                 text_style.white_space = WhiteSpace::Nowrap;
+                let age = self.heat_age();
                 match self.layout {
                     Layout::Split => pane
-                        .child(self.split_columns(&text_style))
+                        .child(self.split_columns(&text_style, age))
                         .into_any_element(),
                     Layout::Unified => pane
-                        .children(self.code_rows(&text_style))
+                        .children(self.code_rows(&text_style, age))
                         .into_any_element(),
                 }
             }
         }
     }
 
-    fn split_columns(&self, base: &TextStyle) -> AnyElement {
+    fn split_columns(&self, base: &TextStyle, age: Option<Duration>) -> AnyElement {
         let start = self.surface.scroll_offset();
         let end = (start + self.last_fit.max(1)).min(self.row_count());
         let mut old_rows = Vec::new();
         let mut new_rows = Vec::new();
         for row in start..end {
-            old_rows.push(self.split_row(row, true, base));
-            new_rows.push(self.split_row(row, false, base));
+            old_rows.push(self.split_row(row, true, base, age));
+            new_rows.push(self.split_row(row, false, base, age));
         }
         div()
             .flex()
@@ -793,7 +873,13 @@ impl DiffView {
             .into_any_element()
     }
 
-    fn split_row(&self, row: usize, is_old: bool, base: &TextStyle) -> AnyElement {
+    fn split_row(
+        &self,
+        row: usize,
+        is_old: bool,
+        base: &TextStyle,
+        age: Option<Duration>,
+    ) -> AnyElement {
         let pair = self.pairs.get(row).copied().unwrap_or(LinePair {
             old: None,
             new: None,
@@ -808,13 +894,19 @@ impl DiffView {
             .overflow_hidden()
             .line_height(px(LINE_HEIGHT))
             .text_size(px(FONT_SIZE));
-        let style = line_index
-            .and_then(|index| self.lines.get(index))
-            .map(surface::style_from_line)
-            .unwrap_or_default();
+        let style = decayed_line_style(
+            line_index
+                .and_then(|index| self.lines.get(index))
+                .map(surface::style_from_line)
+                .unwrap_or_default(),
+            age,
+        );
         let blank_bg = counterpart
             .and_then(|index| self.lines.get(index))
-            .and_then(|line| surface::line_background(surface::style_from_line(line)));
+            .and_then(|line| {
+                let fresh = surface::style_from_line(line);
+                surface::line_background(decayed_line_style(fresh, age))
+            });
         if let Some(bg) = surface::line_background(style) {
             row_el = row_el.bg(rgb(bg));
         } else if let Some(bg) = blank_bg {
@@ -849,7 +941,7 @@ impl DiffView {
                             .text_color(rgb(surface::kind_color(line.kind)))
                             .child(glyph),
                     )
-                    .child(self.code_text(index, style.dimmed, base))
+                    .child(self.code_text(index, style.dimmed, base, age))
                     .into_any_element()
             }
             None => row_el
@@ -866,17 +958,17 @@ impl DiffView {
         }
     }
 
-    fn code_rows(&self, base: &TextStyle) -> Vec<AnyElement> {
+    fn code_rows(&self, base: &TextStyle, age: Option<Duration>) -> Vec<AnyElement> {
         let start = self.surface.scroll_offset();
         let end = (start + self.last_fit.max(1)).min(self.lines.len());
         (start..end)
-            .map(|index| self.code_row(index, base))
+            .map(|index| self.code_row(index, base, age))
             .collect()
     }
 
-    fn code_row(&self, index: usize, base: &TextStyle) -> AnyElement {
+    fn code_row(&self, index: usize, base: &TextStyle, age: Option<Duration>) -> AnyElement {
         let line = &self.lines[index];
-        let style = self.surface.line_style(index);
+        let style = decayed_line_style(self.surface.line_style(index), age);
         let mut row = div()
             .h(px(LINE_HEIGHT))
             .w_full()
@@ -902,15 +994,25 @@ impl DiffView {
                 .text_color(rgb(surface::kind_color(line.kind)))
                 .child(surface::kind_glyph(line.kind)),
         )
-        .child(self.code_text(index, style.dimmed, base))
+        .child(self.code_text(index, style.dimmed, base, age))
         .into_any_element()
     }
 
-    fn code_text(&self, index: usize, dimmed: bool, base: &TextStyle) -> StyledText {
+    fn code_text(
+        &self,
+        index: usize,
+        dimmed: bool,
+        base: &TextStyle,
+        age: Option<Duration>,
+    ) -> StyledText {
         let mut text_style = base.clone();
         text_style.color = rgb(surface::text_color(dimmed)).into();
+        let highlights = match age {
+            Some(age) => highlight_ranges(&self.lines[index], Some(age)),
+            None => self.line_highlights[index].clone(),
+        };
         StyledText::new(self.line_text[index].clone())
-            .with_default_highlights(&text_style, self.line_highlights[index].clone())
+            .with_default_highlights(&text_style, highlights)
     }
 }
 
@@ -1106,18 +1208,31 @@ fn build_pairs(hunks: &[qol_diff::Hunk]) -> (Vec<LinePair>, Vec<usize>, Vec<usiz
     (pairs, hunk_pair_starts, hunk_line_starts)
 }
 
-fn highlight_ranges(line: &LineChange) -> Vec<(Range<usize>, HighlightStyle)> {
+fn decayed_line_style(fresh: LineStyle, age: Option<Duration>) -> LineStyle {
+    match age {
+        Some(age) => LineStyle {
+            background_heat: qol_diff::decayed_heat(fresh.background_heat, age),
+            dimmed: fresh.dimmed,
+        },
+        None => fresh,
+    }
+}
+
+fn highlight_ranges(
+    line: &LineChange,
+    age: Option<Duration>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
     line.token_spans
         .iter()
         .filter_map(|span| {
+            let heat = age.map_or(span.heat, |age| qol_diff::decayed_heat(span.heat, age));
             let start = span.start.min(line.text.len());
             let end = (span.start + span.len).min(line.text.len());
             (start < end).then_some((
                 start..end,
                 HighlightStyle {
-                    background_color: surface::token_background(span.heat)
-                        .map(|hex| rgb(hex).into()),
-                    color: match (span.heat, span.kind) {
+                    background_color: surface::token_background(heat).map(|hex| rgb(hex).into()),
+                    color: match (heat, span.kind) {
                         (HeatLevel::Cool, TokenKind::Plain) => None,
                         (HeatLevel::Cool, kind) => {
                             surface::token_kind_color(kind).map(|hex| rgb(hex).into())
@@ -1474,6 +1589,55 @@ mod tests {
         assert_eq!(
             unified_gutter(&line(Some(300), None), 3),
             "300     ".to_string()
+        );
+    }
+
+    #[test]
+    fn decayed_line_style_feeds_cooler_heat_to_the_color_mapping() {
+        let hot = LineStyle {
+            background_heat: HeatLevel::Hot,
+            dimmed: false,
+        };
+        let warm = LineStyle {
+            background_heat: HeatLevel::Warm,
+            dimmed: false,
+        };
+        let cool = LineStyle {
+            background_heat: HeatLevel::Cool,
+            dimmed: false,
+        };
+        assert_eq!(decayed_line_style(hot, None), hot, "no age renders fresh");
+        assert_eq!(decayed_line_style(hot, Some(Duration::from_secs(30))), hot);
+        assert_eq!(decayed_line_style(hot, Some(Duration::from_secs(60))), warm);
+        assert_eq!(
+            decayed_line_style(hot, Some(Duration::from_secs(300))),
+            cool
+        );
+        assert_eq!(
+            decayed_line_style(warm, Some(Duration::from_secs(299))),
+            warm
+        );
+        assert_eq!(
+            decayed_line_style(warm, Some(Duration::from_secs(300))),
+            cool
+        );
+        assert_eq!(
+            decayed_line_style(cool, Some(Duration::from_secs(86_400))),
+            cool
+        );
+        assert_eq!(
+            decayed_line_style(
+                LineStyle {
+                    background_heat: HeatLevel::Hot,
+                    dimmed: true
+                },
+                Some(Duration::from_secs(60))
+            ),
+            LineStyle {
+                background_heat: HeatLevel::Warm,
+                dimmed: true
+            },
+            "dimmed survives decay"
         );
     }
 }

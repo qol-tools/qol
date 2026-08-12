@@ -1,7 +1,36 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 pub mod engine;
 pub mod lexer;
+
+pub const HOT_TO_WARM_AFTER: Duration = Duration::from_secs(60);
+pub const WARM_TO_COOL_AFTER: Duration = Duration::from_secs(300);
+
+pub fn decayed_heat(heat: HeatLevel, elapsed: Duration) -> HeatLevel {
+    match heat {
+        HeatLevel::Cool => HeatLevel::Cool,
+        HeatLevel::Warm => {
+            if elapsed >= WARM_TO_COOL_AFTER {
+                HeatLevel::Cool
+            } else {
+                HeatLevel::Warm
+            }
+        }
+        HeatLevel::Hot => {
+            if elapsed >= HOT_TO_WARM_AFTER {
+                if elapsed >= WARM_TO_COOL_AFTER {
+                    HeatLevel::Cool
+                } else {
+                    HeatLevel::Warm
+                }
+            } else {
+                HeatLevel::Hot
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DiffStatus {
@@ -102,9 +131,11 @@ impl std::error::Error for DiffError {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
-        DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind, TokenKind,
-        TokenSpan,
+        decayed_heat, DiffError, DiffStatus, FileDiff, HeatLevel, Hunk, LineChange, LineKind,
+        TokenKind, TokenSpan,
     };
 
     #[test]
@@ -180,5 +211,66 @@ mod tests {
         assert_eq!(DiffError::Binary.to_string(), "file content is binary");
         let json = serde_json::to_string(&DiffError::Conflict).expect("serialize");
         assert_eq!(json, "\"Conflict\"");
+    }
+
+    #[test]
+    fn decay_keeps_fresh_heat_untouched() {
+        assert_eq!(
+            decayed_heat(HeatLevel::Cool, Duration::ZERO),
+            HeatLevel::Cool
+        );
+        assert_eq!(
+            decayed_heat(HeatLevel::Warm, Duration::ZERO),
+            HeatLevel::Warm
+        );
+        assert_eq!(decayed_heat(HeatLevel::Hot, Duration::ZERO), HeatLevel::Hot);
+    }
+
+    #[test]
+    fn hot_cools_to_warm_after_one_minute() {
+        assert_eq!(
+            decayed_heat(HeatLevel::Hot, Duration::from_secs(59)),
+            HeatLevel::Hot
+        );
+        assert_eq!(
+            decayed_heat(HeatLevel::Hot, Duration::from_secs(60)),
+            HeatLevel::Warm
+        );
+        assert_eq!(
+            decayed_heat(HeatLevel::Hot, Duration::from_secs(299)),
+            HeatLevel::Warm
+        );
+    }
+
+    #[test]
+    fn warm_cools_to_cool_after_five_minutes() {
+        assert_eq!(
+            decayed_heat(HeatLevel::Warm, Duration::from_secs(299)),
+            HeatLevel::Warm
+        );
+        assert_eq!(
+            decayed_heat(HeatLevel::Warm, Duration::from_secs(300)),
+            HeatLevel::Cool
+        );
+    }
+
+    #[test]
+    fn hot_cools_straight_to_cool_after_five_minutes() {
+        assert_eq!(
+            decayed_heat(HeatLevel::Hot, Duration::from_secs(300)),
+            HeatLevel::Cool
+        );
+        assert_eq!(
+            decayed_heat(HeatLevel::Hot, Duration::from_secs(3600)),
+            HeatLevel::Cool
+        );
+    }
+
+    #[test]
+    fn cool_never_warms() {
+        assert_eq!(
+            decayed_heat(HeatLevel::Cool, Duration::from_secs(86_400)),
+            HeatLevel::Cool
+        );
     }
 }
