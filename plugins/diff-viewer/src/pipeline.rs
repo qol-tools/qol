@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -41,6 +42,7 @@ pub enum GitResult {
         path: String,
         range: String,
         diff: Result<FileDiff, DiffError>,
+        touched_at: Option<Instant>,
     },
     History {
         generation: u64,
@@ -182,6 +184,7 @@ pub fn spawn_git_facts_thread(
         .name("diff-viewer-git-facts".to_owned())
         .spawn(move || {
             let mut last_head: Option<String> = None;
+            let mut heat_stamps: HashMap<PathBuf, Instant> = HashMap::new();
             while let Ok(first) = requests.recv() {
                 let mut pending = vec![first];
                 while let Ok(next) = requests.try_recv() {
@@ -196,7 +199,14 @@ pub fn spawn_git_facts_thread(
                     }
                 }
                 for request in latest_refresh.into_iter().chain(latest_select) {
-                    handle_request(request, &repo, &results, &generation, &mut last_head);
+                    handle_request(
+                        request,
+                        &repo,
+                        &results,
+                        &generation,
+                        &mut last_head,
+                        &mut heat_stamps,
+                    );
                 }
             }
         })
@@ -209,6 +219,7 @@ fn handle_request(
     results: &mpsc::Sender<GitResult>,
     generation: &AtomicU64,
     last_head: &mut Option<String>,
+    heat_stamps: &mut HashMap<PathBuf, Instant>,
 ) {
     match request {
         GitRequest::Refresh {
@@ -217,6 +228,14 @@ fn handle_request(
         } => {
             if !is_live(g, generation) {
                 return;
+            }
+            let changed: Vec<PathBuf> = changed
+                .into_iter()
+                .map(|path| repo_relative(repo, &path))
+                .collect();
+            let now = Instant::now();
+            for path in &changed {
+                heat_stamps.insert(path.clone(), now);
             }
             let outcome = refresh_facts(repo, changed);
             if !is_live(g, generation) {
@@ -250,15 +269,26 @@ fn handle_request(
             path,
             range,
         } => {
+            if range == DEFAULT_RANGE {
+                heat_stamps.insert(PathBuf::from(&path), Instant::now());
+            }
             let diff = selected_file_diff(repo, &path, &range);
+            let touched_at = heat_stamps.get(Path::new(&path)).copied();
             let _ = results.send(GitResult::Diff {
                 generation: g,
                 path,
                 range,
                 diff,
+                touched_at,
             });
         }
     }
+}
+
+fn repo_relative(repo: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(repo)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_live(generation: u64, current: &AtomicU64) -> bool {
@@ -439,5 +469,126 @@ mod tests {
         }
         assert_eq!(refreshes, 1, "only the latest refresh is processed");
         assert_eq!(diffs, 1, "only the latest select is processed");
+    }
+
+    #[test]
+    fn repo_relative_strips_the_repo_prefix_and_keeps_other_paths() {
+        let repo = Path::new("/repo");
+        assert_eq!(
+            repo_relative(repo, Path::new("/repo/src/a.rs")),
+            PathBuf::from("src/a.rs")
+        );
+        assert_eq!(
+            repo_relative(repo, Path::new("src/a.rs")),
+            PathBuf::from("src/a.rs"),
+            "already-relative paths pass through"
+        );
+    }
+
+    #[test]
+    fn commit_range_selects_report_no_stamp_for_never_watched_paths() {
+        let generation = Arc::new(AtomicU64::new(1));
+        let (requests, request_rx) = mpsc::channel();
+        let (result_tx, results) = mpsc::channel();
+        let _thread = spawn_git_facts_thread(
+            PathBuf::from("/nonexistent"),
+            request_rx,
+            result_tx,
+            generation.clone(),
+        );
+        let _ = requests.send(GitRequest::SelectFile {
+            generation: 1,
+            path: "src/a.rs".to_string(),
+            range: "HEAD~1..HEAD".to_string(),
+        });
+        drop(requests);
+        let mut touched_at = None;
+        while let Ok(result) = results.recv() {
+            if let GitResult::Diff {
+                touched_at: touched,
+                ..
+            } = result
+            {
+                touched_at = Some(touched);
+            }
+        }
+        assert_eq!(
+            touched_at,
+            Some(None),
+            "history selects never stamp, so heat cannot reset on scrub"
+        );
+    }
+
+    #[test]
+    fn watch_stamps_use_relative_keys_and_worktree_selects_reheat() {
+        let generation = Arc::new(AtomicU64::new(1));
+        let (requests, request_rx) = mpsc::channel();
+        let (result_tx, results) = mpsc::channel();
+        let _thread = spawn_git_facts_thread(
+            PathBuf::from("/nonexistent"),
+            request_rx,
+            result_tx,
+            generation.clone(),
+        );
+        let _ = requests.send(GitRequest::Refresh {
+            generation: 1,
+            changed: vec![PathBuf::from("/nonexistent/src/a.rs")],
+        });
+        let _ = requests.send(GitRequest::SelectFile {
+            generation: 1,
+            path: "src/a.rs".to_string(),
+            range: "HEAD~1..HEAD".to_string(),
+        });
+        drop(requests);
+        let mut touched_at = None;
+        while let Ok(result) = results.recv() {
+            if let GitResult::Diff {
+                touched_at: touched,
+                ..
+            } = result
+            {
+                touched_at = Some(touched);
+            }
+        }
+        let touched_at = touched_at
+            .expect("one select result")
+            .expect("the watch stamp normalized to the relative key must reach the select");
+        assert!(
+            touched_at.elapsed() < Duration::from_secs(5),
+            "the stamp is from the current refresh"
+        );
+    }
+
+    #[test]
+    fn worktree_selects_always_stamp_even_without_a_watch_event() {
+        let generation = Arc::new(AtomicU64::new(1));
+        let (requests, request_rx) = mpsc::channel();
+        let (result_tx, results) = mpsc::channel();
+        let _thread = spawn_git_facts_thread(
+            PathBuf::from("/nonexistent"),
+            request_rx,
+            result_tx,
+            generation.clone(),
+        );
+        let _ = requests.send(GitRequest::SelectFile {
+            generation: 1,
+            path: "src/b.rs".to_string(),
+            range: "HEAD".to_string(),
+        });
+        drop(requests);
+        let mut touched_at = None;
+        while let Ok(result) = results.recv() {
+            if let GitResult::Diff {
+                touched_at: touched,
+                ..
+            } = result
+            {
+                touched_at = Some(touched);
+            }
+        }
+        assert!(
+            touched_at.expect("one select result").is_some(),
+            "applying heat to the worktree diff is itself a touch"
+        );
     }
 }
