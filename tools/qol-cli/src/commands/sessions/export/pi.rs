@@ -153,6 +153,20 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     if (loopPhase === "waiting") setLoopPhase("paused");
   }
 
+  function assistantBranchContains(ctx, needle) {
+    for (const entry of [...ctx.sessionManager.getBranch()]) {
+      if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+      const content = entry.message.content;
+      const text = typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.filter((block) => block?.type === "text").map((block) => block.text).join("\n")
+          : "";
+      if (text.includes(needle)) return true;
+    }
+    return false;
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     restoreLoopPhase(ctx);
   });
@@ -162,13 +176,19 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
   });
 
   pi.on("agent_end", async (event, _ctx) => {
-    const text = assistantText(event.messages);
-    if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
-      setLoopPhase("idle");
-    }
+    try {
+      const text = assistantText(event.messages);
+      if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
+        setLoopPhase("idle");
+      }
+    } catch (_error) {}
   });
 
-  pi.on("agent_settled", async (_event, _ctx) => {
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (loopPhase === "closing" && loopFinalReport && assistantBranchContains(ctx, loopFinalReport)) {
+      setLoopPhase("idle");
+      return;
+    }
     if (loopFollowUpSent) return;
     if (loopPhase === "review") {
       loopFollowUpSent = true;
@@ -369,6 +389,8 @@ mod tests {
         assert!(source.contains("recovered the previous implementation response"));
         assert!(source.contains("pi.on(\"agent_settled\""));
         assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
+        assert!(source.contains("assistantBranchContains"));
+        assert!(source.contains("entry.message?.role !== \"assistant\""));
     }
 
     #[test]
