@@ -328,6 +328,10 @@ pub(super) fn spawn_or_reuse(
     })?;
     if let Some(model) = model {
         launch.env.push(("PI_MODEL".to_owned(), model.to_owned()));
+        if tool_id.as_str() == "pi" {
+            launch.args.push("--model".to_owned());
+            launch.args.push(model.to_owned());
+        }
     }
     let key = match key {
         Some(key) => SpawnKey::new(key.to_owned())
@@ -987,6 +991,38 @@ mod tests {
         assert_eq!(
             request.launch.env,
             vec![("PI_MODEL".to_owned(), "deepseek-v4-flash".to_owned())]
+        );
+        assert!(
+            request.launch.args.is_empty(),
+            "codex keeps its own model flags"
+        );
+    }
+
+    #[test]
+    fn configured_spawn_model_passes_the_pi_model_flag() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let outcome = spawn_or_reuse(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            &cwd,
+            Some("lane-pi"),
+            None,
+            None,
+            Some("deepseek-v4-flash"),
+            &locks(&root),
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            request.launch.args,
+            vec!["--model".to_owned(), "deepseek-v4-flash".to_owned()]
         );
     }
 
