@@ -13,49 +13,104 @@ const LOOP_PHASES = new Set(["idle", "waiting", "review", "closing", "paused"]);
 const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining. Do not stop at a round boundary.`;
 const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close. Do not add or remove sections.`;
 
-function run(args, timeoutMs, input, signal) {
+function mcpState() {
+  return {
+    child: null,
+    nextId: 1,
+    pending: new Map(),
+    buffer: "",
+    stderr: "",
+    broken: false,
+  };
+}
+
+const state = mcpState();
+
+function ensureMcp() {
+  if (state.child && state.child.exitCode === null && !state.broken) return;
+  const child = spawn("qol", ["sessions", "mcp"], { stdio: ["pipe", "pipe", "pipe"] });
+  state.child = child;
+  state.nextId = 1;
+  state.pending = new Map();
+  state.buffer = "";
+  state.stderr = "";
+  state.broken = false;
+  child.stderr.on("data", (chunk) => { state.stderr += chunk; });
+  child.stdout.on("data", (chunk) => {
+    state.buffer += chunk;
+    let newline;
+    while ((newline = state.buffer.indexOf("\n")) !== -1) {
+      const line = state.buffer.slice(0, newline);
+      state.buffer = state.buffer.slice(newline + 1);
+      if (!line.trim()) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const entry = state.pending.get(message.id);
+      if (!entry) continue;
+      state.pending.delete(message.id);
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      entry.resolve(message);
+    }
+  });
+  child.on("error", (error) => {
+    state.broken = true;
+    failAll(new Error(`qol sessions mcp failed: ${error.message}`));
+  });
+  child.on("close", (code) => {
+    state.broken = true;
+    const message = state.stderr.trim() || `qol sessions mcp exited with ${code ?? "unknown"}`;
+    failAll(new Error(message));
+  });
+}
+
+function failAll(error) {
+  for (const entry of state.pending.values()) {
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    entry.reject(error);
+  }
+  state.pending.clear();
+}
+
+function mcpCall(request, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
-    const child = spawn("qol", ["sessions", ...args], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer = null;
-    const settle = (fn) => {
-      if (settled) return;
-      settled = true;
-      if (timer !== null) clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      fn();
-    };
+    ensureMcp();
+    const id = state.nextId++;
+    const entry = { resolve, reject, timer: null };
+    state.pending.set(id, entry);
+    entry.timer = setTimeout(() => {
+      state.pending.delete(id);
+      reject(new Error(`qol sessions mcp timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     const onAbort = () => {
-      child.kill("SIGTERM");
-      settle(() => reject(new Error("qol sessions aborted by the host")));
+      state.pending.delete(id);
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      reject(new Error("qol sessions aborted by the host"));
     };
-    timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      settle(() => reject(new Error(`qol sessions timed out after ${timeoutMs ?? 60_000}ms`)));
-    }, timeoutMs ?? 60_000);
     if (signal?.aborted) {
       onAbort();
       return;
     }
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => settle(() => reject(new Error(`qol sessions failed: ${error.message}`))));
-    child.on("close", (code, childSignal) => settle(() => {
-      if (childSignal) {
-        reject(new Error(`qol sessions exited with ${childSignal}`));
-        return;
-      }
-      if (code !== 0) {
-        const message = stderr.trim() || stdout.trim();
-        reject(new Error(message || `qol sessions exited with ${code}`));
-        return;
-      }
-      resolve(stdout.trim());
-    }));
-    child.stdin.end(input ?? "");
+    state.child.stdin.write(`${JSON.stringify({ ...request, id })}\n`);
+  });
+}
+
+function toolCall(name, arguments_, timeoutMs, signal) {
+  return mcpCall(
+    { jsonrpc: "2.0", method: "tools/call", params: { name, arguments: arguments_ } },
+    timeoutMs,
+    signal,
+  ).then((response) => {
+    const result = response?.result;
+    const text = result?.content?.[0]?.text;
+    if (result?.isError || typeof text !== "string") {
+      throw new Error(text || `${name} failed`);
+    }
+    return text;
   });
 }
 
@@ -121,7 +176,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
 "#;
 
 const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _onUpdate) {
-      const stdout = await run(["list", "--json"], 60_000, undefined, signal);
+      const stdout = await toolCall("sessions_list", {}, 60_000, signal);
       const rows = JSON.parse(stdout);
       const text = rows
         .map(
@@ -134,9 +189,7 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _o
 "#;
 
 const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
-      if (params.surface != null) args.push("--surface", params.surface);
-      const stdout = await run(args, 60_000, undefined, signal);
+      const stdout = await toolCall("session_spawn", params, 60_000, signal);
       const outcome = JSON.parse(stdout);
       const text = outcome.reused
         ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
@@ -146,12 +199,9 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
 "#;
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const args = ["bridge", params.session];
-      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
-      args.push("--", params.task);
       setLoopPhase("waiting");
       try {
-        const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
+        const stdout = await toolCall("session_bridge", params, BRIDGE_TIMEOUT_MS, signal);
         const outcome = JSON.parse(stdout);
         setLoopPhase(outcome.completed ? "review" : "paused");
         const text = outcome.completed
@@ -171,11 +221,7 @@ const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _
 "#;
 
 const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_loop_close", arguments: params } };
-      const response = JSON.parse(await run(["mcp"], 10_000, `${JSON.stringify(request)}\n`, signal));
-      const result = response?.result;
-      const text = result?.content?.[0]?.text;
-      if (result?.isError || typeof text !== "string") throw new Error(text || "session_loop_close failed");
+      const text = await toolCall("session_loop_close", params, 10_000, signal);
       const receipt = JSON.parse(text);
       setLoopPhase("closing", receipt.final_report);
       return {
@@ -186,7 +232,7 @@ const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, signa
 "#;
 
 const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const stdout = await run(["close", params.session], 30_000, undefined, signal);
+      const stdout = await toolCall("session_close", params, 30_000, signal);
       const outcome = JSON.parse(stdout);
       return {
         content: [{ type: "text", text: `closed session ${outcome.session} (${outcome.tool}, key ${outcome.key})` }],
@@ -304,8 +350,7 @@ mod tests {
             "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
         ));
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
-        assert!(source.contains("args.push(\"--acknowledge-marker\""));
-        assert!(source.contains("args.push(\"--\", params.task)"));
+        assert!(source.contains("toolCall(\"session_bridge\", params, BRIDGE_TIMEOUT_MS, signal)"));
     }
 
     #[test]
@@ -336,7 +381,7 @@ mod tests {
             "key: Type.String({ description: \"Stable spawn key; required so retries are idempotent\" }),"
         ));
         assert!(source.contains("surface: Type.Optional(Type.String"));
-        assert!(EXECUTE_SPAWN.contains("args.push(\"--surface\", params.surface)"));
+        assert!(EXECUTE_SPAWN.contains("toolCall(\"session_spawn\", params, 60_000, signal)"));
         assert!(EXECUTE_SPAWN.contains("outcome.reused"));
         assert!(EXECUTE_SPAWN.contains("spawned session ${outcome.session}"));
     }
@@ -350,7 +395,7 @@ mod tests {
             .expect("loop close in contract");
         let source = render_tool_block(spec).expect("render");
         assert!(source.contains("name: \"session_loop_close\""));
-        assert!(source.contains("run([\"mcp\"], 10_000"));
+        assert!(source.contains("toolCall(\"session_loop_close\", params, 10_000, signal)"));
         assert!(source.contains("setLoopPhase(\"closing\", receipt.final_report)"));
     }
 
@@ -360,7 +405,7 @@ mod tests {
         assert!(!source.contains("spawnSync"));
         assert!(source.contains("import { spawn } from \"node:child_process\";"));
         assert!(source.contains("signal?.addEventListener(\"abort\", onAbort"));
-        assert!(source.contains("await run(args, BRIDGE_TIMEOUT_MS, undefined, signal)"));
+        assert!(source.contains("toolCall(\"session_bridge\", params, BRIDGE_TIMEOUT_MS, signal)"));
         assert!(EXECUTE_BRIDGE.contains("setLoopPhase(\"waiting\")"));
         for template in [
             EXECUTE_LIST,
@@ -370,8 +415,8 @@ mod tests {
             EXECUTE_CLOSE,
         ] {
             assert!(
-                template.contains("signal") && template.contains("await run("),
-                "every pi tool must await the async child run with the host signal"
+                template.contains("signal") && template.contains("toolCall("),
+                "every pi tool must await the shared mcp client with the host signal"
             );
         }
     }

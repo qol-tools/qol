@@ -309,17 +309,28 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: {}", help_text().trim_end());
     }
-    let server = McpSessionServer::system()?;
+    let server = Arc::new(McpSessionServer::system()?);
     let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut output = BufWriter::new(stdout.lock());
+    let output = Arc::new(std::sync::Mutex::new(BufWriter::new(io::stdout())));
     for line in stdin.lock().lines() {
         let line = line?;
-        if let Some(response) = server.handle_line(&line) {
-            serde_json::to_writer(&mut output, &response)?;
-            output.write_all(b"\n")?;
-            output.flush()?;
+        if line.trim().is_empty() {
+            continue;
         }
+        let server = Arc::clone(&server);
+        let output = Arc::clone(&output);
+        std::thread::spawn(move || {
+            if let Some(response) = server.handle_line(&line) {
+                let mut out = match output.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+                if serde_json::to_writer(&mut *out, &response).is_ok() {
+                    let _ = out.write_all(b"\n");
+                    let _ = out.flush();
+                }
+            }
+        });
     }
     Ok(())
 }
