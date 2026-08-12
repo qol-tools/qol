@@ -112,6 +112,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "description": "tab or os-window; defaults to the spawn_surface config, then tab",
                         "enum": ["tab", "os-window"],
                     },
+                    "model": {
+                        "type": "string",
+                        "description": "Model override for the spawned session (e.g. deepseek-v4-pro); beats the spawn_model config",
+                    },
                 },
                 "required": ["tool", "cwd", "key"],
             }),

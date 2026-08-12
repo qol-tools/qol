@@ -227,7 +227,9 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 }
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
-    let (tool, cwd, key, surface) = parse_args(args)?;
+    let (tool, cwd, key, surface, model_flag) = parse_args(args)?;
+    let configured = config_model()?;
+    let model = model_flag.or(configured);
     let outcome = spawn_or_reuse(
         &TerminalSessionService::system(),
         &CliSessionInterpreter::system(),
@@ -236,7 +238,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         key.as_deref(),
         surface.as_deref(),
         config_surface()?,
-        config_model()?.as_deref(),
+        model.as_deref(),
         &SpawnLocks::system()?,
     )?;
     println!(
@@ -246,12 +248,22 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_args(args: &[OsString]) -> Result<(String, String, Option<String>, Option<String>)> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]";
+fn parse_args(
+    args: &[OsString],
+) -> Result<(
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    let usage =
+        "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
     let mut surface = None;
+    let mut model = None;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -274,12 +286,16 @@ fn parse_args(args: &[OsString]) -> Result<(String, String, Option<String>, Opti
                 surface = Some(flag_value(args, index, "--surface", usage)?);
                 index += 2;
             }
+            "--model" => {
+                model = Some(flag_value(args, index, "--model", usage)?);
+                index += 2;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
     let tool = tool.ok_or_else(|| anyhow!("usage: {usage}"))?;
     let cwd = cwd.ok_or_else(|| anyhow!("usage: {usage}"))?;
-    Ok((tool, cwd, key, surface))
+    Ok((tool, cwd, key, surface, model))
 }
 
 fn flag_value(args: &[OsString], index: usize, flag: &str, usage: &str) -> Result<String> {
@@ -755,7 +771,7 @@ mod tests {
 
     #[test]
     fn spawn_args_parse_required_and_optional_flags() {
-        let (tool, cwd, key, surface) = parse_args(&[
+        let (tool, cwd, key, surface, model) = parse_args(&[
             "--tool".into(),
             "codex".into(),
             "--cwd".into(),
@@ -764,19 +780,23 @@ mod tests {
             "lane-1".into(),
             "--surface".into(),
             "os-window".into(),
+            "--model".into(),
+            "deepseek-v4-pro".into(),
         ])
         .unwrap();
         assert_eq!(tool, "codex");
         assert_eq!(cwd, "/work/project");
         assert_eq!(key.as_deref(), Some("lane-1"));
         assert_eq!(surface.as_deref(), Some("os-window"));
+        assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
 
-        let (tool, cwd, key, surface) =
+        let (tool, cwd, key, surface, model) =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
         assert_eq!(tool, "pi");
         assert_eq!(cwd, "/tmp");
         assert_eq!(key, None);
         assert_eq!(surface, None);
+        assert_eq!(model, None);
     }
 
     #[test]

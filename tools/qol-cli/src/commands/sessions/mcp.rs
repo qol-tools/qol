@@ -202,6 +202,17 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `surface` must be a string".to_owned())
             })
             .transpose()?;
+        let model = arguments
+            .get("model")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
+            })
+            .transpose()?;
+        let configured = super::spawn::config_model().map_err(|error| error.to_string())?;
+        let model = model.or(configured);
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -210,9 +221,7 @@ impl McpSessionServer {
             Some(key),
             surface.as_deref(),
             super::spawn::config_surface().map_err(|error| error.to_string())?,
-            super::spawn::config_model()
-                .map_err(|error| error.to_string())?
-                .as_deref(),
+            model.as_deref(),
             &self.locks,
         )
         .map_err(|error| error.to_string())?;
