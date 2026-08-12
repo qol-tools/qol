@@ -22,7 +22,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 14] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -38,6 +38,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
     SessionSubcommand {
         name: "bridge",
         run: |rest, _format| run_bridge(rest),
+    },
+    SessionSubcommand {
+        name: "submit",
+        run: |rest, _format| run_submit(rest),
     },
     SessionSubcommand {
         name: "next",
@@ -255,6 +259,27 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     println!(
         "{}",
         serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
+    );
+    Ok(())
+}
+
+fn run_submit(args: &[OsString]) -> Result<()> {
+    let (binding_token, task, _timeout_ms, acknowledge_marker) = parse_bridge_args(args)?;
+    let binding = SessionBinding::from_str(&binding_token)
+        .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
+    let terminals = service()?;
+    let pending = bridge::PendingBridgeStore::system()?;
+    let outcome = bridge::submit_only(
+        &terminals,
+        &CliSessionInterpreter::system(),
+        &binding,
+        &task,
+        &pending,
+        acknowledge_marker.as_deref(),
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize submit outcome")?
     );
     Ok(())
 }
