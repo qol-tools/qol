@@ -49,9 +49,10 @@ jobs:
           if [[ "${DRY_RUN}" == "true" ]]; then
             args+=(--dry-run)
           fi
-          python3 .github/scripts/prune_releases.py "${args[@]}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          python3 .github/scripts/prune_releases.py "${args[@]}" 2>&1 | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Prune build caches
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
