@@ -363,12 +363,14 @@ pub(super) fn execute(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
-    task: &str,
+    task: Option<&str>,
     timeout: Duration,
     pending: &PendingBridgeStore,
     acknowledge_marker: Option<&str>,
 ) -> Result<BridgeOutcome> {
-    validate_task(task)?;
+    if let Some(task) = task {
+        validate_task(task)?;
+    }
     let _owner = pending.acquire_owner(binding)?;
     if terminals
         .is_current(binding)
@@ -376,7 +378,6 @@ pub(super) fn execute(
     {
         bail!("cannot bridge to the calling terminal; choose an independent session");
     }
-    let target = resolve_target(terminals, binding)?;
     if let Some(marker) = acknowledge_marker {
         pending.acknowledge(binding, marker, true)?;
     } else if let Some(round) = pending.pending_round(binding)? {
@@ -397,6 +398,11 @@ pub(super) fn execute(
             return resume_owned(terminals, interpreter, binding, timeout, pending, false);
         }
         pending.acknowledge(binding, &round.completion_marker, false)?;
+        if task.is_none() {
+            bail!(
+                "the pending round shows no trace on the target and is now closed; resubmit the task via `session_submit` or `session_bridge` with a task"
+            );
+        }
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
             "event=superseded_undelivered target_backend={}",
@@ -404,75 +410,16 @@ pub(super) fn execute(
         );
     }
 
-    let (changed_tx, changed_rx) = mpsc::sync_channel(1);
-    let subscription = interpreter
-        .subscribe(
-            &target,
-            Arc::new(move || {
-                let _ = changed_tx.try_send(());
-            }),
-        )
-        .context("failed to subscribe to implementation-session changes")?;
+    let task = task.ok_or_else(|| {
+        anyhow!("no task to submit and no pending round to wait for; submit one via `session_submit` or call `session_bridge` with a task")
+    })?;
+
+    let SubmittedRound {
+        marker,
+        subscription,
+        changed_rx,
+    } = submit_task(terminals, interpreter, binding, task, pending)?;
     let subscribed = subscription.is_some();
-
-    let marker = CompletionMarker::generate();
-    let prompt = bridge_prompt(task, &marker);
-    pending.start(binding, &marker.token, &driver_token(terminals))?;
-
-    let liveness = session_liveness(terminals, interpreter, binding);
-    let pre_screen = terminals
-        .read_screen(binding)
-        .context("bridge screen read failed")?;
-    if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
-        pending.acknowledge(binding, &marker.token, false)?;
-        qol_runtime::probe!(
-            "CLI_SESSION_BRIDGE",
-            "event=delivery_failed target_backend={}",
-            binding.session_id().backend()
-        );
-        return Err(error).context("bridge task delivery failed");
-    }
-    if !delivery_observed(
-        terminals,
-        binding,
-        &marker.left,
-        &pre_screen,
-        &liveness,
-        DELIVERY_VERIFY_WINDOW,
-    )? {
-        qol_runtime::probe!(
-            "CLI_SESSION_BRIDGE",
-            "event=delivery_retry target_backend={}",
-            binding.session_id().backend()
-        );
-        terminals
-            .send_text(binding, &prompt, DeliveryMode::Submit)
-            .context("bridge task redelivery failed")?;
-        if !delivery_observed(
-            terminals,
-            binding,
-            &marker.left,
-            &pre_screen,
-            &liveness,
-            DELIVERY_VERIFY_WINDOW,
-        )? {
-            pending.acknowledge(binding, &marker.token, false)?;
-            qol_runtime::probe!(
-                "CLI_SESSION_BRIDGE",
-                "event=delivery_unobserved target_backend={}",
-                binding.session_id().backend()
-            );
-            bail!(
-                "the target never showed the submitted task; no round is pending - fix the target session, then resubmit via `qol sessions bridge`"
-            );
-        }
-    }
-    qol_runtime::probe!(
-        "CLI_SESSION_BRIDGE",
-        "event=submitted target_backend={} subscription={}",
-        binding.session_id().backend(),
-        if subscribed { "active" } else { "fallback" }
-    );
 
     let outcome = wait_for_completion(
         terminals,
@@ -603,6 +550,143 @@ fn resume_owned(
     }
     drop(subscription);
     Ok(outcome)
+}
+
+struct SubmittedRound {
+    marker: CompletionMarker,
+    subscription: Option<qol_terminal_sessions::cli::CliSessionSubscription>,
+    changed_rx: mpsc::Receiver<()>,
+}
+
+fn submit_task(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    task: &str,
+    pending: &PendingBridgeStore,
+) -> Result<SubmittedRound> {
+    let target = resolve_target(terminals, binding)?;
+    let (changed_tx, changed_rx) = mpsc::sync_channel(1);
+    let subscription = interpreter
+        .subscribe(
+            &target,
+            Arc::new(move || {
+                let _ = changed_tx.try_send(());
+            }),
+        )
+        .context("failed to subscribe to implementation-session changes")?;
+    let subscribed = subscription.is_some();
+
+    let marker = CompletionMarker::generate();
+    let prompt = bridge_prompt(task, &marker);
+    pending.start(binding, &marker.token, &driver_token(terminals))?;
+
+    let liveness = session_liveness(terminals, interpreter, binding);
+    let pre_screen = terminals
+        .read_screen(binding)
+        .context("bridge screen read failed")?;
+    if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
+        pending.acknowledge(binding, &marker.token, false)?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=delivery_failed target_backend={}",
+            binding.session_id().backend()
+        );
+        return Err(error).context("bridge task delivery failed");
+    }
+    if !delivery_observed(
+        terminals,
+        binding,
+        &marker.left,
+        &pre_screen,
+        &liveness,
+        DELIVERY_VERIFY_WINDOW,
+    )? {
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=delivery_retry target_backend={}",
+            binding.session_id().backend()
+        );
+        terminals
+            .send_text(binding, &prompt, DeliveryMode::Submit)
+            .context("bridge task redelivery failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            &marker.left,
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &marker.token, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=delivery_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the target never showed the submitted task; no round is pending - fix the target session, then resubmit via `qol sessions bridge`"
+            );
+        }
+    }
+    qol_runtime::probe!(
+        "CLI_SESSION_BRIDGE",
+        "event=submitted target_backend={} subscription={}",
+        binding.session_id().backend(),
+        if subscribed { "active" } else { "fallback" }
+    );
+    Ok(SubmittedRound {
+        marker,
+        subscription,
+        changed_rx,
+    })
+}
+
+pub(super) fn submit_only(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    task: &str,
+    pending: &PendingBridgeStore,
+    acknowledge_marker: Option<&str>,
+) -> Result<BridgeOutcome> {
+    validate_task(task)?;
+    let _owner = pending.acquire_owner(binding)?;
+    if terminals
+        .is_current(binding)
+        .context("failed to identify the current terminal session")?
+    {
+        bail!("cannot submit to the calling terminal; choose an independent session");
+    }
+    resolve_target(terminals, binding)?;
+    if let Some(marker) = acknowledge_marker {
+        pending.acknowledge(binding, marker, true)?;
+    }
+    if pending.pending_round(binding)?.is_some() {
+        bail!(
+            "a round is already pending for this session; wait for it with `session_bridge` before submitting new work"
+        );
+    }
+    let started = Instant::now();
+    let SubmittedRound {
+        marker,
+        subscription,
+        ..
+    } = submit_task(terminals, interpreter, binding, task, pending)?;
+    let screen = terminals
+        .read_screen(binding)
+        .context("submit screen read failed")?;
+    drop(subscription);
+    Ok(outcome(
+        false,
+        true,
+        false,
+        binding,
+        &marker.token,
+        screen,
+        0,
+        started,
+    ))
 }
 
 pub(super) fn delivery_observed(

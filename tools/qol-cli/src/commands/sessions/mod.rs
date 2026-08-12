@@ -247,7 +247,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
         &terminals,
         &CliSessionInterpreter::system(),
         &binding,
-        &task,
+        Some(task.as_str()),
         std::time::Duration::from_millis(timeout_ms),
         &pending,
         acknowledge_marker.as_deref(),

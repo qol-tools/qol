@@ -248,6 +248,17 @@ const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _
     },
 "#;
 
+const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const stdout = await toolCall("session_submit", params, 60_000, signal);
+      const outcome = JSON.parse(stdout);
+      const text = `task submitted to session ${outcome.session}; round open, wait with session_bridge (omit task)`;
+      return {
+        content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
+        details: { outcome },
+      };
+    },
+"#;
+
 const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const text = await toolCall("session_loop_close", params, 10_000, signal);
       const receipt = JSON.parse(text);
@@ -286,6 +297,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
         "session_bridge" => EXECUTE_BRIDGE,
+        "session_submit" => EXECUTE_SUBMIT,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
         other => bail!("no pi adapter template for contract tool `{other}`"),
@@ -375,10 +387,26 @@ mod tests {
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
         assert!(source.contains(
-            "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
+            "task: Type.Optional(Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the pending round\" })),"
         ));
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
         assert!(source.contains("toolCall(\"session_bridge\", params, BRIDGE_TIMEOUT_MS, signal)"));
+    }
+
+    #[test]
+    fn pi_schema_exposes_submit_without_waiting() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_submit")
+            .expect("submit in contract");
+        let source = render_tool_block(spec).expect("render");
+        assert!(source.contains("toolCall(\"session_submit\", params, 60_000, signal)"));
+        assert!(source.contains(
+            "task: Type.String({ description: \"Bounded implementation task to submit exactly once\" }),"
+        ));
+        let all = pi_extension().expect("render");
+        assert!(all.contains("round open, wait with session_bridge (omit task)"));
     }
 
     #[test]

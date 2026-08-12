@@ -180,6 +180,7 @@ impl McpSessionServer {
             "sessions_list" => self.tool_list_sessions(),
             "session_spawn" => self.tool_spawn(arguments),
             "session_bridge" => self.tool_bridge(arguments),
+            "session_submit" => self.tool_submit(arguments),
             "session_loop_close" => self.close_loop(arguments),
             "session_close" => self.tool_close(arguments),
             other => {
@@ -267,10 +268,7 @@ impl McpSessionServer {
 
     fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        let task = arguments
-            .get("task")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "session_bridge requires a `task` string".to_owned())?;
+        let task = arguments.get("task").and_then(Value::as_str);
         if arguments.get("timeout_ms").is_some() {
             return Err("session_bridge takes no `timeout_ms`; the round stays open until the implementation emits its completion signal. Resend this call without that argument.".to_owned());
         }
@@ -288,6 +286,32 @@ impl McpSessionServer {
             &binding,
             task,
             self.round_timeout,
+            &self.pending,
+            acknowledge_marker,
+        )
+        .map_err(|error| error.to_string())?;
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_submit(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let task = arguments
+            .get("task")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "session_submit requires a `task` string".to_owned())?;
+        let acknowledge_marker = arguments
+            .get("acknowledge_marker")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    "session_submit `acknowledge_marker` must be a string".to_owned()
+                })
+            })
+            .transpose()?;
+        let outcome = super::bridge::submit_only(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &binding,
+            task,
             &self.pending,
             acknowledge_marker,
         )
@@ -1016,6 +1040,7 @@ mod tests {
                 "sessions_list",
                 "session_spawn",
                 "session_bridge",
+                "session_submit",
                 "session_loop_close",
                 "session_close"
             ]
