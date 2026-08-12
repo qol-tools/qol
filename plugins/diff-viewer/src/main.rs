@@ -1,5 +1,5 @@
 use std::sync::atomic::AtomicU64;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use gpui::{
@@ -10,10 +10,12 @@ use plugin_diff_viewer::view::{DiffView, WINDOW_HEIGHT, WINDOW_WIDTH};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::placement::MonitorPlacement;
 use qol_gpui::window::open_window_with_focus;
-use qol_watch::{watch, WatchNotice, WatchRoot};
+use qol_watch::{watch, Watch, WatchNotice, WatchRoot};
 
 const WINDOW_TITLE: &str = "Diff Viewer";
 const APP_ID: &str = "plugin-diff-viewer";
+
+static REPO_WATCH: OnceLock<Watch> = OnceLock::new();
 
 fn main() {
     let cwd = std::env::current_dir().expect("diff-viewer needs a working directory");
@@ -27,40 +29,35 @@ fn main() {
         let generation = Arc::new(AtomicU64::new(0));
         let (git_tx, requests) = mpsc::channel::<GitRequest>();
         let (result_tx, results) = mpsc::channel();
-        let live = match &repo {
-            Some(repo_path) => {
-                let (watch_tx, batches) = mpsc::channel::<Vec<std::path::PathBuf>>();
-                let watch = match watch(&[WatchRoot::deep(repo_path.clone())], move |notice| {
-                    if let WatchNotice::Changed(paths) = notice {
-                        let _ = watch_tx.send(paths);
-                    }
-                }) {
-                    Ok(watch) => Some(watch),
-                    Err(error) => {
-                        eprintln!("[diff-viewer] repo watch unavailable: {error}");
-                        None
-                    }
-                };
-                let watch_bridge = if watch.is_some() {
-                    Some(pipeline::spawn_watch_bridge(
-                        batches,
-                        git_tx.clone(),
-                        generation.clone(),
-                    ))
-                } else {
-                    None
-                };
-                let facts_thread = Some(pipeline::spawn_git_facts_thread(
-                    repo_path.clone(),
-                    requests,
-                    result_tx,
-                    generation.clone(),
-                ));
-                (watch, facts_thread, watch_bridge)
-            }
-            None => (None, None, None),
-        };
-        let _live = live;
+        if let Some(repo_path) = &repo {
+            let repo_path = repo_path.clone();
+            let facts_repo = repo_path.clone();
+            let thread_git_tx = git_tx.clone();
+            let thread_generation = generation.clone();
+            std::thread::Builder::new()
+                .name("diff-viewer-watch-register".to_owned())
+                .spawn(move || {
+                    let (watch_tx, batches) = mpsc::channel::<Vec<std::path::PathBuf>>();
+                    let watch = match watch(
+                        &[WatchRoot::filtered_deep(repo_path).with_budget(pipeline::WATCH_BUDGET)],
+                        move |notice| {
+                            if let WatchNotice::Changed(paths) = notice {
+                                let _ = watch_tx.send(paths);
+                            }
+                        },
+                    ) {
+                        Ok(watch) => watch,
+                        Err(error) => {
+                            eprintln!("[diff-viewer] repo watch unavailable: {error}");
+                            return;
+                        }
+                    };
+                    pipeline::spawn_watch_bridge(batches, thread_git_tx, thread_generation);
+                    let _ = REPO_WATCH.set(watch);
+                })
+                .expect("spawn diff-viewer watch registration");
+            pipeline::spawn_git_facts_thread(facts_repo, requests, result_tx, generation.clone());
+        }
         let (options, requested) = window_options(cx);
         match open_window_with_focus(cx, options, move |window, cx| {
             window.set_window_title(WINDOW_TITLE);

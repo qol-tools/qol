@@ -52,11 +52,29 @@ key contract, so an amend or rebase churns the filmstrip correctly.
 
 Summon-to-first-paint must stay under 500 ms.
 The measured fast path is `git status --porcelain` at 8 ms on this repo, so
-the budget is met by the porcelain fast path plus cached facts.
-The full diff runs async and paints when ready; the first frame shows the
-file list and summary from the fast path.
+in principle the budget is met by the porcelain fast path plus cached facts.
+In practice the first frame does not yet contain the fast-path file list:
+measured in a guest at monorepo scale (8k directories under the repo), the
+first facts landed 81-96 ms after the first render because the main thread
+was busy registering the recursive watch and the result poll ticks at 50 ms.
+The first painted frame is therefore the empty state and the file list
+appears a poll tick or two later (measured after the fix: +84 to +140 ms,
+now gated by the cold git spawn and the poll phase instead of by tree
+size); the full diff runs async and paints when ready.
 A large-range full diff measured 89 to 97 ms and grows with repo size, which
 is why it never blocks the first paint.
+Watch registration is off the paint path: it runs on a background thread, so
+open latency no longer scales with tree size (before the fix, first render
+grew ~18-20 us per directory: 299 ms at 8.1k dirs and 380 ms at 12.2k dirs;
+after the fix it stays 166-193 ms with target/ trees from 8k to 20k dirs
+and a rejecting 20.5k-dir non-noise tree). Registration is filtered at
+registration time (build-noise directories `target/`, `node_modules/`, and
+`.git` are excluded before any watch is taken), so they consume neither
+inotify watches nor walk time, and a per-root budget
+(`pipeline::WATCH_BUDGET`, 20,000 directories) rejects registration above
+the budget. A pathological tree therefore either registers within budget or
+degrades deterministically to the 3 s backstop refresh instead of silently
+exhausting the OS watch limit mid-walk.
 
 ## Failure model
 

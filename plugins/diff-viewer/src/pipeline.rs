@@ -11,6 +11,7 @@ use qol_git::NumstatEntry;
 pub const DEFAULT_RANGE: &str = "HEAD";
 pub const HISTORY_LIMIT: usize = 64;
 const WATCH_MAX_LATENCY: Duration = Duration::from_secs(1);
+pub const WATCH_BUDGET: usize = 20_000;
 
 #[derive(Debug, Clone)]
 pub enum GitRequest {
