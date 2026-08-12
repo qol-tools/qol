@@ -255,10 +255,6 @@ pub fn set_unmap_hide(enabled: bool) {
     UNMAP_HIDE.store(enabled, Ordering::Relaxed);
 }
 
-fn unmap_hide_enabled() -> bool {
-    UNMAP_HIDE.load(Ordering::Relaxed)
-}
-
 pub fn park_window_by_title(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
