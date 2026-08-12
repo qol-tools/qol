@@ -35,7 +35,7 @@ jobs:
       windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
       windows_qol: ${{ steps.affected.outputs.windows_qol }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -89,7 +89,7 @@ jobs:
             skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: matrix.skip != 'true'
 
       - name: Free disk space
@@ -214,7 +214,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/rust-setup
         with:
