@@ -17,8 +17,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
-const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUBSCRIPTION_HEARTBEAT: Duration = Duration::from_secs(30);
+const WAIT_BACKOFF_AFTER: Duration = Duration::from_secs(30);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
@@ -694,6 +694,7 @@ pub(super) fn wait_for_completion(
             .read_screen(binding)
             .context("bridge screen read failed")?;
         reads += 1;
+        let read_at = Instant::now();
         let matched = screen.contains(marker);
         if matched && previous.as_deref() == Some(screen.as_str()) {
             return Ok(outcome(
@@ -725,17 +726,26 @@ pub(super) fn wait_for_completion(
             ));
         }
         let remaining = timeout.saturating_sub(elapsed);
-        let interval = if matched {
+        let minimum_gap = if matched || elapsed < WAIT_BACKOFF_AFTER {
             COMPLETION_SETTLE_INTERVAL
-        } else if !subscribed {
-            FALLBACK_POLL_INTERVAL
         } else {
+            Duration::from_secs(1)
+        };
+        let interval = if subscribed {
             SUBSCRIPTION_HEARTBEAT
+        } else {
+            minimum_gap
         }
         .min(remaining);
         if subscribed {
             match changed.recv_timeout(interval) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(()) => {
+                    let since_last = read_at.elapsed();
+                    if since_last < minimum_gap {
+                        std::thread::sleep(minimum_gap - since_last);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(anyhow!("implementation-session change stream disconnected"));
                 }

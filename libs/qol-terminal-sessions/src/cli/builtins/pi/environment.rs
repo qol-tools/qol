@@ -133,6 +133,41 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 fn process_start_unix_secs(pid: i32) -> Option<i64> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(started) = process_start_from_proc(pid) {
+            return Some(started);
+        }
+    }
+    process_start_from_ps(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_from_proc(pid: i32) -> Option<i64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let boot_time = boot_time_unix_secs()?;
+    Some(boot_time + starttime_ticks(&stat)? / 100)
+}
+
+#[cfg(target_os = "linux")]
+fn starttime_ticks(stat: &str) -> Option<i64> {
+    stat.rsplit(')')
+        .next()?
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn boot_time_unix_secs() -> Option<i64> {
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    stat.lines()
+        .find_map(|line| line.strip_prefix("btime "))
+        .and_then(|value| value.trim().parse().ok())
+}
+
+fn process_start_from_ps(pid: i32) -> Option<i64> {
     let output = Command::new("ps")
         .args(["-o", "etime=", "-p", &pid.to_string()])
         .output()
@@ -217,6 +252,19 @@ mod tests {
         for name in ["nonsense.jsonl", "2026-08-03_x.jsonl", "T-x.jsonl"] {
             assert_eq!(created_at_unix_secs(Path::new(name)), None, "name: {name}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn starttime_ticks_skips_the_pid_and_the_comm_field() {
+        let stat = "1981432 (pi) S 1882 1981432 1981432 0 -1 4194304 42654 0 2 0 12 4 0 0 20 0 22 0 4402889 4818305024 29688 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        assert_eq!(starttime_ticks(stat), Some(4_402_889));
+
+        let noisy = "123 (bash (wrapper)) S 1 123 123 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 555 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        assert_eq!(starttime_ticks(noisy), Some(555));
+
+        assert_eq!(starttime_ticks(""), None);
+        assert_eq!(starttime_ticks("42 (x) R 0"), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
+    ScreenReader, SessionBinding, SessionFacts, SessionInventory, TerminalSessionService,
 };
 use serde_json::{json, Value};
 
@@ -21,6 +21,7 @@ const ERROR_INVALID_PARAMS: i64 = -32602;
 const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(1_000);
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DISCOVERY_CACHE_TTL: Duration = Duration::from_millis(500);
 pub(super) const WAIT_TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const WAIT_TIMEOUT_DEFAULT_MS: u64 = 30_000;
 pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
@@ -30,18 +31,45 @@ pub(crate) struct McpSessionServer {
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
     locks: super::spawn::SpawnLocks,
+    discovery: std::sync::Mutex<DiscoveryCache>,
     round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
 
+#[derive(Default)]
+struct DiscoveryCache {
+    facts: Vec<SessionFacts>,
+    cached_at: Option<Instant>,
+}
+
+impl DiscoveryCache {
+    fn fresh(&self) -> bool {
+        self.cached_at
+            .is_some_and(|cached_at| cached_at.elapsed() < DISCOVERY_CACHE_TTL)
+    }
+}
+
 impl McpSessionServer {
+    fn cached_sessions(&self) -> Option<Vec<SessionFacts>> {
+        let cache = self.discovery.lock().ok()?;
+        cache.fresh().then(|| cache.facts.clone())
+    }
+
+    fn cache_sessions(&self, facts: &[SessionFacts]) {
+        if let Ok(mut cache) = self.discovery.lock() {
+            cache.facts = facts.to_vec();
+            cache.cached_at = Some(Instant::now());
+        }
+    }
+
     pub(crate) fn system() -> Result<Self> {
         Ok(Self {
             terminals: Arc::new(TerminalSessionService::system()),
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
+            discovery: std::sync::Mutex::new(DiscoveryCache::default()),
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
@@ -57,6 +85,7 @@ impl McpSessionServer {
             interpreter,
             pending,
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            discovery: std::sync::Mutex::new(DiscoveryCache::default()),
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
@@ -73,6 +102,7 @@ impl McpSessionServer {
             interpreter,
             pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
+            discovery: std::sync::Mutex::new(DiscoveryCache::default()),
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
@@ -174,10 +204,17 @@ impl McpSessionServer {
     }
 
     fn tool_list_sessions(&self) -> Result<String, String> {
-        let facts = self
-            .terminals
-            .discover()
-            .map_err(|error| format!("discovery failed: {error}"))?;
+        let facts = match self.cached_sessions() {
+            Some(facts) => facts,
+            None => {
+                let facts = self
+                    .terminals
+                    .discover()
+                    .map_err(|error| format!("discovery failed: {error}"))?;
+                self.cache_sessions(&facts);
+                facts
+            }
+        };
         let rows = facts
             .iter()
             .filter_map(|session| {
@@ -474,6 +511,7 @@ mod tests {
         current: Mutex<bool>,
         spawner_enabled: AtomicBool,
         spawn_count: std::sync::atomic::AtomicUsize,
+        discover_count: std::sync::atomic::AtomicUsize,
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
         spawn_cwd: Mutex<Option<std::path::PathBuf>>,
         closed: Mutex<Vec<SessionBinding>>,
@@ -491,6 +529,7 @@ mod tests {
                 current: Mutex::new(false),
                 spawner_enabled: AtomicBool::new(false),
                 spawn_count: std::sync::atomic::AtomicUsize::new(0),
+                discover_count: std::sync::atomic::AtomicUsize::new(0),
                 spawn_identity: Mutex::new(None),
                 spawn_cwd: Mutex::new(None),
                 closed: Mutex::new(Vec::new()),
@@ -554,6 +593,8 @@ mod tests {
 
     impl SessionInventory for FakeBackend {
         fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            self.discover_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut facts = vec![Self::session()];
             if let Some(spawned) = self.spawned_session() {
                 facts.push(spawned);
@@ -782,6 +823,74 @@ mod tests {
         .unwrap();
         assert!(!outcome.completed);
         assert!(!outcome.stalled);
+    }
+
+    #[test]
+    fn subscribed_wait_spaces_reads_out_even_when_change_events_burst() {
+        use std::str::FromStr;
+        let backend = Arc::new(FakeBackend::new(
+            (0..2_000)
+                .map(|index| format!("working step {index}"))
+                .collect(),
+            false,
+            false,
+        ));
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        let binding = qol_terminal_sessions::SessionBinding::from_str(&token()).unwrap();
+        let (changed_tx, changed_rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || loop {
+            let _ = changed_tx.try_send(());
+            std::thread::sleep(Duration::from_millis(1));
+        });
+        let outcome = super::super::bridge::wait_for_completion(
+            &terminals,
+            &binding,
+            "QOL_BRIDGE_DONE_never",
+            Duration::from_secs(1),
+            changed_rx,
+            true,
+            true,
+            &|| None,
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert!(!outcome.completed);
+        assert!(
+            outcome.reads <= 8,
+            "burst events must not outpace the 250ms gap, got {}",
+            outcome.reads
+        );
+        assert!(outcome.reads >= 3);
+    }
+
+    #[test]
+    fn list_tool_serves_cached_sessions_within_the_ttl() {
+        let (server, backend) = server(Vec::new(), false, false);
+        tool_call(&server, "sessions_list", json!({}));
+        let after_first = backend
+            .discover_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(after_first, 1);
+        tool_call(&server, "sessions_list", json!({}));
+        assert_eq!(
+            backend
+                .discover_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            after_first,
+            "a second list within the TTL must reuse the cached discovery"
+        );
+    }
+
+    #[test]
+    fn discovery_cache_expires_after_the_ttl() {
+        let mut cache = DiscoveryCache::default();
+        assert!(!cache.fresh());
+        cache.facts = vec![FakeBackend::session()];
+        cache.cached_at = Some(Instant::now());
+        assert!(cache.fresh());
+        cache.cached_at = Some(Instant::now() - DISCOVERY_CACHE_TTL - Duration::from_millis(1));
+        assert!(!cache.fresh());
     }
 
     #[test]
