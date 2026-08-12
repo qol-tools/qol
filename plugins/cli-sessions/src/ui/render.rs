@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 use gpui::prelude::*;
@@ -129,12 +131,16 @@ fn summary_groups_el(rows: &[SessionState]) -> impl IntoElement {
         }))
 }
 
-fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoElement {
+fn header(
+    rows: &[SessionState],
+    gesture: Rc<RefCell<DragGestureState>>,
+    cx: &mut Context<SessionsView>,
+) -> impl IntoElement {
     let palette = current_palette();
-    let view = cx.entity();
-    let collapse = view.clone();
-    let hide = view;
+    let collapse = cx.entity();
+    let hide = cx.entity();
     WindowBar::new("CLI SESSIONS")
+        .drag_gesture(gesture)
         .background(palette.chrome_bg)
         .border(palette.divider)
         .title_color(palette.text_heading)
@@ -596,7 +602,7 @@ impl SessionsView {
                     _ => {}
                 }
             }))
-            .child(header(&rows, cx))
+            .child(header(&rows, self.drag_gesture.clone(), cx))
             .child(
                 div()
                     .id("cli-sessions-list")

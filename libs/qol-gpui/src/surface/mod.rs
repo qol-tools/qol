@@ -23,6 +23,8 @@ pub enum SurfaceKind {
     Panel,
 }
 
+pub const DRAG_THRESHOLD_PX: f32 = 4.0;
+
 pub struct DragGestureState {
     press: Option<Point<Pixels>>,
     moving: bool,

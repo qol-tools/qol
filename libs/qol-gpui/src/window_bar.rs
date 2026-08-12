@@ -4,14 +4,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::icon_button::IconButton;
-use crate::surface::{DragGestureState, PanelDragArea};
+use crate::surface::{DragGestureState, PanelDragArea, DRAG_THRESHOLD_PX};
 use crate::theme::{SystemPalette, DARK_REFERENCE};
 
 const BAR_HEIGHT: f32 = 34.0;
 const BAR_PADDING_X: f32 = 12.0;
 const TRAILING_GAP: f32 = 9.0;
 const TITLE_SIZE: f32 = 11.0;
-const DRAG_THRESHOLD_PX: f32 = 4.0;
 
 const fn chrome_defaults() -> (u32, u32, u32) {
     let system = SystemPalette::from_reference(DARK_REFERENCE);
@@ -39,6 +38,7 @@ pub struct WindowBar {
     button_focus: u32,
     collapse: Option<BarAction>,
     hide: Option<BarAction>,
+    drag_gesture: Option<Rc<RefCell<DragGestureState>>>,
     children: Vec<gpui::AnyElement>,
 }
 
@@ -47,8 +47,9 @@ impl WindowBar {
         let system = SystemPalette::from_reference(DARK_REFERENCE);
         let (background, title_color, button_text) = chrome_defaults();
         let border = divider_default(&system);
+        let display_title: SharedString = title.into();
         Self {
-            title: title.into(),
+            title: display_title,
             background,
             border,
             title_color,
@@ -57,6 +58,7 @@ impl WindowBar {
             button_focus: system.accent,
             collapse: None,
             hide: None,
+            drag_gesture: None,
             children: Vec::new(),
         }
     }
@@ -80,6 +82,11 @@ impl WindowBar {
         self.button_text = text;
         self.button_hover = hover;
         self.button_focus = focus;
+        self
+    }
+
+    pub fn drag_gesture(mut self, gesture: Rc<RefCell<DragGestureState>>) -> Self {
+        self.drag_gesture = Some(gesture);
         self
     }
 
@@ -132,9 +139,11 @@ impl RenderOnce for WindowBar {
             .border_b_1()
             .border_color(rgb(self.border))
             .cursor(CursorStyle::OpenHand)
-            .panel_drag_after(&Rc::new(RefCell::new(DragGestureState::new(
-                DRAG_THRESHOLD_PX,
-            ))))
+            .panel_drag_after(
+                &self.drag_gesture.clone().unwrap_or_else(|| {
+                    Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD_PX)))
+                }),
+            )
             .on_click(|event, window, _| {
                 if is_double_click(event.click_count()) {
                     window.toggle_fullscreen();
