@@ -68,6 +68,9 @@ target-lexicon = "0.12.16"
 [patch.crates-io]
 # QoL needs the owning X11 client to hand active continuous-hotkey grabs to Muffin.
 global-hotkey = { path = "vendor/global-hotkey" }
+# QoL needs its managed windows to carry USPosition before first map so the WM
+# honors the requested bounds instead of running its own placement.
+gpui = { path = "vendor/gpui" }
 # macOS only: align zed-font-kit core-graphics versions
 # gpui forces image's "avif" feature (an encoder nothing can call); the stub
 # drops the rav1e stack until zed#60897 ships in a gpui release

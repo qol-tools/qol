@@ -85,19 +85,26 @@ fn main() {
                     requested.origin.y.to_f64() as i32,
                 );
                 std::thread::spawn(move || {
+                    let x = requested.origin.x.to_f64() as i32;
+                    let y = requested.origin.y.to_f64() as i32;
                     std::thread::sleep(Duration::from_millis(300));
-                    if let Some(session) = qol_gpui::popup_window::window_geometry_session(&title) {
-                        session.reposition(
-                            requested.origin.x.to_f64() as i32,
-                            requested.origin.y.to_f64() as i32,
-                        );
+                    let mut repositioned = false;
+                    let off = qol_gpui::popup_window::window_position_by_title(&title)
+                        .map(|(actual_x, actual_y)| (actual_x - x).abs() + (actual_y - y).abs())
+                        .unwrap_or(0);
+                    if off > 8 {
+                        if let Some(session) =
+                            qol_gpui::popup_window::window_geometry_session(&title)
+                        {
+                            repositioned = session.reposition(x, y);
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(400));
                     let actual = qol_gpui::popup_window::window_position_by_title(&title);
                     let focused = qol_gpui::popup_window::window_holds_input_focus(&title);
                     qol_runtime::probe!(
                         "DIFF_VIEWER",
-                        "settled=true actual={actual:?} focused={focused:?}"
+                        "settled=true actual={actual:?} focused={focused:?} repositioned={repositioned}"
                     );
                 });
             }
