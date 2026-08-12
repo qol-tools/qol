@@ -156,4 +156,4 @@ jobs:
             exit 1
           fi
           gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
-          gh release edit "$tag" --draft=false
+          gh release edit "$tag" --draft=false --latest=false

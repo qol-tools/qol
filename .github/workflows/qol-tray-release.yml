@@ -228,9 +228,10 @@ jobs:
           allow_updates: false
           draft: true
           prerelease: false
+          make_latest: true
 
       - name: Publish immutable release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release edit "${RELEASE_TAG}" --draft=false
+        run: gh release edit "${RELEASE_TAG}" --draft=false --latest=true
