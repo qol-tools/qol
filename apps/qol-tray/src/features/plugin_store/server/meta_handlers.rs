@@ -97,7 +97,9 @@ fn build_info_error(message: &str) -> BuildInfoErrorResponse {
 }
 
 pub(super) async fn check_update() -> Json<serde_json::Value> {
-    let available = crate::updates::check_for_updates().await.unwrap_or(false);
+    let available = crate::updates::check_for_updates_force()
+        .await
+        .unwrap_or(false);
     let latest = crate::updates::latest_version().map(String::from);
     Json(serde_json::json!({ "available": available, "latest": latest }))
 }

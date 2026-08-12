@@ -13,6 +13,12 @@ impl GitHubClient {
         let url = self.source.releases_api_url();
         let response = super::send_checked(self.build_request(&url)).await?;
         let releases: Vec<GitHubRelease> = response.json().await?;
+        if releases.len() == super::super::source::RELEASES_PER_PAGE {
+            log::warn!(
+                "release list page is full ({} releases); the newest tag may be outside the fetched window",
+                releases.len()
+            );
+        }
         Ok(releases)
     }
 

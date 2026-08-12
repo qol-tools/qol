@@ -5,7 +5,10 @@ pub(crate) fn build_github_request(
     url: &str,
     token: Option<&str>,
 ) -> reqwest::RequestBuilder {
-    let mut request = client.get(url).header("User-Agent", "qol-tray");
+    let mut request = client
+        .get(url)
+        .header("User-Agent", "qol-tray")
+        .header("Accept", "application/vnd.github+json");
     if let Some(token) = token {
         request = request.header("Authorization", format!("Bearer {}", token));
     }
