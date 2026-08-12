@@ -1,10 +1,17 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use super::spawn::identity_from_user_vars;
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId, TerminalError};
+
+fn null_path_is_empty<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<PathBuf>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct KittyLs(pub Vec<OsWindow>);
@@ -23,6 +30,7 @@ pub struct Tab {
 pub struct KittyWindow {
     pub id: u64,
     pub title: String,
+    #[serde(default, deserialize_with = "null_path_is_empty")]
     pub cwd: PathBuf,
     pub pid: i32,
     #[serde(default)]
@@ -39,7 +47,7 @@ pub struct KittyWindow {
 pub struct ForegroundProcess {
     pub pid: i32,
     pub cmdline: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_path_is_empty")]
     pub cwd: PathBuf,
 }
 
@@ -51,7 +59,7 @@ fn basename(cmdline: &[String]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn usable_cwd(path: &Path) -> Option<String> {
+fn usable_cwd(path: &std::path::Path) -> Option<String> {
     let value = path.to_string_lossy();
     if value.is_empty() || value.chars().any(|character| character.is_control()) {
         return None;
@@ -177,6 +185,22 @@ mod tests {
         let sessions = parse_ls(body, backend_id()).unwrap().sessions(backend_id());
 
         assert_eq!(sessions[0].cwd, "/work/project");
+    }
+
+    #[test]
+    fn parser_tolerates_null_window_and_foreground_cwds() {
+        let body = r#"[{"id":1,"tabs":[{"windows":[
+{"id":10,"title":"Fresh","cwd":null,"pid":100,"foreground_processes":[{"pid":101,"cwd":null,"cmdline":["/bin/zsh"]}]},
+{"id":11,"title":"Mixed","cwd":null,"pid":200,"foreground_processes":[{"pid":201,"cwd":"/real/place","cmdline":["/usr/bin/pi"]}]},
+{"id":12,"title":"Missing","pid":300}
+]}]}]"#;
+
+        let sessions = parse_ls(body, backend_id()).unwrap().sessions(backend_id());
+
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].cwd, "");
+        assert_eq!(sessions[1].cwd, "/real/place");
+        assert_eq!(sessions[2].cwd, "");
     }
 
     #[test]
