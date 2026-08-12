@@ -312,6 +312,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
     let server = Arc::new(McpSessionServer::system()?);
     let stdin = io::stdin();
     let output = Arc::new(std::sync::Mutex::new(BufWriter::new(io::stdout())));
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -319,7 +320,10 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
         }
         let server = Arc::clone(&server);
         let output = Arc::clone(&output);
+        let active = Arc::clone(&active);
+        active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         std::thread::spawn(move || {
+            let remaining = FinishGuard(active);
             if let Some(response) = server.handle_line(&line) {
                 let mut out = match output.lock() {
                     Ok(guard) => guard,
@@ -330,9 +334,21 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
                     let _ = out.flush();
                 }
             }
+            let _ = remaining;
         });
     }
+    while active.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     Ok(())
+}
+
+struct FinishGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for FinishGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn help_text() -> &'static str {
