@@ -11,7 +11,7 @@ const BRIDGE_TIMEOUT_MS = 86_410_000;
 const LOOP_ENTRY = "qol-sessions-feature-loop";
 const LOOP_PHASES = new Set(["idle", "waiting", "review", "closing", "paused"]);
 const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining. Do not stop at a round boundary.`;
-const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close. Do not add or remove sections.`;
+const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close: the final_report field of the session_loop_close tool result you just received. Do not add or remove sections.`;
 
 function mcpState() {
   return {
@@ -198,7 +198,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     if (loopPhase === "closing") {
       loopFollowUpSent = true;
       pi.appendEntry(LOOP_ENTRY, { phase: loopPhase, final_report: loopFinalReport, follow_up_sent: true });
-      pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+      pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: "followUp" });
     }
   });
 "#;
