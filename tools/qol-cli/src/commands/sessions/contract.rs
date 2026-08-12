@@ -146,7 +146,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_loop_close",
             label: "Close the feature loop",
-            description: "Close the architect-owned feature loop through an explicit state transition and render the canonical final report. Use outcome `accepted` only after personally verifying the complete user request; use `paused` only for a user redirect or genuine blocker.",
+            description: "Close the architect-owned feature loop through an explicit state transition and render the canonical final report. Use outcome `accepted` only after personally verifying the complete user request; accepted is terminal and also closes the implementation terminal, whose transcript persists for resume. Use `paused` only for a user redirect or genuine blocker, which keeps the terminal open.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
