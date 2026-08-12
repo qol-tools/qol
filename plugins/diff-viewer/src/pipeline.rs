@@ -45,6 +45,7 @@ pub enum GitResult {
     History {
         generation: u64,
         commits: Vec<qol_git::LogEntry>,
+        magnitudes: Vec<qol_git::LogStatEntry>,
     },
 }
 
@@ -233,7 +234,8 @@ fn handle_request(
                 },
             };
             let _ = results.send(result);
-            let commits = qol_git::log(repo, HISTORY_LIMIT).unwrap_or_default();
+            let (commits, magnitudes) =
+                qol_git::log_with_stats(repo, HISTORY_LIMIT).unwrap_or_default();
             let head = commits.first().map(|entry| entry.sha.clone());
             if head != *last_head {
                 *last_head = head;
@@ -241,6 +243,7 @@ fn handle_request(
                     let _ = results.send(GitResult::History {
                         generation: g,
                         commits,
+                        magnitudes,
                     });
                 }
             }
@@ -403,6 +406,70 @@ mod tests {
             results.recv_timeout(Duration::from_millis(200)).is_err(),
             "a stale generation must never reach the git CLI"
         );
+    }
+
+    #[test]
+    fn refresh_delivers_history_with_magnitudes() {
+        let dir = std::env::temp_dir().join(format!(
+            "diff-viewer-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create repo dir");
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git run");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("a.txt"), "one\n").expect("write");
+        run(&["add", "a.txt"]);
+        run(&["commit", "-q", "-m", "first"]);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        run(&["add", "a.txt"]);
+        run(&["commit", "-q", "-m", "second"]);
+        let generation = Arc::new(AtomicU64::new(1));
+        let (requests, request_rx) = mpsc::channel();
+        let (result_tx, results) = mpsc::channel();
+        let _thread = spawn_git_facts_thread(dir.clone(), request_rx, result_tx, generation);
+        let _ = requests.send(GitRequest::Refresh {
+            generation: 1,
+            changed: Vec::new(),
+        });
+        let mut history = None;
+        while let Ok(result) = results.recv_timeout(Duration::from_secs(10)) {
+            if let GitResult::History {
+                commits,
+                magnitudes,
+                ..
+            } = result
+            {
+                history = Some((commits, magnitudes));
+                break;
+            }
+        }
+        let (commits, magnitudes) = history.expect("history result");
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].subject, "second");
+        assert_eq!(magnitudes.len(), 2);
+        assert_eq!(magnitudes[0].sha, commits[0].sha, "magnitudes align by sha");
+        assert_eq!(magnitudes[0].magnitude(), 2, "second adds two lines");
+        assert_eq!(
+            magnitudes[1].magnitude(),
+            1,
+            "the root commit counts its tree"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

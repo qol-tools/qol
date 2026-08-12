@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -345,10 +346,21 @@ impl DiffView {
                 GitResult::History {
                     generation,
                     commits,
+                    magnitudes,
                 } if generation == current => {
+                    let magnitudes_by_sha: HashMap<&str, u64> = magnitudes
+                        .iter()
+                        .map(|entry| (entry.sha.as_str(), entry.magnitude()))
+                        .collect();
                     let commits: Vec<ScrubCommit> = commits
                         .into_iter()
-                        .map(|entry| ScrubCommit::new(entry.sha, entry.subject))
+                        .map(|entry| {
+                            let magnitude = magnitudes_by_sha
+                                .get(entry.sha.as_str())
+                                .copied()
+                                .unwrap_or(0);
+                            ScrubCommit::with_magnitude(entry.sha, entry.subject, magnitude)
+                        })
                         .collect();
                     if commits != self.scrub_commits {
                         self.diff_cache.clear();

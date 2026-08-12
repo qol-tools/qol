@@ -8,18 +8,22 @@ const STRIP_HEIGHT: f32 = 28.0;
 const SLOT_PX: f32 = 18.0;
 const DOT_PX: f32 = 8.0;
 const SELECTED_DOT_PX: f32 = 12.0;
+const DOT_MAX_PX: f32 = 16.0;
+const MAGNITUDE_CLAMP: u64 = 5_000;
 
 const STRIP_BG: u32 = 0x11141a;
 const STRIP_BORDER: u32 = 0x2f3644;
 const ACCENT: u32 = 0xff8c42;
 const FOCUS_RING: u32 = 0x5fd0e8;
 const DOT_OLDEST: u32 = 0x3a435c;
+const HOT_WHITE: u32 = 0xfff2e0;
 const EMPTY_TEXT: u32 = 0x67748f;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Commit {
     pub sha: String,
     pub subject: String,
+    pub magnitude: u64,
 }
 
 impl Commit {
@@ -27,6 +31,19 @@ impl Commit {
         Self {
             sha: sha.into(),
             subject: subject.into(),
+            magnitude: 0,
+        }
+    }
+
+    pub fn with_magnitude(
+        sha: impl Into<String>,
+        subject: impl Into<String>,
+        magnitude: u64,
+    ) -> Self {
+        Self {
+            sha: sha.into(),
+            subject: subject.into(),
+            magnitude,
         }
     }
 }
@@ -152,7 +169,25 @@ fn age_color(index: usize, len: usize) -> u32 {
     } else {
         1.0 - index as f32 / (len - 1) as f32
     };
-    lerp(DOT_OLDEST, ACCENT, t)
+    heat_color(t)
+}
+
+fn heat_color(t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        lerp(DOT_OLDEST, ACCENT, t * 2.0)
+    } else {
+        lerp(ACCENT, HOT_WHITE, (t - 0.5) * 2.0)
+    }
+}
+
+fn dot_size(magnitude: u64) -> f32 {
+    if magnitude == 0 {
+        return DOT_PX;
+    }
+    let clamped = magnitude.min(MAGNITUDE_CLAMP) as f32;
+    let t = clamped.ln_1p() / (MAGNITUDE_CLAMP as f32).ln_1p();
+    DOT_PX + (DOT_MAX_PX - DOT_PX) * t
 }
 
 fn lerp(from: u32, to: u32, t: f32) -> u32 {
@@ -302,10 +337,15 @@ impl ScrubberView {
         if focused {
             slot = slot.border_1().border_color(rgb(FOCUS_RING));
         }
-        let dot_size = if selected { SELECTED_DOT_PX } else { DOT_PX };
+        let magnitude = self.state.commits[index].magnitude;
+        let size = if selected {
+            dot_size(magnitude).max(SELECTED_DOT_PX)
+        } else {
+            dot_size(magnitude)
+        };
         let mut dot = div()
-            .w(px(dot_size))
-            .h(px(dot_size))
+            .w(px(size))
+            .h(px(size))
             .rounded_full()
             .bg(rgb(age_color(index, self.state.len())));
         if selected {
@@ -523,11 +563,12 @@ mod tests {
     }
 
     #[test]
-    fn age_color_is_brightest_for_the_newest_commit() {
-        assert_eq!(age_color(0, 5), ACCENT);
+    fn age_color_is_white_hot_for_the_newest_commit() {
+        assert_eq!(age_color(0, 5), HOT_WHITE);
         assert_eq!(age_color(4, 5), DOT_OLDEST);
-        assert_eq!(age_color(0, 1), ACCENT, "a single commit is the newest");
+        assert_eq!(age_color(0, 1), HOT_WHITE, "a single commit is the newest");
         assert_eq!(age_color(0, 0), DOT_OLDEST, "an empty strip renders dim");
+        assert_eq!(age_color(2, 5), ACCENT, "the strip midpoint burns ember");
         let luminance = |color: u32| {
             let red = (color >> 16) & 0xff;
             let green = (color >> 8) & 0xff;
@@ -546,6 +587,57 @@ mod tests {
                 "luminance dims with age at index {index}"
             );
         }
+    }
+
+    #[test]
+    fn heat_color_walks_blue_to_ember_to_white() {
+        assert_eq!(heat_color(0.0), DOT_OLDEST);
+        assert_eq!(heat_color(0.5), ACCENT);
+        assert_eq!(heat_color(1.0), HOT_WHITE);
+        assert_eq!(heat_color(-1.0), DOT_OLDEST, "cold clamps");
+        assert_eq!(heat_color(2.0), HOT_WHITE, "hot clamps");
+        let blue = heat_color(0.25);
+        assert!(
+            (blue >> 16) & 0xff < (ACCENT >> 16) & 0xff,
+            "the cool half stays below ember red"
+        );
+        let hot = heat_color(0.75);
+        assert!(hot >= ACCENT, "the hot half burns at or past ember");
+        assert_eq!(hot, lerp(ACCENT, HOT_WHITE, 0.5));
+    }
+
+    #[test]
+    fn dot_size_follows_a_clamped_log_curve() {
+        assert_eq!(
+            dot_size(0),
+            DOT_PX,
+            "unknown magnitude renders the base dot"
+        );
+        assert!(dot_size(1) > DOT_PX);
+        assert!(dot_size(10) > dot_size(5));
+        assert!(dot_size(100) > dot_size(10));
+        assert!(dot_size(1_000) > dot_size(100));
+        assert_eq!(
+            dot_size(MAGNITUDE_CLAMP),
+            DOT_MAX_PX,
+            "the clamp reaches the largest dot"
+        );
+        assert_eq!(
+            dot_size(MAGNITUDE_CLAMP * 10),
+            DOT_MAX_PX,
+            "oversized commits stay clamped"
+        );
+        assert!(dot_size(10) - dot_size(5) < dot_size(500) - dot_size(250));
+    }
+
+    #[test]
+    fn commit_magnitude_defaults_to_zero() {
+        let plain = Commit::new("aaa", "plain");
+        assert_eq!(plain.magnitude, 0, "legacy construction stays cold");
+        let hot = Commit::with_magnitude("aaa", "hot", 42);
+        assert_eq!(hot.magnitude, 42);
+        assert_eq!(hot.sha, "aaa");
+        assert_eq!(hot.subject, "hot");
     }
 
     #[test]

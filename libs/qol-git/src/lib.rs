@@ -52,6 +52,19 @@ pub struct LogEntry {
     pub authored_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogStatEntry {
+    pub sha: String,
+    pub added: u64,
+    pub deleted: u64,
+}
+
+impl LogStatEntry {
+    pub fn magnitude(&self) -> u64 {
+        self.added + self.deleted
+    }
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, Error> {
     let output = Command::new("git")
         .arg("--no-pager")
@@ -122,6 +135,52 @@ pub fn log(repo: impl AsRef<Path>, n: usize) -> Result<Vec<LogEntry>, Error> {
         .filter(|line| !line.is_empty())
         .map(parse_log_line)
         .collect()
+}
+
+pub fn log_with_stats(
+    repo: impl AsRef<Path>,
+    n: usize,
+) -> Result<(Vec<LogEntry>, Vec<LogStatEntry>), Error> {
+    let format = "%H%x09%an%x09%at%x09%s";
+    let out = run_git(
+        repo.as_ref(),
+        &[
+            "log",
+            "-n",
+            &n.to_string(),
+            "--numstat",
+            &format!("--format={format}"),
+        ],
+    )?;
+    let mut entries = Vec::new();
+    let mut stats = Vec::new();
+    for line in out.lines().filter(|line| !line.is_empty()) {
+        if is_full_sha(line) {
+            entries.push(parse_log_line(line)?);
+            let sha = entries.last().expect("just pushed").sha.clone();
+            stats.push(LogStatEntry {
+                sha,
+                added: 0,
+                deleted: 0,
+            });
+            continue;
+        }
+        let Some(current) = stats.last_mut() else {
+            continue;
+        };
+        match parse_numstat_line(line) {
+            Ok(entry) => {
+                current.added += entry.added.unwrap_or(0);
+                current.deleted += entry.deleted.unwrap_or(0);
+            }
+            Err(error) => eprintln!("qol-git: skipping unparsable numstat line: {error}"),
+        }
+    }
+    Ok((entries, stats))
+}
+
+fn is_full_sha(line: &str) -> bool {
+    line.len() >= 40 && line.as_bytes()[..40].iter().all(u8::is_ascii_hexdigit)
 }
 
 fn parse_status_line(line: &str) -> Result<StatusEntry, Error> {
@@ -440,5 +499,74 @@ mod tests {
         let all = log(&repo, 10).expect("log");
         assert_eq!(all.len(), 3);
         assert_eq!(all[2].subject, "first");
+    }
+
+    #[test]
+    fn log_with_stats_aligns_entries_and_totals() {
+        let repo = repo("log-stats");
+        write(&repo, "a.txt", b"1\n2\n");
+        stage_all(&repo);
+        commit(&repo, "first");
+        write(&repo, "a.txt", b"1\n2\n3\n");
+        write(&repo, "blob.bin", &[0u8, 1, 2]);
+        stage_all(&repo);
+        commit(&repo, "second");
+        write(&repo, "a.txt", b"1\n2\n3\n4\n5\n");
+        write(&repo, "c.txt", b"x\n");
+        stage_all(&repo);
+        commit(&repo, "third");
+        let (entries, stats) = log_with_stats(&repo, 10).expect("log stats");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].subject, "third");
+        assert_eq!(stats.len(), 3);
+        for (entry, stat) in entries.iter().zip(&stats) {
+            assert_eq!(stat.sha, entry.sha, "stats align with log entries");
+        }
+        assert_eq!(
+            stats[0].magnitude(),
+            3,
+            "third adds two lines to a.txt and one to c.txt"
+        );
+        assert_eq!(
+            stats[1].magnitude(),
+            1,
+            "second adds one text line; binary changes count zero"
+        );
+        assert_eq!(
+            stats[2].magnitude(),
+            2,
+            "the root commit counts its full tree"
+        );
+        let limited = log_with_stats(&repo, 2).expect("limited log stats");
+        assert_eq!(limited.1.len(), 2);
+        assert_eq!(limited.1[0].sha, stats[0].sha, "limit applies to stats too");
+    }
+
+    #[test]
+    fn log_with_stats_counts_merge_commits_as_zero() {
+        let repo = repo("log-stats-merge");
+        write(&repo, "a.txt", b"1\n");
+        stage_all(&repo);
+        commit(&repo, "one");
+        git(&repo, &["checkout", "-q", "-b", "side"]);
+        write(&repo, "b.txt", b"2\n");
+        stage_all(&repo);
+        commit(&repo, "side");
+        git(&repo, &["checkout", "-q", "main"]);
+        write(&repo, "c.txt", b"3\n");
+        stage_all(&repo);
+        commit(&repo, "main");
+        git(&repo, &["merge", "-q", "--no-ff", "side", "-m", "merge"]);
+        let (entries, stats) = log_with_stats(&repo, 10).expect("log stats");
+        assert_eq!(entries[0].subject, "merge");
+        assert_eq!(entries.len(), 4);
+        assert_eq!(
+            stats[0].magnitude(),
+            0,
+            "merge diffs are not shown without --cc"
+        );
+        assert_eq!(stats[1].magnitude(), 1, "main adds one line");
+        assert_eq!(stats[2].magnitude(), 1, "side adds one line");
+        assert_eq!(stats[3].magnitude(), 1, "root commit counts its tree");
     }
 }
