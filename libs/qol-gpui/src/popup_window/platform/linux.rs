@@ -424,14 +424,47 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
             return true;
         }
     }
-    let _ = conn.unmap_window(wid);
-    let _ = conn.flush();
+    let (unmapped, attempts) = hide_by_unmap(&conn, wid);
     store_card(title, wid, None);
     qol_runtime::probe!(
         "HIDE_WIN",
-        "title={title} wid={wid} path=unmap reason={reason}"
+        "title={title} wid={wid} path=unmap unmapped={unmapped} attempts={attempts} reason={reason}"
     );
-    true
+    unmapped
+}
+
+const UNMAP_VERIFY_ATTEMPTS: u32 = 3;
+const UNMAP_VERIFY_RETRY_MS: [u64; 2] = [2, 10];
+
+fn map_state_of(conn: &impl Connection, wid: u32) -> Option<MapState> {
+    conn.get_window_attributes(wid)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|attrs| attrs.map_state)
+}
+
+fn unmap_and_verify(conn: &impl Connection, wid: u32) -> bool {
+    let sent = conn.unmap_window(wid).is_ok();
+    let flushed = conn.flush().is_ok();
+    sent && flushed && map_state_of(conn, wid) != Some(MapState::VIEWABLE)
+}
+
+fn hide_by_unmap(first: &impl Connection, wid: u32) -> (bool, u32) {
+    if unmap_and_verify(first, wid) {
+        return (true, 1);
+    }
+    for attempt in 1..UNMAP_VERIFY_ATTEMPTS {
+        std::thread::sleep(Duration::from_millis(
+            UNMAP_VERIFY_RETRY_MS[(attempt - 1) as usize],
+        ));
+        let Ok((conn, _)) = x11rb::connect(None) else {
+            return (false, attempt + 1);
+        };
+        if unmap_and_verify(&conn, wid) {
+            return (true, attempt + 1);
+        }
+    }
+    (false, UNMAP_VERIFY_ATTEMPTS)
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
