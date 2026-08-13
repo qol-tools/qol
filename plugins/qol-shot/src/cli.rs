@@ -22,7 +22,6 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 fn app(binary_name: &'static str) -> HeadlessApp {
     let app = HeadlessApp::new(PLUGIN_ID, binary_name)
         .about("Capture screenshots and record screen regions.")
-        .default_command(["record"])
         .command(record_command(binary_name))
         .command(screenshot_command(binary_name))
         .command(copy_command(binary_name))
@@ -315,7 +314,14 @@ mod tests {
     use qol_headless::{EXIT_SUCCESS, EXIT_USAGE};
 
     #[test]
-    fn no_args_default_to_record_help_topic() {
+    fn empty_argv_prints_usage_without_running() {
+        let execution = app(BINARY_NAME).execute(Vec::new());
+        assert_eq!(execution.exit_code, EXIT_USAGE);
+        assert!(execution.stderr.contains("No command supplied"));
+    }
+
+    #[test]
+    fn record_help_topic_is_registered() {
         let execution = app(BINARY_NAME).execute(vec!["help".to_string(), "record".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(execution.stdout.contains(&format!("{BINARY_NAME} record")));
