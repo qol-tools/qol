@@ -1,3 +1,4 @@
+pub mod field;
 pub mod overview;
 pub mod pipeline;
 pub mod scrubber;

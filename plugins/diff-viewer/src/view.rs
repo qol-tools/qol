@@ -26,6 +26,7 @@ use qol_gpui::surface::{DragGestureState, DRAG_THRESHOLD_PX};
 use qol_gpui::window_chrome::PanelChrome;
 use qol_gpui::WindowBar;
 
+use crate::field::{self, AshSpec, ConeSpec};
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
 use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
@@ -36,7 +37,7 @@ pub const WINDOW_WIDTH: f32 = 960.0;
 pub const WINDOW_HEIGHT: f32 = 640.0;
 const LIST_WIDTH: f32 = 340.0;
 const ROW_HEIGHT: f32 = 26.0;
-const LINE_HEIGHT: f32 = 18.0;
+pub const LINE_HEIGHT: f32 = 18.0;
 const FONT_SIZE: f32 = 13.0;
 const GLYPH_WIDTH: f32 = 12.0;
 const PIXELS_PER_NOTCH: f32 = 50.0;
@@ -44,7 +45,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const DIFF_TTL: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HEAT_TICK: Duration = Duration::from_secs(1);
-const TRANSITION_MS: Duration = Duration::from_millis(450);
+pub const TRANSITION_MS: Duration = Duration::from_millis(450);
 const MORPH_FADE: f32 = 0.4;
 const GHOST_DRIFT_PX: f32 = 8.0;
 const SLIDE_PX: f32 = 10.0;
@@ -160,6 +161,7 @@ enum DiffPane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Layout {
+    Field,
     Unified,
     Split,
     Wave,
@@ -218,6 +220,11 @@ pub struct DiffView {
     last_markers_diff: Option<Arc<FileDiff>>,
     last_markers_layout: Layout,
     wave_folded: bool,
+    field_folded: bool,
+    field_fit: usize,
+    field_epoch: Instant,
+    pending_cone: Option<(usize, usize)>,
+    cone: Option<ConeSpec>,
     font_family: SharedString,
     focus_handle: FocusHandle,
     scrubber_view: Entity<ScrubberView>,
@@ -272,7 +279,7 @@ impl DiffView {
             lines: Vec::new(),
             active_pane: ActivePane::Files,
             files_collapsed: false,
-            layout: Layout::Split,
+            layout: Layout::Field,
             pairs: Vec::new(),
             hunk_pair_starts: Vec::new(),
             hunk_line_starts: Vec::new(),
@@ -289,8 +296,13 @@ impl DiffView {
             unified_gutters: Vec::new(),
             side_gutters: Vec::new(),
             last_markers_diff: None,
-            last_markers_layout: Layout::Split,
+            last_markers_layout: Layout::Field,
             wave_folded: false,
+            field_folded: false,
+            field_fit: 1,
+            field_epoch: Instant::now(),
+            pending_cone: None,
+            cone: None,
             font_family: pick_monospace(cx),
             focus_handle: cx.focus_handle(),
             scrubber_view,
@@ -492,6 +504,8 @@ impl DiffView {
                         self.diff_cache.clear();
                     }
                     self.scrub_commits = commits;
+                    self.pending_cone = None;
+                    self.cone = None;
                     let commits = self.scrub_commits.clone();
                     self.scrubber_view.update(cx, |view, cx| {
                         view.set_commits(commits, cx);
@@ -559,8 +573,7 @@ impl DiffView {
         if self.last_scrub_selected == Some(selected) {
             return false;
         }
-        self.last_scrub_selected = Some(selected);
-        self.request_scrub_diff(selected);
+        self.arm_scrub_trail(selected);
         true
     }
 
@@ -568,9 +581,17 @@ impl DiffView {
         if self.last_scrub_selected == Some(index) {
             return false;
         }
-        self.last_scrub_selected = Some(index);
-        self.request_scrub_diff(index);
+        self.arm_scrub_trail(index);
         true
+    }
+
+    fn arm_scrub_trail(&mut self, index: usize) {
+        let old = self.last_scrub_selected;
+        self.last_scrub_selected = Some(index);
+        if let Some(old) = old {
+            self.pending_cone = Some((old, index));
+        }
+        self.request_scrub_diff(index);
     }
 
     fn request_scrub_diff(&mut self, index: usize) {
@@ -699,6 +720,11 @@ impl DiffView {
         if matches!(self.pane, DiffPane::Error(_)) {
             return;
         }
+        self.cone = self.pending_cone.take().map(|(from, to)| ConeSpec {
+            seq: self.transition_seq + 1,
+            from,
+            to,
+        });
         let old_lines = self.lines.clone();
         let plan = TransitionPlan::between(&old_lines, new_lines);
         let old_pair_of = old_pair_rows(&self.pairs, old_lines.len());
@@ -735,6 +761,7 @@ impl DiffView {
     }
 
     fn select_current_file(&mut self) {
+        self.pending_cone = None;
         let Some(path) = self.files.selected_path() else {
             return;
         };
@@ -771,18 +798,19 @@ impl DiffView {
             (ActivePane::Code, "down") | (ActivePane::Code, "j") => self.scroll_lines(1),
             (ActivePane::Code, "up") | (ActivePane::Code, "k") => self.scroll_lines(-1),
             (ActivePane::Code, "s") => {
-                self.layout = match self.layout {
-                    Layout::Unified => Layout::Split,
-                    Layout::Split => Layout::Wave,
-                    Layout::Wave => Layout::Unified,
-                };
+                self.layout = next_layout(self.layout);
                 self.wave_folded = false;
+                self.field_folded = false;
                 let max = self.row_count().saturating_sub(self.last_fit.max(1));
                 self.surface
                     .set_scroll_offset(self.surface.scroll_offset().min(max));
             }
-            (ActivePane::Code, "t") if self.layout == Layout::Wave => {
-                self.wave_folded = !self.wave_folded;
+            (ActivePane::Code, "t") if matches!(self.layout, Layout::Wave | Layout::Field) => {
+                if self.layout == Layout::Wave {
+                    self.wave_folded = !self.wave_folded;
+                } else {
+                    self.field_folded = !self.field_folded;
+                }
                 let lines = self.lines.clone();
                 self.begin_transition(&lines);
             }
@@ -834,7 +862,11 @@ impl DiffView {
                 .set_scroll_offset(target.clamp(0, max as isize) as usize);
             return;
         }
-        let max = self.row_count().saturating_sub(self.last_fit.max(1));
+        let fit = match self.layout {
+            Layout::Field if !self.field_folded => self.field_fit.max(1),
+            _ => self.last_fit.max(1),
+        };
+        let max = self.row_count().saturating_sub(fit);
         let target = self.surface.scroll_offset() as isize + delta;
         self.surface
             .set_scroll_offset(target.clamp(0, max as isize) as usize);
@@ -845,6 +877,7 @@ impl DiffView {
             Layout::Unified => self.lines.len(),
             Layout::Split => self.pairs.len(),
             Layout::Wave => self.lines.len(),
+            Layout::Field => self.lines.len(),
         }
     }
 
@@ -926,10 +959,10 @@ impl DiffView {
             .flex_1()
             .h_full()
             .overflow_hidden()
-            .bg(rgb(surface::CANVAS_BG))
             .on_scroll_wheel(cx.listener(Self::on_scroll));
         if let Some(error) = &self.facts_error {
             return pane
+                .bg(rgb(surface::CANVAS_BG))
                 .child(center_message(error, surface::ERROR_TEXT))
                 .into_any_element();
         }
@@ -944,6 +977,23 @@ impl DiffView {
                     .transition
                     .as_ref()
                     .map(|transition| transition.old_layout);
+                if matches!(self.layout, Layout::Field) && !self.field_folded {
+                    let scene = self.field_scene(window, cx, Vec::new());
+                    let message = div()
+                        .absolute()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .p_2()
+                        .text_color(rgb(surface::TEXT_MUTED))
+                        .child(message);
+                    return pane
+                        .bg(field::background())
+                        .child(scene)
+                        .child(message)
+                        .into_any_element();
+                }
                 let ghosts = match old_layout {
                     Some(Layout::Split) => self.split_ghost_layer(&text_style, None),
                     _ => div()
@@ -953,11 +1003,13 @@ impl DiffView {
                         .children(self.unified_ghosts(&text_style, None))
                         .into_any_element(),
                 };
-                pane.child(center_message(&message, surface::TEXT_MUTED))
+                pane.bg(rgb(surface::CANVAS_BG))
+                    .child(center_message(&message, surface::TEXT_MUTED))
                     .child(ghosts)
                     .into_any_element()
             }
             DiffPane::Error(error) => pane
+                .bg(rgb(surface::CANVAS_BG))
                 .child(center_message(&error.to_string(), surface::ERROR_TEXT))
                 .into_any_element(),
             DiffPane::Ready(_) => {
@@ -965,20 +1017,97 @@ impl DiffView {
                 let age = self.heat_age();
                 match self.layout {
                     Layout::Split => pane
+                        .bg(rgb(surface::CANVAS_BG))
                         .child(self.split_columns(&text_style, age))
                         .into_any_element(),
                     Layout::Unified => pane
+                        .bg(rgb(surface::CANVAS_BG))
                         .children(self.code_rows(&text_style, age))
                         .children(self.unified_ghosts(&text_style, age))
                         .into_any_element(),
                     Layout::Wave if self.wave_folded => pane
+                        .bg(rgb(surface::CANVAS_BG))
                         .children(self.code_rows(&text_style, age))
                         .children(self.unified_ghosts(&text_style, age))
                         .into_any_element(),
-                    Layout::Wave => pane.child(self.wave_pane(age)).into_any_element(),
+                    Layout::Wave => pane
+                        .bg(rgb(surface::CANVAS_BG))
+                        .child(self.wave_pane(age))
+                        .into_any_element(),
+                    Layout::Field if self.field_folded => pane
+                        .bg(field::background())
+                        .children(self.code_rows(&text_style, age))
+                        .children(self.unified_ghosts(&text_style, age))
+                        .into_any_element(),
+                    Layout::Field => pane
+                        .bg(field::background())
+                        .child(self.field_pane(window, cx))
+                        .into_any_element(),
                 }
             }
         }
+    }
+
+    fn field_pane(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let text_style = self.base_text_style(window);
+        let age = self.heat_age();
+        let rows = self.field_rows(&text_style, age);
+        self.field_scene(window, cx, rows)
+    }
+
+    fn field_scene(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        rows: Vec<AnyElement>,
+    ) -> AnyElement {
+        let age = self.heat_age();
+        let selected = self.scrubber_view.read(cx).state().selected();
+        let phase = age
+            .map(|age| age.as_secs_f32())
+            .unwrap_or_else(|| self.field_epoch.elapsed().as_secs_f32());
+        let pane_height = field::pane_height(window.viewport_size().height.to_f64() as f32);
+        let ash = self.active_transition().and_then(|transition| {
+            let removed: Vec<f32> = transition
+                .plan
+                .old
+                .iter()
+                .enumerate()
+                .filter(|(_, fate)| **fate == OldLineFate::Removed)
+                .map(|(index, _)| (index as f32 - transition.old_scroll as f32) * LINE_HEIGHT)
+                .collect();
+            (!removed.is_empty()).then_some(AshSpec {
+                seq: transition.seq,
+                removed_rows: removed,
+            })
+        });
+        let cone = self.active_transition().and_then(|transition| {
+            self.cone
+                .as_ref()
+                .filter(|cone| cone.seq == transition.seq)
+                .map(|cone| ConeSpec {
+                    seq: cone.seq,
+                    from: cone.from,
+                    to: cone.to,
+                })
+        });
+        field::scene(
+            rows,
+            &self.scrub_commits,
+            selected,
+            pane_height,
+            phase,
+            ash,
+            cone,
+        )
+    }
+
+    fn field_rows(&self, base: &TextStyle, age: Option<Duration>) -> Vec<AnyElement> {
+        let start = self.surface.scroll_offset();
+        let end = (start + self.field_fit.max(1)).min(self.lines.len());
+        (start..end)
+            .map(|index| self.code_row(index, base, age))
+            .collect()
     }
 
     fn wave_pane(&self, age: Option<Duration>) -> AnyElement {
@@ -1598,7 +1727,9 @@ impl Render for DiffView {
         {
             self.transition = None;
         }
-        self.last_fit = visible_fit(window.viewport_size().height.to_f64() as f32, LINE_HEIGHT);
+        let viewport_height = window.viewport_size().height.to_f64() as f32;
+        self.last_fit = visible_fit(viewport_height, LINE_HEIGHT);
+        self.field_fit = field::ribbon_fit(field::pane_height(viewport_height)).min(self.last_fit);
         self.update_overview(cx);
         if !self.rendered_once {
             self.rendered_once = true;
@@ -1678,7 +1809,7 @@ impl DiffView {
             let markers = match &self.pane {
                 DiffPane::Ready(diff) => {
                     let starts = match self.layout {
-                        Layout::Unified | Layout::Wave => &self.hunk_line_starts,
+                        Layout::Unified | Layout::Wave | Layout::Field => &self.hunk_line_starts,
                         Layout::Split => &self.hunk_pair_starts,
                     };
                     let total = self.row_count();
@@ -1729,6 +1860,15 @@ fn next_pane(active: ActivePane, files_collapsed: bool) -> ActivePane {
         next.other()
     } else {
         next
+    }
+}
+
+fn next_layout(layout: Layout) -> Layout {
+    match layout {
+        Layout::Unified => Layout::Split,
+        Layout::Split => Layout::Field,
+        Layout::Field => Layout::Unified,
+        Layout::Wave => Layout::Unified,
     }
 }
 
@@ -2113,6 +2253,19 @@ mod tests {
         assert_eq!(ActivePane::Files.other(), ActivePane::Code);
         assert_eq!(ActivePane::Code.other(), ActivePane::Scrubber);
         assert_eq!(ActivePane::Scrubber.other(), ActivePane::Files);
+    }
+
+    #[test]
+    fn layout_cycle_is_field_unified_split_and_wave_is_out() {
+        assert_eq!(next_layout(Layout::Field), Layout::Unified);
+        assert_eq!(next_layout(Layout::Unified), Layout::Split);
+        assert_eq!(next_layout(Layout::Split), Layout::Field);
+        assert_eq!(next_layout(Layout::Wave), Layout::Unified);
+        let mut layout = Layout::Field;
+        for _ in 0..9 {
+            layout = next_layout(layout);
+            assert_ne!(layout, Layout::Wave, "the wave never re-enters the cycle");
+        }
     }
 
     #[test]
