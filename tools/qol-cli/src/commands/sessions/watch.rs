@@ -41,6 +41,7 @@ struct WatchedRound {
     last_screen: Option<String>,
     last_change: Instant,
     stalled_reported: bool,
+    marker_seen: bool,
 }
 
 impl WatchedRound {
@@ -57,6 +58,7 @@ impl WatchedRound {
             last_screen: None,
             last_change: Instant::now(),
             stalled_reported: false,
+            marker_seen: false,
         })
     }
 }
@@ -113,7 +115,7 @@ pub(super) fn watch(
             if watched.is_empty() {
                 return Ok(());
             }
-            reconcile(pending, &mut watched, out)?;
+            reconcile(pending, &mut watched)?;
             if watched.is_empty() {
                 return Ok(());
             }
@@ -189,19 +191,56 @@ fn poll_round(
         }
     };
     if screen.contains(&round.marker) {
-        emit_completed(out, &round.session, &round.marker)?;
-        pending.observe(&round.binding, &round.marker, true)?;
-        pending.store_screen(&round.binding, &round.marker, screen_tail(&screen))?;
-        qol_runtime::probe!(
-            "CLI_SESSION_WATCH",
-            "event=completed session={} reads={}",
-            round.session,
-            round.reads
-        );
-        return Ok(RoundPoll {
-            keep: false,
-            changed: true,
-        });
+        match pending.pending_round(&round.binding)? {
+            None => {
+                return Ok(RoundPoll {
+                    keep: false,
+                    changed: false,
+                });
+            }
+            Some(current) if current.completed => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=collected session={} source=checkpoint",
+                    round.session
+                );
+                return Ok(RoundPoll {
+                    keep: false,
+                    changed: false,
+                });
+            }
+            Some(current) if current.completion_marker != round.marker => {
+                round.marker_seen = false;
+            }
+            Some(_) => {
+                if round.marker_seen {
+                    emit_completed(out, &round.session, &round.marker)?;
+                    pending.observe(&round.binding, &round.marker, true)?;
+                    pending.store_screen(&round.binding, &round.marker, screen_tail(&screen))?;
+                    qol_runtime::probe!(
+                        "CLI_SESSION_WATCH",
+                        "event=completed session={} reads={}",
+                        round.session,
+                        round.reads
+                    );
+                    return Ok(RoundPoll {
+                        keep: false,
+                        changed: true,
+                    });
+                }
+                round.marker_seen = true;
+                if round.last_screen.as_deref() != Some(screen.as_str()) {
+                    round.last_screen = Some(screen.clone());
+                    round.last_change = Instant::now();
+                }
+                return Ok(RoundPoll {
+                    keep: true,
+                    changed: true,
+                });
+            }
+        }
+    } else {
+        round.marker_seen = false;
     }
     let mut changed = false;
     if round.last_screen.as_deref() != Some(screen.as_str()) {
@@ -226,21 +265,16 @@ fn poll_round(
     })
 }
 
-fn reconcile(
-    pending: &PendingBridgeStore,
-    watched: &mut Vec<WatchedRound>,
-    out: &mut dyn Write,
-) -> Result<()> {
+fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> Result<()> {
     let mut remaining = Vec::with_capacity(watched.len());
     for mut round in std::mem::take(watched) {
         match pending.pending_round(&round.binding)? {
             None => {}
             Some(current) => {
                 if current.completed {
-                    emit_completed(out, &round.session, &current.completion_marker)?;
                     qol_runtime::probe!(
                         "CLI_SESSION_WATCH",
-                        "event=completed session={} source=checkpoint",
+                        "event=collected session={} source=checkpoint",
                         round.session
                     );
                 } else {
@@ -250,6 +284,7 @@ fn reconcile(
                         round.last_screen = None;
                         round.last_change = Instant::now();
                         round.stalled_reported = false;
+                        round.marker_seen = false;
                     }
                     remaining.push(round);
                 }
@@ -775,11 +810,138 @@ mod tests {
             .iter()
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
-        assert_eq!(full, 26);
+        assert_eq!(full, 27);
         assert_eq!(ls, 2);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
+    }
+
+    #[test]
+    fn completed_fires_on_the_second_consecutive_marker_poll() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec![
+                "done\nQOL_BRIDGE_DONE_round".to_owned(),
+                "done\nQOL_BRIDGE_DONE_round".to_owned(),
+            ],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["session"], "v1:fake:7:100");
+        assert_eq!(events[0]["marker"], "QOL_BRIDGE_DONE_round");
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "the first marker poll must not emit; the second confirms"
+        );
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed);
+    }
+
+    #[test]
+    fn completed_checkpoint_at_detection_stays_silent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        pending
+            .observe(&binding, "QOL_BRIDGE_DONE_round", true)
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_round".to_owned()],
+        );
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        assert!(out.is_empty(), "a collected round must not be re-announced");
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed);
+    }
+
+    #[test]
+    fn bridge_completion_between_polls_stays_silent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = Arc::new(store(&root));
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_round".to_owned()],
+        );
+        let (terminals, backend) = harness(backend);
+        let out = Arc::new(Mutex::new(Vec::new()));
+        let thread_pending = Arc::clone(&pending);
+        let thread_terminals = terminals;
+        let thread_out = Arc::clone(&out);
+        let handle = std::thread::spawn(move || {
+            let thread_locks = SpawnLocks::with_dir(root.path().join("spawn-locks"));
+            watch(
+                &thread_terminals,
+                &thread_pending,
+                &thread_locks,
+                &["v1:fake:7:100".to_owned()],
+                &mut *thread_out.lock().unwrap(),
+                WatchConfig {
+                    poll_base: Duration::from_millis(50),
+                    poll_cap: Duration::from_millis(50),
+                    stall_after: Duration::from_secs(3600),
+                },
+            )
+            .unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if !backend.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "watcher never polled");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        pending
+            .observe(&binding, "QOL_BRIDGE_DONE_round", true)
+            .unwrap();
+        handle.join().unwrap();
+
+        let events = lines(&out.lock().unwrap());
+        assert!(
+            events.is_empty(),
+            "a bridge that collected the round must win: {events:?}"
+        );
     }
 
     #[test]

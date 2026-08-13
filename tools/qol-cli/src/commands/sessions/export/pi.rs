@@ -249,6 +249,10 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
         await startWatcher(ctx);
         text = `spawned session ${outcome.session} in the background (${outcome.tool}, key ${outcome.key}); round queued, you will be woken when it completes`;
       } else {
+        if (outcome.task_submitted === true) {
+          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
+          await startWatcher(ctx);
+        }
         text = outcome.reused
           ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
           : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`
@@ -461,6 +465,25 @@ mod tests {
         assert!(EXECUTE_SPAWN.contains("await startWatcher(ctx)"));
         assert!(EXECUTE_SPAWN.contains("round queued, you will be woken when it completes"));
         assert!(source.contains("watch-owner-${sessionId}.json"));
+    }
+
+    #[test]
+    fn pi_adapter_watches_foreground_and_reuse_spawns_that_open_a_round() {
+        let source = pi_extension().expect("render");
+        assert!(EXECUTE_SPAWN.contains("if (outcome.task_submitted === true) {"));
+        assert!(EXECUTE_SPAWN.contains(
+            "if (outcome.task_submitted === true) {\n          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);\n          await startWatcher(ctx);\n        }\n        text = outcome.reused"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "`reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "`spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "outcome.task_submitted ? \"; first round delivered, wait with session_bridge (omit task)\""
+        ));
+        assert!(source.contains("await startWatcher(ctx)"));
     }
 
     #[test]
