@@ -37,7 +37,7 @@ pub(crate) fn pre_create_cached(
         titles,
         kind,
     )));
-    let Some(handle) = open_window(selector, state.clone(), false, true, true, cx) else {
+    let Some(handle) = open_window(selector, state.clone(), false, true, false, cx) else {
         qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=failed");
         return None;
     };
