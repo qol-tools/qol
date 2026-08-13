@@ -98,6 +98,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     loopPhase = LOOP_PHASES.has(restored) ? restored : "idle";
     loopFinalReport = typeof entry?.data?.final_report === "string" ? entry.data.final_report : "";
     if (loopPhase === "waiting") setLoopPhase("paused");
+    if (loopPhase === "closing") setLoopPhase("idle");
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -387,6 +388,7 @@ mod tests {
         assert!(source.contains("let closingFollowUpSent = false;"));
         assert!(source.contains("if (!closingFollowUpSent) {"));
         assert!(source.contains("closingFollowUpSent = true;"));
+        assert!(source.contains("if (loopPhase === \"closing\") setLoopPhase(\"idle\")"));
         assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
     }
 
