@@ -249,6 +249,10 @@ impl ScreenReader for KittyBackend {
         )?;
         self.read_screen_command(target)
     }
+
+    fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.read_screen_command(target)
+    }
 }
 
 impl SessionFocus for KittyBackend {
@@ -594,10 +598,10 @@ mod tests {
     };
     use crate::cli::{CliLaunchProgram, CliToolId};
     use crate::{
-        kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionCloser,
-        SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity, SpawnKey,
-        SpawnRequest, SpawnSurface, TerminalBackend, TerminalError, TerminalSessionService,
-        TerminalSnapshot, TextInput,
+        kitty::backend_id, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities,
+        SessionCloser, SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity,
+        SpawnKey, SpawnRequest, SpawnSurface, TerminalBackend, TerminalError,
+        TerminalSessionService, TerminalSnapshot, TextInput,
     };
 
     type RecordedCall = (Option<String>, Vec<String>, Option<String>);
@@ -974,6 +978,22 @@ mod tests {
         assert_eq!(calls[0].1, ["@", "ls"]);
         assert_eq!(
             calls[1].1,
+            ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn relaxed_screen_reads_skip_discovery_and_the_capability_recheck() {
+        let runner = FakeRunner::with_outputs(vec![success("screen".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        assert_eq!(backend.read_screen_relaxed(&target).unwrap(), "screen");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
         );
     }

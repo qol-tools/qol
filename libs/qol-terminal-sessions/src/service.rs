@@ -12,6 +12,10 @@ pub trait SessionInventory {
 
 pub trait ScreenReader {
     fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError>;
+
+    fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.read_screen(target)
+    }
 }
 
 pub trait SessionFocus {
@@ -211,6 +215,11 @@ impl TerminalSessionService {
 impl ScreenReader for TerminalSessionService {
     fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.backend_for(target.session_id())?.read_screen(target)
+    }
+
+    fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.backend_for(target.session_id())?
+            .read_screen_relaxed(target)
     }
 }
 
