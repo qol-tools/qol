@@ -834,10 +834,10 @@ impl DiffView {
                 {
                     return;
                 }
-                let keystroke = event.keystroke.clone();
-                let handle = self.scrubber_view.read(cx).focus_handle(cx);
-                window.focus(&handle);
-                window.dispatch_keystroke(keystroke, cx);
+                let delta: isize = if key == "left" { -1 } else { 1 };
+                self.scrubber_view.update(cx, |view, cx| {
+                    view.step_selection(delta, cx);
+                });
             }
             "j" => self.scroll_lines(1),
             "k" => self.scroll_lines(-1),

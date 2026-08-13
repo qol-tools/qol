@@ -265,6 +265,19 @@ impl ScrubberView {
         cx.notify();
     }
 
+    pub fn step_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let before = self.state.selected();
+        if delta < 0 {
+            self.state.prev();
+        } else {
+            self.state.next();
+        }
+        if self.state.selected() != before {
+            self.fire_select(cx);
+        }
+        cx.notify();
+    }
+
     fn confirm(&mut self, cx: &mut Context<Self>) {
         if let Some(callback) = &self.on_confirm {
             callback(cx);
@@ -280,27 +293,13 @@ impl ScrubberView {
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         match key {
-            "left" if !self.state.is_empty() => {
-                let before = self.state.selected();
-                self.state.prev();
-                if self.state.selected() != before {
-                    self.fire_select(cx);
-                }
-            }
-            "right" if !self.state.is_empty() => {
-                let before = self.state.selected();
-                self.state.next();
-                if self.state.selected() != before {
-                    self.fire_select(cx);
-                }
-            }
+            "left" if !self.state.is_empty() => self.step_selection(-1, cx),
+            "right" if !self.state.is_empty() => self.step_selection(1, cx),
             "enter" | "return" => {
                 self.confirm(cx);
-                return;
             }
-            _ => return,
+            _ => {}
         }
-        cx.notify();
     }
 
     fn begin_drag(&mut self, index: usize, x: f32, cx: &mut Context<Self>) {
