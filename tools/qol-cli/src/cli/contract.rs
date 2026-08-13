@@ -201,7 +201,7 @@ fn app() -> HeadlessApp {
                 "Session rows or bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
             )
-            .detail("The agent surface is sessions_list, session_spawn, session_bridge, and session_loop_close.")
+            .detail("The agent surface is sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close.")
             .detail("spawn launches a tagged harness for a registered tool or reuses its live match under the same key.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
             .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
@@ -218,16 +218,24 @@ fn app() -> HeadlessApp {
             .subcommand(command(
                 "spawn",
                 "Launch a tagged tool session or reuse its live match.",
-                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]",
-                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, and surface. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab.",
+                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]",
+                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, surface, model, and title. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab; an explicit --model overrides the spawned session's model, with spawn_model in the same file as the fallback. --title names the new tab (the lane key by default); --task delivers the first round at spawn time so the round is already open when the command returns.",
                 "Spawn JSON on stdout; diagnostics on stderr.",
-                "Exits non-zero on orchestration, identity, capability, or readiness failure.",
+                "Exits non-zero on orchestration, identity, capability, readiness, or task delivery failure.",
+            ))
+            .subcommand(command(
+                "submit",
+                "Deliver one bounded task and return with the round open.",
+                "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]",
+                "Submits exactly once with a generated completion signal and returns immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. Refuses when a round is already pending on that session; pass the reviewed completion_marker as --acknowledge-marker to start the next round. Wait for the completion with `qol sessions bridge <session>` (no task) or resume.",
+                "Submit JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation or delivery failure; the round is open only when delivery is observed.",
             ))
             .subcommand(command(
                 "bridge",
                 "Submit and await one bounded implementation task.",
-                "qol sessions bridge <session> <task...> [--timeout-ms N]",
-                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON. Timeout defaults to 24h.",
+                "qol sessions bridge <session> [<task...>] [--timeout-ms N]",
+                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON. Without a task it re-attaches to the pending round and waits for its completion marker. Timeout defaults to 24h.",
                 "Bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on validation or delivery failure; a timeout returns completed=false.",
             ))
@@ -235,9 +243,17 @@ fn app() -> HeadlessApp {
                 "next",
                 "Print the exact next command for each open bridge round.",
                 "qol sessions next [<session>] [--json]",
-                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
                 "Round phases and commands on stdout.",
                 "Exits non-zero when the bridge state cannot be read.",
+            ))
+            .subcommand(command(
+                "discard",
+                "Drop the checkpoint of a round whose terminal is gone.",
+                "qol sessions discard <session>",
+                "Removes the pending-bridge checkpoint of a session that no longer has a live terminal (verified via discovery); it refuses a live session, refuses when no checkpoint exists, and never touches last-send state or spawn locks. The session token comes from `qol sessions next`, which prints phase=gone with the exact discard command for orphaned rounds.",
+                "Removal confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when the session is live, has no checkpoint, or discovery fails.",
             ))
             .subcommand(command(
                 "resume",
@@ -260,7 +276,7 @@ fn app() -> HeadlessApp {
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_bridge, and session_loop_close. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

@@ -515,6 +515,7 @@ fn ghost_window_options(placement: &WindowPlacement, mode: GhostOpenMode) -> Win
         window_decorations: Some(ghost_window_decorations(false)),
         kind: ghost_window_kind(),
         focus: mode.requests_focus(),
+        show: mode == GhostOpenMode::Interactive,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),

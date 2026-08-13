@@ -2,6 +2,8 @@ use crate::features::plugin_store::release_assets::{resolve_asset_pattern, Platf
 use crate::plugins::manifest::BinaryDependency;
 use crate::version::normalize_semver_tag;
 
+pub(crate) const RELEASES_PER_PAGE: usize = 100;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PluginSource {
     pub(crate) name: String,
@@ -48,8 +50,8 @@ impl PluginSource {
 
     pub(crate) fn releases_api_url(&self) -> String {
         format!(
-            "https://api.github.com/repos/{}/releases?per_page=100",
-            self.repo
+            "https://api.github.com/repos/{}/releases?per_page={}",
+            self.repo, RELEASES_PER_PAGE
         )
     }
 
@@ -163,7 +165,12 @@ where
 {
     release_tags
         .into_iter()
-        .find(|tag| version_from_plugin_tag(tag, plugin_id).is_some())
+        .filter_map(|tag| {
+            let version = version_from_plugin_tag(tag, plugin_id)?;
+            Some((tag, semver::Version::parse(&version).ok()?))
+        })
+        .max_by(|a, b| a.1.cmp(&b.1))
+        .map(|(tag, _)| tag)
 }
 
 pub(super) fn required_release_asset_names(
@@ -359,12 +366,12 @@ mod tests {
     }
 
     #[test]
-    fn select_release_tag_picks_newest_first_matching_prefix() {
+    fn select_release_tag_picks_max_semver_regardless_of_list_order() {
         let tags = [
-            "qol-tray-v3.10.1",
-            "plugin-launcher-v0.4.0",
-            "plugin-alt-tab-v1.2.3",
             "plugin-alt-tab-v1.2.2",
+            "plugin-launcher-v0.4.0",
+            "qol-tray-v3.10.1",
+            "plugin-alt-tab-v1.2.3",
             "plugin-launcher-v0.3.9",
         ];
 
@@ -372,7 +379,7 @@ mod tests {
         assert_eq!(
             alt_tab,
             Some("plugin-alt-tab-v1.2.3"),
-            "must pick the first (newest) matching tag, not the second-newest"
+            "must pick the maximum matching version, not the first match in list order"
         );
 
         let launcher = select_release_tag(tags.iter().copied(), "plugin-launcher");
@@ -384,6 +391,48 @@ mod tests {
 
         let missing = select_release_tag(tags.iter().copied(), "plugin-keyremap");
         assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn select_release_tag_orders_by_semver_not_lexicographic() {
+        let tags = ["plugin-launcher-v0.9.0", "plugin-launcher-v0.10.0"];
+        let got = select_release_tag(tags.iter().copied(), "plugin-launcher");
+        assert_eq!(
+            got,
+            Some("plugin-launcher-v0.10.0"),
+            "0.10.0 must beat 0.9.0 even though it sorts earlier lexicographically"
+        );
+    }
+
+    #[test]
+    fn select_release_tag_prefers_stable_over_prerelease() {
+        let tags = [
+            "plugin-alt-tab-v1.2.3-beta.1",
+            "plugin-alt-tab-v1.2.3",
+            "plugin-alt-tab-v1.2.2",
+        ];
+        let got = select_release_tag(tags.iter().copied(), "plugin-alt-tab");
+        assert_eq!(got, Some("plugin-alt-tab-v1.2.3"));
+    }
+
+    #[test]
+    fn select_release_tag_finds_max_buried_beyond_one_hundred_tags() {
+        let mut tags: Vec<String> = (0..=139)
+            .map(|i| format!("plugin-filler-v{i}.0.0"))
+            .collect();
+        tags[100] = "plugin-target-v1.0.0".to_string();
+        tags[130] = "plugin-target-v2.0.0".to_string();
+
+        let got = select_release_tag(tags.iter().map(|t| t.as_str()), "plugin-target");
+        assert_eq!(
+            got,
+            Some("plugin-target-v2.0.0"),
+            "selection must not depend on list position; v2.0.0 buried at index 130 wins over v1.0.0 at index 100"
+        );
+        assert_eq!(
+            select_release_tag(tags.iter().map(|t| t.as_str()), "plugin-filler"),
+            Some("plugin-filler-v139.0.0")
+        );
     }
 
     #[test]

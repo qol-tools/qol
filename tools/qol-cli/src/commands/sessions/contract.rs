@@ -112,8 +112,43 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "description": "tab or os-window; defaults to the spawn_surface config, then tab",
                         "enum": ["tab", "os-window"],
                     },
+                    "model": {
+                        "type": "string",
+                        "description": "Model override for the spawned session (e.g. deepseek-v4-pro); beats the spawn_model config",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Tab title for the spawned session; defaults to the lane key",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Bounded first-round task delivered at spawn time; the round is open when the call returns and session_bridge (no task) waits for it",
+                    },
                 },
                 "required": ["tool", "cwd", "key"],
+            }),
+        },
+        ToolSpec {
+            name: "session_submit",
+            label: "Submit a task without waiting",
+            description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Stable session token from sessions_list",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Bounded implementation task to submit exactly once",
+                    },
+                    "acknowledge_marker": {
+                        "type": "string",
+                        "description": "Completion marker from the last reviewed completed bridge; required to submit a new round instead of recovering the prior response",
+                    },
+                },
+                "required": ["session", "task"],
             }),
         },
         ToolSpec {
@@ -129,14 +164,14 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "task": {
                         "type": "string",
-                        "description": "Bounded implementation task to submit exactly once after any pending response is acknowledged",
+                        "description": "Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the round a prior session_submit or spawn task left open",
                     },
                     "acknowledge_marker": {
                         "type": "string",
                         "description": "Completion marker from the last reviewed completed bridge; required to submit the next round instead of recovering the prior response",
                     },
                 },
-                "required": ["session", "task"],
+                "required": ["session"],
             }),
         },
         ToolSpec {
@@ -215,6 +250,7 @@ mod tests {
             [
                 "sessions_list",
                 "session_spawn",
+                "session_submit",
                 "session_bridge",
                 "session_loop_close",
                 "session_close"

@@ -9,6 +9,10 @@ pub(crate) struct ProcessTreeGuard {
     _state: Mutex<()>,
 }
 
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {}
+}
+
 pub(crate) struct PreparedSpawn;
 
 fn unsupported() -> io::Error {

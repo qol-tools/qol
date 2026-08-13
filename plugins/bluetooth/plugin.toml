@@ -3,7 +3,7 @@ id = "plugin-bluetooth"
 uid = "c30275fa-eb76-42af-bdce-2e7596976fba"
 name = "Bluetooth"
 description = "Reliably reconnect the Bluetooth devices you choose"
-version = "0.26.2"
+version = "0.26.5"
 author = "KMRH47"
 platforms = ["linux"]
 

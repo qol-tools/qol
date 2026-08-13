@@ -232,6 +232,7 @@ fn seal_completed_tree(guard: &crate::ProcessTreeGuard) -> Result<(), GuardedWai
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", windows))]
     use crate::CapturedOutput;
     use std::io::Write;
 

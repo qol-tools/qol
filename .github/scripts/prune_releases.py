@@ -16,12 +16,18 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from urllib.parse import quote
 
 MUTATION_PAUSE_SECONDS = 0.5
 RETRY_PAUSE_SECONDS = 30
 RETRIES = 3
 
 TAG_PATTERN = re.compile(r"^(?P<component>.+)-v(?P<version>\d+\.\d+\.\d+)$")
+RULE_VIOLATION_MARKER = "Repository rule violations found"
+
+
+class RuleRefusedError(RuntimeError):
+    pass
 
 
 def parse_tag(tag: str) -> tuple[str, tuple[int, int, int]] | None:
@@ -79,11 +85,16 @@ def list_remote_tags() -> list[str]:
 
 
 def release_id_for_tag(tag: str) -> int | None:
-    try:
-        output = gh_api([f"repos/{{owner}}/{{repo}}/releases/tags/{tag}"])
-    except subprocess.CalledProcessError:
-        return None
-    return json.loads(output)["id"]
+    for attempt in range(1, RETRIES + 1):
+        try:
+            output = gh_api([f"repos/{{owner}}/{{repo}}/releases/tags/{quote(tag, safe='')}"])
+            return json.loads(output)["id"]
+        except subprocess.CalledProcessError as error:
+            if any(marker in (error.stderr or "") for marker in GONE_MARKERS):
+                return None
+            if attempt == RETRIES:
+                raise
+            time.sleep(RETRY_PAUSE_SECONDS * attempt)
 
 
 def delete_tag(tag: str) -> None:
@@ -92,8 +103,41 @@ def delete_tag(tag: str) -> None:
         gh_api_mutation(
             ["-X", "DELETE", f"repos/{{owner}}/{{repo}}/releases/{release_id}"]
         )
-    gh_api_mutation(["-X", "DELETE", f"repos/{{owner}}/{{repo}}/git/refs/tags/{tag}"])
+    for attempt in range(1, RETRIES + 1):
+        try:
+            gh_api(
+                ["-X", "DELETE", f"repos/{{owner}}/{{repo}}/git/refs/tags/{quote(tag, safe='')}"]
+            )
+            break
+        except subprocess.CalledProcessError as error:
+            stderr = error.stderr or ""
+            if any(marker in stderr for marker in GONE_MARKERS):
+                break
+            if "Cannot delete this tag" in stderr:
+                release_id = release_id_for_tag(tag)
+                if release_id is None and RULE_VIOLATION_MARKER in stderr:
+                    raise RuleRefusedError(
+                        f"tag deletion refused by a repository rule: {stderr.strip()}"
+                    )
+                if release_id is not None:
+                    gh_api_mutation(
+                        [
+                            "-X",
+                            "DELETE",
+                            f"repos/{{owner}}/{{repo}}/releases/{release_id}",
+                        ]
+                    )
+            time.sleep(RETRY_PAUSE_SECONDS * attempt)
+            if attempt == RETRIES:
+                raise
     time.sleep(MUTATION_PAUSE_SECONDS)
+
+
+def current_latest_tag() -> str | None:
+    try:
+        return gh_api(["repos/{owner}/{repo}/releases/latest", "--jq", ".tag_name"]).strip() or None
+    except subprocess.CalledProcessError:
+        return None
 
 
 def main() -> int:
@@ -109,13 +153,36 @@ def main() -> int:
     doomed = plan_prune(tags, args.keep)
     kept = len(tags) - len(doomed)
     print(f"{len(tags)} tags total, keeping {kept}, pruning {len(doomed)}")
+    latest_tag = current_latest_tag()
+    if latest_tag in doomed:
+        print(f"keeping {latest_tag}: it holds the Latest badge")
+        doomed.remove(latest_tag)
+    failed = False
+    failures = []
+    rule_refused = []
     for tag in doomed:
         if args.dry_run:
             print(f"would delete {tag}")
             continue
-        delete_tag(tag)
+        try:
+            delete_tag(tag)
+        except RuleRefusedError as error:
+            rule_refused.append(tag)
+            print(f"unprunable {tag}: {error}", file=sys.stderr)
+            continue
+        except Exception as error:
+            failed = True
+            failures.append((tag, error))
+            print(f"failed to delete {tag}: {error}", file=sys.stderr)
+            continue
         print(f"deleted {tag}")
-    return 0
+    if rule_refused:
+        names = ", ".join(rule_refused)
+        print(f"kept {len(rule_refused)} rule-refused tag(s): {names}")
+    if failed:
+        names = ", ".join(tag for tag, _ in failures)
+        print(f"failed to prune {len(failures)} tag(s): {names}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

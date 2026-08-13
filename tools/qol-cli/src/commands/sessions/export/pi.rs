@@ -77,12 +77,17 @@ function assistantText(messages) {
 
 const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
   let loopFinalReport = "";
+  let closingFollowUpSent = false;
 
   function setLoopPhase(phase, finalReport = "") {
     if (loopPhase === phase && loopFinalReport === finalReport) return;
     loopPhase = phase;
     loopFinalReport = finalReport;
     pi.appendEntry(LOOP_ENTRY, { phase, final_report: finalReport });
+  }
+
+  function normalized(text) {
+    return text.replace(/[^a-z0-9]/gi, "").toLowerCase();
   }
 
   function restoreLoopPhase(ctx) {
@@ -93,6 +98,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     loopPhase = LOOP_PHASES.has(restored) ? restored : "idle";
     loopFinalReport = typeof entry?.data?.final_report === "string" ? entry.data.final_report : "";
     if (loopPhase === "waiting") setLoopPhase("paused");
+    if (loopPhase === "closing") setLoopPhase("idle");
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -105,7 +111,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
 
   pi.on("agent_end", async (event, _ctx) => {
     const text = assistantText(event.messages);
-    if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
+    if (loopPhase === "closing" && loopFinalReport && normalized(text).includes(normalized(loopFinalReport))) {
       setLoopPhase("idle");
     }
   });
@@ -115,7 +121,12 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
       pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
     }
     if (loopPhase === "closing") {
-      pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+      if (!closingFollowUpSent) {
+        closingFollowUpSent = true;
+        pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: "followUp" });
+      } else {
+        setLoopPhase("idle");
+      }
     }
   });
 "#;
@@ -136,19 +147,33 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _o
 const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
       if (params.surface != null) args.push("--surface", params.surface);
+      if (params.model != null) args.push("--model", params.model);
+      if (params.title != null) args.push("--title", params.title);
+      if (params.task != null) args.push("--task", params.task);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       const text = outcome.reused
         ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
-        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`;
+        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`
+          + (outcome.task_submitted ? "; first round delivered, wait with session_bridge (omit task)" : "");
       return { content: [{ type: "text", text }], details: { outcome } };
+    },
+"#;
+
+const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const args = ["submit", params.session, "--task", params.task];
+      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
+      const stdout = await run(args, 60_000, undefined, signal);
+      const outcome = JSON.parse(stdout);
+      const text = `task submitted to session ${outcome.session}; round open, wait with session_bridge (omit task)`;
+      return { content: [{ type: "text", text: `${text}\n${outcome.screen}` }], details: { outcome } };
     },
 "#;
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
-      args.push("--", params.task);
+      if (params.task != null) args.push("--", params.task);
       setLoopPhase("waiting");
       try {
         const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
@@ -211,6 +236,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
+        "session_submit" => EXECUTE_SUBMIT,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
@@ -301,11 +327,11 @@ mod tests {
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
         assert!(source.contains(
-            "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
+            "task: Type.Optional(Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the round a prior session_submit or spawn task left open\" })),"
         ));
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
         assert!(source.contains("args.push(\"--acknowledge-marker\""));
-        assert!(source.contains("args.push(\"--\", params.task)"));
+        assert!(source.contains("if (params.task != null) args.push(\"--\", params.task)"));
     }
 
     #[test]
@@ -355,6 +381,21 @@ mod tests {
     }
 
     #[test]
+    fn pi_adapter_closes_the_loop_after_a_single_report_echo() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("function normalized(text)"));
+        assert!(source.contains("normalized(text).includes(normalized(loopFinalReport))"));
+        assert!(source.contains("let closingFollowUpSent = false;"));
+        assert!(source.contains("if (!closingFollowUpSent) {"));
+        assert!(source.contains("closingFollowUpSent = true;"));
+        assert!(source.contains("if (loopPhase === \"closing\") setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP
+            .contains("pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: \"followUp\" })"));
+        assert!(!source.contains("FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}"));
+    }
+
+    #[test]
     fn pi_adapter_never_blocks_the_host_event_loop() {
         let source = pi_extension().expect("render");
         assert!(!source.contains("spawnSync"));
@@ -365,6 +406,7 @@ mod tests {
         for template in [
             EXECUTE_LIST,
             EXECUTE_SPAWN,
+            EXECUTE_SUBMIT,
             EXECUTE_BRIDGE,
             EXECUTE_LOOP_CLOSE,
             EXECUTE_CLOSE,

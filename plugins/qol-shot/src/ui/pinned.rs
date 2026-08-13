@@ -189,7 +189,7 @@ fn open_window(
         window_decorations: Some(WindowDecorations::Client),
         kind: qol_gpui::popup_window::pinned_window_kind(),
         focus: spec.focus,
-        show: true,
+        show: spec.active,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),

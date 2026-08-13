@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
+    ScreenReader, SessionBinding, SessionInventory, SpawnSurface, TerminalSessionService,
 };
 use serde_json::{json, Value};
 
@@ -30,6 +30,8 @@ pub(crate) struct McpSessionServer {
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
     locks: super::spawn::SpawnLocks,
+    spawn_model: Option<String>,
+    spawn_surface: Option<SpawnSurface>,
     round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
@@ -42,6 +44,8 @@ impl McpSessionServer {
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
+            spawn_model: super::spawn::config_spawn_model()?,
+            spawn_surface: super::spawn::config_surface()?,
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
@@ -57,6 +61,8 @@ impl McpSessionServer {
             interpreter,
             pending,
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            spawn_model: None,
+            spawn_surface: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
@@ -73,6 +79,8 @@ impl McpSessionServer {
             interpreter,
             pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
+            spawn_model: None,
+            spawn_surface: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
@@ -149,6 +157,7 @@ impl McpSessionServer {
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
             "session_spawn" => self.tool_spawn(arguments),
+            "session_submit" => self.tool_submit(arguments),
             "session_bridge" => self.tool_bridge(arguments),
             "session_loop_close" => self.close_loop(arguments),
             "session_close" => self.tool_close(arguments),
@@ -202,6 +211,36 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `surface` must be a string".to_owned())
             })
             .transpose()?;
+        let model_flag = arguments
+            .get("model")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
+            })
+            .transpose()?;
+        let title = arguments
+            .get("title")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `title` must be a string".to_owned())
+            })
+            .transpose()?;
+        let task = arguments
+            .get("task")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `task` must be a string".to_owned())
+            })
+            .transpose()?;
+        let model =
+            super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
+                .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -209,8 +248,44 @@ impl McpSessionServer {
             cwd,
             Some(key),
             surface.as_deref(),
-            super::spawn::config_surface().map_err(|error| error.to_string())?,
+            model.as_deref(),
+            title.as_deref(),
+            self.spawn_surface,
             &self.locks,
+        )
+        .map_err(|error| error.to_string())?;
+        let outcome = match task {
+            Some(task) => super::spawn::deliver_task(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                outcome,
+                &task,
+                &self.pending,
+            )
+            .map_err(|error| error.to_string())?,
+            None => outcome,
+        };
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_submit(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let task = string_argument(&arguments, "task")?;
+        let acknowledge_marker = arguments
+            .get("acknowledge_marker")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    "session_submit `acknowledge_marker` must be a string".to_owned()
+                })
+            })
+            .transpose()?;
+        let outcome = super::bridge::submit(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &binding,
+            task,
+            &self.pending,
+            acknowledge_marker,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -218,10 +293,7 @@ impl McpSessionServer {
 
     fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        let task = arguments
-            .get("task")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "session_bridge requires a `task` string".to_owned())?;
+        let task = arguments.get("task").and_then(Value::as_str);
         if arguments.get("timeout_ms").is_some() {
             return Err("session_bridge takes no `timeout_ms`; the round stays open until the implementation emits its completion signal. Resend this call without that argument.".to_owned());
         }
@@ -233,15 +305,30 @@ impl McpSessionServer {
                 })
             })
             .transpose()?;
-        let outcome = super::bridge::execute(
-            self.terminals.as_ref(),
-            &self.interpreter,
-            &binding,
-            task,
-            self.round_timeout,
-            &self.pending,
-            acknowledge_marker,
-        )
+        let outcome = match task {
+            Some(task) => super::bridge::execute(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                &binding,
+                task,
+                self.round_timeout,
+                &self.pending,
+                acknowledge_marker,
+            ),
+            None => {
+                if acknowledge_marker.is_some() {
+                    return Err("session_bridge without a task takes no `acknowledge_marker`; acknowledge the reviewed round on the next submit or the loop close".to_owned());
+                }
+                super::bridge::resume(
+                    self.terminals.as_ref(),
+                    &self.interpreter,
+                    &binding,
+                    self.round_timeout,
+                    &self.pending,
+                    false,
+                )
+            }
+        }
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
@@ -260,15 +347,20 @@ impl McpSessionServer {
         if !matches!(outcome, "accepted" | "paused") {
             return Err("session_loop_close `outcome` must be `accepted` or `paused`".to_owned());
         }
-        let receipt = render_close_receipt(&arguments, outcome)?;
+        let mut receipt = render_close_receipt(&arguments, outcome)?;
         self.pending
             .acknowledge(&binding, completion_marker, outcome == "accepted")
             .map_err(|error| error.to_string())?;
-        Ok(receipt)
+        if outcome == "accepted" {
+            let terminal_closed =
+                super::close::close_spawned_terminal(self.terminals.as_ref(), &binding).is_ok();
+            receipt["terminal_closed"] = json!(terminal_closed);
+        }
+        serde_json::to_string(&receipt).map_err(|error| format!("serialization failed: {error}"))
     }
 }
 
-fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<String, String> {
+fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<Value, String> {
     let landed = non_empty_argument(arguments, "landed")?;
     let before = non_empty_argument(arguments, "before")?;
     let now = non_empty_argument(arguments, "now")?;
@@ -277,12 +369,11 @@ fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<String, Stri
     let final_report = format!(
         "## What landed\n\n{landed}\n\n## Before\n\n{before}\n\n## Now\n\n{now}\n\n## Verification\n\n{verification}\n\n## Remaining\n\n{remaining}"
     );
-    serde_json::to_string(&json!({
+    Ok(json!({
         "loop_closed": true,
         "outcome": outcome,
         "final_report": final_report,
     }))
-    .map_err(|error| format!("serialization failed: {error}"))
 }
 
 pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
@@ -313,7 +404,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close,\n  session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts.\n  session_bridge submits once and waits for the implementation terminal's\n  generated completion signal before returning. A reviewed completion marker\n  explicitly acknowledges the prior response before another task can be\n  submitted. session_loop_close acknowledges the final response and records\n  the architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and an\n  optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -437,6 +528,7 @@ mod tests {
         spawn_count: std::sync::atomic::AtomicUsize,
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
         spawn_cwd: Mutex<Option<std::path::PathBuf>>,
+        spawn_launch: Mutex<Option<qol_terminal_sessions::cli::CliLaunchProgram>>,
         closed: Mutex<Vec<SessionBinding>>,
     }
 
@@ -454,6 +546,7 @@ mod tests {
                 spawn_count: std::sync::atomic::AtomicUsize::new(0),
                 spawn_identity: Mutex::new(None),
                 spawn_cwd: Mutex::new(None),
+                spawn_launch: Mutex::new(None),
                 closed: Mutex::new(Vec::new()),
             }
         }
@@ -630,6 +723,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *self.spawn_identity.lock().unwrap() = Some(request.identity.clone());
             *self.spawn_cwd.lock().unwrap() = Some(request.cwd.clone());
+            *self.spawn_launch.lock().unwrap() = Some(request.launch.clone());
             SessionId::new(self.id.clone(), format!("spawn-{}", request.identity.key)).map_err(
                 |error| TerminalError::SpawnFailed {
                     backend: self.id.clone(),
@@ -845,6 +939,7 @@ mod tests {
             [
                 "sessions_list",
                 "session_spawn",
+                "session_submit",
                 "session_bridge",
                 "session_loop_close",
                 "session_close"
@@ -862,6 +957,112 @@ mod tests {
         assert_eq!(rows[0]["session"], token());
         assert_eq!(rows[0]["tool"], "generic");
         assert_eq!(rows[0]["display_name"], "agent");
+    }
+
+    #[test]
+    fn session_submit_delivers_and_leaves_the_round_open() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "implement the bounded change" }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["submitted"], true);
+        assert_eq!(outcome["completed"], false);
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].2, DeliveryMode::Submit);
+        assert!(sent[0].1.contains("[qol session bridge]"));
+        drop(sent);
+
+        let binding: SessionBinding = token().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap();
+        assert!(round.is_some());
+        assert_eq!(round.unwrap().completion_marker, marker);
+    }
+
+    #[test]
+    fn session_submit_refuses_when_a_round_is_already_pending() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let first = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "first task" }),
+        );
+        assert_eq!(first["result"]["isError"], false);
+        let second = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "second task" }),
+        );
+        assert_eq!(second["result"]["isError"], true);
+        assert!(second["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already pending"));
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+    }
+
+    fn live_pi_screen() -> String {
+        [
+            "conversation output",
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            "/tmp",
+            "$0.400 47.3%/1.0M (auto)",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn spawn_carries_title_and_task_and_the_round_stays_open_for_bridge() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], true, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "lane-one", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["title"] = json!("Lane One");
+        arguments["task"] = json!("implement and test the bounded change");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["reused"], false);
+        assert_eq!(outcome["title"], "Lane One");
+        assert_eq!(outcome["task_submitted"], true);
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+        assert_eq!(outcome["session"], "v1:kitty:spawn-lane-one:200");
+
+        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(request.program, "pi");
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 1);
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap();
+        assert!(round.is_some());
+
+        let waited = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": outcome["session"] }),
+        );
+        assert_eq!(waited["result"]["isError"], false);
+        let waited_outcome: Value =
+            serde_json::from_str(waited["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(waited_outcome["completed"], true);
+        assert_eq!(waited_outcome["completion_marker"], marker);
     }
 
     #[test]
@@ -1045,7 +1246,7 @@ mod tests {
 
     #[test]
     fn loop_close_returns_a_typed_terminal_receipt() {
-        let (server, _) = server(Vec::new(), false, false);
+        let (server, backend) = server(Vec::new(), false, false);
         for outcome in ["accepted", "paused"] {
             let binding: SessionBinding = token().parse().unwrap();
             server
@@ -1072,7 +1273,55 @@ mod tests {
                 .unwrap()
                 .contains("## Before"));
             assert!(receipt["final_report"].as_str().unwrap().contains("## Now"));
+            if outcome == "accepted" {
+                assert_eq!(receipt["terminal_closed"], false);
+            } else {
+                assert!(receipt.get("terminal_closed").is_none());
+            }
+            assert!(backend.closed.lock().unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn loop_close_accepted_terminates_a_spawned_implementation_terminal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(session);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "accepted");
+        assert_eq!(receipt["terminal_closed"], true);
+        let closed = backend.closed.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0], binding);
     }
 
     #[test]
@@ -1161,11 +1410,9 @@ mod tests {
             .unwrap()
             .contains("was not spawned"));
 
-        tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut close_lane = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        close_lane["model"] = json!("flash-x");
+        tool_call(&server, "session_spawn", close_lane);
         let spawned = "v1:kitty:spawn-mcp-lane:200";
         let binding: SessionBinding = spawned.parse().unwrap();
         server
@@ -1247,11 +1494,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let response = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
@@ -1271,6 +1516,87 @@ mod tests {
     }
 
     #[test]
+    fn session_spawn_model_override_reaches_the_launch_and_outcome() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-lane-model", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["model"], json!("flash-x"));
+        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(request.program, "pi");
+        assert_eq!(
+            request.args,
+            vec!["--model".to_owned(), "flash-x".to_owned()]
+        );
+    }
+
+    #[test]
+    fn session_spawn_model_rejects_non_string_values() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-lane-model", None, &cwd);
+        arguments["model"] = json!(42);
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("model` must be a string"));
+    }
+
+    #[test]
+    fn session_spawn_refuses_a_new_lane_without_an_explicit_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let missing = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(missing["result"]["isError"], true);
+        assert!(missing["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--model"));
+
+        let mut empty = spawn_arguments("codex", "mcp-lane-empty", None, &cwd);
+        empty["model"] = json!("");
+        let empty = tool_call(&server, "session_spawn", empty);
+        assert_eq!(empty["result"]["isError"], true);
+        assert!(empty["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--model"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
     fn session_spawn_reuses_the_live_match_and_never_launches_twice() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
@@ -1279,11 +1605,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let first = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        first_arguments["model"] = json!("flash-x");
+        let first = tool_call(&server, "session_spawn", first_arguments);
         assert_eq!(first["result"]["isError"], false);
         let second = tool_call(
             &server,
@@ -1313,11 +1637,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        first_arguments["model"] = json!("flash-x");
+        tool_call(&server, "session_spawn", first_arguments);
         let conflict = tool_call(
             &server,
             "session_spawn",
@@ -1389,11 +1711,10 @@ mod tests {
             .unwrap()
             .contains("invalid surface `floating`"));
 
-        let unsupported = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd),
-        );
+        let mut unsupported_arguments =
+            spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd);
+        unsupported_arguments["model"] = json!("flash-x");
+        let unsupported = tool_call(&server, "session_spawn", unsupported_arguments);
         assert_eq!(unsupported["result"]["isError"], true);
         assert!(unsupported["result"]["content"][0]["text"]
             .as_str()

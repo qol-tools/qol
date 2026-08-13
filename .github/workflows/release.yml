@@ -36,7 +36,7 @@ jobs:
       bin_name: ${{ steps.resolve.outputs.bin_name }}
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_REF }}
 
@@ -81,7 +81,7 @@ jobs:
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_REF }}
 
@@ -156,4 +156,4 @@ jobs:
             exit 1
           fi
           gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
-          gh release edit "$tag" --draft=false
+          gh release edit "$tag" --draft=false --latest=false

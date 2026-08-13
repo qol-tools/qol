@@ -249,6 +249,33 @@ impl ScreenReader for KittyBackend {
         )?;
         self.read_screen_command(target)
     }
+
+    fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.read_screen_command(target)
+    }
+
+    fn read_screen_matching(
+        &self,
+        target: &SessionBinding,
+        pattern: &str,
+    ) -> Result<String, TerminalError> {
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
+            "match screen lines",
+            &strings([
+                "@",
+                "get-text",
+                "--match",
+                &matcher(window_id),
+                "--match",
+                &regex_escape(pattern),
+                "--extent",
+                "screen",
+            ]),
+            None,
+        )
+    }
 }
 
 impl SessionFocus for KittyBackend {
@@ -440,6 +467,17 @@ fn matcher(window_id: u64) -> String {
     format!("id:{window_id}")
 }
 
+fn regex_escape(pattern: &str) -> String {
+    let mut escaped = String::with_capacity(pattern.len());
+    for character in pattern.chars() {
+        if "\\^$.|?*+()[]{}".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
     values.into_iter().map(str::to_owned).collect()
 }
@@ -594,10 +632,10 @@ mod tests {
     };
     use crate::cli::{CliLaunchProgram, CliToolId};
     use crate::{
-        kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionCloser,
-        SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity, SpawnKey,
-        SpawnRequest, SpawnSurface, TerminalBackend, TerminalError, TerminalSessionService,
-        TerminalSnapshot, TextInput,
+        kitty::backend_id, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities,
+        SessionCloser, SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity,
+        SpawnKey, SpawnRequest, SpawnSurface, TerminalBackend, TerminalError,
+        TerminalSessionService, TerminalSnapshot, TextInput,
     };
 
     type RecordedCall = (Option<String>, Vec<String>, Option<String>);
@@ -975,6 +1013,51 @@ mod tests {
         assert_eq!(
             calls[1].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn relaxed_screen_reads_skip_discovery_and_the_capability_recheck() {
+        let runner = FakeRunner::with_outputs(vec![success("screen".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        assert_eq!(backend.read_screen_relaxed(&target).unwrap(), "screen");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn marker_matched_reads_escape_the_pattern_and_skip_discovery() {
+        let runner =
+            FakeRunner::with_outputs(vec![success("3: QOL_BRIDGE_DONE_a.b[c]".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        let matched = backend
+            .read_screen_matching(&target, "QOL_BRIDGE_DONE_a.b[c]")
+            .unwrap();
+
+        assert_eq!(matched, "3: QOL_BRIDGE_DONE_a.b[c]");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            [
+                "@",
+                "get-text",
+                "--match",
+                "id:42",
+                "--match",
+                r"QOL_BRIDGE_DONE_a\.b\[c\]",
+                "--extent",
+                "screen",
+            ]
         );
     }
 

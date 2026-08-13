@@ -91,6 +91,46 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             self.assertIn(contract, workflow)
 
+    def test_plugin_publish_never_claims_latest(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+
+        self.assertIn(
+            'gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*',
+            workflow,
+        )
+        self.assertIn('gh release edit "$tag" --draft=false --latest=false', workflow)
+        self.assertNotIn("--latest=true", workflow)
+
+    def test_tray_publish_claims_latest(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+
+        self.assertIn(
+            'gh release edit "${RELEASE_TAG}" --draft=false --latest=true',
+            workflow,
+        )
+        self.assertNotIn("--latest=false", workflow)
+
+    def test_release_creation_steps_carry_an_explicit_latest_policy(self):
+        for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow=workflow_path.name):
+                workflow = workflow_path.read_text()
+                lines = workflow.splitlines()
+                for index, line in enumerate(lines):
+                    if "gh release create" in line:
+                        self.assertIn(
+                            "--latest",
+                            line,
+                            f"release creation must carry an explicit latest flag: "
+                            f"{workflow_path.name}:{index + 1}",
+                        )
+                    if "action-gh-release" in line:
+                        block = lines[index + 1 : index + 12]
+                        self.assertTrue(
+                            any("make_latest:" in b for b in block),
+                            f"action-gh-release step must declare make_latest: "
+                            f"{workflow_path.name}:{index + 1}",
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

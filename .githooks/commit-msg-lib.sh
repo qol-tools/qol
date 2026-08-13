@@ -11,6 +11,8 @@
 
 QOL_TYPES='feat|fix|refactor|chore|docs|test|perf|wip|style|ci|build|revert'
 QOL_UMBRELLA_EXTRA='workspace build ci deps dev emu settings'
+QOL_BARE_VERBS_ENDING_IN_ED=' read reread embed feed seed speed need shed spread breed bleed proceed exceed succeed heed '
+QOL_BARE_VERBS_ENDING_IN_ING=' ping ring bring sing string cling fling spring sling wing swing sting '
 
 # Singularize a family directory name by dropping one trailing 's'.
 #   plugins->plugin  libs->lib  apps->app  tools->tool  services->service
@@ -85,6 +87,22 @@ qol_first_member() {
   printf '%s' "$1" | sed -E 's/,.*//; s/^[[:space:]]+//; s/[[:space:]]+$//'
 }
 
+qol_check_imperative() {
+  lead="$(printf '%s' "$1" | awk '{print tolower($1)}')"
+  stem="${lead##*-}"
+  is_bare_verb_shape=0
+  case "$stem" in
+    *ing) case "$QOL_BARE_VERBS_ENDING_IN_ING" in *" $stem "*) is_bare_verb_shape=1 ;; esac ;;
+    *ed)  case "$QOL_BARE_VERBS_ENDING_IN_ED"  in *" $stem "*) is_bare_verb_shape=1 ;; esac ;;
+    *ss|*us|*is|*os) is_bare_verb_shape=1 ;;
+    *s) ;;
+    *) is_bare_verb_shape=1 ;;
+  esac
+  [ "$is_bare_verb_shape" = 1 ] && return 0
+  printf "use imperative mood: '%s' is not a bare verb (e.g. add / split / restore)" "$lead"
+  return 1
+}
+
 # Validate a subject against an allowed-scope set (newline-separated; may be empty
 # to skip the membership check). Echoes a reason and returns 1 on the first
 # violation; returns 0 when the subject is acceptable.
@@ -101,12 +119,9 @@ qol_check_subject() {
     *.) printf '%s' "drop the trailing period in the subject"; return 1 ;;
   esac
 
-  word="$(printf '%s' "$summary" | awk '{print tolower($1)}')"
-  case "$word" in
-    added|fixed|changed|removed|updated|refactored|implemented|\
-    adds|fixes|changes|removes|updates|adding|fixing|changing|removing|updating)
-      printf "use imperative mood, not '%s' (e.g. add / fix / remove)" "$word"; return 1 ;;
-  esac
+  if ! reason="$(qol_check_imperative "$summary")"; then
+    printf '%s' "$reason"; return 1
+  fi
 
   scope="$(qol_extract_scope "$subject")"
   [ -n "$scope" ] || return 0          # scopeless commits are allowed

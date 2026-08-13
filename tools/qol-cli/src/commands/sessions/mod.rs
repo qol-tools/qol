@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
+use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
@@ -22,7 +23,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 15] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -30,6 +31,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
     SessionSubcommand {
         name: "spawn",
         run: |rest, _format| spawn::run(rest),
+    },
+    SessionSubcommand {
+        name: "submit",
+        run: |rest, _format| run_submit(rest),
     },
     SessionSubcommand {
         name: "send",
@@ -46,6 +51,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
     SessionSubcommand {
         name: "resume",
         run: |rest, _format| run_resume(rest),
+    },
+    SessionSubcommand {
+        name: "discard",
+        run: |rest, _format| discard(rest),
     },
     SessionSubcommand {
         name: "interrupt",
@@ -109,10 +118,12 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]
-  qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]
+  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]
+  qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
+  qol sessions discard <session>
   qol sessions interrupt <session>
   qol sessions close <session>
 
@@ -131,27 +142,48 @@ Details:
   (default surface), or reuses the single live session already carrying the
   key when its tool matches; a key used by a different tool conflicts and
   multiple matches are ambiguous. The result JSON reports session, tool, key,
-  reused, cwd, and surface from the live session facts. The CLI generates a
-  key when --key is omitted; the MCP session_spawn tool requires one so
-  retries are idempotent. The surface default comes from the spawn_surface
-  setting in ~/.config/qol-tray/sessions.toml, then tab.
+  reused, cwd, surface, and model from the live session facts. The CLI
+  generates a key when --key is omitted; the MCP session_spawn tool requires
+  one so retries are idempotent. The surface default comes from the
+  spawn_surface setting in ~/.config/qol-tray/sessions.toml, then tab. An
+  explicit --model override names the spawned session's model (appended to
+  the harness launch as --model); the spawn_model setting in the same file is
+  the fallback. --title names the new tab (the lane key by default), and
+  --task delivers the first round at spawn time so the round is already open
+  when the command returns; the outcome JSON then reports task_submitted,
+  completion_marker, and next_command.
+  submit delivers one bounded task and returns immediately with the round
+  recorded and open, so several lanes can run in parallel before any of them
+  is awaited; it refuses when a round is already pending on that session.
   bridge submits one bounded task, supplies a generated completion signal,
   waits in the same call, and prints JSON with completed, submitted, session,
-  completion_marker, screen, reads, and elapsed_ms. Before submitting, it
+  completion_marker, screen, reads, and elapsed_ms. Without a task it
+  re-attaches to the pending round and waits for its completion marker.
+  Before submitting, it
   resumes any unfinished bridge for that session and returns its latest
   response with submitted=false. Pass its reviewed completion_marker through
   --acknowledge-marker to submit the following round. Its timeout is clamped
-  to 1s..24h (default 24h).
+  to 1s..24h (default 24h). With --gate the local quality gate (cargo fmt
+  --check, clippy with -D warnings, and the qol and qol-terminal-sessions
+  test suites) runs in the current working directory once the round
+  completes, and its per-step results and GREEN/RED verdict are appended to
+  screen; a missing Cargo.toml skips the gate with a note, and --no-gate
+  (the default) leaves it off.
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
   command for each open round: resume while waiting, resume --kickstart when
-  the target went idle without emitting its completion signal, then a review
-  instruction with the acknowledge-marker bridge template once complete.
+  the target went idle without emitting its completion signal, discard when
+  the target's terminal is gone, then a review instruction with the
+  acknowledge-marker bridge template once complete.
   resume re-attaches to the one pending round and waits for its completion
   marker without submitting anything; its timeout defaults to 24h. With
   --kickstart it first nudges the interrupted session to continue or emit
   the signal. A wait that detects an idle target returns stalled=true
   instead of blocking until timeout; rerun next when that happens.
+  discard removes the pending-bridge checkpoint of a session whose terminal
+  is gone (verified via live discovery); it refuses a live session, refuses
+  when no checkpoint exists, and never touches last-send state or spawn
+  locks.
   interrupt sends the target tool's stop key (agent TUIs: esc, plain
   shells: ctrl+c) while a round is open, leaving the round and its
   queued input intact. Every bridge JSON result carries next_command;
@@ -234,24 +266,107 @@ fn send(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn run_bridge(args: &[OsString]) -> Result<()> {
-    let (binding_token, task, timeout_ms, acknowledge_marker) = parse_bridge_args(args)?;
+fn run_submit(args: &[OsString]) -> Result<()> {
+    let (binding_token, task, acknowledge_marker) = parse_submit_args(args)?;
     let binding = SessionBinding::from_str(&binding_token)
         .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
-    let timeout_ms = timeout_ms
-        .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
-        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
     let terminals = service()?;
-    let pending = bridge::PendingBridgeStore::system()?;
-    let outcome = bridge::execute(
+    let outcome = bridge::submit(
         &terminals,
         &CliSessionInterpreter::system(),
         &binding,
         &task,
-        std::time::Duration::from_millis(timeout_ms),
-        &pending,
+        &bridge::PendingBridgeStore::system()?,
         acknowledge_marker.as_deref(),
     )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize submit outcome")?
+    );
+    Ok(())
+}
+
+fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String>)> {
+    let usage = "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]";
+    let binding = args
+        .first()
+        .and_then(|argument| argument.to_str())
+        .ok_or_else(|| anyhow!("usage: {usage}"))?
+        .to_owned();
+    let mut task = None;
+    let mut acknowledge_marker = None;
+    let mut index = 1;
+    while index < args.len() {
+        let argument = args[index]
+            .to_str()
+            .ok_or_else(|| anyhow!("submit arguments must be valid UTF-8"))?;
+        match argument {
+            "--task" => {
+                task = Some(
+                    args.get(index + 1)
+                        .and_then(|value| value.to_str())
+                        .filter(|value| !value.starts_with("--"))
+                        .ok_or_else(|| anyhow!("usage: {usage}"))?
+                        .to_owned(),
+                );
+                index += 2;
+            }
+            "--acknowledge-marker" => {
+                acknowledge_marker = Some(
+                    args.get(index + 1)
+                        .and_then(|value| value.to_str())
+                        .filter(|value| !value.starts_with("--"))
+                        .ok_or_else(|| anyhow!("usage: {usage}"))?
+                        .to_owned(),
+                );
+                index += 2;
+            }
+            other => bail!("unknown submit flag `{other}`\nusage: {usage}"),
+        }
+    }
+    let task = task.ok_or_else(|| anyhow!("usage: {usage}"))?;
+    Ok((binding, task, acknowledge_marker))
+}
+
+fn run_bridge(args: &[OsString]) -> Result<()> {
+    let parsed = parse_bridge_args(args)?;
+    let binding = SessionBinding::from_str(&parsed.binding)
+        .map_err(|error| anyhow!("invalid session token `{}`: {error}", parsed.binding))?;
+    let timeout_ms = parsed
+        .timeout_ms
+        .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
+        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
+    let terminals = service()?;
+    let pending = bridge::PendingBridgeStore::system()?;
+    let mut outcome = match parsed.task.as_deref() {
+        Some(task) => bridge::execute(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &binding,
+            task,
+            std::time::Duration::from_millis(timeout_ms),
+            &pending,
+            parsed.acknowledge_marker.as_deref(),
+        )?,
+        None => {
+            if parsed.acknowledge_marker.is_some() {
+                bail!(
+                    "bridge without a task takes no --acknowledge-marker; acknowledge the reviewed round on the next submit or the loop close"
+                );
+            }
+            bridge::resume(
+                &terminals,
+                &CliSessionInterpreter::system(),
+                &binding,
+                std::time::Duration::from_millis(timeout_ms),
+                &pending,
+                false,
+            )?
+        }
+    };
+    if parsed.gate && outcome.completed {
+        outcome.screen = bridge::run_quality_gate(&outcome.screen, &std::env::current_dir()?);
+    }
     println!(
         "{}",
         serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
@@ -259,9 +374,17 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, Option<String>)> {
+struct BridgeArgs {
+    binding: String,
+    task: Option<String>,
+    timeout_ms: Option<u64>,
+    acknowledge_marker: Option<String>,
+    gate: bool,
+}
+
+fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
     let usage =
-        "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]";
+        "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]";
     let binding = args
         .first()
         .and_then(|argument| argument.to_str())
@@ -270,6 +393,7 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
     let mut task_parts = Vec::new();
     let mut timeout_ms = None;
     let mut acknowledge_marker = None;
+    let mut gate = false;
     let mut literal = false;
     let mut index = 1;
     while index < args.len() {
@@ -306,6 +430,14 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
                 acknowledge_marker = Some(value.to_owned());
                 index += 2;
             }
+            "--gate" => {
+                gate = true;
+                index += 1;
+            }
+            "--no-gate" => {
+                gate = false;
+                index += 1;
+            }
             other => {
                 task_parts.push(other.to_owned());
                 index += 1;
@@ -313,10 +445,13 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
         }
     }
     let task = task_parts.join(" ");
-    if task.is_empty() {
-        bail!("usage: {usage}");
-    }
-    Ok((binding, task, timeout_ms, acknowledge_marker))
+    Ok(BridgeArgs {
+        binding,
+        task: (!task.is_empty()).then_some(task),
+        timeout_ms,
+        acknowledge_marker,
+        gate,
+    })
 }
 
 fn run_resume(args: &[OsString]) -> Result<()> {
@@ -391,85 +526,12 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
-    let legacy = if args.is_empty() {
-        pending.legacy_open_rounds()?
-    } else {
-        0
-    };
-    let terminals = service()?;
-    let interpreter = CliSessionInterpreter::system();
-    let rows = rounds
-        .iter()
-        .map(|round| {
-            let attached = round
-                .session
-                .parse::<SessionBinding>()
-                .ok()
-                .and_then(|binding| pending.owner_pid(&binding));
-            if let Some(pid) = attached {
-                return serde_json::json!({
-                    "phase": "attached",
-                    "session": round.session,
-                    "command": "",
-                    "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
-                });
-            }
-            if round.completed {
-                return serde_json::json!({
-                    "phase": "review",
-                    "session": round.session,
-                    "completion_marker": round.completion_marker,
-                    "command": format!(
-                        "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
-                        round.session, round.completion_marker
-                    ),
-                    "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
-                });
-            }
-            let stalled = round
-                .session
-                .parse::<SessionBinding>()
-                .ok()
-                .and_then(|binding| {
-                    bridge::session_liveness(&terminals, &interpreter, &binding)()
-                })
-                == Some(false);
-            if stalled {
-                serde_json::json!({
-                    "phase": "stalled",
-                    "session": round.session,
-                    "command": format!(
-                        "qol sessions resume {} --kickstart --timeout-ms {}",
-                        round.session,
-                        bridge::TIMEOUT_MAX_MS
-                    ),
-                    "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
-                })
-            } else {
-                serde_json::json!({
-                    "phase": "waiting",
-                    "session": round.session,
-                    "command": format!(
-                        "qol sessions resume {} --timeout-ms {}",
-                        round.session,
-                        bridge::TIMEOUT_MAX_MS
-                    ),
-                    "instruction": "Implementation is still running. Run the command in the foreground and do nothing else until it returns.",
-                })
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut rows = rows;
-    if legacy > 0 {
-        rows.push(serde_json::json!({
-            "phase": "unknown",
-            "session": "",
-            "command": "qol sessions next <session>",
-            "instruction": format!(
-                "{legacy} open round(s) recorded by an older qol version carry no session token and cannot be listed here. Run the command once per candidate implementation session from `qol sessions list`."
-            ),
-        }));
-    }
+    let rows = next_rows(
+        &service()?,
+        &CliSessionInterpreter::system(),
+        &pending,
+        &rounds,
+    )?;
     match output_format {
         OutputFormat::Json => println!(
             "{}",
@@ -496,6 +558,119 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn next_rows(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    pending: &bridge::PendingBridgeStore,
+    rounds: &[bridge::PendingRound],
+) -> Result<Vec<serde_json::Value>> {
+    let live = terminals.discover().ok();
+    let mut rows = Vec::with_capacity(rounds.len());
+    for round in rounds {
+        let binding = round.session.parse::<SessionBinding>().ok();
+        let attached = binding
+            .as_ref()
+            .and_then(|binding| pending.owner_pid(binding));
+        if let Some(pid) = attached {
+            rows.push(serde_json::json!({
+                "phase": "attached",
+                "session": round.session,
+                "command": "",
+                "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
+            }));
+            continue;
+        }
+        let gone = binding.as_ref().is_some_and(|binding| {
+            live.as_ref().is_some_and(|facts| {
+                !facts
+                    .iter()
+                    .any(|session| session.id == *binding.session_id())
+            })
+        });
+        if gone {
+            rows.push(serde_json::json!({
+                "phase": "gone",
+                "session": round.session,
+                "command": format!("qol sessions discard {}", round.session),
+                "instruction": "The implementation terminal is gone, so this round cannot resume or be reviewed here. Run the command to drop the orphaned checkpoint, then start a fresh round on a live session.",
+            }));
+            continue;
+        }
+        if round.completed {
+            rows.push(serde_json::json!({
+                "phase": "review",
+                "session": round.session,
+                "completion_marker": round.completion_marker,
+                "command": format!(
+                    "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
+                    round.session, round.completion_marker
+                ),
+                "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
+            }));
+            continue;
+        }
+        let stalled = binding.as_ref().is_some_and(|binding| {
+            bridge::session_liveness(terminals, interpreter, binding)() == Some(false)
+        });
+        if stalled {
+            rows.push(serde_json::json!({
+                "phase": "stalled",
+                "session": round.session,
+                "command": format!(
+                    "qol sessions resume {} --kickstart --timeout-ms {}",
+                    round.session,
+                    bridge::TIMEOUT_MAX_MS
+                ),
+                "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
+            }));
+        } else {
+            rows.push(serde_json::json!({
+                "phase": "waiting",
+                "session": round.session,
+                "command": format!(
+                    "qol sessions resume {} --timeout-ms {}",
+                    round.session,
+                    bridge::TIMEOUT_MAX_MS
+                ),
+                "instruction": "Implementation is still running. Run the command in the foreground and do nothing else until it returns.",
+            }));
+        }
+    }
+    Ok(rows)
+}
+
+fn discard(args: &[OsString]) -> Result<()> {
+    let binding = single_binding(args, "qol sessions discard <session>")?;
+    let removed = discard_checkpoint(
+        &service()?,
+        &bridge::PendingBridgeStore::system()?,
+        &binding,
+    )?;
+    println!(
+        "removed pending bridge checkpoint for {} (completion_marker={}, completed={})",
+        binding, removed.completion_marker, removed.completed
+    );
+    Ok(())
+}
+
+fn discard_checkpoint(
+    terminals: &TerminalSessionService,
+    pending: &bridge::PendingBridgeStore,
+    binding: &SessionBinding,
+) -> Result<BridgeCheckpoint> {
+    if terminals
+        .discover()
+        .context("session discovery failed")?
+        .iter()
+        .any(|session| session.id == *binding.session_id())
+    {
+        bail!(
+            "session `{binding}` still has a live terminal; `qol sessions discard` only removes the checkpoint of a session whose terminal is gone"
+        );
+    }
+    pending.discard(binding)
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {
@@ -643,7 +818,185 @@ fn mode_label(mode: DeliveryMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qol_terminal_sessions::SessionCapabilities;
+    use qol_terminal_sessions::{
+        BackendId, SessionCapabilities, SessionId, TerminalBackend, TerminalError, TerminalSnapshot,
+    };
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct FakeSessionBackend {
+        id: BackendId,
+        sessions: Vec<qol_terminal_sessions::SessionFacts>,
+    }
+
+    impl SessionInventory for FakeSessionBackend {
+        fn discover(&self) -> Result<Vec<qol_terminal_sessions::SessionFacts>, TerminalError> {
+            Ok(self.sessions.clone())
+        }
+    }
+
+    impl ScreenReader for FakeSessionBackend {
+        fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+            Err(TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "screen reading",
+            })
+        }
+    }
+
+    impl SessionFocus for FakeSessionBackend {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for FakeSessionBackend {
+        fn send_text(
+            &self,
+            _target: &SessionBinding,
+            _text: &str,
+            _mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for FakeSessionBackend {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            Err(TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "screen reading",
+            })
+        }
+
+        fn id(&self) -> &BackendId {
+            &self.id
+        }
+    }
+
+    fn fake_terminals(
+        sessions: Vec<qol_terminal_sessions::SessionFacts>,
+    ) -> (TerminalSessionService, Arc<FakeSessionBackend>) {
+        let backend = Arc::new(FakeSessionBackend {
+            id: BackendId::new("fake").unwrap(),
+            sessions,
+        });
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        (terminals, backend)
+    }
+
+    fn fake_facts(native: &str, root_pid: i32) -> qol_terminal_sessions::SessionFacts {
+        qol_terminal_sessions::SessionFacts {
+            id: SessionId::new(BackendId::new("fake").unwrap(), native).unwrap(),
+            root_pid,
+            cwd: "/work".to_owned(),
+            title: "Terminal".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        }
+    }
+
+    fn test_store(root: &tempfile::TempDir) -> bridge::PendingBridgeStore {
+        bridge::PendingBridgeStore::with_dir(root.path().to_path_buf())
+    }
+
+    #[test]
+    fn discard_refuses_a_session_with_a_live_terminal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("7", 123)]);
+
+        let error = discard_checkpoint(&terminals, &store, &binding)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("still has a live terminal"), "{error}");
+        assert!(store.pending_round(&binding).unwrap().is_some());
+    }
+
+    #[test]
+    fn discard_removes_an_orphaned_checkpoint() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(Vec::new());
+
+        let removed = discard_checkpoint(&terminals, &store, &binding).unwrap();
+        assert_eq!(removed.completion_marker, "QOL_BRIDGE_DONE_round");
+        assert!(store.pending_round(&binding).unwrap().is_none());
+    }
+
+    #[test]
+    fn discard_refuses_when_no_checkpoint_exists() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        let (terminals, _) = fake_terminals(Vec::new());
+
+        let error = discard_checkpoint(&terminals, &store, &binding)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no pending bridge checkpoint"), "{error}");
+    }
+
+    #[test]
+    fn next_reports_gone_for_orphaned_rounds_and_waiting_for_live_ones() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let orphan = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        store
+            .start(&orphan, "QOL_BRIDGE_DONE_orphan", "v1:fake:8:800")
+            .unwrap();
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_session = |token: &str| {
+            rows.iter()
+                .find(|row| row["session"] == token)
+                .unwrap_or_else(|| panic!("missing row for {token}"))
+        };
+        let orphan_row = by_session("v1:fake:1:100");
+        assert_eq!(orphan_row["phase"], "gone");
+        assert_eq!(orphan_row["command"], "qol sessions discard v1:fake:1:100");
+        let live_row = by_session("v1:fake:2:200");
+        assert_eq!(live_row["phase"], "waiting");
+        assert!(live_row["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("qol sessions resume"));
+    }
 
     #[test]
     fn capability_names_reflect_flags() {
@@ -659,7 +1012,7 @@ mod tests {
         assert!(help.contains("default 24h"));
         assert!(!help.contains("default 1h"));
         assert!(help.contains(
-            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
         assert!(help.contains("sessions_list, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
@@ -748,7 +1101,7 @@ mod tests {
 
     #[test]
     fn bridge_args_keep_the_surface_small_and_support_literal_flags() {
-        let (binding, task, timeout, acknowledge_marker) = parse_bridge_args(&[
+        let parsed = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "implement".into(),
             "the fix".into(),
@@ -758,23 +1111,74 @@ mod tests {
             "QOL_BRIDGE_DONE_previous".into(),
         ])
         .unwrap();
-        assert_eq!(binding, "v1:kitty:7:123");
-        assert_eq!(task, "implement the fix");
-        assert_eq!(timeout, Some(5000));
+        assert_eq!(parsed.binding, "v1:kitty:7:123");
+        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
+        assert_eq!(parsed.timeout_ms, Some(5000));
         assert_eq!(
-            acknowledge_marker.as_deref(),
+            parsed.acknowledge_marker.as_deref(),
             Some("QOL_BRIDGE_DONE_previous")
         );
+        assert!(!parsed.gate);
 
-        let (_, task, timeout, acknowledge_marker) = parse_bridge_args(&[
+        let parsed = parse_bridge_args(&[
+            "v1:kitty:7:123".into(),
+            "--gate".into(),
+            "implement".into(),
+            "the fix".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
+        assert!(parsed.gate);
+
+        let parsed = parse_bridge_args(&[
+            "v1:kitty:7:123".into(),
+            "--gate".into(),
+            "--no-gate".into(),
+            "implement".into(),
+        ])
+        .unwrap();
+        assert!(!parsed.gate, "--no-gate must win over --gate");
+
+        let parsed = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "--".into(),
             "explain".into(),
             "--timeout-ms".into(),
         ])
         .unwrap();
-        assert_eq!(task, "explain --timeout-ms");
-        assert_eq!(timeout, None);
-        assert_eq!(acknowledge_marker, None);
+        assert_eq!(parsed.task.as_deref(), Some("explain --timeout-ms"));
+        assert_eq!(parsed.timeout_ms, None);
+        assert_eq!(parsed.acknowledge_marker, None);
+
+        let parsed =
+            parse_bridge_args(&["v1:kitty:7:123".into(), "--".into(), "--gate".into()]).unwrap();
+        assert_eq!(parsed.task.as_deref(), Some("--gate"));
+        assert!(!parsed.gate, "--gate after -- is task text");
+
+        let parsed = parse_bridge_args(&["v1:kitty:7:123".into()]).unwrap();
+        assert_eq!(parsed.binding, "v1:kitty:7:123");
+        assert_eq!(parsed.task, None);
+        assert_eq!(parsed.timeout_ms, None);
+        assert_eq!(parsed.acknowledge_marker, None);
+        assert!(!parsed.gate);
+    }
+
+    #[test]
+    fn submit_args_require_the_task_and_support_the_acknowledge_marker() {
+        let parsed = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--acknowledge-marker".into(),
+            "QOL_BRIDGE_DONE_previous".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.0, "v1:kitty:7:123");
+        assert_eq!(parsed.1, "implement the fix");
+        assert_eq!(parsed.2.as_deref(), Some("QOL_BRIDGE_DONE_previous"));
+
+        assert!(parse_submit_args(&["v1:kitty:7:123".into()]).is_err());
+        assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--task".into()]).is_err());
+        assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--bogus".into()]).is_err());
     }
 }

@@ -4,6 +4,7 @@
 
 [![tests](https://github.com/qol-tools/qol/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/ci.yml)
 [![Release Plugin](https://github.com/qol-tools/qol/actions/workflows/release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/release.yml)
+[![QoL Tray Release](https://github.com/qol-tools/qol/actions/workflows/qol-tray-release.yml/badge.svg)](https://github.com/qol-tools/qol/actions/workflows/qol-tray-release.yml)
 
 A portable quality-of-life layer for any computer you sit down at.
 
@@ -12,6 +13,12 @@ A portable quality-of-life layer for any computer you sit down at.
 </div>
 
 ## Quick start
+
+### Install
+
+[Prebuilt tray downloads](https://github.com/qol-tools/qol/releases/latest)
+
+### Develop
 
 ```bash
 cargo setup

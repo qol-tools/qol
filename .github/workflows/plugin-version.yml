@@ -13,9 +13,7 @@ on:
     types: [completed]
 
 permissions:
-  contents: write
-  actions: write
-  statuses: write
+  contents: read
 
 concurrency:
   group: plugin-version-main
@@ -34,6 +32,8 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
     env:
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -48,7 +48,7 @@ jobs:
       qol_tray_tag: ${{ steps.plan.outputs.qol_tray_tag }}
     steps:
       - name: Checkout successful source commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
@@ -167,6 +167,8 @@ jobs:
     if: needs.prepare.outputs.has_plugins == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    permissions:
+      contents: read
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     # Warning parity with CI and release.yml; a new lint failure blocks pre-tag.
@@ -176,9 +178,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.plugin_matrix) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -211,13 +214,16 @@ jobs:
     if: needs.prepare.outputs.has_qol_tray == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -255,13 +261,16 @@ jobs:
     if: needs.prepare.outputs.has_qol_tray == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.candidate_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -311,12 +320,16 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+      statuses: write
     env:
       CANDIDATE_SHA: ${{ needs.prepare.outputs.candidate_sha }}
       RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           fetch-depth: 0

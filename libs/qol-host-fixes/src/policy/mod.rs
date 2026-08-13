@@ -2,6 +2,7 @@ pub mod cli;
 pub mod managed;
 pub mod nvidia;
 
+mod journal;
 #[cfg(target_os = "linux")]
 mod lock;
 pub mod trace;
@@ -10,8 +11,6 @@ use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
-#[cfg(target_os = "linux")]
-use std::path::Path;
 use std::path::PathBuf;
 
 pub const JOURNAL_CANONICAL_DIR: &str = "/var/lib";
@@ -302,214 +301,6 @@ pub fn journal_path(policy: &str) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_dir_pinned(path: &Path) -> Result<std::fs::File> {
-    use std::ffi::CString;
-    use std::os::unix::io::FromRawFd;
-    let display = path.display().to_string();
-    let path = CString::new(path.as_os_str().as_encoded_bytes())
-        .with_context(|| format!("directory path contains a nul byte: {display}"))?;
-    let fd = unsafe {
-        libc::open(
-            path.as_ptr(),
-            libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
-            format!("failed to open directory {display} without following symlinks")
-        });
-    }
-    let file = unsafe { std::fs::File::from_raw_fd(fd) };
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("failed to fstat directory {display}"))?;
-    if !metadata.is_dir() {
-        return Err(PolicyError::JournalInvalid {
-            policy: "journal-directory".to_string(),
-            reason: format!("journal directory {display} is not a real directory"),
-        }
-        .into());
-    }
-    Ok(file)
-}
-
-#[cfg(target_os = "linux")]
-fn fchmod_file(file: &std::fs::File, mode: u32) -> Result<()> {
-    use std::os::unix::io::AsRawFd;
-    let result = unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) };
-    if result == 0 {
-        return Ok(());
-    }
-    Err(std::io::Error::last_os_error())
-        .with_context(|| format!("failed to apply journal mode {mode:o} to an owned artifact"))
-}
-
-#[cfg(target_os = "linux")]
-fn entry_identity(dir_fd: &std::fs::File, name: &str) -> Result<Option<(u64, u64)>> {
-    use std::ffi::CString;
-    use std::os::unix::io::AsRawFd;
-    let name = CString::new(name).context("journal entry name has a nul byte")?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let result = unsafe {
-        libc::fstatat(
-            dir_fd.as_raw_fd(),
-            name.as_ptr(),
-            stat.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if result == 0 {
-        let stat = unsafe { stat.assume_init() };
-        #[cfg(target_os = "macos")]
-        let dev = u64::try_from(stat.st_dev).unwrap_or(0);
-        #[cfg(not(target_os = "macos"))]
-        let dev = stat.st_dev;
-        #[cfg(target_os = "macos")]
-        let ino = u64::try_from(stat.st_ino).unwrap_or(0);
-        #[cfg(not(target_os = "macos"))]
-        let ino = stat.st_ino;
-        return Ok(Some((dev, ino)));
-    }
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::NotFound {
-        return Ok(None);
-    }
-    Err(error).with_context(|| format!("failed to fstat journal entry {name:?}"))
-}
-
-#[cfg(target_os = "linux")]
-fn unlinkat_ignore_missing(fd: &std::fs::File, name: &str) -> Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::io::AsRawFd;
-    let name = CString::new(name).context("journal temp name contains a nul byte")?;
-    let result = unsafe { libc::unlinkat(fd.as_raw_fd(), name.as_ptr(), 0) };
-    if result == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::NotFound {
-        return Ok(());
-    }
-    Err(error).with_context(|| format!("failed to remove journal temp {name:?}"))
-}
-
-#[cfg(target_os = "linux")]
-fn validated_journal_at(
-    dir_fd: &std::fs::File,
-    name: &str,
-    policy: &str,
-) -> Result<Option<(PolicyJournal, Option<JournalFileIdentity>)>> {
-    if name != format!("qol-resident-policy-{policy}.json") {
-        return Ok(None);
-    }
-    let Some((content, stats)) = read_regular_at_identity(dir_fd, name)? else {
-        return Ok(None);
-    };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
-        .with_context(|| format!("failed to parse journal entry {name:?}"))?;
-    if journal.policy != policy {
-        return Err(PolicyError::JournalInvalid {
-            policy: policy.to_string(),
-            reason: format!(
-                "the journal file names policy `{}` but embeds policy `{}`",
-                policy, journal.policy
-            ),
-        }
-        .into());
-    }
-    validate_journal_invariants(&journal)?;
-    let file_identity = journal.journal_file_identity;
-    validate_on_disk_journal(&stats, &journal, policy, &format!("journal entry {name:?}"))?;
-    Ok(Some((journal, file_identity)))
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct JournalFileStats {
-    pub dev: u64,
-    pub ino: u64,
-    pub mode: u32,
-    pub uid: u32,
-    pub gid: u32,
-}
-
-#[cfg(target_os = "linux")]
-fn read_regular_at_identity(
-    dir: &std::fs::File,
-    name: &str,
-) -> Result<Option<(Vec<u8>, JournalFileStats)>> {
-    use std::ffi::CString;
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-    const MAX_JOURNAL_BYTES: usize = 64 * 1024;
-    let name = CString::new(name).context("journal name contains a nul byte")?;
-    let pinned = unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if pinned < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ELOOP)
-        {
-            return Ok(None);
-        }
-        return Err(error).with_context(|| format!("failed to pin journal entry {name:?}"));
-    }
-    let pinned_file = unsafe { std::fs::File::from_raw_fd(pinned) };
-    let pinned_metadata = pinned_file
-        .metadata()
-        .with_context(|| format!("failed to fstat the pinned journal entry {name:?}"))?;
-    if !pinned_metadata.is_file() {
-        return Ok(None);
-    }
-    let proc_link = format!("/proc/self/fd/{}", pinned_file.as_raw_fd());
-    let proc_c =
-        CString::new(proc_link.as_str()).context("proc fd link path contains a nul byte")?;
-    let read_fd = unsafe { libc::open(proc_c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-    if read_fd < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
-            format!("failed to open the pinned journal entry {name:?} for reading")
-        });
-    }
-    let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("failed to fstat the opened journal entry {name:?}"))?;
-    if metadata.dev() != pinned_metadata.dev() || metadata.ino() != pinned_metadata.ino() {
-        return Err(anyhow::anyhow!(
-            "the opened journal entry {name:?} is not the pinned identity; it was preserved"
-        ));
-    }
-    let mut content = Vec::new();
-    {
-        use std::io::Read;
-        file.take(MAX_JOURNAL_BYTES as u64 + 1)
-            .read_to_end(&mut content)
-            .with_context(|| format!("failed to read journal entry {name:?}"))?;
-    }
-    if content.len() > MAX_JOURNAL_BYTES {
-        return Err(PolicyError::JournalInvalid {
-            policy: "journal-entry".to_string(),
-            reason: format!("journal entry {name:?} exceeds the {MAX_JOURNAL_BYTES}-byte bound"),
-        }
-        .into());
-    }
-    Ok(Some((
-        content,
-        JournalFileStats {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-            mode: metadata.mode(),
-            uid: metadata.uid(),
-            gid: metadata.gid(),
-        },
-    )))
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn expected_policy_file_owner() -> (u32, u32) {
     #[cfg(any(test, feature = "sandbox"))]
     {
@@ -519,54 +310,6 @@ pub(crate) fn expected_policy_file_owner() -> (u32, u32) {
     {
         (0, 0)
     }
-}
-
-#[cfg(target_os = "linux")]
-fn validate_on_disk_journal(
-    stats: &JournalFileStats,
-    journal: &PolicyJournal,
-    policy: &str,
-    context: &str,
-) -> Result<()> {
-    let file_identity =
-        journal
-            .journal_file_identity
-            .as_ref()
-            .ok_or_else(|| PolicyError::JournalInvalid {
-                policy: policy.to_string(),
-                reason: format!("{context} carries no embedded file identity; it was preserved"),
-            })?;
-    if file_identity.dev != stats.dev || file_identity.ino != stats.ino {
-        return Err(PolicyError::JournalInvalid {
-            policy: policy.to_string(),
-            reason: format!(
-                "{context} is not the exact file whose identity the journal embeds; it was preserved"
-            ),
-        }
-        .into());
-    }
-    if stats.mode & 0o7777 != JOURNAL_FILE_MODE {
-        return Err(PolicyError::JournalInvalid {
-            policy: policy.to_string(),
-            reason: format!(
-                "{context} carries mode {:o} instead of the exact {JOURNAL_FILE_MODE:o}; it was preserved",
-                stats.mode & 0o7777
-            ),
-        }
-        .into());
-    }
-    let (expected_uid, expected_gid) = expected_policy_file_owner();
-    if stats.uid != expected_uid || stats.gid != expected_gid {
-        return Err(PolicyError::JournalInvalid {
-            policy: policy.to_string(),
-            reason: format!(
-                "{context} carries uid {} gid {} instead of the exact {expected_uid}:{expected_gid}; it was preserved",
-                stats.uid, stats.gid
-            ),
-        }
-        .into());
-    }
-    Ok(())
 }
 
 pub fn journal_stage_path(policy: &str) -> Result<PathBuf> {
@@ -588,466 +331,13 @@ pub(crate) fn sync_directory_fd_strict(dir_fd: &std::fs::File) -> Result<()> {
     Err(std::io::Error::last_os_error()).context("strict directory fsync failed")
 }
 
-#[cfg(all(target_os = "linux", any(test, feature = "sandbox")))]
-pub(crate) fn journal_crash_point(point: &str) -> Result<()> {
-    if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
-        unsafe { libc::abort() };
-    }
-    Ok(())
-}
-
-#[cfg(all(target_os = "linux", not(any(test, feature = "sandbox"))))]
-pub(crate) fn journal_crash_point(_point: &str) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-enum JournalStage {
-    Absent,
-    Recoverable((u64, u64)),
-    Unrecoverable,
-}
-
-#[cfg(target_os = "linux")]
-fn journal_stage_state(
-    parent_fd: &std::fs::File,
-    stage_name: &str,
-    policy: &str,
-) -> Result<JournalStage> {
-    if entry_identity(parent_fd, stage_name)?.is_none() {
-        return Ok(JournalStage::Absent);
-    }
-    let Some((content, stats)) = read_regular_at_identity(parent_fd, stage_name)? else {
-        return Ok(JournalStage::Unrecoverable);
-    };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
-        .with_context(|| format!("failed to parse the journal recovery stage {stage_name:?}"))?;
-    if journal.policy != policy {
-        return Ok(JournalStage::Unrecoverable);
-    }
-    if validate_journal_invariants(&journal).is_err()
-        || validate_on_disk_journal(
-            &stats,
-            &journal,
-            policy,
-            &format!("journal recovery stage {stage_name:?}"),
-        )
-        .is_err()
-    {
-        return Ok(JournalStage::Unrecoverable);
-    }
-    Ok(JournalStage::Recoverable((stats.dev, stats.ino)))
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn recover_stage_before_read(policy: &str) -> Result<()> {
-    let canonical = journal_path(policy)?;
-    let parent = canonical
-        .parent()
-        .context("journal path has no parent directory")?;
-    let parent_fd = open_dir_pinned(parent)?;
-    recover_stage_with_fd(&parent_fd, policy)
-}
-
-#[cfg(target_os = "linux")]
-fn recover_stage_with_fd(parent_fd: &std::fs::File, policy: &str) -> Result<()> {
-    let stage = journal_stage_path(policy)?;
-    let stage_name = stage
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_default();
-    #[cfg(target_os = "linux")]
-    match journal_stage_state(parent_fd, &stage_name, policy)? {
-        JournalStage::Absent => {}
-        JournalStage::Recoverable((dev, ino)) => {
-            fail_next("stage-recover-remove")?;
-            match entry_identity(parent_fd, &stage_name)? {
-                Some(live) if live == (dev, ino) => {}
-                Some(_) => bail!(
-                    "the recoverable journal stage changed identity before removal; it was preserved"
-                ),
-                None => return Ok(()),
-            }
-            unlinkat_ignore_missing(parent_fd, &stage_name)?;
-            sync_directory_fd_strict(parent_fd)?;
-        }
-        JournalStage::Unrecoverable => {
-            return Err(PolicyError::JournalInvalid {
-                policy: policy.to_string(),
-                reason: format!(
-                    "the journal recovery stage {} exists but is not a recoverable qol journal for this policy; it was preserved",
-                    stage.display()
-                ),
-            }
-            .into());
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (&stage_name,);
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn write_stage_linked(
-    parent_fd: &std::fs::File,
-    stage_name: &str,
-    journal: &PolicyJournal,
-) -> Result<(u64, u64)> {
-    use std::ffi::CString;
-    use std::io::Write;
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-    let fd = unsafe {
-        libc::openat(
-            parent_fd.as_raw_fd(),
-            c".".as_ptr(),
-            libc::O_TMPFILE | libc::O_WRONLY | libc::O_CLOEXEC,
-            JOURNAL_FILE_MODE as libc::mode_t,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| "failed to create the unnamed journal temp file");
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    fchmod_file(&file, JOURNAL_FILE_MODE)?;
-    let (owner_uid, owner_gid) = expected_policy_file_owner();
-    let owner = unsafe { libc::fchown(file.as_raw_fd(), owner_uid, owner_gid) };
-    if owner != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| "failed to set the exact journal ownership on the temp");
-    }
-    let metadata = file
-        .metadata()
-        .with_context(|| "failed to fstat the journal temp")?;
-    let identity = JournalFileIdentity {
-        dev: metadata.dev(),
-        ino: metadata.ino(),
-    };
-    let mut journal = journal.clone();
-    journal.journal_file_identity = Some(identity);
-    let content = serde_json::to_vec(&journal).context("failed to serialize the journal")?;
-    file.write_all(&content)
-        .with_context(|| "failed to write the journal temp")?;
-    fail_next("journal-file-sync")?;
-    file.sync_all()
-        .with_context(|| "failed to fsync the journal temp")?;
-    let stage = CString::new(stage_name).context("journal stage name has a nul byte")?;
-    let linked = unsafe {
-        libc::linkat(
-            file.as_raw_fd(),
-            c"".as_ptr(),
-            parent_fd.as_raw_fd(),
-            stage.as_ptr(),
-            libc::AT_EMPTY_PATH,
-        )
-    };
-    if linked != 0 {
-        let error = std::io::Error::last_os_error();
-        let unprivileged = matches!(
-            error.raw_os_error(),
-            Some(libc::ENOENT) | Some(libc::EPERM) | Some(libc::EACCES)
-        );
-        if !unprivileged {
-            return Err(error).with_context(|| {
-                format!("failed to link the journal stage {stage_name:?} without replacing")
-            });
-        }
-        let proc_link = format!("/proc/self/fd/{}", file.as_raw_fd());
-        let proc_c =
-            CString::new(proc_link.as_str()).context("proc fd link path contains a nul byte")?;
-        let linked = unsafe {
-            libc::linkat(
-                parent_fd.as_raw_fd(),
-                proc_c.as_ptr(),
-                parent_fd.as_raw_fd(),
-                stage.as_ptr(),
-                libc::AT_SYMLINK_FOLLOW,
-            )
-        };
-        if linked != 0 {
-            return Err(std::io::Error::last_os_error()).with_context(|| {
-                format!(
-                    "failed to link the owned descriptor into the journal stage {stage_name:?} without replacing"
-                )
-            });
-        }
-    }
-    let stage_identity = (metadata.dev(), metadata.ino());
-    match entry_identity(parent_fd, stage_name)? {
-        Some(live) if live == stage_identity => {}
-        Some(_) => bail!(
-            "the linked journal stage {stage_name:?} is not the exact descriptor identity; it was preserved"
-        ),
-        None => bail!("the linked journal stage {stage_name:?} vanished immediately"),
-    }
-    journal_crash_point("after-journal-stage-link")?;
-    if let Err(error) = sync_directory_fd_strict(parent_fd) {
-        let mut cleanup = Vec::new();
-        match entry_identity(parent_fd, stage_name) {
-            Ok(Some(live)) if live == stage_identity => {
-                if let Err(unlink_error) = unlinkat_ignore_missing(parent_fd, stage_name) {
-                    cleanup.push(unlink_error);
-                }
-                if let Err(sync_error) = sync_directory_fd_strict(parent_fd) {
-                    cleanup.push(sync_error);
-                }
-            }
-            Ok(_) => {}
-            Err(identity_error) => cleanup.push(identity_error),
-        }
-        if cleanup.is_empty() {
-            return Err(error);
-        }
-        let details = cleanup
-            .iter()
-            .map(|error| format!("{error:#}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(anyhow::anyhow!(
-            "{error:#}; additionally, stage cleanup failed: {details}"
-        ));
-    }
-    Ok(stage_identity)
-}
-
-#[cfg(target_os = "linux")]
-fn renameat2_noreplace(dir_fd: &std::fs::File, from: &str, to: &str) -> Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::io::AsRawFd;
-    let from = CString::new(from).context("journal stage name contains a nul byte")?;
-    let to = CString::new(to).context("journal name contains a nul byte")?;
-    let result = unsafe {
-        libc::renameat2(
-            dir_fd.as_raw_fd(),
-            from.as_ptr(),
-            dir_fd.as_raw_fd(),
-            to.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        return Ok(());
-    }
-    Err(std::io::Error::last_os_error()).with_context(|| {
-        format!("failed to commit the journal rename {from:?} -> {to:?} without replacing")
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn renameat_replace(dir_fd: &std::fs::File, from: &str, to: &str) -> Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::io::AsRawFd;
-    let from = CString::new(from).context("journal stage name contains a nul byte")?;
-    let to = CString::new(to).context("journal name contains a nul byte")?;
-    let result = unsafe {
-        libc::renameat(
-            dir_fd.as_raw_fd(),
-            from.as_ptr(),
-            dir_fd.as_raw_fd(),
-            to.as_ptr(),
-        )
-    };
-    if result == 0 {
-        return Ok(());
-    }
-    Err(std::io::Error::last_os_error())
-        .with_context(|| format!("failed to commit journal rename {from:?} -> {to:?}"))
-}
-
-#[cfg(target_os = "linux")]
-fn validated_canonical_identity(
-    parent_fd: &std::fs::File,
-    canonical_name: &str,
-    policy: &str,
-) -> Result<(u64, u64)> {
-    let Some((content, stats)) = read_regular_at_identity(parent_fd, canonical_name)? else {
-        bail!("the canonical journal is not a regular file; refusing to replace it");
-    };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
-        .with_context(|| format!("failed to parse the canonical journal {canonical_name:?}"))?;
-    if journal.policy != policy {
-        bail!("the canonical journal names a different policy; refusing to replace it");
-    }
-    validate_journal_invariants(&journal)?;
-    validate_on_disk_journal(
-        &stats,
-        &journal,
-        policy,
-        &format!("the canonical journal {canonical_name:?}"),
-    )?;
-    Ok((stats.dev, stats.ino))
-}
-
-#[cfg(target_os = "linux")]
-fn commit_stage(
-    parent_fd: &std::fs::File,
-    canonical_name: &str,
-    stage_name: &str,
-    policy: &str,
-) -> Result<()> {
-    match entry_identity(parent_fd, canonical_name)? {
-        None => {
-            fail_next("journal-first-commit")?;
-            renameat2_noreplace(parent_fd, stage_name, canonical_name)?;
-        }
-        Some(_) => {
-            let (dev, ino) = validated_canonical_identity(parent_fd, canonical_name, policy)?;
-            #[cfg(any(test, feature = "sandbox"))]
-            if let Some(replacement) = std::env::var_os("QOL_JOURNAL_REVALIDATE_SWAP") {
-                let canonical = journal_path(policy)?;
-                let swap = canonical.with_extension("swap");
-                std::fs::write(&swap, replacement.as_encoded_bytes())?;
-                std::fs::rename(&swap, &canonical)?;
-            }
-            fail_next("journal-update-revalidate")?;
-            let live = entry_identity(parent_fd, canonical_name)?.ok_or_else(|| {
-                anyhow::anyhow!("the canonical journal vanished before replacement")
-            })?;
-            if live != (dev, ino) {
-                bail!(
-                    "the canonical journal changed identity before replacement; refusing to clobber it"
-                );
-            }
-            fail_next("journal-update-rename")?;
-            renameat_replace(parent_fd, stage_name, canonical_name)?;
-        }
-    }
-    fail_next("journal-dir-sync")?;
-    sync_directory_fd_strict(parent_fd)
-}
-
 pub fn write_journal_durable(journal: &PolicyJournal) -> Result<()> {
     validate_journal_invariants(journal)?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        let path = journal_path(&journal.policy)?;
-        let mut journal = journal.clone();
-        journal.journal_file_identity = None;
-        let content = serde_json::to_vec(&journal).context("failed to serialize the journal")?;
-        qol_fs::atomic_write_durable_mode(&path, &content, JOURNAL_FILE_MODE)
-            .with_context(|| format!("failed to commit journal {}", path.display()))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let policy = journal.policy.clone();
-        let canonical = journal_path(&policy)?;
-        let stage = journal_stage_path(&policy)?;
-        let parent = canonical
-            .parent()
-            .context("journal path has no parent directory")?;
-        let parent_fd = open_dir_pinned(parent)?;
-        let canonical_name = canonical
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let stage_name = stage
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        recover_stage_with_fd(&parent_fd, &policy)?;
-        fail_next("journal-write")?;
-        let stage_identity = write_stage_linked(&parent_fd, &stage_name, journal)?;
-        if let Err(error) = commit_stage(&parent_fd, &canonical_name, &stage_name, &policy) {
-            let mut cleanup = Vec::new();
-            match entry_identity(&parent_fd, &stage_name) {
-                Ok(Some(live)) if live == stage_identity => {
-                    if let Err(unlink_error) = unlinkat_ignore_missing(&parent_fd, &stage_name) {
-                        cleanup.push(unlink_error);
-                    }
-                    if let Err(sync_error) = sync_directory_fd_strict(&parent_fd) {
-                        cleanup.push(sync_error);
-                    }
-                }
-                Ok(_) => {}
-                Err(identity_error) => cleanup.push(identity_error),
-            }
-            if cleanup.is_empty() {
-                return Err(error);
-            }
-            let details = cleanup
-                .iter()
-                .map(|error| format!("{error:#}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(anyhow::anyhow!(
-                "{error:#}; additionally, stage cleanup failed: {details}"
-            ));
-        }
-        Ok(())
-    }
+    journal::write_durable(journal)
 }
 
 pub fn read_journal(policy: &str) -> Result<Option<PolicyJournal>> {
-    #[cfg(not(target_os = "linux"))]
-    {
-        let path = journal_path(policy)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = std::fs::read(&path)
-            .with_context(|| format!("failed to read journal {}", path.display()))?;
-        let journal: PolicyJournal = serde_json::from_slice(&content)
-            .with_context(|| format!("failed to parse journal {}", path.display()))?;
-        if journal.policy != policy {
-            return Err(PolicyError::JournalInvalid {
-                policy: policy.to_string(),
-                reason: format!(
-                    "the journal file names policy `{}` but embeds policy `{}`",
-                    policy, journal.policy
-                ),
-            }
-            .into());
-        }
-        validate_journal_invariants(&journal)?;
-        Ok(Some(journal))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let canonical = journal_path(policy)?;
-        let stage = journal_stage_path(policy)?;
-        let parent = canonical
-            .parent()
-            .context("journal path has no parent directory")?;
-        let parent_fd = open_dir_pinned(parent)?;
-        let canonical_name = canonical
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let stage_name = stage
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if entry_identity(&parent_fd, &stage_name)?.is_some() {
-            return Err(PolicyError::JournalInvalid {
-                policy: policy.to_string(),
-                reason: format!(
-                    "the journal recovery stage {} exists; the journal write was interrupted or the stage is invalid",
-                    stage.display()
-                ),
-            }
-            .into());
-        }
-        match validated_journal_at(&parent_fd, &canonical_name, policy)? {
-            Some((journal, _)) => Ok(Some(journal)),
-            None => {
-                if entry_identity(&parent_fd, &canonical_name)?.is_some() {
-                    Err(PolicyError::JournalInvalid {
-                        policy: policy.to_string(),
-                        reason: format!(
-                            "journal path {} is not a regular file",
-                            canonical.display()
-                        ),
-                    }
-                    .into())
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-    }
+    journal::read(policy)
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -1287,130 +577,7 @@ fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {
 }
 
 pub fn remove_journal_durable(policy: &str) -> Result<()> {
-    #[cfg(not(target_os = "linux"))]
-    {
-        let path = journal_path(policy)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => {
-                Err(error).with_context(|| format!("failed to remove journal {}", path.display()))
-            }
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let canonical = journal_path(policy)?;
-        let parent = canonical
-            .parent()
-            .context("journal path has no parent directory")?;
-        let parent_fd = open_dir_pinned(parent)?;
-        let canonical_name = canonical
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        recover_stage_with_fd(&parent_fd, policy)?;
-        let Some((_, file_identity)) = validated_journal_at(&parent_fd, &canonical_name, policy)?
-        else {
-            if entry_identity(&parent_fd, &canonical_name)?.is_some() {
-                return Err(PolicyError::JournalInvalid {
-                    policy: policy.to_string(),
-                    reason: format!(
-                        "journal path {} exists but is not a validated regular qol journal; it was preserved",
-                        canonical.display()
-                    ),
-                }
-                .into());
-            }
-            return Ok(());
-        };
-        let Some(identity) = file_identity else {
-            return Err(PolicyError::JournalInvalid {
-                policy: policy.to_string(),
-                reason: "the canonical journal carries no file identity; refusing to remove it"
-                    .to_string(),
-            }
-            .into());
-        };
-        #[cfg(any(test, feature = "sandbox"))]
-        if std::env::var_os("QOL_JOURNAL_REMOVE_SWAP").is_some() {
-            let canonical = journal_path(policy)?;
-            let swap = canonical.with_extension("swap");
-            std::fs::write(&swap, b"foreign inode bytes")?;
-            std::fs::rename(&swap, &canonical)?;
-        }
-        fail_next("journal-unlink")?;
-        match entry_identity(&parent_fd, &canonical_name)? {
-            Some(live) if live == (identity.dev, identity.ino) => {}
-            Some(_) => {
-                bail!("the journal entry changed identity since validation; it was preserved")
-            }
-            None => return Ok(()),
-        }
-        unlinkat_ignore_missing(&parent_fd, &canonical_name)?;
-        sync_directory_fd_strict(&parent_fd)
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn join_owner(
-    policy: &ResidentPolicy,
-    owner: &ResidencyOwnerId,
-) -> Result<Option<PolicyJournal>> {
-    let Some(journal) = read_journal(policy.id())? else {
-        return Ok(None);
-    };
-    if journal.state != JournalState::Active {
-        bail!(
-            "cannot join policy `{}` in state {}; join requires an Active policy",
-            policy.id(),
-            journal.state.as_str()
-        );
-    }
-    if journal.owners.iter().any(|existing| existing == owner) {
-        return Ok(Some(journal));
-    }
-    let mut journal = journal;
-    journal.owners.push(owner.clone());
-    write_journal_durable(&journal)?;
-    Ok(Some(journal))
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn remove_owner(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
-    let Some(mut journal) = read_journal(policy.id())? else {
-        return Ok(());
-    };
-    let before = journal.owners.len();
-    journal.owners.retain(|existing| existing != owner);
-    if journal.owners.len() == before {
-        return Ok(());
-    }
-    if journal.owners.is_empty() {
-        return remove_journal_durable(policy.id());
-    }
-    write_journal_durable(&journal)
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn transfer_ownership(
-    policy: &ResidentPolicy,
-    new_owner: &ResidencyOwnerId,
-) -> Result<Option<PolicyJournal>> {
-    let Some(journal) = read_journal(policy.id())? else {
-        return Ok(None);
-    };
-    if journal.state != JournalState::Active {
-        bail!(
-            "cannot transfer policy `{}` in state {}; transfer requires an Active policy",
-            policy.id(),
-            journal.state.as_str()
-        );
-    }
-    let mut journal = journal;
-    journal.owners = vec![new_owner.clone()];
-    write_journal_durable(&journal)?;
-    Ok(Some(journal))
+    journal::remove_durable(policy)
 }
 
 #[cfg(test)]
@@ -1515,6 +682,72 @@ pub(crate) mod test_support {
         std::env::set_var("QOL_POLICY_JOURNAL_DIR", dir);
         JournalDirOverride { previous }
     }
+
+    pub(crate) fn expected_policy_file_owner_for_tests() -> (u32, u32) {
+        #[cfg(target_os = "linux")]
+        {
+            crate::policy::expected_policy_file_owner()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            (0, 0)
+        }
+    }
+
+    pub(crate) fn nvidia_payload() -> crate::policy::nvidia::NvidiaPayload {
+        let (expected_uid, expected_gid) = expected_policy_file_owner_for_tests();
+        let rendered_sha256 = "a".repeat(64);
+        crate::policy::nvidia::NvidiaPayload {
+            entries: vec![crate::policy::nvidia::PackageEntry {
+                package: "nvidia-driver-560".to_string(),
+                version: "560.35.03-0ubuntu1".to_string(),
+            }],
+            expected_module_version: "580.159.02".to_string(),
+            resource_identity: format!(
+                "{}:{}",
+                crate::policy::nvidia::NVIDIA_POLICY_ID,
+                "a".repeat(32)
+            ),
+            staged_path: None,
+            staged_identity: None,
+            active_fingerprint: Some(crate::policy::nvidia::ActiveFileFingerprint {
+                dev: 1,
+                ino: 1,
+                rendered_sha256: rendered_sha256.clone(),
+                mode: 0o100644,
+                uid: expected_uid,
+                gid: expected_gid,
+                ctime_sec: 1,
+                ctime_nsec: 1,
+            }),
+            rendered_sha256,
+        }
+    }
+
+    pub(crate) fn journal(policy_id: &str, owners: &[&str]) -> crate::policy::PolicyJournal {
+        let mut payload = nvidia_payload();
+        let rendered = crate::policy::nvidia::sha256_hex(&crate::policy::nvidia::render_fragment(
+            &payload.entries,
+            &payload.resource_identity,
+        ));
+        payload.rendered_sha256 = rendered.clone();
+        if let Some(fingerprint) = &mut payload.active_fingerprint {
+            fingerprint.rendered_sha256 = rendered;
+        }
+        crate::policy::PolicyJournal {
+            schema_version: crate::policy::JOURNAL_SCHEMA_VERSION,
+            policy: policy_id.to_string(),
+            owners: owners
+                .iter()
+                .map(|owner| crate::policy::ResidencyOwnerId::parse(owner).unwrap())
+                .collect(),
+            state: crate::policy::JournalState::Active,
+            created_unix_ms: 1,
+            payload: crate::policy::PolicyPayload::Nvidia(payload),
+            failure: None,
+            journal_file_identity: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1535,65 +768,11 @@ mod tests {
     }
 
     fn nvidia_payload() -> nvidia::NvidiaPayload {
-        let (expected_uid, expected_gid) = expected_policy_file_owner_for_tests();
-        let rendered_sha256 = "a".repeat(64);
-        nvidia::NvidiaPayload {
-            entries: vec![nvidia::PackageEntry {
-                package: "nvidia-driver-560".to_string(),
-                version: "560.35.03-0ubuntu1".to_string(),
-            }],
-            expected_module_version: "580.159.02".to_string(),
-            resource_identity: format!("{}:{}", nvidia::NVIDIA_POLICY_ID, "a".repeat(32)),
-            staged_path: None,
-            staged_identity: None,
-            active_fingerprint: Some(nvidia::ActiveFileFingerprint {
-                dev: 1,
-                ino: 1,
-                rendered_sha256: rendered_sha256.clone(),
-                mode: 0o100644,
-                uid: expected_uid,
-                gid: expected_gid,
-                ctime_sec: 1,
-                ctime_nsec: 1,
-            }),
-            rendered_sha256,
-        }
-    }
-
-    fn expected_policy_file_owner_for_tests() -> (u32, u32) {
-        #[cfg(target_os = "linux")]
-        {
-            expected_policy_file_owner()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            (0, 0)
-        }
+        test_support::nvidia_payload()
     }
 
     fn journal(policy_id: &str, owners: &[&str]) -> PolicyJournal {
-        let mut payload = nvidia_payload();
-        let rendered = nvidia::sha256_hex(&nvidia::render_fragment(
-            &payload.entries,
-            &payload.resource_identity,
-        ));
-        payload.rendered_sha256 = rendered.clone();
-        if let Some(fingerprint) = &mut payload.active_fingerprint {
-            fingerprint.rendered_sha256 = rendered;
-        }
-        PolicyJournal {
-            schema_version: JOURNAL_SCHEMA_VERSION,
-            policy: policy_id.to_string(),
-            owners: owners
-                .iter()
-                .map(|owner| ResidencyOwnerId::parse(owner).unwrap())
-                .collect(),
-            state: JournalState::Active,
-            created_unix_ms: 1,
-            payload: PolicyPayload::Nvidia(payload),
-            failure: None,
-            journal_file_identity: None,
-        }
+        test_support::journal(policy_id, owners)
     }
 
     fn canonical_path() -> std::path::PathBuf {
@@ -1939,7 +1118,7 @@ mod tests {
                 stage_path().exists(),
                 "the crash must leave the linked update stage behind"
             );
-            recover_stage_before_read("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage("nvidia-driver-version-pin").unwrap();
             assert!(
                 !stage_path().exists(),
                 "the locked recovery must remove the exact recoverable stage"
@@ -2044,6 +1223,88 @@ mod tests {
                 "{point}: the failed write must not commit the canonical"
             );
         }
+        for point in [
+            "journal-update-revalidate",
+            "journal-update-rename",
+            "journal-dir-sync",
+        ] {
+            reset_journal_dir();
+            write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+            std::env::set_var("QOL_RESIDENT_FAIL_NEXT", point);
+            let error = write_journal_durable(&journal(
+                "nvidia-driver-version-pin",
+                &["owner-a", "owner-b"],
+            ))
+            .unwrap_err();
+            std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+            assert!(
+                format!("{error:#}").contains(&format!("injected {point} failure")),
+                "{point}: {error:#}"
+            );
+            assert!(
+                !stage_path().exists(),
+                "{point}: the failed update must clean the exact stage it created"
+            );
+            assert!(
+                canonical_path().exists(),
+                "{point}: the committed canonical must survive the refused update"
+            );
+        }
+        reset_journal_dir();
+        write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+        std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "journal-unlink");
+        let error = remove_journal_durable("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+        assert!(
+            format!("{error:#}").contains("injected journal-unlink failure"),
+            "{error:#}"
+        );
+        assert!(
+            canonical_path().exists(),
+            "the refused removal must preserve the canonical"
+        );
+        reset_journal_dir();
+        write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"])).unwrap();
+        let dir = test_journal_dir();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "policy::tests::journal_subprocess_probe",
+                "--nocapture",
+            ])
+            .env("QOL_POLICY_SUBPROCESS", "1")
+            .env("QOL_RESIDENT_CRASH_POINT", "after-journal-stage-link")
+            .env("QOL_POLICY_JOURNAL_DIR", dir)
+            .output()
+            .unwrap();
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert!(
+                output.status.signal() == Some(libc::SIGABRT),
+                "the update probe must abort at the stage link"
+            );
+        }
+        assert!(
+            stage_path().exists(),
+            "the crash must leave the linked update stage behind"
+        );
+        std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "stage-recover-remove");
+        let error = journal::recover_stage("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+        assert!(
+            format!("{error:#}").contains("injected stage-recover-remove failure"),
+            "{error:#}"
+        );
+        assert!(
+            stage_path().exists(),
+            "the refused recovery must preserve the exact recoverable stage"
+        );
+        assert!(
+            canonical_path().exists(),
+            "the canonical must survive the refused recovery"
+        );
+        std::fs::remove_file(canonical_path()).unwrap();
+        std::fs::remove_file(stage_path()).unwrap();
     }
 
     #[test]
@@ -2265,7 +1526,7 @@ mod tests {
                 read_journal("nvidia-driver-version-pin").is_err(),
                 "the stage must be visible to read-only status, not Absent"
             );
-            recover_stage_before_read("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage("nvidia-driver-version-pin").unwrap();
             assert!(
                 !stage_path().exists(),
                 "recovery must remove the exact recoverable stage"
@@ -2329,8 +1590,8 @@ mod tests {
             ino: 1,
             rendered_sha256: payload.rendered_sha256.clone(),
             mode: 0o100644,
-            uid: expected_policy_file_owner_for_tests().0,
-            gid: expected_policy_file_owner_for_tests().1,
+            uid: test_support::expected_policy_file_owner_for_tests().0,
+            gid: test_support::expected_policy_file_owner_for_tests().1,
             ctime_sec: 1,
             ctime_nsec: 1,
         });
@@ -2563,7 +1824,9 @@ mod tests {
         {
             let mut wrong_owner = payload_with_shape(false, false, true);
             wrong_owner.active_fingerprint.as_mut().unwrap().uid =
-                expected_policy_file_owner_for_tests().0.wrapping_add(1);
+                test_support::expected_policy_file_owner_for_tests()
+                    .0
+                    .wrapping_add(1);
             assert!(nvidia::validate_payload(&wrong_owner).is_err());
         }
 

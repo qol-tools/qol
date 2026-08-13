@@ -243,9 +243,9 @@ mod tests {
                 .join("|")
         );
         assert!(execution.stdout.contains(&usage));
-        assert!(execution
-            .stdout
-            .contains("sessions_list, session_spawn, session_bridge, and session_loop_close"));
+        assert!(execution.stdout.contains(
+            "sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close"
+        ));
         assert!(execution
             .stdout
             .contains("read, send, wait, and focus remain human diagnostics"));
@@ -262,7 +262,7 @@ mod tests {
         let execution = contract_execution(&args).unwrap().unwrap();
         assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
         assert!(execution.stdout.contains(
-            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
         assert!(execution
             .stdout
@@ -284,8 +284,11 @@ mod tests {
         assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
         assert!(execution
             .stdout
-            .contains("qol sessions bridge <session> <task...> [--timeout-ms N]"));
+            .contains("qol sessions bridge <session> [<task...>] [--timeout-ms N]"));
         assert!(execution.stdout.contains("Submits exactly once"));
+        assert!(execution
+            .stdout
+            .contains("Without a task it re-attaches to the pending round"));
         assert!(execution.stdout.contains("completion_marker"));
         assert!(execution.stdout.contains("Timeout defaults to 24h"));
     }

@@ -28,3 +28,8 @@ pub(crate) use macos::MacosNvidia as Backend;
 mod windows;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::WindowsNvidia as Backend;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod fallback;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) use fallback::FallbackNvidia as Backend;
