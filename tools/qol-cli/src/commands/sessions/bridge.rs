@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -23,6 +23,7 @@ const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const TASK_MAX_BYTES: usize = 64 * 1024;
+const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const TIMEOUT_DEFAULT_MS: u64 = TIMEOUT_MAX_MS;
@@ -112,7 +113,7 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, driver, false, false)
+        self.write_unlocked(binding, marker, driver, false)
     }
 
     pub(super) fn observe(
@@ -128,7 +129,7 @@ impl PendingBridgeStore {
         if checkpoint.closed || checkpoint.completion_marker != marker {
             return Ok(());
         }
-        self.write_unlocked(binding, marker, &checkpoint.driver, completed, false)
+        self.write_unlocked(binding, marker, &checkpoint.driver, completed)
     }
 
     fn write_unlocked(
@@ -137,7 +138,6 @@ impl PendingBridgeStore {
         marker: &str,
         driver: &str,
         completed: bool,
-        closed: bool,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -147,7 +147,7 @@ impl PendingBridgeStore {
             driver: driver.to_owned(),
             completion_marker: marker.to_owned(),
             completed,
-            closed,
+            closed: false,
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -172,13 +172,18 @@ impl PendingBridgeStore {
         if require_completed && !checkpoint.completed {
             bail!("the pending bridge has not completed");
         }
-        self.write_unlocked(
-            binding,
-            marker,
-            &checkpoint.driver,
-            checkpoint.completed,
-            true,
-        )
+        fs::remove_file(self.file_for(binding))
+            .context("failed to remove pending bridge checkpoint")
+    }
+
+    pub(super) fn discard(&self, binding: &SessionBinding) -> Result<BridgeCheckpoint> {
+        let _lock = self.lock(binding)?;
+        let checkpoint = self
+            .load_unlocked(binding)?
+            .ok_or_else(|| anyhow!("no pending bridge checkpoint exists for `{binding}`"))?;
+        fs::remove_file(self.file_for(binding))
+            .context("failed to remove pending bridge checkpoint")?;
+        Ok(checkpoint)
     }
 
     pub(super) fn pending_round(&self, binding: &SessionBinding) -> Result<Option<PendingRound>> {
@@ -207,15 +212,8 @@ impl PendingBridgeStore {
         Ok(rounds)
     }
 
-    pub(super) fn legacy_open_rounds(&self) -> Result<usize> {
-        Ok(self
-            .open_checkpoints()?
-            .iter()
-            .filter(|checkpoint| checkpoint.session.is_empty())
-            .count())
-    }
-
     fn open_checkpoints(&self) -> Result<Vec<BridgeCheckpoint>> {
+        self.sweep()?;
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -241,6 +239,37 @@ impl PendingBridgeStore {
             checkpoints.push(checkpoint);
         }
         Ok(checkpoints)
+    }
+
+    fn sweep(&self) -> Result<()> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).context("failed to read pending bridge directory"),
+        };
+        for entry in entries {
+            let path = entry
+                .context("failed to read pending bridge directory")?
+                .path();
+            match path.extension().and_then(|extension| extension.to_str()) {
+                Some("tmp") if older_than(&path, STALE_TMP_AFTER) => {
+                    let _ = fs::remove_file(&path);
+                }
+                Some("json") => {
+                    let Ok(encoded) = fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let Ok(checkpoint) = serde_json::from_str::<BridgeCheckpoint>(&encoded) else {
+                        continue;
+                    };
+                    if checkpoint.closed || checkpoint.session.is_empty() {
+                        let _ = fs::remove_file(&path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn acquire_owner(&self, binding: &SessionBinding) -> Result<BridgeOwner> {
@@ -318,6 +347,12 @@ impl PendingBridgeStore {
     fn owner_for(&self, binding: &SessionBinding) -> PathBuf {
         self.file_for(binding).with_extension("owner")
     }
+}
+
+fn older_than(path: &Path, age: Duration) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|modified| modified.elapsed().is_ok_and(|elapsed| elapsed >= age))
 }
 
 struct CompletionMarker {
@@ -637,7 +672,24 @@ fn resume_owned(
             started,
         ));
     }
-    let target = resolve_target(terminals, binding)?;
+    let target = resolve_target(terminals, binding).map_err(|error| {
+        let gone = terminals
+            .discover()
+            .map(|facts| {
+                !facts
+                    .iter()
+                    .any(|session| session.id == *binding.session_id())
+            })
+            .unwrap_or(false);
+        if gone {
+            anyhow!(
+                "{error}; the terminal is gone - recover the orphaned round with `qol sessions discard {}`",
+                binding.token()
+            )
+        } else {
+            error
+        }
+    })?;
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
     let subscription = interpreter
         .subscribe(
@@ -711,7 +763,7 @@ pub(super) fn delivery_observed(
     let deadline = Instant::now() + window;
     loop {
         let screen = terminals
-            .read_screen(binding)
+            .read_screen_relaxed(binding)
             .context("bridge screen read failed")?;
         if screen.contains(fragment) || screen != pre_screen || liveness() == Some(true) {
             return Ok(true);
@@ -785,10 +837,16 @@ pub(super) fn wait_for_completion(
     let mut last_probe: Option<Instant> = None;
     let mut reads = 0;
     loop {
-        let screen = terminals
-            .read_screen(binding)
-            .context("bridge screen read failed")?;
         reads += 1;
+        let screen = if reads % 10 == 0 {
+            terminals
+                .read_screen(binding)
+                .context("bridge screen read failed")?
+        } else {
+            terminals
+                .read_screen_relaxed(binding)
+                .context("bridge screen read failed")?
+        };
         let matched = screen.contains(marker);
         if matched && previous.as_deref() == Some(screen.as_str()) {
             return Ok(outcome(
@@ -898,7 +956,254 @@ fn validate_task(task: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::thread;
+
+    use qol_terminal_sessions::cli::{
+        CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+        CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolColor, CliToolId,
+    };
+    use qol_terminal_sessions::{
+        BackendId, SessionCapabilities, SessionFocus, SessionId, TerminalBackend, TerminalError,
+        TerminalSnapshot,
+    };
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum FakeCall {
+        Ls,
+        GetText,
+        SendText,
+    }
+
+    struct FakeBackend {
+        id: BackendId,
+        facts: SessionFacts,
+        screens: Mutex<VecDeque<String>>,
+        sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
+        calls: Mutex<Vec<FakeCall>>,
+    }
+
+    impl FakeBackend {
+        fn new(facts: SessionFacts, screens: Vec<String>) -> Arc<Self> {
+            Arc::new(Self {
+                id: BackendId::new("fake").unwrap(),
+                facts,
+                screens: Mutex::new(screens.into()),
+                sent: Mutex::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn next_screen(&self) -> String {
+            let mut screens = self.screens.lock().unwrap();
+            if let Some(screen) = screens.pop_front() {
+                return screen;
+            }
+            self.generated_completion()
+                .unwrap_or_else(|| ">>> ready".to_owned())
+        }
+
+        fn generated_completion(&self) -> Option<String> {
+            let sent = self.sent.lock().unwrap();
+            let prompt = &sent.last()?.1;
+            let fragments = prompt
+                .split('`')
+                .enumerate()
+                .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
+                .collect::<Vec<_>>();
+            let right = fragments.last()?;
+            let left = fragments.get(fragments.len().checked_sub(2)?)?;
+            Some(format!("implementation complete\n{left}{right}"))
+        }
+    }
+
+    impl SessionInventory for FakeBackend {
+        fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            self.calls.lock().unwrap().push(FakeCall::Ls);
+            Ok(vec![self.facts.clone()])
+        }
+    }
+
+    impl ScreenReader for FakeBackend {
+        fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            self.calls.lock().unwrap().push(FakeCall::Ls);
+            self.calls.lock().unwrap().push(FakeCall::GetText);
+            Ok(self.next_screen())
+        }
+
+        fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            self.calls.lock().unwrap().push(FakeCall::GetText);
+            Ok(self.next_screen())
+        }
+    }
+
+    impl SessionFocus for FakeBackend {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for FakeBackend {
+        fn send_text(
+            &self,
+            target: &SessionBinding,
+            text: &str,
+            mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            self.calls.lock().unwrap().push(FakeCall::SendText);
+            self.sent
+                .lock()
+                .unwrap()
+                .push((target.clone(), text.to_owned(), mode));
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for FakeBackend {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            _target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            Ok(">>> ready".to_owned())
+        }
+
+        fn id(&self) -> &BackendId {
+            &self.id
+        }
+    }
+
+    struct StopSignal(Arc<AtomicBool>);
+
+    impl Drop for StopSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    struct TickerStrategy;
+
+    impl TickerStrategy {
+        fn tool() -> CliTool {
+            CliTool::new(
+                CliToolId::new("ticker").unwrap(),
+                "Ticker",
+                CliToolColor::new(0, 0, 0),
+            )
+        }
+    }
+
+    impl CliSessionStrategy for TickerStrategy {
+        fn tool(&self) -> &CliTool {
+            static TOOL: std::sync::OnceLock<CliTool> = std::sync::OnceLock::new();
+            TOOL.get_or_init(TickerStrategy::tool)
+        }
+
+        fn matches(&self, _session: &SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(&self, _session: &SessionFacts) -> CliSessionDescriptor {
+            CliSessionDescriptor {
+                tool: self.tool().clone(),
+                display_name: None,
+                external_id: None,
+                has_activity: None,
+                evidence: CliSessionEvidence::default(),
+            }
+        }
+
+        fn subscribe(
+            &self,
+            _session: &SessionFacts,
+            on_change: CliSessionChangeHandler,
+        ) -> Result<Option<CliSessionSubscription>, CliSessionSubscriptionError> {
+            let stop = Arc::new(AtomicBool::new(false));
+            let tick_stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !tick_stop.load(Ordering::Relaxed) {
+                    on_change();
+                    thread::sleep(Duration::from_millis(1));
+                }
+            });
+            Ok(Some(CliSessionSubscription::from_guard(StopSignal(stop))))
+        }
+    }
+
+    #[test]
+    fn hot_loop_reads_skip_the_capability_recheck_except_every_tenth() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::new(
+            SessionId::new(BackendId::new("fake").unwrap(), "7").unwrap(),
+            123,
+        )
+        .unwrap();
+        let facts = SessionFacts {
+            id: binding.session_id().clone(),
+            root_pid: binding.root_pid(),
+            cwd: "/work/demo".to_owned(),
+            title: "Demo REPL".to_owned(),
+            at_prompt: true,
+            reported_cmd: Some("agent".to_owned()),
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        };
+        let mut screens = vec![">>> ready".to_owned()];
+        screens.push(
+            ">>> [qol session bridge]\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
+                .to_owned(),
+        );
+        screens.extend((0..12).map(|index| format!("building step {index}")));
+        let backend = FakeBackend::new(facts, screens);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::new(TickerStrategy) as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+
+        let outcome = execute(
+            &terminals,
+            &interpreter,
+            &binding,
+            "implement the bounded change",
+            Duration::from_secs(10),
+            &pending,
+            None,
+        )
+        .unwrap();
+
+        assert!(outcome.completed);
+        assert_eq!(outcome.reads, 14);
+        let calls = backend.calls.lock().unwrap();
+        let ls = calls.iter().filter(|call| **call == FakeCall::Ls).count() as u64;
+        let get_text = calls
+            .iter()
+            .filter(|call| **call == FakeCall::GetText)
+            .count() as u64;
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| **call == FakeCall::SendText)
+                .count(),
+            1
+        );
+        assert_eq!(get_text, outcome.reads + 2);
+        assert_eq!(ls, outcome.reads / 10 + 3);
+        assert!(ls - 3 <= outcome.reads.div_ceil(10) + 1);
+    }
 
     #[test]
     fn prompt_never_contains_the_joined_completion_marker() {
@@ -990,7 +1295,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_checkpoint_cannot_be_resurrected_by_a_late_bridge() {
+    fn acknowledged_checkpoint_is_deleted_and_cannot_be_resurrected_by_a_late_bridge() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
@@ -1000,11 +1305,17 @@ mod tests {
         store
             .acknowledge(&binding, "QOL_BRIDGE_DONE_old", false)
             .unwrap();
+        assert!(
+            store.load(&binding).unwrap().is_none(),
+            "acknowledging a round must remove its checkpoint file"
+        );
         store
             .observe(&binding, "QOL_BRIDGE_DONE_old", true)
             .unwrap();
-        let closed = store.load(&binding).unwrap().unwrap();
-        assert!(closed.closed);
+        assert!(
+            store.load(&binding).unwrap().is_none(),
+            "a late observe must not resurrect an acknowledged round"
+        );
 
         store
             .start(&binding, "QOL_BRIDGE_DONE_new", "v1:fake:8:800")
@@ -1016,5 +1327,62 @@ mod tests {
         assert_eq!(current.completion_marker, "QOL_BRIDGE_DONE_new");
         assert!(!current.completed);
         assert!(!current.closed);
+    }
+
+    #[test]
+    fn sweep_removes_stale_tmp_legacy_and_closed_checkpoints() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let open = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        store
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800")
+            .unwrap();
+
+        let stale_tmp = root.path().join("stale.tmp");
+        fs::write(&stale_tmp, b"partial").unwrap();
+        age_file(&stale_tmp, Duration::from_secs(7200));
+        let fresh_tmp = root.path().join("fresh.tmp");
+        fs::write(&fresh_tmp, b"partial").unwrap();
+        let legacy = root.path().join("legacy.json");
+        fs::write(
+            &legacy,
+            serde_json::to_string(&BridgeCheckpoint {
+                session: String::new(),
+                driver: String::new(),
+                completion_marker: "QOL_BRIDGE_DONE_legacy".to_owned(),
+                completed: false,
+                closed: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let closed = root.path().join("closed.json");
+        fs::write(
+            &closed,
+            serde_json::to_string(&BridgeCheckpoint {
+                session: "v1:fake:2:200".to_owned(),
+                driver: String::new(),
+                completion_marker: "QOL_BRIDGE_DONE_closed".to_owned(),
+                completed: true,
+                closed: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let rounds = store.pending_rounds().unwrap();
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].session, "v1:fake:1:100");
+        assert!(!stale_tmp.exists());
+        assert!(fresh_tmp.exists());
+        assert!(!legacy.exists());
+        assert!(!closed.exists());
+        assert!(store.file_for(&open).exists());
+    }
+
+    fn age_file(path: &std::path::Path, age: Duration) {
+        let file = fs::File::open(path).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(SystemTime::now() - age);
+        file.set_times(times).unwrap();
     }
 }

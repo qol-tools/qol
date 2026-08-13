@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
+use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
@@ -22,7 +23,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 14] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 15] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -50,6 +51,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 14] = [
     SessionSubcommand {
         name: "resume",
         run: |rest, _format| run_resume(rest),
+    },
+    SessionSubcommand {
+        name: "discard",
+        run: |rest, _format| discard(rest),
     },
     SessionSubcommand {
         name: "interrupt",
@@ -118,6 +123,7 @@ Primary usage:
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
+  qol sessions discard <session>
   qol sessions interrupt <session>
   qol sessions close <session>
 
@@ -161,13 +167,18 @@ Details:
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
   command for each open round: resume while waiting, resume --kickstart when
-  the target went idle without emitting its completion signal, then a review
-  instruction with the acknowledge-marker bridge template once complete.
+  the target went idle without emitting its completion signal, discard when
+  the target's terminal is gone, then a review instruction with the
+  acknowledge-marker bridge template once complete.
   resume re-attaches to the one pending round and waits for its completion
   marker without submitting anything; its timeout defaults to 24h. With
   --kickstart it first nudges the interrupted session to continue or emit
   the signal. A wait that detects an idle target returns stalled=true
   instead of blocking until timeout; rerun next when that happens.
+  discard removes the pending-bridge checkpoint of a session whose terminal
+  is gone (verified via live discovery); it refuses a live session, refuses
+  when no checkpoint exists, and never touches last-send state or spawn
+  locks.
   interrupt sends the target tool's stop key (agent TUIs: esc, plain
   shells: ctrl+c) while a round is open, leaving the round and its
   queued input intact. Every bridge JSON result carries next_command;
@@ -496,85 +507,12 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
-    let legacy = if args.is_empty() {
-        pending.legacy_open_rounds()?
-    } else {
-        0
-    };
-    let terminals = service()?;
-    let interpreter = CliSessionInterpreter::system();
-    let rows = rounds
-        .iter()
-        .map(|round| {
-            let attached = round
-                .session
-                .parse::<SessionBinding>()
-                .ok()
-                .and_then(|binding| pending.owner_pid(&binding));
-            if let Some(pid) = attached {
-                return serde_json::json!({
-                    "phase": "attached",
-                    "session": round.session,
-                    "command": "",
-                    "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
-                });
-            }
-            if round.completed {
-                return serde_json::json!({
-                    "phase": "review",
-                    "session": round.session,
-                    "completion_marker": round.completion_marker,
-                    "command": format!(
-                        "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
-                        round.session, round.completion_marker
-                    ),
-                    "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
-                });
-            }
-            let stalled = round
-                .session
-                .parse::<SessionBinding>()
-                .ok()
-                .and_then(|binding| {
-                    bridge::session_liveness(&terminals, &interpreter, &binding)()
-                })
-                == Some(false);
-            if stalled {
-                serde_json::json!({
-                    "phase": "stalled",
-                    "session": round.session,
-                    "command": format!(
-                        "qol sessions resume {} --kickstart --timeout-ms {}",
-                        round.session,
-                        bridge::TIMEOUT_MAX_MS
-                    ),
-                    "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
-                })
-            } else {
-                serde_json::json!({
-                    "phase": "waiting",
-                    "session": round.session,
-                    "command": format!(
-                        "qol sessions resume {} --timeout-ms {}",
-                        round.session,
-                        bridge::TIMEOUT_MAX_MS
-                    ),
-                    "instruction": "Implementation is still running. Run the command in the foreground and do nothing else until it returns.",
-                })
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut rows = rows;
-    if legacy > 0 {
-        rows.push(serde_json::json!({
-            "phase": "unknown",
-            "session": "",
-            "command": "qol sessions next <session>",
-            "instruction": format!(
-                "{legacy} open round(s) recorded by an older qol version carry no session token and cannot be listed here. Run the command once per candidate implementation session from `qol sessions list`."
-            ),
-        }));
-    }
+    let rows = next_rows(
+        &service()?,
+        &CliSessionInterpreter::system(),
+        &pending,
+        &rounds,
+    )?;
     match output_format {
         OutputFormat::Json => println!(
             "{}",
@@ -601,6 +539,119 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn next_rows(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    pending: &bridge::PendingBridgeStore,
+    rounds: &[bridge::PendingRound],
+) -> Result<Vec<serde_json::Value>> {
+    let live = terminals.discover().ok();
+    let mut rows = Vec::with_capacity(rounds.len());
+    for round in rounds {
+        let binding = round.session.parse::<SessionBinding>().ok();
+        let attached = binding
+            .as_ref()
+            .and_then(|binding| pending.owner_pid(binding));
+        if let Some(pid) = attached {
+            rows.push(serde_json::json!({
+                "phase": "attached",
+                "session": round.session,
+                "command": "",
+                "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
+            }));
+            continue;
+        }
+        let gone = binding.as_ref().is_some_and(|binding| {
+            live.as_ref().is_some_and(|facts| {
+                !facts
+                    .iter()
+                    .any(|session| session.id == *binding.session_id())
+            })
+        });
+        if gone {
+            rows.push(serde_json::json!({
+                "phase": "gone",
+                "session": round.session,
+                "command": format!("qol sessions discard {}", round.session),
+                "instruction": "The implementation terminal is gone, so this round cannot resume or be reviewed here. Run the command to drop the orphaned checkpoint, then start a fresh round on a live session.",
+            }));
+            continue;
+        }
+        if round.completed {
+            rows.push(serde_json::json!({
+                "phase": "review",
+                "session": round.session,
+                "completion_marker": round.completion_marker,
+                "command": format!(
+                    "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
+                    round.session, round.completion_marker
+                ),
+                "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
+            }));
+            continue;
+        }
+        let stalled = binding.as_ref().is_some_and(|binding| {
+            bridge::session_liveness(terminals, interpreter, binding)() == Some(false)
+        });
+        if stalled {
+            rows.push(serde_json::json!({
+                "phase": "stalled",
+                "session": round.session,
+                "command": format!(
+                    "qol sessions resume {} --kickstart --timeout-ms {}",
+                    round.session,
+                    bridge::TIMEOUT_MAX_MS
+                ),
+                "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
+            }));
+        } else {
+            rows.push(serde_json::json!({
+                "phase": "waiting",
+                "session": round.session,
+                "command": format!(
+                    "qol sessions resume {} --timeout-ms {}",
+                    round.session,
+                    bridge::TIMEOUT_MAX_MS
+                ),
+                "instruction": "Implementation is still running. Run the command in the foreground and do nothing else until it returns.",
+            }));
+        }
+    }
+    Ok(rows)
+}
+
+fn discard(args: &[OsString]) -> Result<()> {
+    let binding = single_binding(args, "qol sessions discard <session>")?;
+    let removed = discard_checkpoint(
+        &service()?,
+        &bridge::PendingBridgeStore::system()?,
+        &binding,
+    )?;
+    println!(
+        "removed pending bridge checkpoint for {} (completion_marker={}, completed={})",
+        binding, removed.completion_marker, removed.completed
+    );
+    Ok(())
+}
+
+fn discard_checkpoint(
+    terminals: &TerminalSessionService,
+    pending: &bridge::PendingBridgeStore,
+    binding: &SessionBinding,
+) -> Result<BridgeCheckpoint> {
+    if terminals
+        .discover()
+        .context("session discovery failed")?
+        .iter()
+        .any(|session| session.id == *binding.session_id())
+    {
+        bail!(
+            "session `{binding}` still has a live terminal; `qol sessions discard` only removes the checkpoint of a session whose terminal is gone"
+        );
+    }
+    pending.discard(binding)
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {
@@ -748,7 +799,185 @@ fn mode_label(mode: DeliveryMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qol_terminal_sessions::SessionCapabilities;
+    use qol_terminal_sessions::{
+        BackendId, SessionCapabilities, SessionId, TerminalBackend, TerminalError, TerminalSnapshot,
+    };
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct FakeSessionBackend {
+        id: BackendId,
+        sessions: Vec<qol_terminal_sessions::SessionFacts>,
+    }
+
+    impl SessionInventory for FakeSessionBackend {
+        fn discover(&self) -> Result<Vec<qol_terminal_sessions::SessionFacts>, TerminalError> {
+            Ok(self.sessions.clone())
+        }
+    }
+
+    impl ScreenReader for FakeSessionBackend {
+        fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+            Err(TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "screen reading",
+            })
+        }
+    }
+
+    impl SessionFocus for FakeSessionBackend {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for FakeSessionBackend {
+        fn send_text(
+            &self,
+            _target: &SessionBinding,
+            _text: &str,
+            _mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for FakeSessionBackend {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            Err(TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "screen reading",
+            })
+        }
+
+        fn id(&self) -> &BackendId {
+            &self.id
+        }
+    }
+
+    fn fake_terminals(
+        sessions: Vec<qol_terminal_sessions::SessionFacts>,
+    ) -> (TerminalSessionService, Arc<FakeSessionBackend>) {
+        let backend = Arc::new(FakeSessionBackend {
+            id: BackendId::new("fake").unwrap(),
+            sessions,
+        });
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        (terminals, backend)
+    }
+
+    fn fake_facts(native: &str, root_pid: i32) -> qol_terminal_sessions::SessionFacts {
+        qol_terminal_sessions::SessionFacts {
+            id: SessionId::new(BackendId::new("fake").unwrap(), native).unwrap(),
+            root_pid,
+            cwd: "/work".to_owned(),
+            title: "Terminal".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        }
+    }
+
+    fn test_store(root: &tempfile::TempDir) -> bridge::PendingBridgeStore {
+        bridge::PendingBridgeStore::with_dir(root.path().to_path_buf())
+    }
+
+    #[test]
+    fn discard_refuses_a_session_with_a_live_terminal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("7", 123)]);
+
+        let error = discard_checkpoint(&terminals, &store, &binding)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("still has a live terminal"), "{error}");
+        assert!(store.pending_round(&binding).unwrap().is_some());
+    }
+
+    #[test]
+    fn discard_removes_an_orphaned_checkpoint() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(Vec::new());
+
+        let removed = discard_checkpoint(&terminals, &store, &binding).unwrap();
+        assert_eq!(removed.completion_marker, "QOL_BRIDGE_DONE_round");
+        assert!(store.pending_round(&binding).unwrap().is_none());
+    }
+
+    #[test]
+    fn discard_refuses_when_no_checkpoint_exists() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        let (terminals, _) = fake_terminals(Vec::new());
+
+        let error = discard_checkpoint(&terminals, &store, &binding)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no pending bridge checkpoint"), "{error}");
+    }
+
+    #[test]
+    fn next_reports_gone_for_orphaned_rounds_and_waiting_for_live_ones() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let orphan = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        store
+            .start(&orphan, "QOL_BRIDGE_DONE_orphan", "v1:fake:8:800")
+            .unwrap();
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800")
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_session = |token: &str| {
+            rows.iter()
+                .find(|row| row["session"] == token)
+                .unwrap_or_else(|| panic!("missing row for {token}"))
+        };
+        let orphan_row = by_session("v1:fake:1:100");
+        assert_eq!(orphan_row["phase"], "gone");
+        assert_eq!(orphan_row["command"], "qol sessions discard v1:fake:1:100");
+        let live_row = by_session("v1:fake:2:200");
+        assert_eq!(live_row["phase"], "waiting");
+        assert!(live_row["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("qol sessions resume"));
+    }
 
     #[test]
     fn capability_names_reflect_flags() {
