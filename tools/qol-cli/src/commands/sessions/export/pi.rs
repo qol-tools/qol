@@ -237,9 +237,15 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
               ? `qol sessions: lane ${event.session} completed.\n\n${reportSnippet(event.screen)}\n\nReview it, then close the loop with session_loop_close.`
               : `qol sessions: lane ${event.session} ${event.event}. ${action}`;
           wakeDebugLog(sessionId, `send message_bytes=${message.length}`);
-          pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true })
-            .then(() => wakeDebugLog(sessionId, "send ok"))
-            .catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`));
+          try {
+            const sent = pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true });
+            wakeDebugLog(sessionId, `send returned ${typeof sent}`);
+            if (sent && typeof sent.then === "function") {
+              sent.then(() => wakeDebugLog(sessionId, "send ok")).catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`));
+            }
+          } catch (error) {
+            wakeDebugLog(sessionId, `send threw: ${error?.message ?? error}`);
+          }
         }
       });
       child.on("error", (error) => {
@@ -542,10 +548,9 @@ mod tests {
         assert!(WATCH_GLUE.contains("chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}"));
         assert!(WATCH_GLUE.contains("event=${event.event} session=${event.session} screen="));
         assert!(WATCH_GLUE.contains("send message_bytes=${message.length}"));
-        assert!(WATCH_GLUE.contains(".then(() => wakeDebugLog(sessionId, \"send ok\"))"));
-        assert!(WATCH_GLUE.contains(
-            ".catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`))"
-        ));
+        assert!(WATCH_GLUE.contains("send returned ${typeof sent}"));
+        assert!(WATCH_GLUE.contains("send threw: ${error?.message ?? error}"));
+        assert!(WATCH_GLUE.contains("if (sent && typeof sent.then === \"function\")"));
         assert!(source.contains("import * as fs from \"node:fs\";"));
         assert!(source.contains("import * as fsp from \"node:fs/promises\";"));
     }
