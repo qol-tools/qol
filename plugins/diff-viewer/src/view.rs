@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, AnyElement, App, ClickEvent, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, HighlightStyle, KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString,
-    StyledText, TextStyle, WhiteSpace, Window,
+    div, ease_out_quint, px, rgb, Animation, AnimationExt as _, AnyElement, App, ClickEvent,
+    Context, CursorStyle, Div, ElementId, Entity, FocusHandle, Focusable, HighlightStyle,
+    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, TextStyle, WhiteSpace,
+    Window,
 };
 use qol_cache::TtlCache;
+use qol_diff::transition::{NewLineFate, OldLineFate, TransitionPlan};
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::placement::Corner;
 use qol_gpui::scroll_list::ScrollList;
@@ -39,6 +41,10 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const DIFF_TTL: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HEAT_TICK: Duration = Duration::from_secs(1);
+const TRANSITION_MS: Duration = Duration::from_millis(200);
+const MORPH_FADE: f32 = 0.4;
+const GHOST_DRIFT_PX: f32 = 8.0;
+const SLIDE_PX: f32 = 10.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
@@ -156,6 +162,17 @@ struct LinePair {
     new: Option<usize>,
 }
 
+struct TransitionState {
+    seq: u64,
+    started: Instant,
+    old_lines: Vec<LineChange>,
+    old_pair_of: Vec<Option<usize>>,
+    old_layout: Layout,
+    old_scroll: usize,
+    old_gutter_width: usize,
+    plan: TransitionPlan,
+}
+
 pub struct DiffView {
     repo: Option<PathBuf>,
     files: FileListState,
@@ -194,6 +211,9 @@ pub struct DiffView {
     heat_stamps: HashMap<String, Instant>,
     heat_stamp: Option<Instant>,
     heat_fingerprint: Vec<LineStyle>,
+    transition: Option<TransitionState>,
+    transition_seq: u64,
+    select_rx: Option<mpsc::Receiver<usize>>,
     chrome: PanelChrome,
     drag_gesture: Rc<RefCell<DragGestureState>>,
 }
@@ -208,7 +228,16 @@ impl DiffView {
         cx: &mut Context<Self>,
     ) -> Self {
         let (jump_tx, jump_rx) = mpsc::channel::<f32>();
-        let scrubber_view = cx.new(|cx| ScrubberView::new(cx, None));
+        let (select_tx, select_rx) = mpsc::channel::<usize>();
+        let scrubber_view = cx.new(|cx| {
+            ScrubberView::new(
+                cx,
+                None,
+                Some(Box::new(move |index, _cx| {
+                    let _ = select_tx.send(index);
+                })),
+            )
+        });
         let overview_view = cx.new(|_cx| {
             let tx = jump_tx.clone();
             OverviewView::new(move |ratio, _app| {
@@ -254,6 +283,9 @@ impl DiffView {
             heat_stamps: HashMap::new(),
             heat_stamp: None,
             heat_fingerprint: Vec::new(),
+            transition: None,
+            transition_seq: 0,
+            select_rx: Some(select_rx),
             chrome: PanelChrome::new(window_title, Corner::TopLeft),
         };
         if view.repo.is_none() {
@@ -275,6 +307,7 @@ impl DiffView {
     fn spawn_result_poll(&mut self, cx: &mut Context<Self>) {
         let rx = self.results.take().expect("result poll spawned once");
         let jump_rx = self.jump_rx.take().expect("jump poll spawned once");
+        let select_rx = self.select_rx.take().expect("select poll spawned once");
         let this = cx.weak_entity();
         let generation = self.generation.clone();
         cx.spawn(async move |_view, cx| loop {
@@ -287,12 +320,19 @@ impl DiffView {
             while let Ok(ratio) = jump_rx.try_recv() {
                 jumps.push(ratio);
             }
-            if results.is_empty() && jumps.is_empty() {
+            let mut selects = Vec::new();
+            while let Ok(index) = select_rx.try_recv() {
+                selects.push(index);
+            }
+            if results.is_empty() && jumps.is_empty() && selects.is_empty() {
                 continue;
             }
             let current = generation.load(Ordering::SeqCst);
             let _ = this.update(cx, |view, cx| {
                 let mut changed = view.apply_results(results, current, cx);
+                if let Some(index) = selects.last().copied() {
+                    changed |= view.on_scrub_selected(index);
+                }
                 if let Some(ratio) = jumps.last().copied() {
                     view.apply_jump(ratio);
                     changed = true;
@@ -502,6 +542,15 @@ impl DiffView {
         true
     }
 
+    fn on_scrub_selected(&mut self, index: usize) -> bool {
+        if self.last_scrub_selected == Some(index) {
+            return false;
+        }
+        self.last_scrub_selected = Some(index);
+        self.request_scrub_diff(index);
+        true
+    }
+
     fn request_scrub_diff(&mut self, index: usize) {
         let Some(path) = self.files.selected_path() else {
             return;
@@ -573,6 +622,7 @@ impl DiffView {
                 if matches!(self.pane, DiffPane::Empty) {
                     return false;
                 }
+                self.begin_transition(&[]);
                 self.lines.clear();
                 self.line_text.clear();
                 self.line_highlights.clear();
@@ -588,6 +638,7 @@ impl DiffView {
                     }
                 }
                 let lines = flatten(&diff);
+                self.begin_transition(&lines);
                 let (pairs, hunk_pair_starts, hunk_line_starts) = build_pairs(&diff.hunks);
                 let gutter_width = self.surface.gutter_width();
                 self.line_text = lines
@@ -613,9 +664,33 @@ impl DiffView {
                 self.hunk_line_starts = hunk_line_starts;
                 self.pane = DiffPane::Ready(diff);
             }
-            Err(error) => self.pane = DiffPane::Error(error),
+            Err(error) => {
+                self.transition = None;
+                self.pane = DiffPane::Error(error);
+            }
         }
         true
+    }
+
+    fn begin_transition(&mut self, new_lines: &[LineChange]) {
+        self.transition = None;
+        if matches!(self.pane, DiffPane::Error(_)) {
+            return;
+        }
+        let old_lines = self.lines.clone();
+        let plan = TransitionPlan::between(&old_lines, new_lines);
+        let old_pair_of = old_pair_rows(&self.pairs, old_lines.len());
+        self.transition_seq += 1;
+        self.transition = Some(TransitionState {
+            seq: self.transition_seq,
+            started: Instant::now(),
+            old_lines,
+            old_pair_of,
+            old_layout: self.layout,
+            old_scroll: self.surface.scroll_offset(),
+            old_gutter_width: self.surface.gutter_width(),
+            plan,
+        });
     }
 
     fn hide_panel(&mut self, cx: &mut Context<Self>) {
@@ -812,18 +887,29 @@ impl DiffView {
                     Some(repo) => format!("No changes in {}", repo.display()),
                     None => "No changes".to_string(),
                 };
+                let text_style = self.base_text_style(window);
+                let old_layout = self
+                    .transition
+                    .as_ref()
+                    .map(|transition| transition.old_layout);
+                let ghosts = match old_layout {
+                    Some(Layout::Split) => self.split_ghost_layer(&text_style, None),
+                    _ => div()
+                        .absolute()
+                        .size_full()
+                        .top(px(0.0))
+                        .children(self.unified_ghosts(&text_style, None))
+                        .into_any_element(),
+                };
                 pane.child(center_message(&message, surface::TEXT_MUTED))
+                    .child(ghosts)
                     .into_any_element()
             }
             DiffPane::Error(error) => pane
                 .child(center_message(&error.to_string(), surface::ERROR_TEXT))
                 .into_any_element(),
             DiffPane::Ready(_) => {
-                let mut text_style = window.text_style();
-                text_style.font_family = self.font_family.clone();
-                text_style.font_size = px(FONT_SIZE).into();
-                text_style.line_height = px(LINE_HEIGHT).into();
-                text_style.white_space = WhiteSpace::Nowrap;
+                let text_style = self.base_text_style(window);
                 let age = self.heat_age();
                 match self.layout {
                     Layout::Split => pane
@@ -831,10 +917,20 @@ impl DiffView {
                         .into_any_element(),
                     Layout::Unified => pane
                         .children(self.code_rows(&text_style, age))
+                        .children(self.unified_ghosts(&text_style, age))
                         .into_any_element(),
                 }
             }
         }
+    }
+
+    fn base_text_style(&self, window: &Window) -> TextStyle {
+        let mut text_style = window.text_style();
+        text_style.font_family = self.font_family.clone();
+        text_style.font_size = px(FONT_SIZE).into();
+        text_style.line_height = px(LINE_HEIGHT).into();
+        text_style.white_space = WhiteSpace::Nowrap;
+        text_style
     }
 
     fn split_columns(&self, base: &TextStyle, age: Option<Duration>) -> AnyElement {
@@ -859,7 +955,8 @@ impl DiffView {
                     .overflow_hidden()
                     .border_r_1()
                     .border_color(rgb(surface::BORDER))
-                    .children(old_rows),
+                    .children(old_rows)
+                    .children(self.split_ghosts(true, base, age)),
             )
             .child(
                 div()
@@ -868,7 +965,8 @@ impl DiffView {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .children(new_rows),
+                    .children(new_rows)
+                    .children(self.split_ghosts(false, base, age)),
             )
             .into_any_element()
     }
@@ -926,23 +1024,25 @@ impl DiffView {
                     (false, LineKind::Added) => "+",
                     _ => " ",
                 };
-                row_el
-                    .child(
-                        div()
-                            .flex_none()
-                            .px_1()
-                            .text_color(rgb(surface::GUTTER_TEXT))
-                            .child(label.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(GLYPH_WIDTH))
-                            .text_color(rgb(surface::kind_color(line.kind)))
-                            .child(glyph),
-                    )
-                    .child(self.code_text(index, style.dimmed, base, age))
-                    .into_any_element()
+                self.animate_new_line(
+                    index,
+                    row_el
+                        .child(
+                            div()
+                                .flex_none()
+                                .px_1()
+                                .text_color(rgb(surface::GUTTER_TEXT))
+                                .child(label.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(GLYPH_WIDTH))
+                                .text_color(rgb(surface::kind_color(line.kind)))
+                                .child(glyph),
+                        )
+                        .child(self.code_text(index, style.dimmed, base, age)),
+                )
             }
             None => row_el
                 .child(
@@ -980,22 +1080,24 @@ impl DiffView {
         if let Some(bg) = surface::line_background(style) {
             row = row.bg(rgb(bg));
         }
-        row.child(
-            div()
-                .flex_none()
-                .px_1()
-                .text_color(rgb(surface::GUTTER_TEXT))
-                .child(self.unified_gutters[index].clone()),
+        self.animate_new_line(
+            index,
+            row.child(
+                div()
+                    .flex_none()
+                    .px_1()
+                    .text_color(rgb(surface::GUTTER_TEXT))
+                    .child(self.unified_gutters[index].clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(GLYPH_WIDTH))
+                    .text_color(rgb(surface::kind_color(line.kind)))
+                    .child(surface::kind_glyph(line.kind)),
+            )
+            .child(self.code_text(index, style.dimmed, base, age)),
         )
-        .child(
-            div()
-                .flex_none()
-                .w(px(GLYPH_WIDTH))
-                .text_color(rgb(surface::kind_color(line.kind)))
-                .child(surface::kind_glyph(line.kind)),
-        )
-        .child(self.code_text(index, style.dimmed, base, age))
-        .into_any_element()
     }
 
     fn code_text(
@@ -1014,6 +1116,202 @@ impl DiffView {
         StyledText::new(self.line_text[index].clone())
             .with_default_highlights(&text_style, highlights)
     }
+
+    fn animate_new_line(&self, line_index: usize, row: Div) -> AnyElement {
+        let Some(transition) = self.active_transition() else {
+            return row.into_any_element();
+        };
+        let seq = transition.seq;
+        match transition.plan.new.get(line_index) {
+            Some(NewLineFate::Added) => row
+                .with_animation(
+                    ElementId::named_usize(format!("tw-row-{seq}"), line_index),
+                    Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+                    |row, progress| row.opacity(progress).top(px(SLIDE_PX * (1.0 - progress))),
+                )
+                .into_any_element(),
+            Some(NewLineFate::MorphedFrom(_)) => row
+                .with_animation(
+                    ElementId::named_usize(format!("tw-row-{seq}"), line_index),
+                    Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+                    |row, progress| row.opacity(MORPH_FADE + (1.0 - MORPH_FADE) * progress),
+                )
+                .into_any_element(),
+            _ => row.into_any_element(),
+        }
+    }
+
+    fn active_transition(&self) -> Option<&TransitionState> {
+        self.transition
+            .as_ref()
+            .filter(|transition| transition.started.elapsed() < TRANSITION_MS)
+    }
+
+    fn unified_ghosts(&self, base: &TextStyle, age: Option<Duration>) -> Vec<AnyElement> {
+        let Some(transition) = self.active_transition() else {
+            return Vec::new();
+        };
+        let mut ghosts = Vec::new();
+        for (index, fate) in transition.plan.old.iter().enumerate() {
+            if *fate != OldLineFate::Removed {
+                continue;
+            }
+            let top = (index as f32 - transition.old_scroll as f32) * LINE_HEIGHT;
+            ghosts.push(self.unified_ghost(index, top, base, age));
+        }
+        ghosts
+    }
+
+    fn split_ghosts(
+        &self,
+        is_old_side: bool,
+        base: &TextStyle,
+        age: Option<Duration>,
+    ) -> Vec<AnyElement> {
+        let Some(transition) = self.active_transition() else {
+            return Vec::new();
+        };
+        let mut ghosts = Vec::new();
+        for (index, fate) in transition.plan.old.iter().enumerate() {
+            if *fate != OldLineFate::Removed {
+                continue;
+            }
+            let line = &transition.old_lines[index];
+            if (line.kind == LineKind::Added) == is_old_side {
+                continue;
+            }
+            let pair_row = transition.old_pair_of[index].unwrap_or(index);
+            let top = (pair_row as f32 - transition.old_scroll as f32) * LINE_HEIGHT;
+            ghosts.push(self.split_ghost(index, is_old_side, top, base, age));
+        }
+        ghosts
+    }
+
+    fn split_ghost_layer(&self, base: &TextStyle, age: Option<Duration>) -> AnyElement {
+        div()
+            .absolute()
+            .size_full()
+            .top(px(0.0))
+            .flex()
+            .flex_row()
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .border_r_1()
+                    .border_color(rgb(surface::BORDER))
+                    .children(self.split_ghosts(true, base, age)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .children(self.split_ghosts(false, base, age)),
+            )
+            .into_any_element()
+    }
+
+    fn unified_ghost(
+        &self,
+        index: usize,
+        top: f32,
+        base: &TextStyle,
+        age: Option<Duration>,
+    ) -> AnyElement {
+        let transition = self
+            .active_transition()
+            .expect("unified ghost needs a transition");
+        let line = &transition.old_lines[index];
+        let seq = transition.seq;
+        let width = transition.old_gutter_width;
+        let style = decayed_line_style(surface::style_from_line(line), age);
+        let mut row = ghost_base(top);
+        if let Some(bg) = surface::line_background(style) {
+            row = row.bg(rgb(bg));
+        }
+        row.child(
+            div()
+                .flex_none()
+                .px_1()
+                .text_color(rgb(surface::GUTTER_TEXT))
+                .child(unified_gutter(line, width)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(GLYPH_WIDTH))
+                .text_color(rgb(surface::kind_color(line.kind)))
+                .child(surface::kind_glyph(line.kind)),
+        )
+        .child(ghost_text(line, style.dimmed, base, age))
+        .with_animation(
+            ElementId::named_usize(format!("tw-ghost-{seq}"), index),
+            Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+            move |row, progress| {
+                row.opacity(1.0 - progress)
+                    .top(px(top - GHOST_DRIFT_PX * progress))
+            },
+        )
+        .into_any_element()
+    }
+
+    fn split_ghost(
+        &self,
+        index: usize,
+        is_old_side: bool,
+        top: f32,
+        base: &TextStyle,
+        age: Option<Duration>,
+    ) -> AnyElement {
+        let transition = self
+            .active_transition()
+            .expect("split ghost needs a transition");
+        let line = &transition.old_lines[index];
+        let seq = transition.seq;
+        let width = transition.old_gutter_width;
+        let labels = surface::gutter_labels(line.old_line_no, line.new_line_no, width);
+        let label = if is_old_side { labels.0 } else { labels.1 };
+        let style = decayed_line_style(surface::style_from_line(line), age);
+        let mut row = ghost_base(top);
+        if let Some(bg) = surface::line_background(style) {
+            row = row.bg(rgb(bg));
+        }
+        let glyph = match (is_old_side, line.kind) {
+            (true, LineKind::Removed) => "-",
+            (false, LineKind::Added) => "+",
+            _ => " ",
+        };
+        row.child(
+            div()
+                .flex_none()
+                .px_1()
+                .text_color(rgb(surface::GUTTER_TEXT))
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(GLYPH_WIDTH))
+                .text_color(rgb(surface::kind_color(line.kind)))
+                .child(glyph),
+        )
+        .child(ghost_text(line, style.dimmed, base, age))
+        .with_animation(
+            ElementId::named_usize(format!("tw-ghost-{seq}"), index),
+            Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+            move |row, progress| {
+                row.opacity(1.0 - progress)
+                    .top(px(top - GHOST_DRIFT_PX * progress))
+            },
+        )
+        .into_any_element()
+    }
 }
 
 impl Focusable for DiffView {
@@ -1024,6 +1322,13 @@ impl Focusable for DiffView {
 
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self
+            .transition
+            .as_ref()
+            .is_some_and(|transition| transition.started.elapsed() >= TRANSITION_MS)
+        {
+            self.transition = None;
+        }
         self.last_fit = visible_fit(window.viewport_size().height.to_f64() as f32, LINE_HEIGHT);
         self.update_overview(cx);
         if !self.rendered_once {
@@ -1206,6 +1511,53 @@ fn build_pairs(hunks: &[qol_diff::Hunk]) -> (Vec<LinePair>, Vec<usize>, Vec<usiz
         }
     }
     (pairs, hunk_pair_starts, hunk_line_starts)
+}
+
+fn old_pair_rows(pairs: &[LinePair], line_count: usize) -> Vec<Option<usize>> {
+    let mut rows = vec![None; line_count];
+    for (row, pair) in pairs.iter().enumerate() {
+        if let Some(index) = pair.old {
+            if let Some(slot) = rows.get_mut(index) {
+                *slot = Some(row);
+            }
+        }
+        if let Some(index) = pair.new {
+            if let Some(slot) = rows.get_mut(index) {
+                *slot = Some(row);
+            }
+        }
+    }
+    rows
+}
+
+fn ghost_base(top: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(top))
+        .left(px(0.0))
+        .w_full()
+        .h(px(LINE_HEIGHT))
+        .flex()
+        .flex_row()
+        .overflow_hidden()
+        .line_height(px(LINE_HEIGHT))
+        .text_size(px(FONT_SIZE))
+}
+
+fn ghost_text(
+    line: &LineChange,
+    dimmed: bool,
+    base: &TextStyle,
+    age: Option<Duration>,
+) -> StyledText {
+    let mut text_style = base.clone();
+    text_style.color = rgb(surface::text_color(dimmed)).into();
+    let highlights = match age {
+        Some(age) => highlight_ranges(line, Some(age)),
+        None => highlight_ranges(line, None),
+    };
+    StyledText::new(SharedString::from(line.text.clone()))
+        .with_default_highlights(&text_style, highlights)
 }
 
 fn decayed_line_style(fresh: LineStyle, age: Option<Duration>) -> LineStyle {
@@ -1567,6 +1919,34 @@ mod tests {
             },
             "context between one-sided runs stays aligned"
         );
+    }
+
+    #[test]
+    fn old_pair_rows_map_every_flat_line_to_its_split_row() {
+        let pairs = vec![
+            LinePair {
+                old: Some(0),
+                new: Some(0),
+            },
+            LinePair {
+                old: Some(1),
+                new: Some(2),
+            },
+            LinePair {
+                old: None,
+                new: Some(3),
+            },
+        ];
+        assert_eq!(
+            old_pair_rows(&pairs, 4),
+            vec![Some(0), Some(1), Some(1), Some(2)]
+        );
+        assert_eq!(
+            old_pair_rows(&pairs, 2),
+            vec![Some(0), Some(1)],
+            "unlisted flat lines stay unplaced"
+        );
+        assert_eq!(old_pair_rows(&[], 0), Vec::<Option<usize>>::new());
     }
 
     #[test]

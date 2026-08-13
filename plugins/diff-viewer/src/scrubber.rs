@@ -217,21 +217,28 @@ struct DragAnchor {
 }
 
 pub type ConfirmCallback = Box<dyn Fn(&mut Context<ScrubberView>)>;
+pub type SelectCallback = Box<dyn Fn(usize, &mut Context<ScrubberView>)>;
 
 pub struct ScrubberView {
     state: ScrubberState,
     focus_handle: FocusHandle,
     drag: Option<DragAnchor>,
     on_confirm: Option<ConfirmCallback>,
+    on_select: Option<SelectCallback>,
 }
 
 impl ScrubberView {
-    pub fn new(cx: &mut Context<Self>, on_confirm: Option<ConfirmCallback>) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        on_confirm: Option<ConfirmCallback>,
+        on_select: Option<SelectCallback>,
+    ) -> Self {
         Self {
             state: ScrubberState::new(),
             focus_handle: cx.focus_handle(),
             drag: None,
             on_confirm,
+            on_select,
         }
     }
 
@@ -264,11 +271,29 @@ impl ScrubberView {
         }
     }
 
+    fn fire_select(&self, cx: &mut Context<Self>) {
+        if let Some(callback) = &self.on_select {
+            callback(self.state.selected(), cx);
+        }
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         match key {
-            "left" if !self.state.is_empty() => self.state.prev(),
-            "right" if !self.state.is_empty() => self.state.next(),
+            "left" if !self.state.is_empty() => {
+                let before = self.state.selected();
+                self.state.prev();
+                if self.state.selected() != before {
+                    self.fire_select(cx);
+                }
+            }
+            "right" if !self.state.is_empty() => {
+                let before = self.state.selected();
+                self.state.next();
+                if self.state.selected() != before {
+                    self.fire_select(cx);
+                }
+            }
             "enter" | "return" => {
                 self.confirm(cx);
                 return;
@@ -279,7 +304,11 @@ impl ScrubberView {
     }
 
     fn begin_drag(&mut self, index: usize, x: f32, cx: &mut Context<Self>) {
+        let changed = index != self.state.selected();
         self.state.select(index);
+        if changed {
+            self.fire_select(cx);
+        }
         self.drag = Some(DragAnchor { index, x });
         cx.stop_propagation();
         cx.notify();
@@ -307,6 +336,7 @@ impl ScrubberView {
         };
         if target != self.state.selected {
             self.state.select(target);
+            self.fire_select(cx);
             cx.notify();
         }
     }

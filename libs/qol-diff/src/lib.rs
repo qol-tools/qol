@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod engine;
 pub mod lexer;
+pub mod transition;
 
 pub const HOT_TO_WARM_AFTER: Duration = Duration::from_secs(60);
 pub const WARM_TO_COOL_AFTER: Duration = Duration::from_secs(300);
