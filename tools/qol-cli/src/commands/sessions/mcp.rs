@@ -353,9 +353,13 @@ impl McpSessionServer {
             .acknowledge(&binding, completion_marker, outcome == "accepted")
             .map_err(|error| error.to_string())?;
         if outcome == "accepted" {
-            let terminal_closed =
-                super::close::close_spawned_terminal(self.terminals.as_ref(), &binding).is_ok();
-            receipt["terminal_closed"] = json!(terminal_closed);
+            let close = super::close::close_spawned_terminal(self.terminals.as_ref(), &binding)
+                .map_err(|error| error.to_string())?;
+            receipt["terminal_closed"] = json!(close.closed);
+            receipt["terminal_state"] = json!(close.terminal_state);
+            if let Some(detail) = close.close_detail {
+                receipt["close_detail"] = json!(detail);
+            }
         }
         serde_json::to_string(&receipt).map_err(|error| format!("serialization failed: {error}"))
     }
@@ -525,6 +529,8 @@ mod tests {
         complete_bridge: AtomicBool,
         fail_send: bool,
         current: Mutex<bool>,
+        gone: AtomicBool,
+        fail_close: AtomicBool,
         spawner_enabled: AtomicBool,
         spawn_count: std::sync::atomic::AtomicUsize,
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
@@ -543,6 +549,8 @@ mod tests {
                 complete_bridge: AtomicBool::new(complete_bridge),
                 fail_send,
                 current: Mutex::new(false),
+                gone: AtomicBool::new(false),
+                fail_close: AtomicBool::new(false),
                 spawner_enabled: AtomicBool::new(false),
                 spawn_count: std::sync::atomic::AtomicUsize::new(0),
                 spawn_identity: Mutex::new(None),
@@ -559,6 +567,14 @@ mod tests {
 
         fn enable_spawner(&self) {
             self.spawner_enabled.store(true, Ordering::Relaxed);
+        }
+
+        fn mark_gone(&self) {
+            self.gone.store(true, Ordering::Relaxed);
+        }
+
+        fn fail_closing(&self) {
+            self.fail_close.store(true, Ordering::Relaxed);
         }
 
         fn spawned_session(&self) -> Option<SessionFacts> {
@@ -609,6 +625,9 @@ mod tests {
 
     impl SessionInventory for FakeBackend {
         fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            if self.gone.load(Ordering::Relaxed) {
+                return Ok(Vec::new());
+            }
             let mut facts = vec![Self::session()];
             if let Some(spawned) = self.spawned_session() {
                 facts.push(spawned);
@@ -706,6 +725,14 @@ mod tests {
 
     impl qol_terminal_sessions::SessionCloser for FakeBackend {
         fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+            if self.fail_close.load(Ordering::Relaxed) {
+                return Err(TerminalError::CommandFailed {
+                    backend: self.id.clone(),
+                    operation: "close",
+                    code: Some(1),
+                    stderr: "fake close refused".to_owned(),
+                });
+            }
             self.closed.lock().unwrap().push(target.clone());
             Ok(())
         }
@@ -1248,39 +1275,51 @@ mod tests {
     #[test]
     fn loop_close_returns_a_typed_terminal_receipt() {
         let (server, backend) = server(Vec::new(), false, false);
-        for outcome in ["accepted", "paused"] {
-            let binding: SessionBinding = token().parse().unwrap();
-            server
-                .pending
-                .start(&binding, "QOL_BRIDGE_DONE_final", "")
+        let binding: SessionBinding = token().parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        let response = tool_call(&server, "session_loop_close", close_arguments("paused"));
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
-            server
-                .pending
-                .observe(&binding, "QOL_BRIDGE_DONE_final", true)
-                .unwrap();
-            let response = tool_call(&server, "session_loop_close", close_arguments(outcome));
-            assert_eq!(response["result"]["isError"], false);
-            let receipt: Value =
-                serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                    .unwrap();
-            assert_eq!(receipt["loop_closed"], true);
-            assert_eq!(receipt["outcome"], outcome);
-            assert!(receipt["final_report"]
-                .as_str()
-                .unwrap()
-                .contains("## What landed"));
-            assert!(receipt["final_report"]
-                .as_str()
-                .unwrap()
-                .contains("## Before"));
-            assert!(receipt["final_report"].as_str().unwrap().contains("## Now"));
-            if outcome == "accepted" {
-                assert_eq!(receipt["terminal_closed"], false);
-            } else {
-                assert!(receipt.get("terminal_closed").is_none());
-            }
-            assert!(backend.closed.lock().unwrap().is_empty());
-        }
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "paused");
+        assert!(receipt["final_report"]
+            .as_str()
+            .unwrap()
+            .contains("## What landed"));
+        assert!(receipt["final_report"]
+            .as_str()
+            .unwrap()
+            .contains("## Before"));
+        assert!(receipt["final_report"].as_str().unwrap().contains("## Now"));
+        assert!(receipt.get("terminal_closed").is_none());
+        assert!(receipt.get("terminal_state").is_none());
+        assert!(receipt.get("close_detail").is_none());
+        assert!(backend.closed.lock().unwrap().is_empty());
+
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        let response = tool_call(&server, "session_loop_close", close_arguments("accepted"));
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("was not spawned"));
+        assert!(backend.closed.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1320,9 +1359,101 @@ mod tests {
         assert_eq!(receipt["loop_closed"], true);
         assert_eq!(receipt["outcome"], "accepted");
         assert_eq!(receipt["terminal_closed"], true);
+        assert_eq!(receipt["terminal_state"], "closed");
+        assert!(receipt.get("close_detail").is_none());
         let closed = backend.closed.lock().unwrap();
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0], binding);
+    }
+
+    #[test]
+    fn loop_close_accepted_reports_a_terminal_that_is_already_gone() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "mcp-lane-gone", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        backend.mark_gone();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(session);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["terminal_closed"], true);
+        assert_eq!(receipt["terminal_state"], "already_gone");
+        assert!(receipt["close_detail"]
+            .as_str()
+            .unwrap()
+            .contains("no longer live"));
+        assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_accepted_surfaces_a_failed_terminal_close() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "mcp-lane-fail", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        backend.fail_closing();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(session);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["terminal_closed"], false);
+        assert_eq!(receipt["terminal_state"], "close_failed");
+        assert!(receipt["close_detail"]
+            .as_str()
+            .unwrap()
+            .contains("fake close refused"));
+        assert!(backend.closed.lock().unwrap().is_empty());
     }
 
     #[test]

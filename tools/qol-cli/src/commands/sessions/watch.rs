@@ -92,52 +92,58 @@ pub(super) fn watch(
     out: &mut dyn Write,
     config: WatchConfig,
 ) -> Result<()> {
-    let _guard = if tokens.is_empty() {
+    let watch_lock = if tokens.is_empty() {
         let key = qol_terminal_sessions::SpawnKey::new(WATCH_ALL_KEY)
             .context("watch lock key is invalid")?;
-        Some(
-            locks
-                .acquire(&key)
-                .context("another qol sessions watch is already running")?,
-        )
+        let guard = locks
+            .acquire(&key)
+            .context("another qol sessions watch is already running")?;
+        Some((key, guard))
     } else {
         None
     };
-    let mut watched = load_rounds(pending, tokens)?
-        .into_iter()
-        .map(WatchedRound::new)
-        .collect::<Result<Vec<_>>>()?;
-    let mut poll_interval = config.poll_base;
-    loop {
-        if watched.is_empty() {
-            return Ok(());
-        }
-        reconcile(pending, &mut watched, out)?;
-        if watched.is_empty() {
-            return Ok(());
-        }
-        let mut changed = false;
-        let mut remaining = Vec::with_capacity(watched.len());
-        for mut round in watched {
-            let outcome = poll_round(terminals, pending, &mut round, out, config)?;
-            changed |= outcome.changed;
-            if outcome.keep {
-                remaining.push(round);
+    let result = (|| {
+        let mut watched = load_rounds(pending, tokens)?
+            .into_iter()
+            .map(WatchedRound::new)
+            .collect::<Result<Vec<_>>>()?;
+        let mut poll_interval = config.poll_base;
+        loop {
+            if watched.is_empty() {
+                return Ok(());
             }
+            reconcile(pending, &mut watched, out)?;
+            if watched.is_empty() {
+                return Ok(());
+            }
+            let mut changed = false;
+            let mut remaining = Vec::with_capacity(watched.len());
+            for mut round in watched {
+                let outcome = poll_round(terminals, pending, &mut round, out, config)?;
+                changed |= outcome.changed;
+                if outcome.keep {
+                    remaining.push(round);
+                }
+            }
+            watched = remaining;
+            let sleep = if changed {
+                config.poll_base
+            } else {
+                poll_interval
+            };
+            poll_interval = if changed {
+                config.poll_base
+            } else {
+                next_poll_interval(poll_interval, config.poll_cap)
+            };
+            std::thread::sleep(sleep);
         }
-        watched = remaining;
-        let sleep = if changed {
-            config.poll_base
-        } else {
-            poll_interval
-        };
-        poll_interval = if changed {
-            config.poll_base
-        } else {
-            next_poll_interval(poll_interval, config.poll_cap)
-        };
-        std::thread::sleep(sleep);
+    })();
+    if let Some((key, guard)) = watch_lock {
+        drop(guard);
+        locks.remove(&key);
     }
+    result
 }
 
 struct RoundPoll {
@@ -319,6 +325,7 @@ mod tests {
         BackendId, DeliveryMode, SessionCapabilities, SessionFacts, SessionFocus, SessionId,
         TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
     };
+    use sha2::{Digest, Sha256};
 
     use super::super::bridge::PendingBridgeStore;
     use super::super::spawn::SpawnLocks;
@@ -769,5 +776,75 @@ mod tests {
             "{error}"
         );
         drop(guard);
+    }
+
+    #[test]
+    fn all_rounds_mode_removes_the_watch_lock_on_normal_and_error_exit() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let locks = locks(&root);
+        let key = qol_terminal_sessions::SpawnKey::new(WATCH_ALL_KEY).unwrap();
+        let digest = Sha256::digest(key.as_str().as_bytes());
+        let lock_path = root
+            .path()
+            .join("spawn-locks")
+            .join(format!("{digest:x}.lock"));
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_error", "")
+            .unwrap();
+        let (terminals, _) = harness(FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_error".to_owned()],
+        ));
+        let error = watch(
+            &terminals,
+            &pending,
+            &locks,
+            &[],
+            &mut FailingWriter,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("failed to write"), "{error}");
+        assert!(
+            !lock_path.exists(),
+            "an erroring watch must leave no lock file behind"
+        );
+
+        pending.discard(&binding).unwrap();
+        pending.start(&binding, "QOL_BRIDGE_DONE_done", "").unwrap();
+        let (terminals, _) = harness(FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_done".to_owned()],
+        ));
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks,
+            &[],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+        assert!(
+            !lock_path.exists(),
+            "a completed watch must leave no lock file behind"
+        );
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("watch write failed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 }
