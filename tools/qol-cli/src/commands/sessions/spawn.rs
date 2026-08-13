@@ -123,7 +123,10 @@ fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
     Ok(config.spawn_model)
 }
 
-fn resolve_model_with(flag: Option<&str>, config: Option<String>) -> Result<Option<String>> {
+pub(super) fn resolve_model_with(
+    flag: Option<&str>,
+    config: Option<String>,
+) -> Result<Option<String>> {
     Ok(match flag {
         Some(model) => Some(model.to_owned()),
         None => config,
@@ -132,6 +135,15 @@ fn resolve_model_with(flag: Option<&str>, config: Option<String>) -> Result<Opti
 
 pub(super) fn resolve_model(flag: Option<&str>) -> Result<Option<String>> {
     resolve_model_with(flag, config_spawn_model()?)
+}
+
+pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
+    match model.map(str::trim) {
+        Some(model) if !model.is_empty() => Ok(()),
+        _ => bail!(
+            "spawning a new session requires an explicit model so the lane launches at the intended tier; pass --model MODEL or set spawn_model in sessions.toml. The reuse path needs no model."
+        ),
+    }
 }
 
 fn model_args(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
@@ -261,9 +273,29 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     let model = resolve_model(parsed.model.as_deref())?;
-    let terminals = TerminalSessionService::system();
+    let outcome = run_with(
+        &TerminalSessionService::system(),
+        parsed,
+        model,
+        config_surface()?,
+        &SpawnLocks::system()?,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
+    );
+    Ok(())
+}
+
+fn run_with(
+    terminals: &TerminalSessionService,
+    parsed: SpawnArgs,
+    model: Option<String>,
+    config: Option<SpawnSurface>,
+    locks: &SpawnLocks,
+) -> Result<SpawnOutcome> {
     let outcome = spawn_or_reuse(
-        &terminals,
+        terminals,
         &CliSessionInterpreter::system(),
         &parsed.tool,
         &parsed.cwd,
@@ -271,19 +303,19 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         parsed.surface.as_deref(),
         model.as_deref(),
         parsed.title.as_deref(),
-        config_surface()?,
-        &SpawnLocks::system()?,
+        config,
+        locks,
     )?;
-    let outcome = if let Some(task) = parsed.task.as_deref() {
-        submit_first_round(&terminals, &CliSessionInterpreter::system(), outcome, task)?
+    if let Some(task) = parsed.task.as_deref() {
+        Ok(submit_first_round(
+            terminals,
+            &CliSessionInterpreter::system(),
+            outcome,
+            task,
+        )?)
     } else {
-        outcome
-    };
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
-    );
-    Ok(())
+        Ok(outcome)
+    }
 }
 
 pub(super) fn deliver_task(
@@ -365,7 +397,7 @@ struct SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK]\n--model is required when launching a new session; the reuse path needs no model";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -471,6 +503,7 @@ pub(super) fn spawn_or_reuse(
         let snapshot = terminals.snapshot().context("session discovery failed")?;
         match decide(interpreter, snapshot.sessions(), &identity) {
             SpawnDecision::Launch => {
+                require_model_for_launch(model)?;
                 let mut launch = launch;
                 if let Some(model) = model {
                     launch.args.extend(model_args(&tool_id, model)?);
@@ -1010,6 +1043,123 @@ mod tests {
     }
 
     #[test]
+    fn launch_requires_a_non_empty_model_but_reuse_stays_exempt() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        for model in [None, Some(""), Some("   ")] {
+            let error = run_spawn(
+                &terminals,
+                "codex",
+                &cwd,
+                Some("lane-1"),
+                None,
+                model,
+                None,
+                None,
+                &locks,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("--model"), "model: {model:?} error: {error}");
+        }
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let reused = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cli_run_refuses_a_new_lane_without_a_model_and_allows_reuse_without_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            cwd.clone().into(),
+            "--key".into(),
+            "lane-1".into(),
+        ])
+        .unwrap();
+        let error = run_with(&terminals, parsed, None, None, &locks)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--model"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            cwd.clone().into(),
+            "--key".into(),
+            "lane-1".into(),
+            "--model".into(),
+            "flash-x".into(),
+        ])
+        .unwrap();
+        let outcome =
+            run_with(&terminals, parsed, Some("flash-x".to_owned()), None, &locks).unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            "ignored-cwd".into(),
+            "--key".into(),
+            "lane-1".into(),
+        ])
+        .unwrap();
+        let outcome = run_with(&terminals, parsed, None, None, &locks).unwrap();
+        assert!(outcome.reused);
+        assert_eq!(outcome.cwd, cwd);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
     fn spawn_args_reject_missing_required_flags_and_unknown_flags() {
         for args in [
             vec!["--cwd".into(), "/tmp".into()],
@@ -1188,7 +1338,7 @@ mod tests {
             &cwd,
             Some("lane-2"),
             None,
-            None,
+            Some("flash-x"),
             Some("Lane Two"),
             None,
             &locks(&root),
@@ -1214,7 +1364,7 @@ mod tests {
             &cwd,
             Some("mcp-key"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1229,7 +1379,7 @@ mod tests {
             &cwd,
             None,
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1541,7 +1691,7 @@ mod tests {
             cwd.join("nope").to_str().unwrap(),
             Some("lane-1"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1555,7 +1705,7 @@ mod tests {
             cwd.join("file").to_str().unwrap(),
             Some("lane-2"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1580,7 +1730,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             Some("os-window"),
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1628,7 +1778,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks,
@@ -1656,7 +1806,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks,
@@ -1702,7 +1852,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             Some("os-window"),
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks,
@@ -1736,7 +1886,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             None,
-            None,
+            Some("flash-x"),
             None,
             None,
             &locks,
