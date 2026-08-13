@@ -10,7 +10,7 @@ use qol_terminal_sessions::{
 use super::bridge::{PendingBridgeStore, PendingRound};
 use super::spawn::SpawnLocks;
 
-const POLL_BASE: Duration = Duration::from_secs(10);
+const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(30);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
