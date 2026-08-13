@@ -83,6 +83,10 @@ impl CliSessionInterpreter {
         self.strategy_for(session).classify_screen(session, screen)
     }
 
+    pub fn ui_rendered(&self, session: &SessionFacts, screen: &str) -> bool {
+        self.strategy_for(session).ui_rendered(screen)
+    }
+
     pub fn launch_for(&self, tool: &CliToolId) -> Option<CliLaunchProgram> {
         self.strategies
             .iter()

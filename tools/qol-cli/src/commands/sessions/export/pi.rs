@@ -136,19 +136,33 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _o
 const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
       if (params.surface != null) args.push("--surface", params.surface);
+      if (params.model != null) args.push("--model", params.model);
+      if (params.title != null) args.push("--title", params.title);
+      if (params.task != null) args.push("--task", params.task);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       const text = outcome.reused
         ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
-        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`;
+        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`
+          + (outcome.task_submitted ? "; first round delivered, wait with session_bridge (omit task)" : "");
       return { content: [{ type: "text", text }], details: { outcome } };
+    },
+"#;
+
+const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const args = ["submit", params.session, "--task", params.task];
+      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
+      const stdout = await run(args, 60_000, undefined, signal);
+      const outcome = JSON.parse(stdout);
+      const text = `task submitted to session ${outcome.session}; round open, wait with session_bridge (omit task)`;
+      return { content: [{ type: "text", text: `${text}\n${outcome.screen}` }], details: { outcome } };
     },
 "#;
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
-      args.push("--", params.task);
+      if (params.task != null) args.push("--", params.task);
       setLoopPhase("waiting");
       try {
         const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
@@ -211,6 +225,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
+        "session_submit" => EXECUTE_SUBMIT,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
@@ -301,11 +316,11 @@ mod tests {
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
         assert!(source.contains(
-            "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
+            "task: Type.Optional(Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the round a prior session_submit or spawn task left open\" })),"
         ));
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
         assert!(source.contains("args.push(\"--acknowledge-marker\""));
-        assert!(source.contains("args.push(\"--\", params.task)"));
+        assert!(source.contains("if (params.task != null) args.push(\"--\", params.task)"));
     }
 
     #[test]
@@ -365,6 +380,7 @@ mod tests {
         for template in [
             EXECUTE_LIST,
             EXECUTE_SPAWN,
+            EXECUTE_SUBMIT,
             EXECUTE_BRIDGE,
             EXECUTE_LOOP_CLOSE,
             EXECUTE_CLOSE,

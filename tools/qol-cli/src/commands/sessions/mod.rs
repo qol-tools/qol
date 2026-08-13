@@ -22,7 +22,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 14] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -30,6 +30,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 13] = [
     SessionSubcommand {
         name: "spawn",
         run: |rest, _format| spawn::run(rest),
+    },
+    SessionSubcommand {
+        name: "submit",
+        run: |rest, _format| run_submit(rest),
     },
     SessionSubcommand {
         name: "send",
@@ -109,8 +113,9 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--model MODEL]
-  qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]
+  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]
+  qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
   qol sessions interrupt <session>
@@ -137,10 +142,18 @@ Details:
   spawn_surface setting in ~/.config/qol-tray/sessions.toml, then tab. An
   explicit --model override names the spawned session's model (appended to
   the harness launch as --model); the spawn_model setting in the same file is
-  the fallback.
+  the fallback. --title names the new tab (the lane key by default), and
+  --task delivers the first round at spawn time so the round is already open
+  when the command returns; the outcome JSON then reports task_submitted,
+  completion_marker, and next_command.
+  submit delivers one bounded task and returns immediately with the round
+  recorded and open, so several lanes can run in parallel before any of them
+  is awaited; it refuses when a round is already pending on that session.
   bridge submits one bounded task, supplies a generated completion signal,
   waits in the same call, and prints JSON with completed, submitted, session,
-  completion_marker, screen, reads, and elapsed_ms. Before submitting, it
+  completion_marker, screen, reads, and elapsed_ms. Without a task it
+  re-attaches to the pending round and waits for its completion marker.
+  Before submitting, it
   resumes any unfinished bridge for that session and returns its latest
   response with submitted=false. Pass its reviewed completion_marker through
   --acknowledge-marker to submit the following round. Its timeout is clamped
@@ -237,24 +250,104 @@ fn send(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn run_bridge(args: &[OsString]) -> Result<()> {
-    let (binding_token, task, timeout_ms, acknowledge_marker) = parse_bridge_args(args)?;
+fn run_submit(args: &[OsString]) -> Result<()> {
+    let (binding_token, task, acknowledge_marker) = parse_submit_args(args)?;
     let binding = SessionBinding::from_str(&binding_token)
         .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
-    let timeout_ms = timeout_ms
-        .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
-        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
     let terminals = service()?;
-    let pending = bridge::PendingBridgeStore::system()?;
-    let outcome = bridge::execute(
+    let outcome = bridge::submit(
         &terminals,
         &CliSessionInterpreter::system(),
         &binding,
         &task,
-        std::time::Duration::from_millis(timeout_ms),
-        &pending,
+        &bridge::PendingBridgeStore::system()?,
         acknowledge_marker.as_deref(),
     )?;
+    println!(
+        "{}",
+        serde_json::to_string(&outcome).context("failed to serialize submit outcome")?
+    );
+    Ok(())
+}
+
+fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String>)> {
+    let usage = "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]";
+    let binding = args
+        .first()
+        .and_then(|argument| argument.to_str())
+        .ok_or_else(|| anyhow!("usage: {usage}"))?
+        .to_owned();
+    let mut task = None;
+    let mut acknowledge_marker = None;
+    let mut index = 1;
+    while index < args.len() {
+        let argument = args[index]
+            .to_str()
+            .ok_or_else(|| anyhow!("submit arguments must be valid UTF-8"))?;
+        match argument {
+            "--task" => {
+                task = Some(
+                    args.get(index + 1)
+                        .and_then(|value| value.to_str())
+                        .filter(|value| !value.starts_with("--"))
+                        .ok_or_else(|| anyhow!("usage: {usage}"))?
+                        .to_owned(),
+                );
+                index += 2;
+            }
+            "--acknowledge-marker" => {
+                acknowledge_marker = Some(
+                    args.get(index + 1)
+                        .and_then(|value| value.to_str())
+                        .filter(|value| !value.starts_with("--"))
+                        .ok_or_else(|| anyhow!("usage: {usage}"))?
+                        .to_owned(),
+                );
+                index += 2;
+            }
+            other => bail!("unknown submit flag `{other}`\nusage: {usage}"),
+        }
+    }
+    let task = task.ok_or_else(|| anyhow!("usage: {usage}"))?;
+    Ok((binding, task, acknowledge_marker))
+}
+
+fn run_bridge(args: &[OsString]) -> Result<()> {
+    let parsed = parse_bridge_args(args)?;
+    let binding = SessionBinding::from_str(&parsed.binding)
+        .map_err(|error| anyhow!("invalid session token `{}`: {error}", parsed.binding))?;
+    let timeout_ms = parsed
+        .timeout_ms
+        .unwrap_or(bridge::TIMEOUT_DEFAULT_MS)
+        .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
+    let terminals = service()?;
+    let pending = bridge::PendingBridgeStore::system()?;
+    let outcome = match parsed.task.as_deref() {
+        Some(task) => bridge::execute(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &binding,
+            task,
+            std::time::Duration::from_millis(timeout_ms),
+            &pending,
+            parsed.acknowledge_marker.as_deref(),
+        )?,
+        None => {
+            if parsed.acknowledge_marker.is_some() {
+                bail!(
+                    "bridge without a task takes no --acknowledge-marker; acknowledge the reviewed round on the next submit or the loop close"
+                );
+            }
+            bridge::resume(
+                &terminals,
+                &CliSessionInterpreter::system(),
+                &binding,
+                std::time::Duration::from_millis(timeout_ms),
+                &pending,
+                false,
+            )?
+        }
+    };
     println!(
         "{}",
         serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
@@ -262,7 +355,14 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, Option<String>)> {
+struct BridgeArgs {
+    binding: String,
+    task: Option<String>,
+    timeout_ms: Option<u64>,
+    acknowledge_marker: Option<String>,
+}
+
+fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
     let usage =
         "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]";
     let binding = args
@@ -316,10 +416,12 @@ fn parse_bridge_args(args: &[OsString]) -> Result<(String, String, Option<u64>, 
         }
     }
     let task = task_parts.join(" ");
-    if task.is_empty() {
-        bail!("usage: {usage}");
-    }
-    Ok((binding, task, timeout_ms, acknowledge_marker))
+    Ok(BridgeArgs {
+        binding,
+        task: (!task.is_empty()).then_some(task),
+        timeout_ms,
+        acknowledge_marker,
+    })
 }
 
 fn run_resume(args: &[OsString]) -> Result<()> {
@@ -751,7 +853,7 @@ mod tests {
 
     #[test]
     fn bridge_args_keep_the_surface_small_and_support_literal_flags() {
-        let (binding, task, timeout, acknowledge_marker) = parse_bridge_args(&[
+        let parsed = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "implement".into(),
             "the fix".into(),
@@ -761,23 +863,48 @@ mod tests {
             "QOL_BRIDGE_DONE_previous".into(),
         ])
         .unwrap();
-        assert_eq!(binding, "v1:kitty:7:123");
-        assert_eq!(task, "implement the fix");
-        assert_eq!(timeout, Some(5000));
+        assert_eq!(parsed.binding, "v1:kitty:7:123");
+        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
+        assert_eq!(parsed.timeout_ms, Some(5000));
         assert_eq!(
-            acknowledge_marker.as_deref(),
+            parsed.acknowledge_marker.as_deref(),
             Some("QOL_BRIDGE_DONE_previous")
         );
 
-        let (_, task, timeout, acknowledge_marker) = parse_bridge_args(&[
+        let parsed = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
             "--".into(),
             "explain".into(),
             "--timeout-ms".into(),
         ])
         .unwrap();
-        assert_eq!(task, "explain --timeout-ms");
-        assert_eq!(timeout, None);
-        assert_eq!(acknowledge_marker, None);
+        assert_eq!(parsed.task.as_deref(), Some("explain --timeout-ms"));
+        assert_eq!(parsed.timeout_ms, None);
+        assert_eq!(parsed.acknowledge_marker, None);
+
+        let parsed = parse_bridge_args(&["v1:kitty:7:123".into()]).unwrap();
+        assert_eq!(parsed.binding, "v1:kitty:7:123");
+        assert_eq!(parsed.task, None);
+        assert_eq!(parsed.timeout_ms, None);
+        assert_eq!(parsed.acknowledge_marker, None);
+    }
+
+    #[test]
+    fn submit_args_require_the_task_and_support_the_acknowledge_marker() {
+        let parsed = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--acknowledge-marker".into(),
+            "QOL_BRIDGE_DONE_previous".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.0, "v1:kitty:7:123");
+        assert_eq!(parsed.1, "implement the fix");
+        assert_eq!(parsed.2.as_deref(), Some("QOL_BRIDGE_DONE_previous"));
+
+        assert!(parse_submit_args(&["v1:kitty:7:123".into()]).is_err());
+        assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--task".into()]).is_err());
+        assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--bogus".into()]).is_err());
     }
 }

@@ -86,6 +86,10 @@ impl CliSessionStrategy for ClaudeStrategy {
         }
     }
 
+    fn ui_rendered(&self, screen: &str) -> bool {
+        crate::cli::screen::claude_working(screen) || crate::cli::screen::has_done_marker(screen)
+    }
+
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("claude"))
     }

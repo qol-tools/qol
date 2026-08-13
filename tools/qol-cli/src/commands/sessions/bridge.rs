@@ -503,6 +503,101 @@ pub(super) fn execute(
     Ok(outcome)
 }
 
+pub(super) fn submit(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    task: &str,
+    pending: &PendingBridgeStore,
+    acknowledge_marker: Option<&str>,
+) -> Result<BridgeOutcome> {
+    validate_task(task)?;
+    let _owner = pending.acquire_owner(binding)?;
+    if terminals
+        .is_current(binding)
+        .context("failed to identify the current terminal session")?
+    {
+        bail!("cannot submit to the calling terminal; choose an independent session");
+    }
+    let _target = resolve_target(terminals, binding)?;
+    if let Some(marker) = acknowledge_marker {
+        pending.acknowledge(binding, marker, true)?;
+    } else if pending.pending_round(binding)?.is_some() {
+        bail!(
+            "a round is already pending for `{binding}`; wait for it with `qol sessions bridge` (no task) before submitting another"
+        );
+    }
+    let marker = CompletionMarker::generate();
+    let prompt = bridge_prompt(task, &marker);
+    pending.start(binding, &marker.token, &driver_token(terminals))?;
+    let liveness = session_liveness(terminals, interpreter, binding);
+    let pre_screen = terminals
+        .read_screen(binding)
+        .context("submit screen read failed")?;
+    if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
+        pending.acknowledge(binding, &marker.token, false)?;
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=submit_delivery_failed target_backend={}",
+            binding.session_id().backend()
+        );
+        return Err(error).context("submit task delivery failed");
+    }
+    if !delivery_observed(
+        terminals,
+        binding,
+        &marker.left,
+        &pre_screen,
+        &liveness,
+        DELIVERY_VERIFY_WINDOW,
+    )? {
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=submit_delivery_retry target_backend={}",
+            binding.session_id().backend()
+        );
+        terminals
+            .send_text(binding, &prompt, DeliveryMode::Submit)
+            .context("submit task redelivery failed")?;
+        if !delivery_observed(
+            terminals,
+            binding,
+            &marker.left,
+            &pre_screen,
+            &liveness,
+            DELIVERY_VERIFY_WINDOW,
+        )? {
+            pending.acknowledge(binding, &marker.token, false)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=submit_delivery_unobserved target_backend={}",
+                binding.session_id().backend()
+            );
+            bail!(
+                "the target never showed the submitted task; no round is pending - fix the target session, then submit again"
+            );
+        }
+    }
+    qol_runtime::probe!(
+        "CLI_SESSION_BRIDGE",
+        "event=submitted_async target_backend={}",
+        binding.session_id().backend()
+    );
+    let screen = terminals
+        .read_screen(binding)
+        .context("submit screen read failed")?;
+    Ok(outcome(
+        false,
+        true,
+        false,
+        binding,
+        &marker.token,
+        screen,
+        1,
+        Instant::now(),
+    ))
+}
+
 pub(super) fn resume(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
-    SessionFacts, SessionId, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface,
-    TerminalSessionService,
+    ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
+    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,6 +18,7 @@ pub(super) const SURFACE_TAB: &str = "tab";
 pub(super) const SURFACE_OS_WINDOW: &str = "os-window";
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT_MS: u64 = 30_000;
+const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static KEY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -30,6 +31,11 @@ pub(super) struct SpawnOutcome {
     pub(super) cwd: String,
     pub(super) surface: String,
     pub(super) model: Option<String>,
+    pub(super) title: String,
+    pub(super) task_submitted: Option<bool>,
+    pub(super) completion_marker: Option<String>,
+    pub(super) screen: Option<String>,
+    pub(super) next_command: Option<String>,
     pub(super) elapsed_ms: u128,
 }
 
@@ -251,22 +257,97 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     let model = resolve_model(parsed.model.as_deref())?;
+    let terminals = TerminalSessionService::system();
     let outcome = spawn_or_reuse(
-        &TerminalSessionService::system(),
+        &terminals,
         &CliSessionInterpreter::system(),
         &parsed.tool,
         &parsed.cwd,
         parsed.key.as_deref(),
         parsed.surface.as_deref(),
         model.as_deref(),
+        parsed.title.as_deref(),
         config_surface()?,
         &SpawnLocks::system()?,
     )?;
+    let outcome = if let Some(task) = parsed.task.as_deref() {
+        submit_first_round(&terminals, &CliSessionInterpreter::system(), outcome, task)?
+    } else {
+        outcome
+    };
     println!(
         "{}",
         serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
     );
     Ok(())
+}
+
+pub(super) fn deliver_task(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    mut outcome: SpawnOutcome,
+    task: &str,
+    pending: &super::bridge::PendingBridgeStore,
+) -> Result<SpawnOutcome> {
+    let binding = outcome
+        .session
+        .parse()
+        .context("spawned session token cannot be resolved for task delivery")?;
+    wait_until_live(terminals, interpreter, &binding)?;
+    let submitted = super::bridge::submit(terminals, interpreter, &binding, task, pending, None)?;
+    outcome.task_submitted = Some(true);
+    outcome.completion_marker = Some(submitted.completion_marker);
+    outcome.screen = Some(submitted.screen);
+    outcome.next_command = Some(submitted.next_command);
+    Ok(outcome)
+}
+
+fn submit_first_round(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    outcome: SpawnOutcome,
+    task: &str,
+) -> Result<SpawnOutcome> {
+    deliver_task(
+        terminals,
+        interpreter,
+        outcome,
+        task,
+        &super::bridge::PendingBridgeStore::system()?,
+    )
+}
+
+fn wait_until_live(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let facts = terminals
+            .discover()
+            .context("target discovery failed while waiting for its live UI")?
+            .into_iter()
+            .find(|facts| facts.id == *binding.session_id())
+            .ok_or_else(|| anyhow!("spawned target disappeared while waiting for its live UI"))?;
+        let screen = terminals
+            .read_screen(binding)
+            .context("target screen read failed while waiting for its live UI")?;
+        let evidence = interpreter.classify_screen(&facts, &screen);
+        if interpreter.ui_rendered(&facts, &screen)
+            || evidence.viewport == qol_terminal_sessions::cli::CliViewportState::Live
+            || evidence.runtime != qol_terminal_sessions::cli::CliRuntimeState::Unknown
+        {
+            return Ok(());
+        }
+        if started.elapsed() >= SPAWN_TASK_READY_TIMEOUT {
+            bail!(
+                "the spawned session's UI did not become live within {}s; the task was not delivered - check the session or spawn again without --task",
+                SPAWN_TASK_READY_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(READY_POLL_INTERVAL);
+    }
 }
 
 struct SpawnArgs {
@@ -275,15 +356,19 @@ struct SpawnArgs {
     key: Option<String>,
     surface: Option<String>,
     model: Option<String>,
+    title: Option<String>,
+    task: Option<String>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
     let mut surface = None;
     let mut model = None;
+    let mut title = None;
+    let mut task = None;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -310,6 +395,14 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 model = Some(flag_value(args, index, "--model", usage)?);
                 index += 2;
             }
+            "--title" => {
+                title = Some(flag_value(args, index, "--title", usage)?);
+                index += 2;
+            }
+            "--task" => {
+                task = Some(flag_value(args, index, "--task", usage)?);
+                index += 2;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -321,6 +414,8 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         key,
         surface,
         model,
+        title,
+        task,
     })
 }
 
@@ -344,6 +439,7 @@ pub(super) fn spawn_or_reuse(
     key: Option<&str>,
     surface: Option<&str>,
     model: Option<&str>,
+    title: Option<&str>,
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
 ) -> Result<SpawnOutcome> {
@@ -359,6 +455,8 @@ pub(super) fn spawn_or_reuse(
             .map_err(|error| anyhow!("generated spawn key is invalid: {error}"))?,
     };
     let surface = resolve_surface(surface, config)?;
+    let key_string = key.to_string();
+    let title = title.unwrap_or(&key_string);
     let identity = SpawnIdentity {
         key: key.clone(),
         tool: tool_id.clone(),
@@ -376,9 +474,9 @@ pub(super) fn spawn_or_reuse(
                 identity: identity.clone(),
                 launch,
                 cwd: canonicalize_cwd(cwd)?,
-                title: None,
+                title: Some(title.to_owned()),
             };
-            launch_ready(terminals, interpreter, &identity, &request, model)
+            launch_ready(terminals, interpreter, &identity, &request, model, title)
         }
         SpawnDecision::Reuse(facts) => {
             qol_runtime::probe!(
@@ -387,7 +485,7 @@ pub(super) fn spawn_or_reuse(
                 identity.key,
                 identity.tool
             );
-            outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned))
+            outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned), title)
         }
         SpawnDecision::Conflict(found) => {
             qol_runtime::probe!(
@@ -425,6 +523,7 @@ fn launch_ready(
     identity: &SpawnIdentity,
     request: &SpawnRequest,
     model: Option<&str>,
+    title: &str,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -445,7 +544,8 @@ fn launch_ready(
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
     )?;
-    let mut outcome = outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned))?;
+    let mut outcome =
+        outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -524,6 +624,7 @@ fn outcome_from_facts(
     interpreter: &CliSessionInterpreter,
     reused: bool,
     model: Option<String>,
+    title: &str,
 ) -> Result<SpawnOutcome> {
     let binding = facts
         .binding()
@@ -540,6 +641,11 @@ fn outcome_from_facts(
         cwd: facts.cwd.clone(),
         surface: surface_token(identity.surface).to_owned(),
         model,
+        title: title.to_owned(),
+        task_submitted: None,
+        completion_marker: None,
+        screen: None,
+        next_command: None,
         elapsed_ms: 0,
     })
 }
@@ -786,6 +892,7 @@ mod tests {
         key: Option<&str>,
         surface: Option<&str>,
         model: Option<&str>,
+        title: Option<&str>,
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
     ) -> Result<SpawnOutcome> {
@@ -797,6 +904,7 @@ mod tests {
             key,
             surface,
             model,
+            title,
             config,
             locks,
         )
@@ -815,6 +923,10 @@ mod tests {
             "os-window".into(),
             "--model".into(),
             "flash-x".into(),
+            "--title".into(),
+            "Lane One".into(),
+            "--task".into(),
+            "implement the fix".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -822,6 +934,8 @@ mod tests {
         assert_eq!(parsed.key.as_deref(), Some("lane-1"));
         assert_eq!(parsed.surface.as_deref(), Some("os-window"));
         assert_eq!(parsed.model.as_deref(), Some("flash-x"));
+        assert_eq!(parsed.title.as_deref(), Some("Lane One"));
+        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -830,6 +944,8 @@ mod tests {
         assert_eq!(parsed.key, None);
         assert_eq!(parsed.surface, None);
         assert_eq!(parsed.model, None);
+        assert_eq!(parsed.title, None);
+        assert_eq!(parsed.task, None);
     }
 
     #[test]
@@ -895,7 +1011,7 @@ mod tests {
                 "pi".into(),
                 "--cwd".into(),
                 "/tmp".into(),
-                "--title".into(),
+                "--bogus".into(),
                 "x".into(),
             ],
         ] {
@@ -993,6 +1109,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 &locks(&root),
             )
             .unwrap_err()
@@ -1021,6 +1138,7 @@ mod tests {
             None,
             Some("flash-x"),
             None,
+            None,
             &locks(&root),
         )
         .unwrap();
@@ -1032,6 +1150,7 @@ mod tests {
         assert_eq!(outcome.cwd, cwd);
         assert_eq!(outcome.surface, "tab");
         assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(outcome.title, "lane-1");
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
 
         let expected = identity("lane-1", "codex", SpawnSurface::Tab);
@@ -1042,8 +1161,34 @@ mod tests {
             request.launch.args,
             vec!["--model".to_owned(), "flash-x".to_owned()]
         );
+        assert_eq!(request.title.as_deref(), Some("lane-1"));
         assert_eq!(request.cwd, std::path::PathBuf::from(&cwd));
-        assert_eq!(request.title, None);
+    }
+
+    #[test]
+    fn fresh_spawn_carries_an_explicit_title_into_the_launch() {
+        let (terminals, backend) = harness(vec![vec![]]);
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let outcome = run_spawn(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-2"),
+            None,
+            None,
+            Some("Lane Two"),
+            None,
+            &locks(&root),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.title, "Lane Two");
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.title.as_deref(), Some("Lane Two"));
     }
 
     #[test]
@@ -1062,6 +1207,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap();
@@ -1072,6 +1218,7 @@ mod tests {
             &terminals,
             "pi",
             &cwd,
+            None,
             None,
             None,
             None,
@@ -1098,6 +1245,7 @@ mod tests {
             "missing-requested-dir",
             Some("lane-1"),
             Some("os-window"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1127,6 +1275,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap_err()
@@ -1146,6 +1295,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             None,
@@ -1169,6 +1319,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             None,
@@ -1383,6 +1534,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap_err()
@@ -1393,6 +1545,7 @@ mod tests {
             "codex",
             cwd.join("file").to_str().unwrap(),
             Some("lane-2"),
+            None,
             None,
             None,
             None,
@@ -1418,6 +1571,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             Some("os-window"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1447,6 +1601,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks,
         )
         .unwrap_err()
@@ -1463,6 +1618,7 @@ mod tests {
             "codex",
             &cwd,
             Some("lane-1"),
+            None,
             None,
             None,
             None,

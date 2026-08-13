@@ -149,6 +149,7 @@ impl McpSessionServer {
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
             "session_spawn" => self.tool_spawn(arguments),
+            "session_submit" => self.tool_submit(arguments),
             "session_bridge" => self.tool_bridge(arguments),
             "session_loop_close" => self.close_loop(arguments),
             "session_close" => self.tool_close(arguments),
@@ -211,6 +212,24 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
             })
             .transpose()?;
+        let title = arguments
+            .get("title")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `title` must be a string".to_owned())
+            })
+            .transpose()?;
+        let task = arguments
+            .get("task")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `task` must be a string".to_owned())
+            })
+            .transpose()?;
         let model = super::spawn::resolve_model(model_flag.as_deref())
             .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_or_reuse(
@@ -221,8 +240,43 @@ impl McpSessionServer {
             Some(key),
             surface.as_deref(),
             model.as_deref(),
+            title.as_deref(),
             super::spawn::config_surface().map_err(|error| error.to_string())?,
             &self.locks,
+        )
+        .map_err(|error| error.to_string())?;
+        let outcome = match task {
+            Some(task) => super::spawn::deliver_task(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                outcome,
+                &task,
+                &self.pending,
+            )
+            .map_err(|error| error.to_string())?,
+            None => outcome,
+        };
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_submit(&self, arguments: Value) -> Result<String, String> {
+        let binding = binding_argument(&arguments, "session")?;
+        let task = string_argument(&arguments, "task")?;
+        let acknowledge_marker = arguments
+            .get("acknowledge_marker")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    "session_submit `acknowledge_marker` must be a string".to_owned()
+                })
+            })
+            .transpose()?;
+        let outcome = super::bridge::submit(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &binding,
+            task,
+            &self.pending,
+            acknowledge_marker,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -230,10 +284,7 @@ impl McpSessionServer {
 
     fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        let task = arguments
-            .get("task")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "session_bridge requires a `task` string".to_owned())?;
+        let task = arguments.get("task").and_then(Value::as_str);
         if arguments.get("timeout_ms").is_some() {
             return Err("session_bridge takes no `timeout_ms`; the round stays open until the implementation emits its completion signal. Resend this call without that argument.".to_owned());
         }
@@ -245,15 +296,30 @@ impl McpSessionServer {
                 })
             })
             .transpose()?;
-        let outcome = super::bridge::execute(
-            self.terminals.as_ref(),
-            &self.interpreter,
-            &binding,
-            task,
-            self.round_timeout,
-            &self.pending,
-            acknowledge_marker,
-        )
+        let outcome = match task {
+            Some(task) => super::bridge::execute(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                &binding,
+                task,
+                self.round_timeout,
+                &self.pending,
+                acknowledge_marker,
+            ),
+            None => {
+                if acknowledge_marker.is_some() {
+                    return Err("session_bridge without a task takes no `acknowledge_marker`; acknowledge the reviewed round on the next submit or the loop close".to_owned());
+                }
+                super::bridge::resume(
+                    self.terminals.as_ref(),
+                    &self.interpreter,
+                    &binding,
+                    self.round_timeout,
+                    &self.pending,
+                    false,
+                )
+            }
+        }
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
@@ -325,7 +391,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close,\n  session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `model` argument overrides the spawned session's model (the\n  sessions.toml `spawn_model` entry is the fallback). session_bridge submits\n  once and waits for the implementation terminal's generated completion\n  signal before returning. A reviewed completion marker explicitly\n  acknowledges the prior response before another task can be submitted.\n  session_loop_close acknowledges the final response and records the\n  architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), an optional\n  `model` argument overrides the spawned session's model (the sessions.toml\n  `spawn_model` entry is the fallback), and an optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close acknowledges the\n  final response and records the architect's explicit accepted or paused\n  terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -860,6 +926,7 @@ mod tests {
             [
                 "sessions_list",
                 "session_spawn",
+                "session_submit",
                 "session_bridge",
                 "session_loop_close",
                 "session_close"
@@ -877,6 +944,111 @@ mod tests {
         assert_eq!(rows[0]["session"], token());
         assert_eq!(rows[0]["tool"], "generic");
         assert_eq!(rows[0]["display_name"], "agent");
+    }
+
+    #[test]
+    fn session_submit_delivers_and_leaves_the_round_open() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "implement the bounded change" }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["submitted"], true);
+        assert_eq!(outcome["completed"], false);
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].2, DeliveryMode::Submit);
+        assert!(sent[0].1.contains("[qol session bridge]"));
+        drop(sent);
+
+        let binding: SessionBinding = token().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap();
+        assert!(round.is_some());
+        assert_eq!(round.unwrap().completion_marker, marker);
+    }
+
+    #[test]
+    fn session_submit_refuses_when_a_round_is_already_pending() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let first = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "first task" }),
+        );
+        assert_eq!(first["result"]["isError"], false);
+        let second = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "second task" }),
+        );
+        assert_eq!(second["result"]["isError"], true);
+        assert!(second["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already pending"));
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+    }
+
+    fn live_pi_screen() -> String {
+        [
+            "conversation output",
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            "/tmp",
+            "$0.400 47.3%/1.0M (auto)",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn spawn_carries_title_and_task_and_the_round_stays_open_for_bridge() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], true, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "lane-one", None, &cwd);
+        arguments["title"] = json!("Lane One");
+        arguments["task"] = json!("implement and test the bounded change");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["reused"], false);
+        assert_eq!(outcome["title"], "Lane One");
+        assert_eq!(outcome["task_submitted"], true);
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+        assert_eq!(outcome["session"], "v1:kitty:spawn-lane-one:200");
+
+        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(request.program, "pi");
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 1);
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap();
+        assert!(round.is_some());
+
+        let waited = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": outcome["session"] }),
+        );
+        assert_eq!(waited["result"]["isError"], false);
+        let waited_outcome: Value =
+            serde_json::from_str(waited["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(waited_outcome["completed"], true);
+        assert_eq!(waited_outcome["completion_marker"], marker);
     }
 
     #[test]

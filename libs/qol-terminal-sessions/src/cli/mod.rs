@@ -52,6 +52,10 @@ pub trait CliSessionStrategy: Send + Sync {
         CliScreenEvidence::default()
     }
 
+    fn ui_rendered(&self, _screen: &str) -> bool {
+        false
+    }
+
     fn launch(&self) -> Option<CliLaunchProgram> {
         None
     }
