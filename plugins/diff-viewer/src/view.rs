@@ -32,7 +32,7 @@ use crate::field::{self, AshSpec, ConeSpec, SceneState};
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
 use crate::rail::{RailDeath, RailGeo, RailMark, RailSpec};
-use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
+use crate::scrubber::{arrow_delta, Commit as ScrubCommit, ScrubberView};
 use crate::surface::{self, CodeSurface, LineStyle};
 use crate::wave::{self, WaveMorph};
 
@@ -834,7 +834,7 @@ impl DiffView {
                 {
                     return;
                 }
-                let delta: isize = if key == "left" { -1 } else { 1 };
+                let delta: isize = arrow_delta(key);
                 self.scrubber_view.update(cx, |view, cx| {
                     view.step_selection(delta, cx);
                 });

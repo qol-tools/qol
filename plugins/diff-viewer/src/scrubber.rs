@@ -201,6 +201,14 @@ fn lerp(from: u32, to: u32, t: f32) -> u32 {
     channel(16) | channel(8) | channel(0)
 }
 
+pub(crate) fn arrow_delta(key: &str) -> isize {
+    if key == "left" {
+        1
+    } else {
+        -1
+    }
+}
+
 fn drag_target(anchor_index: usize, anchor_x: f32, x: f32, len: usize) -> Option<usize> {
     if len == 0 {
         return None;
@@ -293,8 +301,9 @@ impl ScrubberView {
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         match key {
-            "left" if !self.state.is_empty() => self.step_selection(-1, cx),
-            "right" if !self.state.is_empty() => self.step_selection(1, cx),
+            "left" | "right" if !self.state.is_empty() => {
+                self.step_selection(arrow_delta(key), cx);
+            }
             "enter" | "return" => {
                 self.confirm(cx);
             }
@@ -483,6 +492,20 @@ mod tests {
         assert_eq!(state.focus_sha(), None);
         assert_eq!((state.selected(), state.focus()), (0, 0));
         assert!(state.is_empty());
+    }
+
+    #[test]
+    fn arrow_keys_step_in_time_direction() {
+        assert_eq!(
+            arrow_delta("left"),
+            1,
+            "left steps into the past (older commit, star left)"
+        );
+        assert_eq!(
+            arrow_delta("right"),
+            -1,
+            "right steps toward the present (newer commit, star right)"
+        );
     }
 
     #[test]
