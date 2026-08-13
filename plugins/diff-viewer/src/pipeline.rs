@@ -88,10 +88,20 @@ pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBu
     }
     for ancestor in launch_cwd.ancestors() {
         if ancestor.join(".git").exists() {
+            let demo = ancestor.join("plugins/diff-viewer/demo");
+            if demo.join(".git").exists() && is_clean_worktree(ancestor) {
+                return Some(demo);
+            }
             return Some(ancestor.to_path_buf());
         }
     }
     None
+}
+
+fn is_clean_worktree(repo: &Path) -> bool {
+    qol_git::status_porcelain(repo)
+        .map(|entries| entries.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn send_refresh(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
@@ -364,6 +374,56 @@ mod tests {
         std::fs::create_dir_all(bare.join("x")).expect("create bare tree");
         assert_eq!(resolve_repo(&bare.join("x"), None), None);
         let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn init_real_repo(path: &Path) {
+        std::fs::create_dir_all(path).expect("create repo");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(path)
+            .status()
+            .expect("git init");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn resolve_repo_prefers_the_nested_demo_when_the_root_tree_is_clean() {
+        let dir = std::env::temp_dir().join(format!(
+            "diff-viewer-demo-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        init_real_repo(&dir);
+        std::fs::write(dir.join("tracked.txt"), "base").expect("write file");
+        let committed = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&dir)
+            .status()
+            .expect("git add")
+            .success()
+            && std::process::Command::new("git")
+                .args(["commit", "-qm", "base"])
+                .current_dir(&dir)
+                .status()
+                .expect("git commit")
+                .success();
+        assert!(committed, "fixture repo must commit");
+        let demo = dir.join("plugins/diff-viewer/demo");
+        let launch = dir.join("plugins/diff-viewer");
+        std::fs::create_dir_all(&launch).expect("launch dir");
+        std::fs::create_dir_all(demo.join(".git")).expect("demo .git");
+        assert_eq!(resolve_repo(&launch, None), Some(demo.clone()));
+        std::fs::write(dir.join("tracked.txt"), "dirty").expect("dirty the root");
+        assert_eq!(
+            resolve_repo(&launch, None),
+            Some(dir.clone()),
+            "a dirty root repo wins over the nested demo"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
