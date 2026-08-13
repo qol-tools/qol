@@ -202,6 +202,17 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `surface` must be a string".to_owned())
             })
             .transpose()?;
+        let model_flag = arguments
+            .get("model")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
+            })
+            .transpose()?;
+        let model = super::spawn::resolve_model(model_flag.as_deref())
+            .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -209,6 +220,7 @@ impl McpSessionServer {
             cwd,
             Some(key),
             surface.as_deref(),
+            model.as_deref(),
             super::spawn::config_surface().map_err(|error| error.to_string())?,
             &self.locks,
         )
@@ -313,7 +325,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close,\n  session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts.\n  session_bridge submits once and waits for the implementation terminal's\n  generated completion signal before returning. A reviewed completion marker\n  explicitly acknowledges the prior response before another task can be\n  submitted. session_loop_close acknowledges the final response and records\n  the architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_bridge, session_loop_close,\n  session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `model` argument overrides the spawned session's model (the\n  sessions.toml `spawn_model` entry is the fallback). session_bridge submits\n  once and waits for the implementation terminal's generated completion\n  signal before returning. A reviewed completion marker explicitly\n  acknowledges the prior response before another task can be submitted.\n  session_loop_close acknowledges the final response and records the\n  architect's explicit accepted or paused terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -437,6 +449,7 @@ mod tests {
         spawn_count: std::sync::atomic::AtomicUsize,
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
         spawn_cwd: Mutex<Option<std::path::PathBuf>>,
+        spawn_launch: Mutex<Option<qol_terminal_sessions::cli::CliLaunchProgram>>,
         closed: Mutex<Vec<SessionBinding>>,
     }
 
@@ -454,6 +467,7 @@ mod tests {
                 spawn_count: std::sync::atomic::AtomicUsize::new(0),
                 spawn_identity: Mutex::new(None),
                 spawn_cwd: Mutex::new(None),
+                spawn_launch: Mutex::new(None),
                 closed: Mutex::new(Vec::new()),
             }
         }
@@ -630,6 +644,7 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *self.spawn_identity.lock().unwrap() = Some(request.identity.clone());
             *self.spawn_cwd.lock().unwrap() = Some(request.cwd.clone());
+            *self.spawn_launch.lock().unwrap() = Some(request.launch.clone());
             SessionId::new(self.id.clone(), format!("spawn-{}", request.identity.key)).map_err(
                 |error| TerminalError::SpawnFailed {
                     backend: self.id.clone(),
@@ -1268,6 +1283,50 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
+    }
+
+    #[test]
+    fn session_spawn_model_override_reaches_the_launch_and_outcome() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-lane-model", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["model"], json!("flash-x"));
+        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(request.program, "pi");
+        assert_eq!(
+            request.args,
+            vec!["--model".to_owned(), "flash-x".to_owned()]
+        );
+    }
+
+    #[test]
+    fn session_spawn_model_rejects_non_string_values() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-lane-model", None, &cwd);
+        arguments["model"] = json!(42);
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("model` must be a string"));
     }
 
     #[test]

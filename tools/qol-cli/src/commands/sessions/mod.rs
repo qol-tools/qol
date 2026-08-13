@@ -109,7 +109,7 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--model MODEL]
   qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
@@ -131,10 +131,13 @@ Details:
   (default surface), or reuses the single live session already carrying the
   key when its tool matches; a key used by a different tool conflicts and
   multiple matches are ambiguous. The result JSON reports session, tool, key,
-  reused, cwd, and surface from the live session facts. The CLI generates a
-  key when --key is omitted; the MCP session_spawn tool requires one so
-  retries are idempotent. The surface default comes from the spawn_surface
-  setting in ~/.config/qol-tray/sessions.toml, then tab.
+  reused, cwd, surface, and model from the live session facts. The CLI
+  generates a key when --key is omitted; the MCP session_spawn tool requires
+  one so retries are idempotent. The surface default comes from the
+  spawn_surface setting in ~/.config/qol-tray/sessions.toml, then tab. An
+  explicit --model override names the spawned session's model (appended to
+  the harness launch as --model); the spawn_model setting in the same file is
+  the fallback.
   bridge submits one bounded task, supplies a generated completion signal,
   waits in the same call, and prints JSON with completed, submitted, session,
   completion_marker, screen, reads, and elapsed_ms. Before submitting, it
@@ -659,7 +662,7 @@ mod tests {
         assert!(help.contains("default 24h"));
         assert!(!help.contains("default 1h"));
         assert!(help.contains(
-            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
         assert!(help.contains("sessions_list, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
