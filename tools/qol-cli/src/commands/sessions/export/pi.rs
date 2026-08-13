@@ -158,6 +158,10 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
       const tokens = await readWatchedTokens(sessionId);
       if (!tokens.includes(token)) tokens.push(token);
       await fs.writeFile(watchStateFile(sessionId), JSON.stringify(tokens));
+      if (watcherChild !== null && watcherChild.exitCode == null) {
+        watcherChild.kill("SIGTERM");
+        watcherChild = null;
+      }
     } catch {}
   }
 
@@ -454,6 +458,22 @@ mod tests {
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
         assert!(source.contains("args.push(\"--acknowledge-marker\""));
         assert!(source.contains("if (params.task != null) args.push(\"--\", params.task)"));
+    }
+
+    #[test]
+    fn pi_adapter_restarts_the_watcher_when_a_new_round_is_recorded() {
+        let record = WATCH_GLUE
+            .split("async function recordWatchedToken")
+            .nth(1)
+            .expect("recordWatchedToken present")
+            .split("async function reportSnippet")
+            .next()
+            .expect("recordWatchedToken body");
+        assert!(record.contains("watcherChild.kill(\"SIGTERM\")"));
+        assert!(record.contains("watcherChild = null"));
+        assert!(WATCH_GLUE
+            .contains("if (watcherChild !== null && watcherChild.exitCode == null) return;"));
+        assert!(WATCH_GLUE.contains("const tokens = await readWatchedTokens(sessionId);"));
     }
 
     #[test]
