@@ -77,12 +77,17 @@ function assistantText(messages) {
 
 const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
   let loopFinalReport = "";
+  let closingFollowUpSent = false;
 
   function setLoopPhase(phase, finalReport = "") {
     if (loopPhase === phase && loopFinalReport === finalReport) return;
     loopPhase = phase;
     loopFinalReport = finalReport;
     pi.appendEntry(LOOP_ENTRY, { phase, final_report: finalReport });
+  }
+
+  function normalized(text) {
+    return text.replace(/[^a-z0-9]/gi, "").toLowerCase();
   }
 
   function restoreLoopPhase(ctx) {
@@ -105,7 +110,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
 
   pi.on("agent_end", async (event, _ctx) => {
     const text = assistantText(event.messages);
-    if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
+    if (loopPhase === "closing" && loopFinalReport && normalized(text).includes(normalized(loopFinalReport))) {
       setLoopPhase("idle");
     }
   });
@@ -115,7 +120,12 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
       pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
     }
     if (loopPhase === "closing") {
-      pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+      if (!closingFollowUpSent) {
+        closingFollowUpSent = true;
+        pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+      } else {
+        setLoopPhase("idle");
+      }
     }
   });
 "#;
@@ -367,6 +377,17 @@ mod tests {
         assert!(source.contains("name: \"session_loop_close\""));
         assert!(source.contains("run([\"mcp\"], 10_000"));
         assert!(source.contains("setLoopPhase(\"closing\", receipt.final_report)"));
+    }
+
+    #[test]
+    fn pi_adapter_closes_the_loop_after_a_single_report_echo() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("function normalized(text)"));
+        assert!(source.contains("normalized(text).includes(normalized(loopFinalReport))"));
+        assert!(source.contains("let closingFollowUpSent = false;"));
+        assert!(source.contains("if (!closingFollowUpSent) {"));
+        assert!(source.contains("closingFollowUpSent = true;"));
+        assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
     }
 
     #[test]
