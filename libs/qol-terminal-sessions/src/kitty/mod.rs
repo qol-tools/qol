@@ -253,29 +253,6 @@ impl ScreenReader for KittyBackend {
     fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen_command(target)
     }
-
-    fn read_screen_matching(
-        &self,
-        target: &SessionBinding,
-        pattern: &str,
-    ) -> Result<String, TerminalError> {
-        let (endpoint, window_id) = self.route_target(target)?;
-        self.run_at(
-            &endpoint,
-            "match screen lines",
-            &strings([
-                "@",
-                "get-text",
-                "--match",
-                &matcher(window_id),
-                "--match",
-                &regex_escape(pattern),
-                "--extent",
-                "screen",
-            ]),
-            None,
-        )
-    }
 }
 
 impl SessionFocus for KittyBackend {
@@ -465,17 +442,6 @@ fn split_native_id(native: &str) -> Option<(&str, u64)> {
 
 fn matcher(window_id: u64) -> String {
     format!("id:{window_id}")
-}
-
-fn regex_escape(pattern: &str) -> String {
-    let mut escaped = String::with_capacity(pattern.len());
-    for character in pattern.chars() {
-        if "\\^$.|?*+()[]{}".contains(character) {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
 }
 
 fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
@@ -1033,32 +999,83 @@ mod tests {
     }
 
     #[test]
-    fn marker_matched_reads_escape_the_pattern_and_skip_discovery() {
-        let runner =
-            FakeRunner::with_outputs(vec![success("3: QOL_BRIDGE_DONE_a.b[c]".to_owned())]);
-        let backend = KittyBackend::with_runner(runner.clone());
-        let target = binding(42, 900);
+    fn wait_cycle_emits_only_window_matching_get_text_commands() {
+        let mut outputs = Vec::new();
+        for _ in 0..9 {
+            outputs.push(success("idle".to_owned()));
+        }
+        outputs.push(success(ls(42, 900)));
+        for _ in 0..10 {
+            outputs.push(success("idle".to_owned()));
+        }
+        outputs.push(success(ls(42, 900)));
+        for _ in 0..6 {
+            outputs.push(success("idle".to_owned()));
+        }
+        outputs.push(success("done\nQOL_BRIDGE_DONE_wait".to_owned()));
+        outputs.push(success("done\nQOL_BRIDGE_DONE_wait".to_owned()));
+        let runner = FakeRunner::with_outputs(outputs);
+        let backend = Arc::new(KittyBackend::with_runner(runner.clone()));
+        let terminals =
+            TerminalSessionService::from_backends(vec![backend as Arc<dyn TerminalBackend>])
+                .unwrap();
+        let (rx, _stop) = ticker();
 
-        let matched = backend
-            .read_screen_matching(&target, "QOL_BRIDGE_DONE_a.b[c]")
+        let outcome = terminals
+            .wait_for_completion(
+                &binding(42, 900),
+                "QOL_BRIDGE_DONE_wait",
+                Duration::from_secs(60),
+                rx,
+                true,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+            )
             .unwrap();
 
-        assert_eq!(matched, "3: QOL_BRIDGE_DONE_a.b[c]");
+        assert!(outcome.completed);
+        assert_eq!(outcome.reads, 27);
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(
-            calls[0].1,
-            [
-                "@",
-                "get-text",
-                "--match",
-                "id:42",
-                "--match",
-                r"QOL_BRIDGE_DONE_a\.b\[c\]",
-                "--extent",
-                "screen",
-            ]
-        );
+        let get_text: Vec<&Vec<String>> = calls
+            .iter()
+            .map(|call| &call.1)
+            .filter(|args| args.first().map(String::as_str) == Some("@"))
+            .filter(|args| args.get(1).map(String::as_str) == Some("get-text"))
+            .collect();
+        assert_eq!(get_text.len(), 27);
+        for args in get_text {
+            assert_eq!(
+                args,
+                &["@", "get-text", "--match", "id:42", "--extent", "screen"]
+            );
+            assert_eq!(
+                args.iter().filter(|arg| arg.as_str() == "--match").count(),
+                1
+            );
+        }
+        assert_eq!(calls.iter().filter(|call| call.1 == ["@", "ls"]).count(), 2);
+    }
+
+    struct StopSignal(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for StopSignal {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn ticker() -> (std::sync::mpsc::Receiver<()>, StopSignal) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tick_stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !tick_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.try_send(());
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        (rx, StopSignal(stop))
     }
 
     fn binding(id: u64, root_pid: i32) -> SessionBinding {

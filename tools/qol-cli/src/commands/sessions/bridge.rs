@@ -1095,7 +1095,6 @@ mod tests {
     enum FakeCall {
         Ls,
         GetText,
-        GetTextMatch,
         SendText,
     }
 
@@ -1158,20 +1157,6 @@ mod tests {
         fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             self.calls.lock().unwrap().push(FakeCall::GetText);
             Ok(self.next_screen())
-        }
-
-        fn read_screen_matching(
-            &self,
-            _target: &SessionBinding,
-            pattern: &str,
-        ) -> Result<String, TerminalError> {
-            self.calls.lock().unwrap().push(FakeCall::GetTextMatch);
-            let screen = self.next_screen();
-            Ok(if screen.contains(pattern) {
-                format!("1: {screen}")
-            } else {
-                String::new()
-            })
         }
     }
 
@@ -1273,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn hot_loop_polls_marker_matches_and_reads_full_screens_only_every_tenth() {
+    fn hot_loop_reads_skip_the_capability_recheck_except_every_tenth() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::new(
@@ -1328,10 +1313,6 @@ mod tests {
             .iter()
             .filter(|call| **call == FakeCall::GetText)
             .count() as u64;
-        let get_text_match = calls
-            .iter()
-            .filter(|call| **call == FakeCall::GetTextMatch)
-            .count() as u64;
         assert_eq!(
             calls
                 .iter()
@@ -1339,13 +1320,8 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(get_text, outcome.reads + 2);
         assert_eq!(ls, outcome.reads / 10 + 3);
-        assert_eq!(get_text_match, outcome.reads - 2);
-        assert_eq!(get_text, 5);
-        assert!(
-            get_text < outcome.reads,
-            "full reads must drop below the poll count"
-        );
         assert!(ls - 3 <= outcome.reads.div_ceil(10) + 1);
     }
 

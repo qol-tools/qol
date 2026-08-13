@@ -17,21 +17,6 @@ pub trait ScreenReader {
     fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen(target)
     }
-
-    fn read_screen_matching(
-        &self,
-        target: &SessionBinding,
-        pattern: &str,
-    ) -> Result<String, TerminalError> {
-        let screen = self.read_screen_relaxed(target)?;
-        let mut matched = String::new();
-        for (index, line) in screen.lines().enumerate() {
-            if line.contains(pattern) {
-                matched.push_str(&format!("{}: {}\n", index + 1, line));
-            }
-        }
-        Ok(matched)
-    }
 }
 
 pub trait SessionFocus {
@@ -237,15 +222,6 @@ impl ScreenReader for TerminalSessionService {
         self.backend_for(target.session_id())?
             .read_screen_relaxed(target)
     }
-
-    fn read_screen_matching(
-        &self,
-        target: &SessionBinding,
-        pattern: &str,
-    ) -> Result<String, TerminalError> {
-        self.backend_for(target.session_id())?
-            .read_screen_matching(target, pattern)
-    }
 }
 
 impl SessionFocus for TerminalSessionService {
@@ -344,46 +320,31 @@ impl TerminalSessionService {
         let mut last_probe: Option<Instant> = None;
         let mut reads = 0u64;
         let mut current_backoff = backoff.base;
-        let mut settled = false;
         loop {
             reads += 1;
-            let mut cheap_no_match = false;
             let screen = if reads.is_multiple_of(10) {
-                Some(self.read_screen(binding)?)
-            } else if settled {
-                Some(self.read_screen_relaxed(binding)?)
-            } else if self
-                .read_screen_matching(binding, marker)?
-                .trim()
-                .is_empty()
-            {
-                cheap_no_match = true;
-                None
+                self.read_screen(binding)?
             } else {
-                settled = true;
-                Some(self.read_screen_relaxed(binding)?)
+                self.read_screen_relaxed(binding)?
             };
-            let matched = screen
-                .as_ref()
-                .is_some_and(|screen| screen.contains(marker));
-            if let Some(screen) = screen {
-                settled = matched;
-                if matched && previous.as_deref() == Some(screen.as_str()) {
-                    return Ok(WaitOutcome {
-                        completed: true,
-                        submitted,
-                        stalled: false,
-                        screen,
-                        reads,
-                        elapsed: started.elapsed(),
-                    });
-                }
-                if previous.as_deref() != Some(screen.as_str()) {
-                    last_change = Instant::now();
-                    current_backoff = backoff.base;
-                }
-                previous = Some(screen);
+            let matched = screen.contains(marker);
+            if matched && previous.as_deref() == Some(screen.as_str()) {
+                return Ok(WaitOutcome {
+                    completed: true,
+                    submitted,
+                    stalled: false,
+                    screen,
+                    reads,
+                    elapsed: started.elapsed(),
+                });
             }
+            let screen_changed = previous.as_deref() != Some(screen.as_str());
+            if screen_changed {
+                last_change = Instant::now();
+                current_backoff = backoff.base;
+            }
+            let grow_backoff = !matched && (previous.is_none() || !screen_changed);
+            previous = Some(screen);
             if !matched && stall_if_quiet(&last_change, &mut last_probe, stall_after, liveness) {
                 return Ok(WaitOutcome {
                     completed: false,
@@ -412,7 +373,7 @@ impl TerminalSessionService {
                 current_backoff
             }
             .min(remaining);
-            if cheap_no_match {
+            if grow_backoff {
                 current_backoff = next_backoff(current_backoff, backoff.cap);
             }
             if subscribed {
@@ -478,7 +439,6 @@ mod tests {
     enum CallKind {
         Ls,
         Full,
-        Matching,
     }
 
     struct FakeBackend {
@@ -542,20 +502,6 @@ mod tests {
         fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             self.record(CallKind::Full);
             Ok(self.next_screen())
-        }
-
-        fn read_screen_matching(
-            &self,
-            _target: &SessionBinding,
-            pattern: &str,
-        ) -> Result<String, TerminalError> {
-            self.record(CallKind::Matching);
-            let screen = self.next_screen();
-            Ok(if screen.contains(pattern) {
-                format!("1: {screen}")
-            } else {
-                String::new()
-            })
         }
     }
 
@@ -636,39 +582,6 @@ mod tests {
     }
 
     #[test]
-    fn wait_cycle_uses_marker_reads_and_fewer_full_reads_than_the_baseline() {
-        let screens = vec!["idle".to_owned(); 9]
-            .into_iter()
-            .chain(["done\nQOL_BRIDGE_DONE_a".to_owned()])
-            .collect();
-        let backend = FakeBackend::new(screens);
-        let terminals = service(backend.clone());
-        let (rx, _stop) = ticker();
-
-        let outcome = terminals
-            .wait_for_completion(
-                &binding(),
-                "QOL_BRIDGE_DONE_a",
-                Duration::from_secs(60),
-                rx,
-                true,
-                true,
-                &|| None,
-                Duration::from_secs(3600),
-            )
-            .unwrap();
-
-        assert!(outcome.completed);
-        assert_eq!(outcome.reads, 11);
-        assert_eq!(outcome.screen, "done\nQOL_BRIDGE_DONE_a");
-        let calls = backend.calls.lock().unwrap();
-        assert_eq!(count(&calls, CallKind::Ls), 1);
-        assert_eq!(count(&calls, CallKind::Full), 2);
-        assert_eq!(count(&calls, CallKind::Matching), 9);
-        assert!(count(&calls, CallKind::Full) <= 3);
-    }
-
-    #[test]
     fn every_tenth_poll_is_a_strict_full_read() {
         let screens = vec!["idle".to_owned(); 25]
             .into_iter()
@@ -695,12 +608,11 @@ mod tests {
         assert_eq!(outcome.reads, 27);
         let calls = backend.calls.lock().unwrap();
         assert_eq!(count(&calls, CallKind::Ls), 2);
-        assert_eq!(count(&calls, CallKind::Full), 4);
-        assert_eq!(count(&calls, CallKind::Matching), 24);
+        assert_eq!(count(&calls, CallKind::Full), 27);
     }
 
     #[test]
-    fn marker_hit_extracts_one_relaxed_read_before_settling() {
+    fn settle_requires_the_marker_on_two_stable_reads() {
         let screens = vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_a".to_owned()];
         let backend = FakeBackend::new(screens);
         let terminals = service(backend.clone());
@@ -722,8 +634,7 @@ mod tests {
         assert!(outcome.completed);
         assert_eq!(outcome.reads, 3);
         let calls = backend.calls.lock().unwrap();
-        assert_eq!(count(&calls, CallKind::Matching), 2);
-        assert_eq!(count(&calls, CallKind::Full), 2);
+        assert_eq!(count(&calls, CallKind::Full), 3);
         assert_eq!(count(&calls, CallKind::Ls), 0);
     }
 
