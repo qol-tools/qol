@@ -39,6 +39,8 @@ pub(super) struct SpawnOutcome {
     pub(super) elapsed_ms: u128,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) background: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) autoclose: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -312,6 +314,7 @@ fn run_with(
         config,
         locks,
         parsed.background,
+        parsed.autoclose,
         parsed.task.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
     )
@@ -323,13 +326,22 @@ pub(super) fn deliver_task(
     mut outcome: SpawnOutcome,
     task: &str,
     pending: &super::bridge::PendingBridgeStore,
+    autoclose: bool,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
         .session
         .parse()
         .context("spawned session token cannot be resolved for task delivery")?;
     wait_until_live(terminals, interpreter, &binding)?;
-    let submitted = super::bridge::submit(terminals, interpreter, &binding, task, pending, None)?;
+    let submitted = super::bridge::submit(
+        terminals,
+        interpreter,
+        &binding,
+        task,
+        pending,
+        None,
+        autoclose,
+    )?;
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(submitted.completion_marker);
     outcome.screen = Some(submitted.screen);
@@ -379,10 +391,11 @@ struct SpawnArgs {
     title: Option<String>,
     task: Option<String>,
     background: bool,
+    autoclose: bool,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -391,6 +404,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut title = None;
     let mut task = None;
     let mut background = false;
+    let mut autoclose = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -429,6 +443,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 background = true;
                 index += 1;
             }
+            "--auto-close" => {
+                autoclose = true;
+                index += 1;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -443,6 +461,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         title,
         task,
         background,
+        autoclose,
     })
 }
 
@@ -513,6 +532,7 @@ pub(super) fn spawn_or_reuse(
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
     background: bool,
+    autoclose: bool,
     task: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
 ) -> Result<SpawnOutcome> {
@@ -553,6 +573,7 @@ pub(super) fn spawn_or_reuse(
                         &marker.token,
                         model,
                         &prepared.title,
+                        autoclose,
                     )
                 } else {
                     let request = SpawnRequest {
@@ -568,16 +589,28 @@ pub(super) fn spawn_or_reuse(
                         &request,
                         model,
                         &prepared.title,
+                        autoclose,
                     )?;
                     match task {
-                        Some(round_task) => {
-                            deliver_task(terminals, interpreter, outcome, round_task, pending)
-                        }
+                        Some(round_task) => deliver_task(
+                            terminals,
+                            interpreter,
+                            outcome,
+                            round_task,
+                            pending,
+                            autoclose,
+                        ),
                         None => Ok(outcome),
                     }
                 }
             }
             SpawnDecision::Reuse(facts) => {
+                if autoclose {
+                    bail!(
+                        "--auto-close cannot reuse the session for key `{}`: closing a reused terminal would kill the user's live session; --auto-close only applies when a new terminal is spawned",
+                        prepared.key
+                    );
+                }
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=reuse key={} tool={}",
@@ -593,7 +626,7 @@ pub(super) fn spawn_or_reuse(
                 )?;
                 match task {
                     Some(round_task) => {
-                        deliver_task(terminals, interpreter, outcome, round_task, pending)
+                        deliver_task(terminals, interpreter, outcome, round_task, pending, false)
                     }
                     None => Ok(outcome),
                 }
@@ -644,6 +677,7 @@ fn launch_background(
     marker: &str,
     model: Option<&str>,
     title: &str,
+    autoclose: bool,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -676,10 +710,16 @@ fn launch_background(
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
-    pending.start(&binding, marker, &super::bridge::driver_token(terminals))?;
+    pending.start(
+        &binding,
+        marker,
+        &super::bridge::driver_token(terminals),
+        autoclose,
+    )?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
     outcome.background = true;
+    outcome.autoclose = autoclose;
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(marker.to_owned());
     outcome.next_command = Some(format!("qol sessions next {}", binding.token()));
@@ -701,6 +741,7 @@ fn launch_ready(
     request: &SpawnRequest,
     model: Option<&str>,
     title: &str,
+    autoclose: bool,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -723,6 +764,7 @@ fn launch_ready(
     )?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
+    outcome.autoclose = autoclose;
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -825,6 +867,7 @@ fn outcome_from_facts(
         next_command: None,
         elapsed_ms: 0,
         background: false,
+        autoclose: false,
     })
 }
 
@@ -1077,7 +1120,8 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
         run_spawn_with(
-            terminals, tool, cwd, key, surface, model, title, config, locks, false, None, &pending,
+            terminals, tool, cwd, key, surface, model, title, config, locks, false, false, None,
+            &pending,
         )
     }
 
@@ -1093,6 +1137,7 @@ mod tests {
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
         background: bool,
+        autoclose: bool,
         task: Option<&str>,
         pending: &super::super::bridge::PendingBridgeStore,
     ) -> Result<SpawnOutcome> {
@@ -1108,6 +1153,7 @@ mod tests {
             config,
             locks,
             background,
+            autoclose,
             task,
             pending,
         )
@@ -1131,6 +1177,7 @@ mod tests {
             "--task".into(),
             "implement the fix".into(),
             "--background".into(),
+            "--auto-close".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -1141,6 +1188,7 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("Lane One"));
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
         assert!(parsed.background);
+        assert!(parsed.autoclose);
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -1152,6 +1200,7 @@ mod tests {
         assert_eq!(parsed.title, None);
         assert_eq!(parsed.task, None);
         assert!(!parsed.background);
+        assert!(!parsed.autoclose);
     }
 
     #[test]
@@ -1288,6 +1337,7 @@ mod tests {
             None,
             &locks,
             true,
+            false,
             Some("implement the fix"),
             &pending,
         )
@@ -1335,6 +1385,7 @@ mod tests {
             None,
             &locks,
             false,
+            false,
             Some("implement the fix"),
             &pending,
         )
@@ -1368,6 +1419,7 @@ mod tests {
             None,
             &locks,
             true,
+            false,
             None,
             &pending,
         )
@@ -1386,6 +1438,7 @@ mod tests {
             None,
             &locks,
             true,
+            false,
             Some("implement the fix"),
             &pending,
         )
@@ -1393,6 +1446,84 @@ mod tests {
         .to_string();
         assert!(no_model.contains("--model"), "{no_model}");
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn autoclose_marks_new_spawns_and_refuses_the_reuse_path() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            true,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.autoclose);
+        assert!(outcome.background);
+        assert!(!outcome.reused);
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "the queued round must carry the autoclose flag for the watcher"
+        );
+
+        let error = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            true,
+            None,
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("--auto-close"), "{error}");
+        assert!(error.contains("reuse"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused, "plain reuse without autoclose stays allowed");
+        assert!(!reused.autoclose);
     }
 
     #[test]

@@ -42,6 +42,7 @@ struct WatchedRound {
     last_change: Instant,
     stalled_reported: bool,
     marker_seen: bool,
+    autoclose: bool,
 }
 
 impl WatchedRound {
@@ -59,6 +60,7 @@ impl WatchedRound {
             last_change: Instant::now(),
             stalled_reported: false,
             marker_seen: false,
+            autoclose: round.autoclose,
         })
     }
 }
@@ -215,15 +217,19 @@ fn poll_round(
             Some(_) => {
                 if round.marker_seen {
                     let tail = screen_tail(&screen);
-                    emit_completed(out, &round.session, &round.marker, tail)?;
+                    emit_completed(out, &round.session, &round.marker, tail, round.autoclose)?;
                     pending.observe(&round.binding, &round.marker, true)?;
                     pending.store_screen(&round.binding, &round.marker, tail)?;
                     qol_runtime::probe!(
                         "CLI_SESSION_WATCH",
-                        "event=completed session={} reads={}",
+                        "event=completed session={} reads={} autoclose={}",
                         round.session,
-                        round.reads
+                        round.reads,
+                        round.autoclose
                     );
+                    if round.autoclose {
+                        close_lane_terminal(terminals, &round.binding);
+                    }
                     return Ok(RoundPoll {
                         keep: false,
                         changed: true,
@@ -337,10 +343,44 @@ fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
     current.saturating_mul(2).min(cap)
 }
 
-fn emit_completed(out: &mut dyn Write, session: &str, marker: &str, screen: &str) -> Result<()> {
+fn close_lane_terminal(terminals: &TerminalSessionService, binding: &SessionBinding) {
+    if terminals.is_current(binding).unwrap_or(false) {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=autoclose_skipped session={} reason=calling_terminal",
+            binding.token()
+        );
+        return;
+    }
+    match terminals.close(binding) {
+        Ok(()) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=autoclosed session={}",
+                binding.token()
+            );
+        }
+        Err(error) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=autoclose_failed session={} error={}",
+                binding.token(),
+                error
+            );
+        }
+    }
+}
+
+fn emit_completed(
+    out: &mut dyn Write,
+    session: &str,
+    marker: &str,
+    screen: &str,
+    autoclose: bool,
+) -> Result<()> {
     emit(
         out,
-        serde_json::json!({ "event": "completed", "session": session, "marker": marker, "screen": screen }),
+        serde_json::json!({ "event": "completed", "session": session, "marker": marker, "screen": screen, "autoclose": autoclose }),
     )
 }
 
@@ -393,6 +433,7 @@ mod tests {
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
         calls: Mutex<Vec<(CallKind, Instant)>>,
+        closed: Mutex<Vec<SessionBinding>>,
     }
 
     impl FakeBackend {
@@ -404,6 +445,7 @@ mod tests {
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
                 calls: Mutex::new(Vec::new()),
+                closed: Mutex::new(Vec::new()),
             })
         }
 
@@ -487,6 +529,17 @@ mod tests {
         fn id(&self) -> &BackendId {
             &self.id
         }
+
+        fn closer(&self) -> Option<&dyn qol_terminal_sessions::SessionCloser> {
+            Some(self)
+        }
+    }
+
+    impl qol_terminal_sessions::SessionCloser for FakeBackend {
+        fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+            self.closed.lock().unwrap().push(target.clone());
+            Ok(())
+        }
     }
 
     fn facts(native: &str, root_pid: i32) -> SessionFacts {
@@ -541,7 +594,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let backend = FakeBackend::new(
             facts("7", 100),
@@ -574,12 +627,84 @@ mod tests {
     }
 
     #[test]
+    fn autoclose_round_closes_the_lane_terminal_after_completed_and_plain_rounds_stay_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+
+        let auto_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&auto_binding, "QOL_BRIDGE_DONE_auto", "v1:fake:8:800", true)
+            .unwrap();
+        let auto_backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_auto".to_owned(); 2],
+        );
+        let (terminals, auto_backend) = harness(auto_backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["autoclose"], true);
+        let closed = auto_backend.closed.lock().unwrap();
+        assert_eq!(
+            closed.as_slice(),
+            &[auto_binding],
+            "an autoclose round must close the lane terminal"
+        );
+        drop(closed);
+
+        let plain_binding: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        pending
+            .start(
+                &plain_binding,
+                "QOL_BRIDGE_DONE_plain",
+                "v1:fake:8:800",
+                false,
+            )
+            .unwrap();
+        let plain_backend = FakeBackend::new(
+            facts("8", 200),
+            vec!["done\nQOL_BRIDGE_DONE_plain".to_owned(); 2],
+        );
+        let (terminals, plain_backend) = harness(plain_backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:8:200".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["autoclose"], false);
+        assert!(
+            plain_backend.closed.lock().unwrap().is_empty(),
+            "a plain round must never close its terminal"
+        );
+    }
+
+    #[test]
     fn completion_stores_the_screen_tail_and_keeps_the_checkpoint() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let final_screen = format!("{}\ndone\nQOL_BRIDGE_DONE_round", "x".repeat(70 * 1024));
         let backend = FakeBackend::new(
@@ -633,7 +758,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let backend = FakeBackend::new(facts("7", 100), Vec::new());
         backend.mark_gone();
@@ -663,7 +788,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let screens = (0..64)
             .map(|_| "idle".to_owned())
@@ -702,7 +827,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let screens = [
             "idle".to_owned(),
@@ -785,7 +910,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let screens = (0..25)
             .map(|_| "idle".to_owned())
@@ -826,7 +951,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let backend = FakeBackend::new(
             facts("7", 100),
@@ -869,7 +994,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         pending
             .observe(&binding, "QOL_BRIDGE_DONE_round", true)
@@ -901,7 +1026,7 @@ mod tests {
         let pending = Arc::new(store(&root));
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let backend = FakeBackend::new(
             facts("7", 100),
@@ -955,10 +1080,20 @@ mod tests {
         let watched_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         let other_binding: SessionBinding = "v1:fake:8:200".parse().unwrap();
         pending
-            .start(&watched_binding, "QOL_BRIDGE_DONE_watched", "v1:fake:9:900")
+            .start(
+                &watched_binding,
+                "QOL_BRIDGE_DONE_watched",
+                "v1:fake:9:900",
+                false,
+            )
             .unwrap();
         pending
-            .start(&other_binding, "QOL_BRIDGE_DONE_other", "v1:fake:9:900")
+            .start(
+                &other_binding,
+                "QOL_BRIDGE_DONE_other",
+                "v1:fake:9:900",
+                false,
+            )
             .unwrap();
         let backend = FakeBackend::new(
             facts("7", 100),
@@ -1024,7 +1159,7 @@ mod tests {
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
 
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_error", "")
+            .start(&binding, "QOL_BRIDGE_DONE_error", "", false)
             .unwrap();
         let (terminals, _) = harness(FakeBackend::new(
             facts("7", 100),
@@ -1047,7 +1182,9 @@ mod tests {
         );
 
         pending.discard(&binding).unwrap();
-        pending.start(&binding, "QOL_BRIDGE_DONE_done", "").unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_done", "", false)
+            .unwrap();
         let (terminals, _) = harness(FakeBackend::new(
             facts("7", 100),
             vec!["done\nQOL_BRIDGE_DONE_done".to_owned()],

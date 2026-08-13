@@ -290,6 +290,7 @@ fn run_submit(args: &[OsString]) -> Result<()> {
         &task,
         &bridge::PendingBridgeStore::system()?,
         acknowledge_marker.as_deref(),
+        false,
     )?;
     println!(
         "{}",
@@ -933,7 +934,7 @@ mod tests {
         let store = test_store(&root);
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let (terminals, _) = fake_terminals(vec![fake_facts("7", 123)]);
 
@@ -950,7 +951,7 @@ mod tests {
         let store = test_store(&root);
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
             .unwrap();
         let (terminals, _) = fake_terminals(Vec::new());
 
@@ -978,11 +979,11 @@ mod tests {
         let store = test_store(&root);
         let orphan = SessionBinding::from_str("v1:fake:1:100").unwrap();
         store
-            .start(&orphan, "QOL_BRIDGE_DONE_orphan", "v1:fake:8:800")
+            .start(&orphan, "QOL_BRIDGE_DONE_orphan", "v1:fake:8:800", false)
             .unwrap();
         let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
         store
-            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800")
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false)
             .unwrap();
         let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
 

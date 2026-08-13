@@ -247,6 +247,15 @@ impl McpSessionServer {
             })
             .transpose()?
             .unwrap_or(false);
+        let autoclose = arguments
+            .get("autoclose")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_spawn `autoclose` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         let model =
             super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
                 .map_err(|error| error.to_string())?;
@@ -262,6 +271,7 @@ impl McpSessionServer {
             self.spawn_surface,
             &self.locks,
             background,
+            autoclose,
             task.as_deref(),
             &self.pending,
         )
@@ -287,6 +297,7 @@ impl McpSessionServer {
             task,
             &self.pending,
             acknowledge_marker,
+            false,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -1278,7 +1289,7 @@ mod tests {
         let binding: SessionBinding = token().parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         server
             .pending
@@ -1307,7 +1318,7 @@ mod tests {
 
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         server
             .pending
@@ -1342,7 +1353,7 @@ mod tests {
         let binding: SessionBinding = session.parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         server
             .pending
@@ -1386,7 +1397,7 @@ mod tests {
         let binding: SessionBinding = session.parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         server
             .pending
@@ -1431,7 +1442,7 @@ mod tests {
         let binding: SessionBinding = session.parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         server
             .pending
@@ -1549,7 +1560,7 @@ mod tests {
         let binding: SessionBinding = spawned.parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
             .unwrap();
         let open_loop = tool_call(&server, "session_close", json!({ "session": spawned }));
         assert_eq!(open_loop["result"]["isError"], true);
@@ -1846,6 +1857,66 @@ mod tests {
                 .spawn_count
                 .load(std::sync::atomic::Ordering::Relaxed),
             0
+        );
+    }
+
+    #[test]
+    fn autoclose_spawn_marks_the_outcome_and_round_and_reuse_refuses_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], false, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-auto", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement the fix");
+        arguments["autoclose"] = json!(true);
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["autoclose"], true);
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "the queued round must carry autoclose for the watcher"
+        );
+
+        let reused = tool_call(
+            &server,
+            "session_spawn",
+            json!({
+                "tool": "pi",
+                "cwd": cwd,
+                "key": "mcp-auto",
+                "autoclose": true,
+            }),
+        );
+        assert_eq!(reused["result"]["isError"], true);
+        assert!(reused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--auto-close"));
+
+        let mut bad_flag = spawn_arguments("pi", "mcp-auto-bad", None, &cwd);
+        bad_flag["model"] = json!("flash-x");
+        bad_flag["autoclose"] = json!("yes");
+        let response = tool_call(&server, "session_spawn", bad_flag);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("autoclose` must be a boolean"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
         );
     }
 

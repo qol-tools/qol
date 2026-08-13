@@ -60,6 +60,7 @@ pub(super) struct PendingRound {
     pub(super) completion_marker: String,
     pub(super) completed: bool,
     pub(super) screen: Option<String>,
+    pub(super) autoclose: bool,
 }
 
 struct PendingBridgeLock {
@@ -94,6 +95,8 @@ struct StoredCheckpoint {
     closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     screen: Option<String>,
+    #[serde(default)]
+    autoclose: bool,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -141,7 +144,13 @@ impl PendingBridgeStore {
             .context("pending bridge checkpoint is invalid")
     }
 
-    pub(super) fn start(&self, binding: &SessionBinding, marker: &str, driver: &str) -> Result<()> {
+    pub(super) fn start(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        driver: &str,
+        autoclose: bool,
+    ) -> Result<()> {
         let _lock = self.lock(binding)?;
         if self
             .load_unlocked(binding)?
@@ -149,7 +158,7 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, driver, false, None)
+        self.write_unlocked(binding, marker, driver, false, None, autoclose)
     }
 
     pub(super) fn observe(
@@ -171,6 +180,7 @@ impl PendingBridgeStore {
             &checkpoint.driver,
             completed,
             checkpoint.screen.as_deref(),
+            checkpoint.autoclose,
         )
     }
 
@@ -193,6 +203,7 @@ impl PendingBridgeStore {
             &checkpoint.driver,
             checkpoint.completed,
             Some(screen),
+            checkpoint.autoclose,
         )
     }
 
@@ -203,6 +214,7 @@ impl PendingBridgeStore {
         driver: &str,
         completed: bool,
         screen: Option<&str>,
+        autoclose: bool,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -214,6 +226,7 @@ impl PendingBridgeStore {
             completed,
             closed: false,
             screen: screen.map(str::to_owned),
+            autoclose,
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -261,6 +274,7 @@ impl PendingBridgeStore {
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
+                autoclose: checkpoint.autoclose,
             }))
     }
 
@@ -274,6 +288,7 @@ impl PendingBridgeStore {
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
+                autoclose: checkpoint.autoclose,
             })
             .collect::<Vec<_>>();
         rounds.sort_by(|left, right| left.session.cmp(&right.session));
@@ -520,7 +535,7 @@ pub(super) fn execute(
 
     let marker = CompletionMarker::generate();
     let prompt = bridge_prompt(task, &marker);
-    pending.start(binding, &marker.token, &driver_token(terminals))?;
+    pending.start(binding, &marker.token, &driver_token(terminals), false)?;
 
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -613,6 +628,7 @@ pub(super) fn submit(
     task: &str,
     pending: &PendingBridgeStore,
     acknowledge_marker: Option<&str>,
+    autoclose: bool,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
     let _owner = pending.acquire_owner(binding)?;
@@ -632,7 +648,7 @@ pub(super) fn submit(
     }
     let marker = CompletionMarker::generate();
     let prompt = bridge_prompt(task, &marker);
-    pending.start(binding, &marker.token, &driver_token(terminals))?;
+    pending.start(binding, &marker.token, &driver_token(terminals), autoclose)?;
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
         .read_screen(binding)
@@ -1466,15 +1482,17 @@ mod tests {
         let review = SessionBinding::from_str("v1:fake:2:200").unwrap();
         let closed = SessionBinding::from_str("v1:fake:3:300").unwrap();
         store
-            .start(&waiting, "QOL_BRIDGE_DONE_wait", "v1:fake:8:800")
+            .start(&waiting, "QOL_BRIDGE_DONE_wait", "v1:fake:8:800", false)
             .unwrap();
         store
-            .start(&review, "QOL_BRIDGE_DONE_review", "v1:fake:8:800")
+            .start(&review, "QOL_BRIDGE_DONE_review", "v1:fake:8:800", false)
             .unwrap();
         store
             .observe(&review, "QOL_BRIDGE_DONE_review", true)
             .unwrap();
-        store.start(&closed, "QOL_BRIDGE_DONE_closed", "").unwrap();
+        store
+            .start(&closed, "QOL_BRIDGE_DONE_closed", "", false)
+            .unwrap();
         store
             .acknowledge(&closed, "QOL_BRIDGE_DONE_closed", false)
             .unwrap();
@@ -1523,7 +1541,7 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_old", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_old", "v1:fake:8:800", false)
             .unwrap();
         store
             .acknowledge(&binding, "QOL_BRIDGE_DONE_old", false)
@@ -1541,7 +1559,7 @@ mod tests {
         );
 
         store
-            .start(&binding, "QOL_BRIDGE_DONE_new", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_new", "v1:fake:8:800", false)
             .unwrap();
         store
             .observe(&binding, "QOL_BRIDGE_DONE_old", true)
@@ -1558,7 +1576,7 @@ mod tests {
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800", false)
             .unwrap();
         pending
             .observe(&binding, "QOL_BRIDGE_DONE_abc123", true)
@@ -1608,7 +1626,7 @@ mod tests {
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800")
+            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800", false)
             .unwrap();
         pending
             .observe(&binding, "QOL_BRIDGE_DONE_abc123", true)
@@ -1665,12 +1683,51 @@ mod tests {
     }
 
     #[test]
+    fn start_with_autoclose_roundtrips_and_old_checkpoints_default_to_false() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_auto", "v1:fake:8:800", true)
+            .unwrap();
+
+        let round = store.pending_round(&binding).unwrap().unwrap();
+        assert!(!round.completed);
+        assert!(round.autoclose, "start must store the autoclose flag");
+
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_auto", true)
+            .unwrap();
+        store
+            .store_screen(&binding, "QOL_BRIDGE_DONE_auto", "done tail")
+            .unwrap();
+        let round = store.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed);
+        assert!(
+            round.autoclose,
+            "observe and store_screen must preserve the autoclose flag"
+        );
+
+        let legacy = SessionBinding::from_str("v1:fake:9:900").unwrap();
+        fs::write(
+            store.file_for(&legacy),
+            r#"{"session":"v1:fake:9:900","driver":"v1:fake:8:800","completion_marker":"QOL_BRIDGE_DONE_legacy","completed":false,"closed":false}"#,
+        )
+        .unwrap();
+        let round = store.pending_round(&legacy).unwrap().unwrap();
+        assert!(
+            !round.autoclose,
+            "an old-shape checkpoint without the field must deserialize as false"
+        );
+    }
+
+    #[test]
     fn sweep_removes_stale_tmp_legacy_and_closed_checkpoints() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let open = SessionBinding::from_str("v1:fake:1:100").unwrap();
         store
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800")
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800", false)
             .unwrap();
 
         let stale_tmp = root.path().join("stale.tmp");

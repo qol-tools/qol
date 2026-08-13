@@ -128,6 +128,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "boolean",
                         "description": "Fire-and-forget launch: embed the first task in the launch command, queue the pending round at spawn time, and return without waiting for the live UI (requires task); the pi extension wakes the initiator when a watcher detects the round",
                     },
+                    "autoclose": {
+                        "type": "boolean",
+                        "description": "Close the lane terminal automatically when the watcher confirms the round's completion; only applies to newly spawned terminals, never to a reused session",
+                    },
                 },
                 "required": ["tool", "cwd", "key"],
             }),
@@ -280,6 +284,42 @@ mod tests {
                 .iter()
                 .any(|value| value == "background"),
             "background must default to false when omitted"
+        );
+    }
+
+    #[test]
+    fn session_spawn_schema_declares_autoclose_as_an_optional_boolean_for_new_terminals() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .unwrap();
+        assert_eq!(
+            spec.input_schema["properties"]["autoclose"]["type"],
+            "boolean"
+        );
+        assert!(
+            !spec.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "autoclose"),
+            "autoclose must default to false when omitted"
+        );
+        let description = spec.input_schema["properties"]["autoclose"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            description.contains("Close the lane terminal"),
+            "{description}"
+        );
+        assert!(
+            description.contains("newly spawned terminals"),
+            "{description}"
+        );
+        assert!(
+            description.contains("never to a reused session"),
+            "{description}"
         );
     }
 
