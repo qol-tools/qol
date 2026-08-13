@@ -5,7 +5,8 @@ use crate::commands::sessions::contract::{tool_specs, ToolSpec};
 
 const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
@@ -149,9 +150,16 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
     return path.join(sessionsDir(), `watch-owner-${sessionId}.json`);
   }
 
+  function wakeDebugLog(sessionId, line) {
+    try {
+      const logPath = path.join(sessionsDir(), `wake-debug-${sessionId}.log`);
+      fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
+    } catch {}
+  }
+
   async function readWatchedTokens(sessionId) {
     try {
-      const parsed = JSON.parse(await fs.readFile(watchStateFile(sessionId), "utf8"));
+      const parsed = JSON.parse(await fsp.readFile(watchStateFile(sessionId), "utf8"));
       return Array.isArray(parsed) ? parsed.filter((token) => typeof token === "string") : [];
     } catch {}
     return [];
@@ -159,10 +167,10 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
 
   async function recordWatchedToken(sessionId, token) {
     try {
-      await fs.mkdir(sessionsDir(), { recursive: true });
+      await fsp.mkdir(sessionsDir(), { recursive: true });
       const tokens = await readWatchedTokens(sessionId);
       if (!tokens.includes(token)) tokens.push(token);
-      await fs.writeFile(watchStateFile(sessionId), JSON.stringify(tokens));
+      await fsp.writeFile(watchStateFile(sessionId), JSON.stringify(tokens));
       if (watcherChild !== null && watcherChild.exitCode == null) {
         watcherChild.kill("SIGTERM");
         watcherChild = null;
@@ -196,16 +204,19 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
     if (!sessionId) return;
     const tokens = await readWatchedTokens(sessionId);
     if (tokens.length === 0) return;
+    wakeDebugLog(sessionId, `watch start tokens=${tokens.length}`);
     try {
       const child = spawn("qol", ["sessions", "watch", ...tokens], {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
       watcherChild = child;
+      wakeDebugLog(sessionId, `watch spawn pid=${child.pid}`);
       child.stdout.on("data", (chunk) => {
         stdoutBuffer += chunk.toString();
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() ?? "";
+        wakeDebugLog(sessionId, `chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}`);
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -214,6 +225,7 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
             event = JSON.parse(trimmed);
           } catch {}
           if (typeof event?.event !== "string" || typeof event?.session !== "string") continue;
+          wakeDebugLog(sessionId, `event=${event.event} session=${event.session} screen=${typeof event.screen === "string" ? event.screen.length : 0}`);
           const action =
             event.event === "gone"
               ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
@@ -224,13 +236,18 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
             event.event === "completed"
               ? `qol sessions: lane ${event.session} completed.\n\n${reportSnippet(event.screen)}\n\nReview it, then close the loop with session_loop_close.`
               : `qol sessions: lane ${event.session} ${event.event}. ${action}`;
-          pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true });
+          wakeDebugLog(sessionId, `send message_bytes=${message.length}`);
+          pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true })
+            .then(() => wakeDebugLog(sessionId, "send ok"))
+            .catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`));
         }
       });
-      child.on("error", () => {
+      child.on("error", (error) => {
+        wakeDebugLog(sessionId, `watch child error: ${error?.message ?? error}`);
         if (watcherChild === child) watcherChild = null;
       });
-      child.on("exit", () => {
+      child.on("exit", (code, signal) => {
+        wakeDebugLog(sessionId, `watch child exit code=${code} signal=${signal}`);
         if (watcherChild === child) watcherChild = null;
       });
     } catch {}
@@ -510,6 +527,27 @@ mod tests {
         assert!(WATCH_GLUE.contains(
             "pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })"
         ));
+    }
+
+    #[test]
+    fn pi_adapter_wake_debug_log_covers_every_delivery_step() {
+        let source = pi_extension().expect("render");
+        assert!(WATCH_GLUE.contains("function wakeDebugLog(sessionId, line)"));
+        assert!(WATCH_GLUE.contains("wake-debug-${sessionId}.log"));
+        assert!(WATCH_GLUE.contains("fs.appendFileSync(logPath"));
+        assert!(WATCH_GLUE.contains("watch start tokens=${tokens.length}"));
+        assert!(WATCH_GLUE.contains("watch spawn pid=${child.pid}"));
+        assert!(WATCH_GLUE.contains("watch child error: ${error?.message ?? error}"));
+        assert!(WATCH_GLUE.contains("watch child exit code=${code} signal=${signal}"));
+        assert!(WATCH_GLUE.contains("chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}"));
+        assert!(WATCH_GLUE.contains("event=${event.event} session=${event.session} screen="));
+        assert!(WATCH_GLUE.contains("send message_bytes=${message.length}"));
+        assert!(WATCH_GLUE.contains(".then(() => wakeDebugLog(sessionId, \"send ok\"))"));
+        assert!(WATCH_GLUE.contains(
+            ".catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`))"
+        ));
+        assert!(source.contains("import * as fs from \"node:fs\";"));
+        assert!(source.contains("import * as fsp from \"node:fs/promises\";"));
     }
 
     #[test]
