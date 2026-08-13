@@ -161,6 +161,23 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
     } catch {}
   }
 
+  function reportSnippet(screen) {
+    if (typeof screen !== "string" || screen.length === 0) return "";
+    const max = 8 * 1024;
+    const truncated = screen.length > max;
+    let start = truncated ? screen.length - max : 0;
+    while (start > 0 && start < screen.length) {
+      const code = screen.charCodeAt(start);
+      if (code >= 0xdc00 && code <= 0xdfff) {
+        start -= 1;
+      } else {
+        break;
+      }
+    }
+    const snippet = screen.slice(start);
+    return truncated ? `(report tail; full screen via session_bridge)\n${snippet}` : snippet;
+  }
+
   let watcherChild: ReturnType<typeof spawn> | null = null;
 
   async function startWatcher(ctx) {
@@ -185,17 +202,16 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
           } catch {}
           if (typeof event?.event !== "string" || typeof event?.session !== "string") continue;
           const action =
+            event.event === "gone"
+              ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
+              : event.event === "stalled"
+                ? "The lane produced no output for 15 minutes; nudge it with qol sessions resume --kickstart, or collect with session_bridge."
+                : "Collect with session_bridge.";
+          const message =
             event.event === "completed"
-              ? "The lane finished its round; collect with session_bridge (omit task)."
-              : event.event === "gone"
-                ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
-                : event.event === "stalled"
-                  ? "The lane produced no output for 15 minutes; nudge it with qol sessions resume --kickstart, or collect with session_bridge."
-                  : "Collect with session_bridge.";
-          pi.sendUserMessage(
-            `qol sessions: lane ${event.session} ${event.event}. ${action}`,
-            { deliverAs: "followUp", triggerTurn: true },
-          );
+              ? `qol sessions: lane ${event.session} completed.\n\n${reportSnippet(event.screen)}\n\nReview it, then close the loop with session_loop_close.`
+              : `qol sessions: lane ${event.session} ${event.event}. ${action}`;
+          pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true });
         }
       });
       child.on("error", () => {
@@ -484,6 +500,23 @@ mod tests {
             "outcome.task_submitted ? \"; first round delivered, wait with session_bridge (omit task)\""
         ));
         assert!(source.contains("await startWatcher(ctx)"));
+    }
+
+    #[test]
+    fn pi_adapter_embeds_the_report_snippet_in_the_completed_wake() {
+        assert!(WATCH_GLUE.contains("function reportSnippet(screen)"));
+        assert!(WATCH_GLUE.contains("const max = 8 * 1024"));
+        assert!(WATCH_GLUE.contains("(report tail; full screen via session_bridge)"));
+        assert!(WATCH_GLUE.contains("Review it, then close the loop with session_loop_close."));
+        assert!(WATCH_GLUE.contains(
+            "`qol sessions: lane ${event.session} completed.\\n\\n${reportSnippet(event.screen)}\\n\\nReview it, then close the loop with session_loop_close.`"
+        ));
+        assert!(WATCH_GLUE.contains("start a fresh lane if the work still matters."));
+        assert!(WATCH_GLUE.contains(
+            "nudge it with qol sessions resume --kickstart, or collect with session_bridge."
+        ));
+        assert!(WATCH_GLUE.contains("deliverAs: \"followUp\", triggerTurn: true"));
+        assert!(WATCH_GLUE.contains("Collect with session_bridge."));
     }
 
     #[test]

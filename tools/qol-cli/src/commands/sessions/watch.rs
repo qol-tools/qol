@@ -214,9 +214,10 @@ fn poll_round(
             }
             Some(_) => {
                 if round.marker_seen {
-                    emit_completed(out, &round.session, &round.marker)?;
+                    let tail = screen_tail(&screen);
+                    emit_completed(out, &round.session, &round.marker, tail)?;
                     pending.observe(&round.binding, &round.marker, true)?;
-                    pending.store_screen(&round.binding, &round.marker, screen_tail(&screen))?;
+                    pending.store_screen(&round.binding, &round.marker, tail)?;
                     qol_runtime::probe!(
                         "CLI_SESSION_WATCH",
                         "event=completed session={} reads={}",
@@ -336,10 +337,10 @@ fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
     current.saturating_mul(2).min(cap)
 }
 
-fn emit_completed(out: &mut dyn Write, session: &str, marker: &str) -> Result<()> {
+fn emit_completed(out: &mut dyn Write, session: &str, marker: &str, screen: &str) -> Result<()> {
     emit(
         out,
-        serde_json::json!({ "event": "completed", "session": session, "marker": marker }),
+        serde_json::json!({ "event": "completed", "session": session, "marker": marker, "screen": screen }),
     )
 }
 
@@ -567,6 +568,7 @@ mod tests {
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["session"], "v1:fake:7:100");
         assert_eq!(events[0]["marker"], "QOL_BRIDGE_DONE_round");
+        assert_eq!(events[0]["screen"], "done\nQOL_BRIDGE_DONE_round");
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
     }
@@ -599,6 +601,7 @@ mod tests {
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["screen"], screen_tail(&final_screen));
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(
             round.completed,
@@ -849,6 +852,7 @@ mod tests {
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["session"], "v1:fake:7:100");
         assert_eq!(events[0]["marker"], "QOL_BRIDGE_DONE_round");
+        assert_eq!(events[0]["screen"], "done\nQOL_BRIDGE_DONE_round");
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
