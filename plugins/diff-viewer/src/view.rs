@@ -138,23 +138,6 @@ impl FileListState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActivePane {
-    Files,
-    Code,
-    Scrubber,
-}
-
-impl ActivePane {
-    fn other(self) -> Self {
-        match self {
-            Self::Files => Self::Code,
-            Self::Code => Self::Scrubber,
-            Self::Scrubber => Self::Files,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum DiffPane {
     Empty,
@@ -165,7 +148,9 @@ enum DiffPane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Field,
+    #[allow(dead_code)]
     Unified,
+    #[allow(dead_code)]
     Split,
     Wave,
 }
@@ -204,7 +189,6 @@ pub struct DiffView {
     pane: DiffPane,
     surface: CodeSurface,
     lines: Vec<LineChange>,
-    active_pane: ActivePane,
     files_collapsed: bool,
     layout: Layout,
     pairs: Vec<LinePair>,
@@ -238,6 +222,8 @@ pub struct DiffView {
     scrub_commits: Vec<ScrubCommit>,
     last_scrub_selected: Option<usize>,
     requested: Option<(String, String)>,
+    pending_center: Option<usize>,
+    scrub_anchor: usize,
     last_facts: Option<Facts>,
     heat_stamps: HashMap<String, Instant>,
     heat_stamp: Option<Instant>,
@@ -284,7 +270,6 @@ impl DiffView {
             pane: DiffPane::Empty,
             surface: CodeSurface::new(),
             lines: Vec::new(),
-            active_pane: ActivePane::Files,
             files_collapsed: false,
             layout: Layout::Field,
             pairs: Vec::new(),
@@ -318,6 +303,8 @@ impl DiffView {
             scrub_commits: Vec::new(),
             last_scrub_selected: None,
             requested: None,
+            pending_center: None,
+            scrub_anchor: 0,
             last_facts: None,
             heat_stamps: HashMap::new(),
             heat_stamp: None,
@@ -459,7 +446,7 @@ impl DiffView {
         for result in results {
             match result {
                 GitResult::Facts { generation, facts } if generation == current => {
-                    changed |= self.apply_facts(facts);
+                    changed |= self.apply_facts(facts, cx);
                 }
                 GitResult::FactsFailed {
                     generation,
@@ -487,7 +474,7 @@ impl DiffView {
                     } else {
                         self.heat_stamp = None;
                     }
-                    changed |= self.apply_diff(diff);
+                    changed |= self.apply_diff(diff, &range);
                     self.in_flight = None;
                 }
                 GitResult::History {
@@ -561,7 +548,7 @@ impl DiffView {
             } else {
                 None
             };
-            self.apply_diff(Ok(diff));
+            self.apply_diff(Ok(diff), &range);
             return;
         }
         self.request_diff(path, range);
@@ -597,6 +584,8 @@ impl DiffView {
     fn arm_scrub_trail(&mut self, index: usize) {
         let old = self.last_scrub_selected;
         self.last_scrub_selected = Some(index);
+        self.pending_center = Some(index);
+        self.scrub_anchor = self.surface.scroll_offset();
         if let Some(old) = old {
             self.pending_cone = Some((old, index));
         }
@@ -610,7 +599,7 @@ impl DiffView {
         self.request_diff_cached(path.to_owned(), commit_range(index));
     }
 
-    fn apply_facts(&mut self, facts: Facts) -> bool {
+    fn apply_facts(&mut self, facts: Facts, cx: &mut Context<Self>) -> bool {
         qol_runtime::probe!("DIFF_VIEWER", "facts numstat={}", facts.numstat.len());
         self.facts_error = None;
         let facts_equal = self
@@ -661,18 +650,28 @@ impl DiffView {
                     .unwrap_or_else(|| pipeline::DEFAULT_RANGE.to_string());
                 self.request_diff(path, range);
             } else {
-                self.select_current_file();
+                self.select_current_file(cx);
             }
             changed = true;
         }
         changed
     }
 
-    fn apply_diff(&mut self, diff: Result<Arc<FileDiff>, DiffError>) -> bool {
+    fn apply_diff(&mut self, diff: Result<Arc<FileDiff>, DiffError>, range: &str) -> bool {
+        let centered = if let Some(index) = self.pending_center {
+            if range == commit_range(index) {
+                self.pending_center = None;
+                self.center_ribbon_on(diff.as_ref().ok().map(Arc::as_ref), self.scrub_anchor)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         match diff {
             Ok(diff) if diff.is_empty() => {
                 if matches!(self.pane, DiffPane::Empty) {
-                    return false;
+                    return centered;
                 }
                 self.begin_transition(&[]);
                 self.lines.clear();
@@ -688,7 +687,7 @@ impl DiffView {
             Ok(diff) => {
                 if let DiffPane::Ready(previous) = &self.pane {
                     if Arc::ptr_eq(previous, &diff) || **previous == *diff {
-                        return false;
+                        return centered;
                     }
                 }
                 let lines = flatten(&diff);
@@ -733,6 +732,23 @@ impl DiffView {
             }
         }
         true
+    }
+
+    fn center_ribbon_on(&mut self, diff: Option<&FileDiff>, anchor: usize) -> bool {
+        let Some(diff) = diff else {
+            return false;
+        };
+        let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
+        let fit = match self.layout {
+            Layout::Field if !self.field_folded => self.field_fit.max(1),
+            _ => self.last_fit.max(1),
+        };
+        let target = ribbon_center_target(first_changed_line(diff), total, fit, anchor);
+        if target != self.surface.scroll_offset() {
+            self.surface.set_scroll_offset(target);
+            return true;
+        }
+        false
     }
 
     fn begin_transition(&mut self, new_lines: &[LineChange]) {
@@ -788,81 +804,55 @@ impl DiffView {
         cx.quit();
     }
 
-    fn select_current_file(&mut self) {
+    fn select_current_file(&mut self, cx: &mut Context<Self>) {
         self.pending_cone = None;
         let Some(path) = self.files.selected_path() else {
             return;
         };
-        self.request_diff(path.to_owned(), pipeline::DEFAULT_RANGE.to_string());
+        let index = self.scrubber_view.read(cx).state().selected();
+        self.pending_center = Some(index);
+        self.scrub_anchor = self.surface.scroll_offset();
+        self.request_diff(path.to_owned(), commit_range(index));
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
-        let page = self.page_size();
-        match (self.active_pane, key) {
-            (_, "tab") => {
-                self.active_pane = next_pane(self.active_pane, self.files_collapsed);
-                self.refocus(_window, cx);
-            }
-            (_, "escape") | (_, "esc") => {
+        match key {
+            "escape" | "esc" => {
                 self.hide_panel(cx);
                 return;
             }
-            (_, "f") => {
-                self.files_collapsed = !self.files_collapsed;
-                if self.files_collapsed && self.active_pane == ActivePane::Files {
-                    self.active_pane = ActivePane::Code;
+            "left" | "right" => {
+                if self.scrub_commits.is_empty() {
+                    return;
                 }
-            }
-            (ActivePane::Files, "down") | (ActivePane::Files, "j") => self.files.move_down(),
-            (ActivePane::Files, "up") | (ActivePane::Files, "k") => self.files.move_up(),
-            (ActivePane::Files, "pagedown") | (ActivePane::Files, "page_down") => {
-                self.files.page(1)
-            }
-            (ActivePane::Files, "pageup") | (ActivePane::Files, "page_up") => self.files.page(-1),
-            (ActivePane::Files, "enter") | (ActivePane::Files, "return") => {
-                self.select_current_file();
-            }
-            (ActivePane::Code, "down") | (ActivePane::Code, "j") => self.scroll_lines(1),
-            (ActivePane::Code, "up") | (ActivePane::Code, "k") => self.scroll_lines(-1),
-            (ActivePane::Code, "s") => {
-                self.layout = next_layout(self.layout);
-                self.wave_folded = false;
-                self.field_folded = false;
-                let max = self.row_count().saturating_sub(self.last_fit.max(1));
-                self.surface
-                    .set_scroll_offset(self.surface.scroll_offset().min(max));
-            }
-            (ActivePane::Code, "t") if matches!(self.layout, Layout::Wave | Layout::Field) => {
-                if self.layout == Layout::Wave {
-                    self.wave_folded = !self.wave_folded;
-                } else {
-                    self.field_folded = !self.field_folded;
+                if self
+                    .scrubber_view
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+                {
+                    return;
                 }
+                let keystroke = event.keystroke.clone();
+                let handle = self.scrubber_view.read(cx).focus_handle(cx);
+                window.focus(&handle);
+                window.dispatch_keystroke(keystroke, cx);
+            }
+            "j" => self.scroll_lines(1),
+            "k" => self.scroll_lines(-1),
+            "down" => self.files.move_down(),
+            "up" => self.files.move_up(),
+            "enter" | "return" => self.select_current_file(cx),
+            "f" => self.files_collapsed = !self.files_collapsed,
+            "t" => {
+                self.field_folded = !self.field_folded;
                 let lines = self.lines.clone();
                 self.begin_transition(&lines);
-            }
-            (ActivePane::Code, "pagedown") | (ActivePane::Code, "page_down") => {
-                self.scroll_lines(page as isize)
-            }
-            (ActivePane::Code, "pageup") | (ActivePane::Code, "page_up") => {
-                self.scroll_lines(-(page as isize))
             }
             _ => return,
         }
         cx.notify();
-    }
-
-    fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.active_pane {
-            ActivePane::Scrubber => {
-                let handle = self
-                    .scrubber_view
-                    .update(cx, |view, cx| view.focus_handle(cx));
-                window.focus(&handle);
-            }
-            _ => window.focus(&self.focus_handle),
-        }
     }
 
     fn on_scroll(
@@ -909,10 +899,6 @@ impl DiffView {
         }
     }
 
-    fn page_size(&self) -> usize {
-        self.last_fit.max(1)
-    }
-
     fn render_file_list(&self, cx: &Context<Self>) -> AnyElement {
         let rows: Vec<AnyElement> = self
             .files
@@ -956,7 +942,7 @@ impl DiffView {
             .on_click(cx.listener(move |view, _: &ClickEvent, _window, cx| {
                 view.files.list.selected = index;
                 view.files.list.sync(view.files.files.len());
-                view.select_current_file();
+                view.select_current_file(cx);
                 cx.notify();
             }));
         if selected {
@@ -2045,21 +2031,29 @@ impl DiffView {
     }
 }
 
-fn next_pane(active: ActivePane, files_collapsed: bool) -> ActivePane {
-    let next = active.other();
-    if files_collapsed && next == ActivePane::Files {
-        next.other()
-    } else {
-        next
+fn first_changed_line(diff: &FileDiff) -> Option<usize> {
+    let mut flat = 0usize;
+    for hunk in &diff.hunks {
+        for line in &hunk.lines {
+            if line.kind != LineKind::Context {
+                return Some(flat);
+            }
+            flat += 1;
+        }
     }
+    None
 }
 
-fn next_layout(layout: Layout) -> Layout {
-    match layout {
-        Layout::Unified => Layout::Split,
-        Layout::Split => Layout::Field,
-        Layout::Field => Layout::Unified,
-        Layout::Wave => Layout::Unified,
+fn ribbon_center_target(
+    first_changed: Option<usize>,
+    total: usize,
+    fit: usize,
+    anchor: usize,
+) -> usize {
+    let max = total.saturating_sub(fit);
+    match first_changed {
+        Some(first) => first.saturating_sub(fit / 2).min(max),
+        None => anchor.min(max),
     }
 }
 
@@ -2440,33 +2434,58 @@ mod tests {
     }
 
     #[test]
-    fn active_pane_cycles_files_code_scrubber() {
-        assert_eq!(ActivePane::Files.other(), ActivePane::Code);
-        assert_eq!(ActivePane::Code.other(), ActivePane::Scrubber);
-        assert_eq!(ActivePane::Scrubber.other(), ActivePane::Files);
+    fn first_changed_line_skips_context_to_the_first_change() {
+        let diff = FileDiff {
+            hunks: hunks(vec![
+                vec![
+                    change(LineKind::Context, Some(1), Some(1)),
+                    change(LineKind::Context, Some(2), Some(2)),
+                    change(LineKind::Added, None, Some(3)),
+                    change(LineKind::Removed, Some(4), None),
+                ],
+                vec![change(LineKind::Added, None, Some(5))],
+            ]),
+            ..FileDiff::empty()
+        };
+        assert_eq!(first_changed_line(&diff), Some(2));
+        assert_eq!(first_changed_line(&FileDiff::empty()), None);
+        let context_only = FileDiff {
+            hunks: hunks(vec![vec![change(LineKind::Context, Some(1), Some(1))]]),
+            ..FileDiff::empty()
+        };
+        assert_eq!(first_changed_line(&context_only), None);
     }
 
     #[test]
-    fn layout_cycle_is_field_unified_split_and_wave_is_out() {
-        assert_eq!(next_layout(Layout::Field), Layout::Unified);
-        assert_eq!(next_layout(Layout::Unified), Layout::Split);
-        assert_eq!(next_layout(Layout::Split), Layout::Field);
-        assert_eq!(next_layout(Layout::Wave), Layout::Unified);
-        let mut layout = Layout::Field;
-        for _ in 0..9 {
-            layout = next_layout(layout);
-            assert_ne!(layout, Layout::Wave, "the wave never re-enters the cycle");
-        }
-    }
-
-    #[test]
-    fn tab_cycle_skips_the_hidden_file_list() {
-        assert_eq!(next_pane(ActivePane::Code, true), ActivePane::Scrubber);
-        assert_eq!(next_pane(ActivePane::Scrubber, true), ActivePane::Code);
-        assert_eq!(next_pane(ActivePane::Files, true), ActivePane::Code);
-        assert_eq!(next_pane(ActivePane::Code, false), ActivePane::Scrubber);
-        assert_eq!(next_pane(ActivePane::Scrubber, false), ActivePane::Files);
-        assert_eq!(next_pane(ActivePane::Files, false), ActivePane::Code);
+    fn ribbon_center_target_centers_changes_and_falls_back_to_anchor() {
+        assert_eq!(ribbon_center_target(Some(10), 100, 20, 0), 0);
+        assert_eq!(ribbon_center_target(Some(30), 100, 20, 0), 20);
+        assert_eq!(ribbon_center_target(Some(90), 100, 20, 0), 80);
+        assert_eq!(
+            ribbon_center_target(Some(5), 100, 20, 0),
+            0,
+            "near the top clamps to zero"
+        );
+        assert_eq!(
+            ribbon_center_target(Some(3), 4, 20, 0),
+            0,
+            "a tiny file has no range"
+        );
+        assert_eq!(
+            ribbon_center_target(None, 100, 20, 55),
+            55,
+            "no changes keep the anchor"
+        );
+        assert_eq!(
+            ribbon_center_target(None, 100, 20, 500),
+            80,
+            "anchor clamps to the file"
+        );
+        assert_eq!(
+            ribbon_center_target(None, 0, 20, 0),
+            0,
+            "an empty file lands at zero"
+        );
     }
 
     fn change(kind: LineKind, old: Option<u32>, new: Option<u32>) -> LineChange {
