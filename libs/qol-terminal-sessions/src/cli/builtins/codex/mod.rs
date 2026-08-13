@@ -94,6 +94,15 @@ impl CliSessionStrategy for CodexStrategy {
         }
     }
 
+    fn ui_rendered(&self, screen: &str) -> bool {
+        crate::cli::screen::has_interrupt_hint(screen)
+            || crate::cli::screen::has_numbered_choice(screen)
+            || crate::cli::screen::contains_any(
+                screen,
+                &["OpenAI Codex (v", "Tip: Try the Codex App"],
+            )
+    }
+
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("codex"))
     }

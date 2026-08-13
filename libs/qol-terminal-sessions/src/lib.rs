@@ -13,6 +13,6 @@ pub use model::{
 };
 pub use service::{
     ScreenReader, SessionCloser, SessionFocus, SessionInventory, TerminalBackend,
-    TerminalSessionService, TextInput,
+    TerminalSessionService, TextInput, WaitOutcome,
 };
 pub use spawn::{SessionSpawner, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface};

@@ -5,6 +5,10 @@ use crate::commands::sessions::contract::{tool_specs, ToolSpec};
 
 const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Type } from "typebox";
 
 const BRIDGE_TIMEOUT_MS = 86_410_000;
@@ -77,12 +81,19 @@ function assistantText(messages) {
 
 const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
   let loopFinalReport = "";
+  let closingFollowUpSent = false;
+  let reviewFollowUpSent = false;
 
   function setLoopPhase(phase, finalReport = "") {
     if (loopPhase === phase && loopFinalReport === finalReport) return;
+    if (loopPhase === "review" && phase !== "review") reviewFollowUpSent = false;
     loopPhase = phase;
     loopFinalReport = finalReport;
     pi.appendEntry(LOOP_ENTRY, { phase, final_report: finalReport });
+  }
+
+  function normalized(text) {
+    return text.replace(/[^a-z0-9]/gi, "").toLowerCase();
   }
 
   function restoreLoopPhase(ctx) {
@@ -93,10 +104,12 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     loopPhase = LOOP_PHASES.has(restored) ? restored : "idle";
     loopFinalReport = typeof entry?.data?.final_report === "string" ? entry.data.final_report : "";
     if (loopPhase === "waiting") setLoopPhase("paused");
+    if (loopPhase === "closing") setLoopPhase("idle");
   }
 
   pi.on("session_start", async (_event, ctx) => {
     restoreLoopPhase(ctx);
+    await startWatcher(ctx);
   });
 
   pi.on("session_tree", async (_event, ctx) => {
@@ -105,18 +118,158 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
 
   pi.on("agent_end", async (event, _ctx) => {
     const text = assistantText(event.messages);
-    if (loopPhase === "closing" && loopFinalReport && text.includes(loopFinalReport)) {
+    if (loopPhase === "closing" && loopFinalReport && normalized(text).includes(normalized(loopFinalReport))) {
       setLoopPhase("idle");
     }
   });
 
   pi.on("agent_settled", async (_event, _ctx) => {
     if (loopPhase === "review") {
-      pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
+      if (!reviewFollowUpSent) {
+        reviewFollowUpSent = true;
+        pi.sendUserMessage(REVIEW_FOLLOW_UP, { deliverAs: "followUp" });
+      }
     }
     if (loopPhase === "closing") {
-      pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+      if (!closingFollowUpSent) {
+        closingFollowUpSent = true;
+        pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: "followUp" });
+      } else {
+        setLoopPhase("idle");
+      }
     }
+  });
+"#;
+
+const WATCH_GLUE: &str = r#"  function sessionsDir() {
+    const base = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share");
+    return path.join(base, "qol-tray", "sessions");
+  }
+
+  function watchStateFile(sessionId) {
+    return path.join(sessionsDir(), `watch-owner-${sessionId}.json`);
+  }
+
+  function wakeDebugLog(sessionId, line) {
+    try {
+      const logPath = path.join(sessionsDir(), `wake-debug-${sessionId}.log`);
+      fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
+    } catch {}
+  }
+
+  async function readWatchedTokens(sessionId) {
+    try {
+      const parsed = JSON.parse(await fsp.readFile(watchStateFile(sessionId), "utf8"));
+      return Array.isArray(parsed) ? parsed.filter((token) => typeof token === "string") : [];
+    } catch {}
+    return [];
+  }
+
+  async function recordWatchedToken(sessionId, token) {
+    try {
+      await fsp.mkdir(sessionsDir(), { recursive: true });
+      const tokens = await readWatchedTokens(sessionId);
+      if (!tokens.includes(token)) tokens.push(token);
+      await fsp.writeFile(watchStateFile(sessionId), JSON.stringify(tokens));
+      if (watcherChild !== null && watcherChild.exitCode == null) {
+        watcherChild.kill("SIGTERM");
+        watcherChild = null;
+      }
+    } catch {}
+  }
+
+  function reportSnippet(screen) {
+    if (typeof screen !== "string" || screen.length === 0) return "";
+    const max = 8 * 1024;
+    const truncated = screen.length > max;
+    let start = truncated ? screen.length - max : 0;
+    while (start > 0 && start < screen.length) {
+      const code = screen.charCodeAt(start);
+      if (code >= 0xdc00 && code <= 0xdfff) {
+        start -= 1;
+      } else {
+        break;
+      }
+    }
+    const snippet = screen.slice(start);
+    return truncated ? `(report tail; full screen via session_bridge)\n${snippet}` : snippet;
+  }
+
+  let watcherChild: ReturnType<typeof spawn> | null = null;
+  let stdoutBuffer = "";
+
+  async function startWatcher(ctx) {
+    if (watcherChild !== null && watcherChild.exitCode == null) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionId) return;
+    const tokens = await readWatchedTokens(sessionId);
+    if (tokens.length === 0) return;
+    wakeDebugLog(sessionId, `watch start tokens=${tokens.length}`);
+    try {
+      const child = spawn("qol", ["sessions", "watch", ...tokens], {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      watcherChild = child;
+      wakeDebugLog(sessionId, `watch spawn pid=${child.pid}`);
+      child.stdout.on("data", (chunk) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";
+        wakeDebugLog(sessionId, `chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}`);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let event;
+          try {
+            event = JSON.parse(trimmed);
+          } catch {}
+          if (typeof event?.event !== "string" || typeof event?.session !== "string") continue;
+          wakeDebugLog(sessionId, `event=${event.event} session=${event.session} screen=${typeof event.screen === "string" ? event.screen.length : 0}`);
+          const action =
+            event.event === "gone"
+              ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
+              : event.event === "stalled"
+                ? "The lane produced no output for 15 minutes; nudge it with qol sessions resume --kickstart, or collect with session_bridge."
+                : "Collect with session_bridge.";
+          const message =
+            event.event === "completed"
+              ? `qol sessions: lane ${event.session} completed.\n\n${reportSnippet(event.screen)}\n\nReview it, then close the loop with session_loop_close.` + (event.autoclose === true ? "\n\n(lane auto-closed)" : "")
+              : `qol sessions: lane ${event.session} ${event.event}. ${action}`;
+          wakeDebugLog(sessionId, `send message_bytes=${message.length}`);
+          try {
+            const sent = pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true });
+            wakeDebugLog(sessionId, `send returned ${typeof sent}`);
+            if (sent && typeof sent.then === "function") {
+              sent.then(() => wakeDebugLog(sessionId, "send ok")).catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`));
+            }
+          } catch (error) {
+            wakeDebugLog(sessionId, `send threw: ${error?.message ?? error}`);
+          }
+        }
+      });
+      child.on("error", (error) => {
+        wakeDebugLog(sessionId, `watch child error: ${error?.message ?? error}`);
+        if (watcherChild === child) watcherChild = null;
+      });
+      child.on("exit", (code, signal) => {
+        wakeDebugLog(sessionId, `watch child exit code=${code} signal=${signal}`);
+        if (watcherChild === child) watcherChild = null;
+      });
+    } catch {}
+  }
+
+  function stopWatcher() {
+    try {
+      if (watcherChild !== null) {
+        watcherChild.kill("SIGTERM");
+        watcherChild = null;
+      }
+    } catch {}
+  }
+
+  pi.on("session_shutdown", async () => {
+    stopWatcher();
   });
 "#;
 
@@ -133,22 +286,50 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _o
     },
 "#;
 
-const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
       if (params.surface != null) args.push("--surface", params.surface);
+      if (params.model != null) args.push("--model", params.model);
+      if (params.title != null) args.push("--title", params.title);
+      if (params.task != null) args.push("--task", params.task);
+      if (params.background === true) args.push("--background");
+      if (params.autoclose === true) args.push("--auto-close");
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
-      const text = outcome.reused
-        ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
-        : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`;
+      let text;
+      if (params.background === true) {
+        await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
+        await startWatcher(ctx);
+        text = `spawned session ${outcome.session} in the background (${outcome.tool}, key ${outcome.key}); round queued, you will be woken when it completes`;
+      } else {
+        if (outcome.task_submitted === true) {
+          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
+          await startWatcher(ctx);
+        }
+        text = outcome.reused
+          ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
+          : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`
+            + (outcome.task_submitted ? "; first round delivered, wait with session_bridge (omit task)" : "");
+      }
       return { content: [{ type: "text", text }], details: { outcome } };
+    },
+"#;
+
+const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const args = ["submit", params.session, "--task", params.task];
+      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
+      const stdout = await run(args, 60_000, undefined, signal);
+      const outcome = JSON.parse(stdout);
+      reviewFollowUpSent = false;
+      const text = `task submitted to session ${outcome.session}; round open, wait with session_bridge (omit task)`;
+      return { content: [{ type: "text", text: `${text}\n${outcome.screen}` }], details: { outcome } };
     },
 "#;
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["bridge", params.session];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
-      args.push("--", params.task);
+      if (params.task != null) args.push("--", params.task);
       setLoopPhase("waiting");
       try {
         const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
@@ -202,7 +383,7 @@ pub(crate) fn pi_extension() -> Result<String> {
         .collect::<Result<Vec<_>>>()?
         .join("\n\n");
     Ok(format!(
-        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{LOOP_SETUP}\n{blocks}\n}}\n"
+        "{HEADER}\nexport default function sessionsToolsExtension(pi: ExtensionAPI) {{\n{LOOP_SETUP}\n{WATCH_GLUE}\n{blocks}\n}}\n"
     ))
 }
 
@@ -211,6 +392,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
+        "session_submit" => EXECUTE_SUBMIT,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
@@ -301,11 +483,156 @@ mod tests {
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
         assert!(source.contains(
-            "task: Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged\" }),"
+            "task: Type.Optional(Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the round a prior session_submit or spawn task left open\" })),"
         ));
         assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
         assert!(source.contains("args.push(\"--acknowledge-marker\""));
-        assert!(source.contains("args.push(\"--\", params.task)"));
+        assert!(source.contains("if (params.task != null) args.push(\"--\", params.task)"));
+    }
+
+    #[test]
+    fn pi_adapter_restarts_the_watcher_when_a_new_round_is_recorded() {
+        let record = WATCH_GLUE
+            .split("async function recordWatchedToken")
+            .nth(1)
+            .expect("recordWatchedToken present")
+            .split("async function reportSnippet")
+            .next()
+            .expect("recordWatchedToken body");
+        assert!(record.contains("watcherChild.kill(\"SIGTERM\")"));
+        assert!(record.contains("watcherChild = null"));
+        assert!(WATCH_GLUE
+            .contains("if (watcherChild !== null && watcherChild.exitCode == null) return;"));
+        assert!(WATCH_GLUE.contains("const tokens = await readWatchedTokens(sessionId);"));
+    }
+
+    #[test]
+    fn pi_adapter_spawns_the_watcher_and_wakes_the_initiator_per_event() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("pi.on(\"session_start\""));
+        assert!(source.contains("await startWatcher(ctx)"));
+        assert!(source.contains("qol sessions: lane ${event.session} ${event.event}."));
+        assert!(source.contains("deliverAs: \"followUp\", triggerTurn: true"));
+        assert!(source.contains("collect with session_bridge"));
+        assert!(source.contains("pi.on(\"session_shutdown\""));
+        assert!(WATCH_GLUE.contains("watcherChild.kill(\"SIGTERM\")"));
+        assert!(WATCH_GLUE.contains("detached: true"));
+        assert!(WATCH_GLUE.contains("stdio: [\"ignore\", \"pipe\", \"pipe\"]"));
+    }
+
+    #[test]
+    fn pi_adapter_buffers_fragmented_watcher_stdout_lines() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("let stdoutBuffer = \"\";"));
+        assert!(source.contains("stdoutBuffer += chunk.toString();"));
+        assert!(source.contains("const lines = stdoutBuffer.split(\"\\n\");"));
+        assert!(source.contains("stdoutBuffer = lines.pop() ?? \"\";"));
+        assert!(WATCH_GLUE.contains("for (const line of lines)"));
+        assert!(WATCH_GLUE.contains("const trimmed = line.trim();"));
+        assert!(WATCH_GLUE.contains("JSON.parse(trimmed)"));
+        assert!(WATCH_GLUE.contains("typeof event?.event !== \"string\""));
+        assert!(WATCH_GLUE.contains(
+            "pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })"
+        ));
+    }
+
+    #[test]
+    fn pi_adapter_wake_debug_log_covers_every_delivery_step() {
+        let source = pi_extension().expect("render");
+        assert!(WATCH_GLUE.contains("function wakeDebugLog(sessionId, line)"));
+        assert!(WATCH_GLUE.contains("wake-debug-${sessionId}.log"));
+        assert!(WATCH_GLUE.contains("fs.appendFileSync(logPath"));
+        assert!(WATCH_GLUE.contains("watch start tokens=${tokens.length}"));
+        assert!(WATCH_GLUE.contains("watch spawn pid=${child.pid}"));
+        assert!(WATCH_GLUE.contains("watch child error: ${error?.message ?? error}"));
+        assert!(WATCH_GLUE.contains("watch child exit code=${code} signal=${signal}"));
+        assert!(WATCH_GLUE.contains("chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}"));
+        assert!(WATCH_GLUE.contains("event=${event.event} session=${event.session} screen="));
+        assert!(WATCH_GLUE.contains("send message_bytes=${message.length}"));
+        assert!(WATCH_GLUE.contains("send returned ${typeof sent}"));
+        assert!(WATCH_GLUE.contains("send threw: ${error?.message ?? error}"));
+        assert!(WATCH_GLUE.contains("if (sent && typeof sent.then === \"function\")"));
+        assert!(source.contains("import * as fs from \"node:fs\";"));
+        assert!(source.contains("import * as fsp from \"node:fs/promises\";"));
+    }
+
+    #[test]
+    fn pi_adapter_records_background_spawns_before_starting_the_watcher() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains(
+            "background: Type.Optional(Type.Boolean({ description: \"Fire-and-forget launch"
+        ));
+        assert!(
+            EXECUTE_SPAWN.contains("if (params.background === true) args.push(\"--background\")")
+        );
+        assert!(EXECUTE_SPAWN.contains(
+            "await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session)"
+        ));
+        assert!(EXECUTE_SPAWN.contains("await startWatcher(ctx)"));
+        assert!(EXECUTE_SPAWN.contains("round queued, you will be woken when it completes"));
+        assert!(source.contains("watch-owner-${sessionId}.json"));
+    }
+
+    #[test]
+    fn pi_adapter_passes_autoclose_through_and_announces_the_closed_lane() {
+        assert!(
+            EXECUTE_SPAWN.contains("if (params.autoclose === true) args.push(\"--auto-close\")")
+        );
+        assert!(
+            EXECUTE_SPAWN.contains("if (params.background === true) args.push(\"--background\")")
+        );
+        assert!(
+            WATCH_GLUE.contains("event.autoclose === true ? \"\\n\\n(lane auto-closed)\" : \"\"")
+        );
+        assert!(WATCH_GLUE.contains("Review it, then close the loop with session_loop_close."));
+    }
+
+    #[test]
+    fn pi_adapter_watches_foreground_and_reuse_spawns_that_open_a_round() {
+        let source = pi_extension().expect("render");
+        assert!(EXECUTE_SPAWN.contains("if (outcome.task_submitted === true) {"));
+        assert!(EXECUTE_SPAWN.contains(
+            "if (outcome.task_submitted === true) {\n          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);\n          await startWatcher(ctx);\n        }\n        text = outcome.reused"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "`reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "`spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`"
+        ));
+        assert!(EXECUTE_SPAWN.contains(
+            "outcome.task_submitted ? \"; first round delivered, wait with session_bridge (omit task)\""
+        ));
+        assert!(source.contains("await startWatcher(ctx)"));
+    }
+
+    #[test]
+    fn pi_adapter_embeds_the_report_snippet_in_the_completed_wake() {
+        assert!(WATCH_GLUE.contains("function reportSnippet(screen)"));
+        assert!(WATCH_GLUE.contains("const max = 8 * 1024"));
+        assert!(WATCH_GLUE.contains("(report tail; full screen via session_bridge)"));
+        assert!(WATCH_GLUE.contains("Review it, then close the loop with session_loop_close."));
+        assert!(WATCH_GLUE.contains(
+            "`qol sessions: lane ${event.session} completed.\\n\\n${reportSnippet(event.screen)}\\n\\nReview it, then close the loop with session_loop_close.`"
+        ));
+        assert!(WATCH_GLUE.contains("start a fresh lane if the work still matters."));
+        assert!(WATCH_GLUE.contains(
+            "nudge it with qol sessions resume --kickstart, or collect with session_bridge."
+        ));
+        assert!(WATCH_GLUE.contains("deliverAs: \"followUp\", triggerTurn: true"));
+        assert!(WATCH_GLUE.contains("Collect with session_bridge."));
+    }
+
+    #[test]
+    fn pi_adapter_watcher_glue_is_defensive_and_keeps_the_closing_flow_untouched() {
+        let source = pi_extension().expect("render");
+        assert!(WATCH_GLUE.contains("try {"));
+        assert!(WATCH_GLUE.contains("catch {}"));
+        assert!(LOOP_SETUP.contains("restoreLoopPhase(ctx);"));
+        assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP
+            .contains("pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: \"followUp\" })"));
+        assert!(source.contains("let closingFollowUpSent = false;"));
     }
 
     #[test]
@@ -316,6 +643,26 @@ mod tests {
         assert!(source.contains("recovered the previous implementation response"));
         assert!(source.contains("pi.on(\"agent_settled\""));
         assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
+    }
+
+    #[test]
+    fn pi_adapter_fires_the_review_reminder_once_per_round() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("let reviewFollowUpSent = false;"));
+        assert!(source.contains("if (!reviewFollowUpSent) {"));
+        let set_at = source
+            .find("reviewFollowUpSent = true;")
+            .expect("flag set before send");
+        let sent_at = source
+            .find("pi.sendUserMessage(REVIEW_FOLLOW_UP")
+            .expect("review follow-up send");
+        assert!(set_at < sent_at);
+        assert!(EXECUTE_SUBMIT.contains("reviewFollowUpSent = false;"));
+        assert!(LOOP_SETUP.contains(
+            "if (loopPhase === \"review\" && phase !== \"review\") reviewFollowUpSent = false;"
+        ));
+        assert!(source.contains("if (!closingFollowUpSent) {"));
+        assert!(source.contains("closingFollowUpSent = true;"));
     }
 
     #[test]
@@ -355,6 +702,21 @@ mod tests {
     }
 
     #[test]
+    fn pi_adapter_closes_the_loop_after_a_single_report_echo() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("function normalized(text)"));
+        assert!(source.contains("normalized(text).includes(normalized(loopFinalReport))"));
+        assert!(source.contains("let closingFollowUpSent = false;"));
+        assert!(source.contains("if (!closingFollowUpSent) {"));
+        assert!(source.contains("closingFollowUpSent = true;"));
+        assert!(source.contains("if (loopPhase === \"closing\") setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP
+            .contains("pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: \"followUp\" })"));
+        assert!(!source.contains("FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}"));
+    }
+
+    #[test]
     fn pi_adapter_never_blocks_the_host_event_loop() {
         let source = pi_extension().expect("render");
         assert!(!source.contains("spawnSync"));
@@ -365,6 +727,7 @@ mod tests {
         for template in [
             EXECUTE_LIST,
             EXECUTE_SPAWN,
+            EXECUTE_SUBMIT,
             EXECUTE_BRIDGE,
             EXECUTE_LOOP_CLOSE,
             EXECUTE_CLOSE,

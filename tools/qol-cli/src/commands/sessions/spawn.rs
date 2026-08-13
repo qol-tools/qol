@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
-    SessionFacts, SessionId, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface,
-    TerminalSessionService,
+    ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
+    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,6 +18,7 @@ pub(super) const SURFACE_TAB: &str = "tab";
 pub(super) const SURFACE_OS_WINDOW: &str = "os-window";
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT_MS: u64 = 30_000;
+const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static KEY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -30,7 +31,20 @@ pub(super) struct SpawnOutcome {
     pub(super) cwd: String,
     pub(super) surface: String,
     pub(super) model: Option<String>,
+    pub(super) title: String,
+    pub(super) task_submitted: Option<bool>,
+    pub(super) completion_marker: Option<String>,
+    pub(super) screen: Option<String>,
+    pub(super) next_command: Option<String>,
     pub(super) elapsed_ms: u128,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) background: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) autoclose: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -117,7 +131,10 @@ fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
     Ok(config.spawn_model)
 }
 
-fn resolve_model_with(flag: Option<&str>, config: Option<String>) -> Result<Option<String>> {
+pub(super) fn resolve_model_with(
+    flag: Option<&str>,
+    config: Option<String>,
+) -> Result<Option<String>> {
     Ok(match flag {
         Some(model) => Some(model.to_owned()),
         None => config,
@@ -126,6 +143,15 @@ fn resolve_model_with(flag: Option<&str>, config: Option<String>) -> Result<Opti
 
 pub(super) fn resolve_model(flag: Option<&str>) -> Result<Option<String>> {
     resolve_model_with(flag, config_spawn_model()?)
+}
+
+pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
+    match model.map(str::trim) {
+        Some(model) if !model.is_empty() => Ok(()),
+        _ => bail!(
+            "spawning a new session requires an explicit model so the lane launches at the intended tier; pass --model MODEL or set spawn_model in sessions.toml. The reuse path needs no model."
+        ),
+    }
 }
 
 fn model_args(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
@@ -203,6 +229,10 @@ impl SpawnLocks {
         Ok(SpawnLockGuard { file })
     }
 
+    pub(super) fn remove(&self, key: &SpawnKey) {
+        let _ = fs::remove_file(self.lock_for(key));
+    }
+
     fn lock_for(&self, key: &SpawnKey) -> PathBuf {
         let digest = Sha256::digest(key.as_str().as_bytes());
         self.dir.join(format!("{digest:x}.lock"))
@@ -251,14 +281,10 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     let model = resolve_model(parsed.model.as_deref())?;
-    let outcome = spawn_or_reuse(
+    let outcome = run_with(
         &TerminalSessionService::system(),
-        &CliSessionInterpreter::system(),
-        &parsed.tool,
-        &parsed.cwd,
-        parsed.key.as_deref(),
-        parsed.surface.as_deref(),
-        model.as_deref(),
+        parsed,
+        model,
         config_surface()?,
         &SpawnLocks::system()?,
     )?;
@@ -269,21 +295,116 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+fn run_with(
+    terminals: &TerminalSessionService,
+    parsed: SpawnArgs,
+    model: Option<String>,
+    config: Option<SpawnSurface>,
+    locks: &SpawnLocks,
+) -> Result<SpawnOutcome> {
+    spawn_or_reuse(
+        terminals,
+        &CliSessionInterpreter::system(),
+        &parsed.tool,
+        &parsed.cwd,
+        parsed.key.as_deref(),
+        parsed.surface.as_deref(),
+        model.as_deref(),
+        parsed.title.as_deref(),
+        config,
+        locks,
+        parsed.background,
+        parsed.autoclose,
+        parsed.task.as_deref(),
+        &super::bridge::PendingBridgeStore::system()?,
+    )
+}
+
+pub(super) fn deliver_task(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    mut outcome: SpawnOutcome,
+    task: &str,
+    pending: &super::bridge::PendingBridgeStore,
+    autoclose: bool,
+) -> Result<SpawnOutcome> {
+    let binding = outcome
+        .session
+        .parse()
+        .context("spawned session token cannot be resolved for task delivery")?;
+    wait_until_live(terminals, interpreter, &binding)?;
+    let submitted = super::bridge::submit(
+        terminals,
+        interpreter,
+        &binding,
+        task,
+        pending,
+        None,
+        autoclose,
+    )?;
+    outcome.task_submitted = Some(true);
+    outcome.completion_marker = Some(submitted.completion_marker);
+    outcome.screen = Some(submitted.screen);
+    outcome.next_command = Some(submitted.next_command);
+    Ok(outcome)
+}
+
+fn wait_until_live(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let facts = terminals
+            .discover()
+            .context("target discovery failed while waiting for its live UI")?
+            .into_iter()
+            .find(|facts| facts.id == *binding.session_id())
+            .ok_or_else(|| anyhow!("spawned target disappeared while waiting for its live UI"))?;
+        let screen = terminals
+            .read_screen(binding)
+            .context("target screen read failed while waiting for its live UI")?;
+        let evidence = interpreter.classify_screen(&facts, &screen);
+        if interpreter.ui_rendered(&facts, &screen)
+            || evidence.viewport == qol_terminal_sessions::cli::CliViewportState::Live
+            || evidence.runtime != qol_terminal_sessions::cli::CliRuntimeState::Unknown
+        {
+            return Ok(());
+        }
+        if started.elapsed() >= SPAWN_TASK_READY_TIMEOUT {
+            bail!(
+                "the spawned session's UI did not become live within {}s; the task was not delivered - check the session or spawn again without --task",
+                SPAWN_TASK_READY_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(READY_POLL_INTERVAL);
+    }
+}
+
 struct SpawnArgs {
     tool: String,
     cwd: String,
     key: Option<String>,
     surface: Option<String>,
     model: Option<String>,
+    title: Option<String>,
+    task: Option<String>,
+    background: bool,
+    autoclose: bool,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
     let mut surface = None;
     let mut model = None;
+    let mut title = None;
+    let mut task = None;
+    let mut background = false;
+    let mut autoclose = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -310,6 +431,22 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 model = Some(flag_value(args, index, "--model", usage)?);
                 index += 2;
             }
+            "--title" => {
+                title = Some(flag_value(args, index, "--title", usage)?);
+                index += 2;
+            }
+            "--task" => {
+                task = Some(flag_value(args, index, "--task", usage)?);
+                index += 2;
+            }
+            "--background" => {
+                background = true;
+                index += 1;
+            }
+            "--auto-close" => {
+                autoclose = true;
+                index += 1;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -321,6 +458,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         key,
         surface,
         model,
+        title,
+        task,
+        background,
+        autoclose,
     })
 }
 
@@ -335,18 +476,22 @@ fn flag_value(args: &[OsString], index: usize, flag: &str, usage: &str) -> Resul
     Ok(value.to_owned())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_or_reuse(
-    terminals: &TerminalSessionService,
+struct SpawnContext {
+    tool_id: CliToolId,
+    launch: CliLaunchProgram,
+    key: SpawnKey,
+    identity: SpawnIdentity,
+    title: String,
+}
+
+fn prepare_spawn(
     interpreter: &CliSessionInterpreter,
     tool: &str,
-    cwd: &str,
     key: Option<&str>,
     surface: Option<&str>,
-    model: Option<&str>,
+    title: Option<&str>,
     config: Option<SpawnSurface>,
-    locks: &SpawnLocks,
-) -> Result<SpawnOutcome> {
+) -> Result<SpawnContext> {
     let tool_id = CliToolId::new(tool.to_owned())
         .map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
     let launch = interpreter.launch_for(&tool_id).ok_or_else(|| {
@@ -359,72 +504,254 @@ pub(super) fn spawn_or_reuse(
             .map_err(|error| anyhow!("generated spawn key is invalid: {error}"))?,
     };
     let surface = resolve_surface(surface, config)?;
+    let title = title.unwrap_or(&key.to_string()).to_owned();
     let identity = SpawnIdentity {
         key: key.clone(),
         tool: tool_id.clone(),
         surface,
     };
-    let _lock = locks.acquire(&key)?;
-    let snapshot = terminals.snapshot().context("session discovery failed")?;
-    match decide(interpreter, snapshot.sessions(), &identity) {
-        SpawnDecision::Launch => {
-            let mut launch = launch;
-            if let Some(model) = model {
-                launch.args.extend(model_args(&tool_id, model)?);
-            }
-            let request = SpawnRequest {
-                identity: identity.clone(),
-                launch,
-                cwd: canonicalize_cwd(cwd)?,
-                title: None,
-            };
-            launch_ready(terminals, interpreter, &identity, &request, model)
-        }
-        SpawnDecision::Reuse(facts) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=reuse key={} tool={}",
-                identity.key,
-                identity.tool
-            );
-            outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned))
-        }
-        SpawnDecision::Conflict(found) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=conflict key={} requested_tool={} found_tool={}",
-                identity.key,
-                identity.tool,
-                found
-            );
-            bail!(
-                "spawn key `{key}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key"
-            )
-        }
-        SpawnDecision::WrongHarness { described } => bail!(
-            "spawn key `{key}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
-            identity.tool
-        ),
-        SpawnDecision::Ambiguous(count) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=ambiguous key={} matches={}",
-                identity.key,
-                count
-            );
-            bail!(
-                "spawn key `{key}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key"
-            )
-        }
-    }
+    Ok(SpawnContext {
+        tool_id,
+        launch,
+        key,
+        identity,
+        title,
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_or_reuse(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    tool: &str,
+    cwd: &str,
+    key: Option<&str>,
+    surface: Option<&str>,
+    model: Option<&str>,
+    title: Option<&str>,
+    config: Option<SpawnSurface>,
+    locks: &SpawnLocks,
+    background: bool,
+    autoclose: bool,
+    task: Option<&str>,
+    pending: &super::bridge::PendingBridgeStore,
+) -> Result<SpawnOutcome> {
+    if background && task.is_none() {
+        bail!(
+            "background spawn requires --task so the first round is queued at launch; the reuse path takes no --background"
+        );
+    }
+    let prepared = prepare_spawn(interpreter, tool, key, surface, title, config)?;
+    let _guard = locks.acquire(&prepared.key)?;
+    let result = (|| {
+        let snapshot = terminals.snapshot().context("session discovery failed")?;
+        match decide(interpreter, snapshot.sessions(), &prepared.identity) {
+            SpawnDecision::Launch => {
+                require_model_for_launch(model)?;
+                let mut launch = prepared.launch.clone();
+                if let Some(model) = model {
+                    launch.args.extend(model_args(&prepared.tool_id, model)?);
+                }
+                if background {
+                    let round_task =
+                        task.expect("the background guard above guarantees a task");
+                    super::bridge::validate_task(round_task)?;
+                    let marker = super::bridge::CompletionMarker::generate();
+                    launch
+                        .args
+                        .push(super::bridge::bridge_prompt(round_task, &marker, super::bridge::Role::Lane));
+                    let request = SpawnRequest {
+                        identity: prepared.identity.clone(),
+                        launch,
+                        cwd: canonicalize_cwd(cwd)?,
+                        title: Some(prepared.title.clone()),
+                    };
+                    launch_background(
+                        terminals,
+                        interpreter,
+                        pending,
+                        &prepared.identity,
+                        &request,
+                        &marker.token,
+                        model,
+                        &prepared.title,
+                        autoclose,
+                    )
+                } else {
+                    let request = SpawnRequest {
+                        identity: prepared.identity.clone(),
+                        launch,
+                        cwd: canonicalize_cwd(cwd)?,
+                        title: Some(prepared.title.clone()),
+                    };
+                    let outcome = launch_ready(
+                        terminals,
+                        interpreter,
+                        pending,
+                        &prepared.identity,
+                        &request,
+                        model,
+                        &prepared.title,
+                        autoclose,
+                    )?;
+                    match task {
+                        Some(round_task) => deliver_task(
+                            terminals,
+                            interpreter,
+                            outcome,
+                            round_task,
+                            pending,
+                            autoclose,
+                        ),
+                        None => Ok(outcome),
+                    }
+                }
+            }
+            SpawnDecision::Reuse(facts) => {
+                if autoclose {
+                    bail!(
+                        "--auto-close cannot reuse the session for key `{}`: closing a reused terminal would kill the user's live session; --auto-close only applies when a new terminal is spawned",
+                        prepared.key
+                    );
+                }
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=reuse key={} tool={}",
+                    prepared.identity.key,
+                    prepared.identity.tool
+                );
+                let outcome = outcome_from_facts(
+                    &facts,
+                    interpreter,
+                    true,
+                    model.map(str::to_owned),
+                    &prepared.title,
+                )?;
+                let binding = facts
+                    .binding()
+                    .context("spawned session cannot bind to a stable token")?;
+                pending.set_role(&binding, super::bridge::Role::Lane)?;
+                match task {
+                    Some(round_task) => {
+                        deliver_task(terminals, interpreter, outcome, round_task, pending, false)
+                    }
+                    None => Ok(outcome),
+                }
+            }
+            SpawnDecision::Conflict(found) => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=conflict key={} requested_tool={} found_tool={}",
+                    prepared.identity.key,
+                    prepared.identity.tool,
+                    found
+                );
+                bail!(
+                    "spawn key `{}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key",
+                    prepared.key
+                )
+            }
+            SpawnDecision::WrongHarness { described } => bail!(
+                "spawn key `{}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
+                prepared.key, prepared.identity.tool
+            ),
+            SpawnDecision::Ambiguous(count) => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=ambiguous key={} matches={}",
+                    prepared.identity.key,
+                    count
+                );
+                bail!(
+                    "spawn key `{}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key",
+                    prepared.key
+                )
+            }
+        }
+    })();
+    drop(_guard);
+    locks.remove(&prepared.key);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_background(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    pending: &super::bridge::PendingBridgeStore,
+    identity: &SpawnIdentity,
+    request: &SpawnRequest,
+    marker: &str,
+    model: Option<&str>,
+    title: &str,
+    autoclose: bool,
+) -> Result<SpawnOutcome> {
+    let started = Instant::now();
+    let session_id = terminals
+        .spawn_on(qol_terminal_sessions::kitty::backend_id(), request)
+        .context("terminal backend refused the spawn request")?;
+    qol_runtime::probe!(
+        "CLI_SESSION_SPAWN",
+        "event=background key={} tool={} surface={} model={}",
+        identity.key,
+        identity.tool,
+        surface_token(identity.surface),
+        model.unwrap_or("default")
+    );
+    let facts = terminals
+        .discover()
+        .context("spawn discovery failed")?
+        .into_iter()
+        .find(|facts| facts.id == session_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "spawned session `{session_id}` was not discoverable right after launch; the lane may have exited before tagging - rerun with the same key"
+            )
+        })?;
+    if facts.spawn_identity.as_ref() != Some(identity) {
+        bail!(
+            "spawned session `{session_id}` appeared with a different spawn identity than requested (key `{}`, tool `{}`); refusing to queue a round for it",
+            identity.key, identity.tool
+        );
+    }
+    let binding = facts
+        .binding()
+        .context("spawned session cannot bind to a stable token")?;
+    pending.set_role(&binding, super::bridge::Role::Lane)?;
+    pending.start(
+        &binding,
+        marker,
+        &super::bridge::driver_token(terminals),
+        autoclose,
+    )?;
+    let mut outcome =
+        outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
+    outcome.background = true;
+    outcome.autoclose = autoclose;
+    outcome.task_submitted = Some(true);
+    outcome.completion_marker = Some(marker.to_owned());
+    outcome.next_command = Some(format!("qol sessions next {}", binding.token()));
+    outcome.elapsed_ms = started.elapsed().as_millis();
+    qol_runtime::probe!(
+        "CLI_SESSION_SPAWN",
+        "event=queued key={} tool={} elapsed_ms={}",
+        identity.key,
+        identity.tool,
+        outcome.elapsed_ms
+    );
+    Ok(outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn launch_ready(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
+    pending: &super::bridge::PendingBridgeStore,
     identity: &SpawnIdentity,
     request: &SpawnRequest,
     model: Option<&str>,
+    title: &str,
+    autoclose: bool,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -445,7 +772,13 @@ fn launch_ready(
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
     )?;
-    let mut outcome = outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned))?;
+    let binding = facts
+        .binding()
+        .context("spawned session cannot bind to a stable token")?;
+    pending.set_role(&binding, super::bridge::Role::Lane)?;
+    let mut outcome =
+        outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
+    outcome.autoclose = autoclose;
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -524,6 +857,7 @@ fn outcome_from_facts(
     interpreter: &CliSessionInterpreter,
     reused: bool,
     model: Option<String>,
+    title: &str,
 ) -> Result<SpawnOutcome> {
     let binding = facts
         .binding()
@@ -540,7 +874,14 @@ fn outcome_from_facts(
         cwd: facts.cwd.clone(),
         surface: surface_token(identity.surface).to_owned(),
         model,
+        title: title.to_owned(),
+        task_submitted: None,
+        completion_marker: None,
+        screen: None,
+        next_command: None,
         elapsed_ms: 0,
+        background: false,
+        autoclose: false,
     })
 }
 
@@ -786,8 +1127,33 @@ mod tests {
         key: Option<&str>,
         surface: Option<&str>,
         model: Option<&str>,
+        title: Option<&str>,
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
+    ) -> Result<SpawnOutcome> {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        run_spawn_with(
+            terminals, tool, cwd, key, surface, model, title, config, locks, false, false, None,
+            &pending,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_spawn_with(
+        terminals: &TerminalSessionService,
+        tool: &str,
+        cwd: &str,
+        key: Option<&str>,
+        surface: Option<&str>,
+        model: Option<&str>,
+        title: Option<&str>,
+        config: Option<SpawnSurface>,
+        locks: &SpawnLocks,
+        background: bool,
+        autoclose: bool,
+        task: Option<&str>,
+        pending: &super::super::bridge::PendingBridgeStore,
     ) -> Result<SpawnOutcome> {
         spawn_or_reuse(
             terminals,
@@ -797,8 +1163,13 @@ mod tests {
             key,
             surface,
             model,
+            title,
             config,
             locks,
+            background,
+            autoclose,
+            task,
+            pending,
         )
     }
 
@@ -815,6 +1186,12 @@ mod tests {
             "os-window".into(),
             "--model".into(),
             "flash-x".into(),
+            "--title".into(),
+            "Lane One".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--background".into(),
+            "--auto-close".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -822,6 +1199,10 @@ mod tests {
         assert_eq!(parsed.key.as_deref(), Some("lane-1"));
         assert_eq!(parsed.surface.as_deref(), Some("os-window"));
         assert_eq!(parsed.model.as_deref(), Some("flash-x"));
+        assert_eq!(parsed.title.as_deref(), Some("Lane One"));
+        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
+        assert!(parsed.background);
+        assert!(parsed.autoclose);
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -830,6 +1211,10 @@ mod tests {
         assert_eq!(parsed.key, None);
         assert_eq!(parsed.surface, None);
         assert_eq!(parsed.model, None);
+        assert_eq!(parsed.title, None);
+        assert_eq!(parsed.task, None);
+        assert!(!parsed.background);
+        assert!(!parsed.autoclose);
     }
 
     #[test]
@@ -885,6 +1270,424 @@ mod tests {
     }
 
     #[test]
+    fn launch_requires_a_non_empty_model_but_reuse_stays_exempt() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        for model in [None, Some(""), Some("   ")] {
+            let error = run_spawn(
+                &terminals,
+                "codex",
+                &cwd,
+                Some("lane-1"),
+                None,
+                model,
+                None,
+                None,
+                &locks,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("--model"), "model: {model:?} error: {error}");
+        }
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let reused = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn background_launch_embeds_the_task_queues_the_round_and_skips_the_liveness_wait() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            false,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.background);
+        assert!(!outcome.reused);
+        assert_eq!(outcome.session, "v1:kitty:spawn-lane-bg:10");
+        assert_eq!(outcome.task_submitted, Some(true));
+        assert_eq!(outcome.screen, None);
+        let marker = outcome.completion_marker.as_deref().unwrap();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+        assert_eq!(
+            outcome.next_command.as_deref(),
+            Some("qol sessions next v1:kitty:spawn-lane-bg:10")
+        );
+
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.launch.program, "pi");
+        assert_eq!(
+            request.launch.args[..2],
+            ["--model".to_owned(), "flash-x".to_owned()]
+        );
+        let prompt = &request.launch.args[2];
+        assert!(prompt.contains("[qol session bridge]"));
+        assert!(prompt.contains("implement the fix"));
+        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+        assert!(
+            !prompt.contains(marker),
+            "the launch prompt never joins the fragments"
+        );
+
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(round.completion_marker, marker);
+        assert!(!round.completed);
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "a background launch writes the lane role marker"
+        );
+
+        let foreground = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            foreground.contains("screen read failed while waiting for its live UI"),
+            "foreground still waits for the live UI: {foreground}"
+        );
+    }
+
+    #[test]
+    fn launch_and_reuse_write_the_lane_role_marker() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "a fresh launch writes the lane role marker"
+        );
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        let binding: SessionBinding = reused.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "the keyed reuse path writes the lane role marker idempotently"
+        );
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        let binding: SessionBinding = reused.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "set_role stays idempotent across repeated reuse"
+        );
+    }
+
+    #[test]
+    fn background_requires_a_task_and_never_bypasses_model_enforcement() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let no_task = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(no_task.contains("--task"), "{no_task}");
+
+        let no_model = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            true,
+            false,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(no_model.contains("--model"), "{no_model}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn autoclose_marks_new_spawns_and_refuses_the_reuse_path() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            true,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.autoclose);
+        assert!(outcome.background);
+        assert!(!outcome.reused);
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "the queued round must carry the autoclose flag for the watcher"
+        );
+
+        let error = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            true,
+            None,
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("--auto-close"), "{error}");
+        assert!(error.contains("reuse"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-auto"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused, "plain reuse without autoclose stays allowed");
+        assert!(!reused.autoclose);
+    }
+
+    #[test]
+    fn cli_run_refuses_a_new_lane_without_a_model_and_allows_reuse_without_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            cwd.clone().into(),
+            "--key".into(),
+            "lane-1".into(),
+        ])
+        .unwrap();
+        let error = run_with(&terminals, parsed, None, None, &locks)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--model"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            cwd.clone().into(),
+            "--key".into(),
+            "lane-1".into(),
+            "--model".into(),
+            "flash-x".into(),
+        ])
+        .unwrap();
+        let outcome =
+            run_with(&terminals, parsed, Some("flash-x".to_owned()), None, &locks).unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "codex".into(),
+            "--cwd".into(),
+            "ignored-cwd".into(),
+            "--key".into(),
+            "lane-1".into(),
+        ])
+        .unwrap();
+        let outcome = run_with(&terminals, parsed, None, None, &locks).unwrap();
+        assert!(outcome.reused);
+        assert_eq!(outcome.cwd, cwd);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
     fn spawn_args_reject_missing_required_flags_and_unknown_flags() {
         for args in [
             vec!["--cwd".into(), "/tmp".into()],
@@ -895,7 +1698,7 @@ mod tests {
                 "pi".into(),
                 "--cwd".into(),
                 "/tmp".into(),
-                "--title".into(),
+                "--bogus".into(),
                 "x".into(),
             ],
         ] {
@@ -993,6 +1796,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 &locks(&root),
             )
             .unwrap_err()
@@ -1021,6 +1825,7 @@ mod tests {
             None,
             Some("flash-x"),
             None,
+            None,
             &locks(&root),
         )
         .unwrap();
@@ -1032,6 +1837,7 @@ mod tests {
         assert_eq!(outcome.cwd, cwd);
         assert_eq!(outcome.surface, "tab");
         assert_eq!(outcome.model.as_deref(), Some("flash-x"));
+        assert_eq!(outcome.title, "lane-1");
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
 
         let expected = identity("lane-1", "codex", SpawnSurface::Tab);
@@ -1042,8 +1848,34 @@ mod tests {
             request.launch.args,
             vec!["--model".to_owned(), "flash-x".to_owned()]
         );
+        assert_eq!(request.title.as_deref(), Some("lane-1"));
         assert_eq!(request.cwd, std::path::PathBuf::from(&cwd));
-        assert_eq!(request.title, None);
+    }
+
+    #[test]
+    fn fresh_spawn_carries_an_explicit_title_into_the_launch() {
+        let (terminals, backend) = harness(vec![vec![]]);
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let outcome = run_spawn(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-2"),
+            None,
+            Some("flash-x"),
+            Some("Lane Two"),
+            None,
+            &locks(&root),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.title, "Lane Two");
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.title.as_deref(), Some("Lane Two"));
     }
 
     #[test]
@@ -1060,6 +1892,7 @@ mod tests {
             &cwd,
             Some("mcp-key"),
             None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1074,6 +1907,7 @@ mod tests {
             &cwd,
             None,
             None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1098,6 +1932,7 @@ mod tests {
             "missing-requested-dir",
             Some("lane-1"),
             Some("os-window"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1127,6 +1962,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap_err()
@@ -1146,6 +1982,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             None,
@@ -1169,6 +2006,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             None,
@@ -1381,6 +2219,7 @@ mod tests {
             cwd.join("nope").to_str().unwrap(),
             Some("lane-1"),
             None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1394,6 +2233,7 @@ mod tests {
             cwd.join("file").to_str().unwrap(),
             Some("lane-2"),
             None,
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1418,6 +2258,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             Some("os-window"),
+            Some("flash-x"),
             None,
             None,
             &locks(&root),
@@ -1447,6 +2288,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks,
         )
         .unwrap_err()
@@ -1464,6 +2306,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             None,
+            Some("flash-x"),
             None,
             None,
             &locks,
@@ -1471,6 +2314,115 @@ mod tests {
         .unwrap();
         assert!(!outcome.reused);
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn the_spawn_lock_file_is_removed_after_spawn_or_reuse_returns() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, _) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert!(
+            !path.exists(),
+            "a completed spawn must leave no lock file behind"
+        );
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(outcome.reused);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_spawn_lock_file_is_removed_on_error_paths_too() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, _) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+
+        let error = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            Some("os-window"),
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("refused the spawn request"), "{error}");
+        assert!(
+            !path.exists(),
+            "a failed spawn must leave no lock file behind"
+        );
+    }
+
+    #[test]
+    fn a_leftover_lock_file_from_a_crashed_spawn_does_not_block_a_fresh_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "99999").unwrap();
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        assert!(!path.exists());
     }
 
     #[test]

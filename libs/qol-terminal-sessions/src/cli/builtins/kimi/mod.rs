@@ -88,6 +88,10 @@ impl CliSessionStrategy for KimiStrategy {
         }
     }
 
+    fn ui_rendered(&self, screen: &str) -> bool {
+        crate::cli::screen::kimi_live(screen)
+    }
+
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("kimi"))
     }
