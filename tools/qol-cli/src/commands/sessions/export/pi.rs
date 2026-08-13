@@ -123,7 +123,7 @@ const LOOP_SETUP: &str = r#"  let loopPhase = "idle";
     if (loopPhase === "closing") {
       if (!closingFollowUpSent) {
         closingFollowUpSent = true;
-        pi.sendUserMessage(`${FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}`, { deliverAs: "followUp" });
+        pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: "followUp" });
       } else {
         setLoopPhase("idle");
       }
@@ -390,6 +390,9 @@ mod tests {
         assert!(source.contains("closingFollowUpSent = true;"));
         assert!(source.contains("if (loopPhase === \"closing\") setLoopPhase(\"idle\")"));
         assert!(LOOP_SETUP.contains("} else {\n        setLoopPhase(\"idle\")"));
+        assert!(LOOP_SETUP
+            .contains("pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: \"followUp\" })"));
+        assert!(!source.contains("FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}"));
     }
 
     #[test]
