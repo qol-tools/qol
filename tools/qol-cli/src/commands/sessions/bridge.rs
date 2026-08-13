@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
@@ -21,6 +22,16 @@ const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
+const GATE_LOCK_MESSAGE: &str = "Blocking waiting for file lock";
+const GATE_STEP_TIMEOUT: Duration = Duration::from_secs(600);
+const GATE_LOCK_RETRY_BUDGET: Duration = Duration::from_secs(1800);
+const GATE_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+const GATE_COMMANDS: [&str; 4] = [
+    "cargo fmt --check -p qol",
+    "cargo clippy -p qol --all-targets -- -D warnings",
+    "cargo test -p qol --bin qol",
+    "cargo test -p qol-terminal-sessions",
+];
 
 pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const TIMEOUT_DEFAULT_MS: u64 = TIMEOUT_MAX_MS;
@@ -907,6 +918,161 @@ fn validate_task(task: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub(super) struct GateStepResult {
+    pub(super) command: String,
+    pub(super) passed: bool,
+    pub(super) elapsed: Duration,
+    pub(super) reason: Option<String>,
+}
+
+#[derive(Debug)]
+pub(super) struct GateSummary {
+    pub(super) steps: Vec<GateStepResult>,
+    pub(super) total: Duration,
+    pub(super) skipped_reason: Option<String>,
+}
+
+pub(super) fn run_quality_gate(screen: &str, cwd: &Path) -> String {
+    if !cwd.join("Cargo.toml").is_file() {
+        return append_gate_section(
+            screen,
+            &GateSummary {
+                steps: Vec::new(),
+                total: Duration::ZERO,
+                skipped_reason: Some(format!(
+                    "no Cargo.toml in {}; the gate is skipped",
+                    cwd.display()
+                )),
+            },
+        );
+    }
+    qol_runtime::probe!("CLI_SESSION_BRIDGE", "event=gate_started");
+    let started = Instant::now();
+    let mut steps = Vec::with_capacity(GATE_COMMANDS.len());
+    for command in GATE_COMMANDS {
+        steps.push(run_gate_step(command, cwd));
+    }
+    let summary = GateSummary {
+        steps,
+        total: started.elapsed(),
+        skipped_reason: None,
+    };
+    let verdict = if summary.steps.iter().all(|step| step.passed) {
+        "GREEN"
+    } else {
+        "RED"
+    };
+    qol_runtime::probe!(
+        "CLI_SESSION_BRIDGE",
+        "event=gate_finished verdict={} total_ms={}",
+        verdict,
+        summary.total.as_millis()
+    );
+    append_gate_section(screen, &summary)
+}
+
+fn append_gate_section(screen: &str, summary: &GateSummary) -> String {
+    format!("{screen}\n\n{}", format_gate_summary(summary))
+}
+
+pub(super) fn format_gate_summary(summary: &GateSummary) -> String {
+    if let Some(reason) = &summary.skipped_reason {
+        return format!("--- GATE ---\nskipped: {reason}");
+    }
+    let mut lines = vec!["--- GATE ---".to_owned()];
+    let count = summary.steps.len();
+    for (index, step) in summary.steps.iter().enumerate() {
+        let status = if step.passed { "PASS" } else { "FAIL" };
+        let mut line = format!(
+            "[{}/{}] {status} {} ({:.1}s)",
+            index + 1,
+            count,
+            step.command,
+            step.elapsed.as_secs_f64()
+        );
+        if let Some(reason) = &step.reason {
+            line.push_str(&format!(" - {reason}"));
+        }
+        lines.push(line);
+    }
+    lines.push(format!("total: {:.1}s", summary.total.as_secs_f64()));
+    lines.push(format!(
+        "verdict: {}",
+        if summary.steps.iter().all(|step| step.passed) {
+            "GREEN"
+        } else {
+            "RED"
+        }
+    ));
+    lines.join("\n")
+}
+
+fn run_gate_step(command: &str, cwd: &Path) -> GateStepResult {
+    let started = Instant::now();
+    let mut parts = command.split_whitespace();
+    let program = parts.next().unwrap_or("cargo");
+    let args = parts.collect::<Vec<_>>();
+    let lock_budget_started = Instant::now();
+    loop {
+        let mut child = std::process::Command::new(program);
+        child.args(&args).current_dir(cwd);
+        match run_owned_with_output_timeout(child, GATE_STEP_TIMEOUT, GATE_OUTPUT_LIMIT) {
+            Ok(BoundedCommandOutput::Completed(output)) => {
+                let passed = output.status.success();
+                return GateStepResult {
+                    command: command.to_owned(),
+                    passed,
+                    elapsed: started.elapsed(),
+                    reason: (!passed).then(|| exit_status_reason(&output.status)),
+                };
+            }
+            Ok(BoundedCommandOutput::TimedOut { stdout, stderr }) => {
+                let mut output = String::from_utf8_lossy(stdout.as_bytes()).into_owned();
+                output.push_str(&String::from_utf8_lossy(stderr.as_bytes()));
+                let lock_held = output.contains(GATE_LOCK_MESSAGE);
+                if lock_held && lock_budget_started.elapsed() < GATE_LOCK_RETRY_BUDGET {
+                    qol_runtime::probe!(
+                        "CLI_SESSION_BRIDGE",
+                        "event=gate_lock_retry command={}",
+                        command
+                    );
+                    continue;
+                }
+                let reason = if lock_held {
+                    format!(
+                        "timed out after {}s waiting for the cargo file lock",
+                        GATE_STEP_TIMEOUT.as_secs()
+                    )
+                } else {
+                    format!("timed out after {}s", GATE_STEP_TIMEOUT.as_secs())
+                };
+                return GateStepResult {
+                    command: command.to_owned(),
+                    passed: false,
+                    elapsed: started.elapsed(),
+                    reason: Some(reason),
+                };
+            }
+            Err(error) => {
+                return GateStepResult {
+                    command: command.to_owned(),
+                    passed: false,
+                    elapsed: started.elapsed(),
+                    reason: Some(format!("failed to run: {error}")),
+                };
+            }
+        }
+    }
+}
+
+fn exit_status_reason(status: &std::process::ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| format!("exit code {code}"))
+        .unwrap_or_else(|| "terminated by signal".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1362,5 +1528,94 @@ mod tests {
         let file = fs::File::open(path).unwrap();
         let times = std::fs::FileTimes::new().set_modified(SystemTime::now() - age);
         file.set_times(times).unwrap();
+    }
+
+    #[test]
+    fn gate_summary_formatter_lists_step_results_total_and_verdict() {
+        let summary = GateSummary {
+            steps: vec![
+                GateStepResult {
+                    command: "cargo fmt --check -p qol".to_owned(),
+                    passed: true,
+                    elapsed: Duration::from_millis(1200),
+                    reason: None,
+                },
+                GateStepResult {
+                    command: "cargo clippy -p qol --all-targets -- -D warnings".to_owned(),
+                    passed: false,
+                    elapsed: Duration::from_secs(38),
+                    reason: Some("exit code 101".to_owned()),
+                },
+            ],
+            total: Duration::from_secs(40),
+            skipped_reason: None,
+        };
+
+        let text = format_gate_summary(&summary);
+        assert!(text.starts_with("--- GATE ---\n"));
+        assert!(text.contains("[1/2] PASS cargo fmt --check -p qol (1.2s)"));
+        assert!(text.contains(
+            "[2/2] FAIL cargo clippy -p qol --all-targets -- -D warnings (38.0s) - exit code 101"
+        ));
+        assert!(text.contains("total: 40.0s"));
+        assert!(text.contains("verdict: RED"));
+    }
+
+    #[test]
+    fn gate_summary_formatter_verdict_is_green_only_when_every_step_passes() {
+        let summary = GateSummary {
+            steps: vec![GateStepResult {
+                command: "cargo test -p qol --bin qol".to_owned(),
+                passed: true,
+                elapsed: Duration::from_secs(5),
+                reason: None,
+            }],
+            total: Duration::from_secs(5),
+            skipped_reason: None,
+        };
+        assert!(format_gate_summary(&summary).contains("verdict: GREEN"));
+    }
+
+    #[test]
+    fn gate_summary_formatter_renders_the_skip_note_without_a_verdict() {
+        let summary = GateSummary {
+            steps: Vec::new(),
+            total: Duration::ZERO,
+            skipped_reason: Some("no Cargo.toml in /tmp/none; the gate is skipped".to_owned()),
+        };
+        let text = format_gate_summary(&summary);
+        assert!(text.starts_with("--- GATE ---\nskipped: "));
+        assert!(text.contains("no Cargo.toml in /tmp/none; the gate is skipped"));
+        assert!(!text.contains("verdict:"));
+    }
+
+    #[test]
+    fn quality_gate_skips_a_directory_without_a_cargo_manifest_and_preserves_the_screen() {
+        let root = tempfile::TempDir::new().unwrap();
+        let screen = "implementation complete\nQOL_BRIDGE_DONE_abc123";
+
+        let text = run_quality_gate(screen, root.path());
+
+        assert!(text.starts_with(screen));
+        assert!(text.contains("--- GATE ---"));
+        assert!(text.contains("skipped: no Cargo.toml in"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gate_step_reports_pass_and_fail_from_the_exit_status() {
+        let cwd = std::env::temp_dir();
+        let pass = run_gate_step("/bin/true", &cwd);
+        assert!(
+            pass.passed,
+            "{}",
+            pass.reason.as_deref().unwrap_or_default()
+        );
+        assert!(pass.reason.is_none());
+
+        let fail = run_gate_step("/bin/false", &cwd);
+        assert!(!fail.passed);
+        assert_eq!(fail.reason.as_deref(), Some("exit code 1"));
+        assert!(fail.elapsed < Duration::from_secs(30));
     }
 }
