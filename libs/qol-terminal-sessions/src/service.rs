@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use crate::{
     BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, SessionSpawner, SpawnRequest,
@@ -15,6 +16,21 @@ pub trait ScreenReader {
 
     fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen(target)
+    }
+
+    fn read_screen_matching(
+        &self,
+        target: &SessionBinding,
+        pattern: &str,
+    ) -> Result<String, TerminalError> {
+        let screen = self.read_screen_relaxed(target)?;
+        let mut matched = String::new();
+        for (index, line) in screen.lines().enumerate() {
+            if line.contains(pattern) {
+                matched.push_str(&format!("{}: {}\n", index + 1, line));
+            }
+        }
+        Ok(matched)
     }
 }
 
@@ -221,6 +237,15 @@ impl ScreenReader for TerminalSessionService {
         self.backend_for(target.session_id())?
             .read_screen_relaxed(target)
     }
+
+    fn read_screen_matching(
+        &self,
+        target: &SessionBinding,
+        pattern: &str,
+    ) -> Result<String, TerminalError> {
+        self.backend_for(target.session_id())?
+            .read_screen_matching(target, pattern)
+    }
 }
 
 impl SessionFocus for TerminalSessionService {
@@ -245,13 +270,195 @@ impl TextInput for TerminalSessionService {
     }
 }
 
+pub const WAIT_BACKOFF_BASE: Duration = Duration::from_secs(3);
+pub const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(15);
+const WAIT_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
+
+#[derive(Debug)]
+pub struct WaitOutcome {
+    pub completed: bool,
+    pub submitted: bool,
+    pub stalled: bool,
+    pub screen: String,
+    pub reads: u64,
+    pub elapsed: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct WaitBackoff {
+    base: Duration,
+    cap: Duration,
+}
+
+impl Default for WaitBackoff {
+    fn default() -> Self {
+        Self {
+            base: WAIT_BACKOFF_BASE,
+            cap: WAIT_BACKOFF_CAP,
+        }
+    }
+}
+
+impl TerminalSessionService {
+    #[allow(clippy::too_many_arguments)]
+    pub fn wait_for_completion(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        timeout: Duration,
+        changed: mpsc::Receiver<()>,
+        subscribed: bool,
+        submitted: bool,
+        liveness: &dyn Fn() -> Option<bool>,
+        stall_after: Duration,
+    ) -> Result<WaitOutcome, TerminalError> {
+        self.wait_for_completion_with_backoff(
+            binding,
+            marker,
+            timeout,
+            changed,
+            subscribed,
+            submitted,
+            liveness,
+            stall_after,
+            WaitBackoff::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn wait_for_completion_with_backoff(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        timeout: Duration,
+        changed: mpsc::Receiver<()>,
+        mut subscribed: bool,
+        submitted: bool,
+        liveness: &dyn Fn() -> Option<bool>,
+        stall_after: Duration,
+        backoff: WaitBackoff,
+    ) -> Result<WaitOutcome, TerminalError> {
+        let started = Instant::now();
+        let mut previous = None;
+        let mut last_change = Instant::now();
+        let mut last_probe: Option<Instant> = None;
+        let mut reads = 0u64;
+        let mut current_backoff = backoff.base;
+        let mut settled = false;
+        loop {
+            reads += 1;
+            let mut cheap_no_match = false;
+            let screen = if reads.is_multiple_of(10) {
+                Some(self.read_screen(binding)?)
+            } else if settled {
+                Some(self.read_screen_relaxed(binding)?)
+            } else if self
+                .read_screen_matching(binding, marker)?
+                .trim()
+                .is_empty()
+            {
+                cheap_no_match = true;
+                None
+            } else {
+                settled = true;
+                Some(self.read_screen_relaxed(binding)?)
+            };
+            let matched = screen
+                .as_ref()
+                .is_some_and(|screen| screen.contains(marker));
+            if let Some(screen) = screen {
+                settled = matched;
+                if matched && previous.as_deref() == Some(screen.as_str()) {
+                    return Ok(WaitOutcome {
+                        completed: true,
+                        submitted,
+                        stalled: false,
+                        screen,
+                        reads,
+                        elapsed: started.elapsed(),
+                    });
+                }
+                if previous.as_deref() != Some(screen.as_str()) {
+                    last_change = Instant::now();
+                    current_backoff = backoff.base;
+                }
+                previous = Some(screen);
+            }
+            if !matched && stall_if_quiet(&last_change, &mut last_probe, stall_after, liveness) {
+                return Ok(WaitOutcome {
+                    completed: false,
+                    submitted,
+                    stalled: true,
+                    screen: previous.clone().unwrap_or_default(),
+                    reads,
+                    elapsed: started.elapsed(),
+                });
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return Ok(WaitOutcome {
+                    completed: false,
+                    submitted,
+                    stalled: false,
+                    screen: previous.clone().unwrap_or_default(),
+                    reads,
+                    elapsed,
+                });
+            }
+            let remaining = timeout.saturating_sub(elapsed);
+            let interval = if matched {
+                WAIT_SETTLE_INTERVAL
+            } else {
+                current_backoff
+            }
+            .min(remaining);
+            if cheap_no_match {
+                current_backoff = next_backoff(current_backoff, backoff.cap);
+            }
+            if subscribed {
+                match changed.recv_timeout(interval) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => subscribed = false,
+                }
+            } else {
+                std::thread::sleep(interval);
+            }
+        }
+    }
+}
+
+fn next_backoff(backoff: Duration, cap: Duration) -> Duration {
+    backoff.saturating_mul(2).min(cap)
+}
+
+fn stall_if_quiet(
+    last_change: &Instant,
+    last_probe: &mut Option<Instant>,
+    stall_after: Duration,
+    liveness: &dyn Fn() -> Option<bool>,
+) -> bool {
+    if last_change.elapsed() < stall_after {
+        return false;
+    }
+    if last_probe.is_some_and(|probed| probed.elapsed() < stall_after) {
+        return false;
+    }
+    *last_probe = Some(Instant::now());
+    let activity = liveness();
+    activity == Some(false) || (activity.is_none() && last_change.elapsed() >= stall_after * 4)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use crate::kitty::KittyBackend;
+    use crate::SessionCapabilities;
 
-    use super::{TerminalBackend, TerminalSessionService};
+    use super::*;
 
     #[test]
     fn duplicate_backend_ids_are_rejected() {
@@ -265,5 +472,354 @@ mod tests {
             .expect("duplicate ids must fail");
 
         assert!(error.to_string().contains("registered twice"));
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CallKind {
+        Ls,
+        Full,
+        Matching,
+    }
+
+    struct FakeBackend {
+        id: BackendId,
+        facts: SessionFacts,
+        screens: Mutex<VecDeque<String>>,
+        last: Mutex<Option<String>>,
+        calls: Mutex<Vec<(CallKind, Instant)>>,
+    }
+
+    impl FakeBackend {
+        fn new(screens: Vec<String>) -> Arc<Self> {
+            Arc::new(Self {
+                id: BackendId::new("fake").unwrap(),
+                facts: SessionFacts {
+                    id: SessionId::new(BackendId::new("fake").unwrap(), "7").unwrap(),
+                    root_pid: 123,
+                    cwd: "/work/demo".to_owned(),
+                    title: "Demo REPL".to_owned(),
+                    at_prompt: true,
+                    reported_cmd: Some("agent".to_owned()),
+                    foreground_basenames: Vec::new(),
+                    foreground_pids: Vec::new(),
+                    capabilities: SessionCapabilities::ALL,
+                    spawn_identity: None,
+                },
+                screens: Mutex::new(screens.into()),
+                last: Mutex::new(None),
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn record(&self, kind: CallKind) {
+            self.calls.lock().unwrap().push((kind, Instant::now()));
+        }
+
+        fn next_screen(&self) -> String {
+            let mut screens = self.screens.lock().unwrap();
+            if let Some(screen) = screens.pop_front() {
+                *self.last.lock().unwrap() = Some(screen.clone());
+                return screen;
+            }
+            self.last.lock().unwrap().clone().unwrap_or_default()
+        }
+    }
+
+    impl SessionInventory for FakeBackend {
+        fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            self.record(CallKind::Ls);
+            Ok(vec![self.facts.clone()])
+        }
+    }
+
+    impl ScreenReader for FakeBackend {
+        fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            self.record(CallKind::Ls);
+            self.record(CallKind::Full);
+            Ok(self.next_screen())
+        }
+
+        fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            self.record(CallKind::Full);
+            Ok(self.next_screen())
+        }
+
+        fn read_screen_matching(
+            &self,
+            _target: &SessionBinding,
+            pattern: &str,
+        ) -> Result<String, TerminalError> {
+            self.record(CallKind::Matching);
+            let screen = self.next_screen();
+            Ok(if screen.contains(pattern) {
+                format!("1: {screen}")
+            } else {
+                String::new()
+            })
+        }
+    }
+
+    impl SessionFocus for FakeBackend {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for FakeBackend {
+        fn send_text(
+            &self,
+            _target: &SessionBinding,
+            _text: &str,
+            _mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for FakeBackend {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            _target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            Ok(self.next_screen())
+        }
+
+        fn id(&self) -> &BackendId {
+            &self.id
+        }
+    }
+
+    struct StopSignal(Arc<AtomicBool>);
+
+    impl Drop for StopSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn ticker() -> (mpsc::Receiver<()>, StopSignal) {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tick_stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !tick_stop.load(Ordering::Relaxed) {
+                let _ = tx.try_send(());
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        (rx, StopSignal(stop))
+    }
+
+    fn binding() -> SessionBinding {
+        SessionBinding::new(
+            SessionId::new(BackendId::new("fake").unwrap(), "7").unwrap(),
+            123,
+        )
+        .unwrap()
+    }
+
+    fn service(backend: Arc<FakeBackend>) -> TerminalSessionService {
+        TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap()
+    }
+
+    fn count(calls: &[(CallKind, Instant)], kind: CallKind) -> usize {
+        calls.iter().filter(|(call, _)| *call == kind).count()
+    }
+
+    fn gaps(calls: &[(CallKind, Instant)]) -> Vec<Duration> {
+        calls.windows(2).map(|pair| pair[1].1 - pair[0].1).collect()
+    }
+
+    #[test]
+    fn wait_cycle_uses_marker_reads_and_fewer_full_reads_than_the_baseline() {
+        let screens = vec!["idle".to_owned(); 9]
+            .into_iter()
+            .chain(["done\nQOL_BRIDGE_DONE_a".to_owned()])
+            .collect();
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (rx, _stop) = ticker();
+
+        let outcome = terminals
+            .wait_for_completion(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(60),
+                rx,
+                true,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+            )
+            .unwrap();
+
+        assert!(outcome.completed);
+        assert_eq!(outcome.reads, 11);
+        assert_eq!(outcome.screen, "done\nQOL_BRIDGE_DONE_a");
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(count(&calls, CallKind::Ls), 1);
+        assert_eq!(count(&calls, CallKind::Full), 2);
+        assert_eq!(count(&calls, CallKind::Matching), 9);
+        assert!(count(&calls, CallKind::Full) <= 3);
+    }
+
+    #[test]
+    fn every_tenth_poll_is_a_strict_full_read() {
+        let screens = vec!["idle".to_owned(); 25]
+            .into_iter()
+            .chain(["done\nQOL_BRIDGE_DONE_a".to_owned()])
+            .collect();
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (rx, _stop) = ticker();
+
+        let outcome = terminals
+            .wait_for_completion(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(60),
+                rx,
+                true,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+            )
+            .unwrap();
+
+        assert!(outcome.completed);
+        assert_eq!(outcome.reads, 27);
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(count(&calls, CallKind::Ls), 2);
+        assert_eq!(count(&calls, CallKind::Full), 4);
+        assert_eq!(count(&calls, CallKind::Matching), 24);
+    }
+
+    #[test]
+    fn marker_hit_extracts_one_relaxed_read_before_settling() {
+        let screens = vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_a".to_owned()];
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (rx, _stop) = ticker();
+
+        let outcome = terminals
+            .wait_for_completion(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(60),
+                rx,
+                true,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+            )
+            .unwrap();
+
+        assert!(outcome.completed);
+        assert_eq!(outcome.reads, 3);
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(count(&calls, CallKind::Matching), 2);
+        assert_eq!(count(&calls, CallKind::Full), 2);
+        assert_eq!(count(&calls, CallKind::Ls), 0);
+    }
+
+    #[test]
+    fn backoff_doubles_from_base_and_caps() {
+        let cap = Duration::from_secs(15);
+        assert_eq!(
+            next_backoff(Duration::from_secs(3), cap),
+            Duration::from_secs(6)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(6), cap),
+            Duration::from_secs(12)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(12), cap),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(15), cap),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[test]
+    fn no_change_polls_grow_the_sleep_up_to_the_cap() {
+        let backend = FakeBackend::new(vec!["idle".to_owned(); 8]);
+        let terminals = service(backend.clone());
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        drop(tx);
+
+        let outcome = terminals
+            .wait_for_completion_with_backoff(
+                &binding(),
+                "QOL_BRIDGE_DONE_never",
+                Duration::from_millis(700),
+                rx,
+                false,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+                WaitBackoff {
+                    base: Duration::from_millis(30),
+                    cap: Duration::from_millis(120),
+                },
+            )
+            .unwrap();
+
+        assert!(!outcome.completed);
+        let calls = backend.calls.lock().unwrap();
+        let gaps = gaps(&calls);
+        assert!(gaps.len() >= 4);
+        assert!(gaps[1] >= gaps[0] * 2 / 3);
+        assert!(gaps[2] >= gaps[1] * 2 / 3);
+        assert!(gaps[3] <= gaps[0] * 8);
+        assert!(gaps[3] >= gaps[0]);
+    }
+
+    #[test]
+    fn a_change_resets_the_backoff_to_base() {
+        let screens = vec![
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "done\nQOL_BRIDGE_DONE_a".to_owned(),
+            "idle2".to_owned(),
+        ];
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        drop(tx);
+
+        let outcome = terminals
+            .wait_for_completion_with_backoff(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(2),
+                rx,
+                false,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+                WaitBackoff {
+                    base: Duration::from_millis(30),
+                    cap: Duration::from_millis(120),
+                },
+            )
+            .unwrap();
+
+        assert!(!outcome.completed);
+        let calls = backend.calls.lock().unwrap();
+        let gaps = gaps(&calls);
+        assert!(gaps.len() >= 6);
+        assert!(gaps[1] >= gaps[0] * 2 / 3);
+        assert!(gaps[2] >= gaps[0] * 2);
+        assert!(gaps[4] <= gaps[2] * 2 / 3);
+        assert!(gaps[5] <= gaps[0] * 3);
     }
 }
