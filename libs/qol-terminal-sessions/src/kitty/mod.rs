@@ -253,6 +253,29 @@ impl ScreenReader for KittyBackend {
     fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen_command(target)
     }
+
+    fn read_screen_matching(
+        &self,
+        target: &SessionBinding,
+        pattern: &str,
+    ) -> Result<String, TerminalError> {
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
+            "match screen lines",
+            &strings([
+                "@",
+                "get-text",
+                "--match",
+                &matcher(window_id),
+                "--match",
+                &regex_escape(pattern),
+                "--extent",
+                "screen",
+            ]),
+            None,
+        )
+    }
 }
 
 impl SessionFocus for KittyBackend {
@@ -442,6 +465,17 @@ fn split_native_id(native: &str) -> Option<(&str, u64)> {
 
 fn matcher(window_id: u64) -> String {
     format!("id:{window_id}")
+}
+
+fn regex_escape(pattern: &str) -> String {
+    let mut escaped = String::with_capacity(pattern.len());
+    for character in pattern.chars() {
+        if "\\^$.|?*+()[]{}".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
@@ -995,6 +1029,35 @@ mod tests {
         assert_eq!(
             calls[0].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn marker_matched_reads_escape_the_pattern_and_skip_discovery() {
+        let runner =
+            FakeRunner::with_outputs(vec![success("3: QOL_BRIDGE_DONE_a.b[c]".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        let matched = backend
+            .read_screen_matching(&target, "QOL_BRIDGE_DONE_a.b[c]")
+            .unwrap();
+
+        assert_eq!(matched, "3: QOL_BRIDGE_DONE_a.b[c]");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            [
+                "@",
+                "get-text",
+                "--match",
+                "id:42",
+                "--match",
+                r"QOL_BRIDGE_DONE_a\.b\[c\]",
+                "--extent",
+                "screen",
+            ]
         );
     }
 

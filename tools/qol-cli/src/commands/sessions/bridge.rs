@@ -16,12 +16,9 @@ use qol_terminal_sessions::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const COMPLETION_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
-const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const SUBSCRIPTION_HEARTBEAT: Duration = Duration::from_secs(30);
-const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
+const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
 
@@ -831,72 +828,29 @@ pub(super) fn wait_for_completion(
     liveness: &dyn Fn() -> Option<bool>,
     stall_after: Duration,
 ) -> Result<BridgeOutcome> {
-    let started = Instant::now();
-    let mut previous = None;
-    let mut last_change = Instant::now();
-    let mut last_probe: Option<Instant> = None;
-    let mut reads = 0;
-    loop {
-        reads += 1;
-        let screen = if reads % 10 == 0 {
-            terminals
-                .read_screen(binding)
-                .context("bridge screen read failed")?
-        } else {
-            terminals
-                .read_screen_relaxed(binding)
-                .context("bridge screen read failed")?
-        };
-        let matched = screen.contains(marker);
-        if matched && previous.as_deref() == Some(screen.as_str()) {
-            return Ok(outcome(
-                true, submitted, false, binding, marker, screen, reads, started,
-            ));
-        }
-        if previous.as_deref() != Some(screen.as_str()) {
-            last_change = Instant::now();
-        }
-        previous = Some(screen.clone());
-        if !matched
-            && last_change.elapsed() >= stall_after
-            && last_probe.is_none_or(|probed| probed.elapsed() >= stall_after)
-        {
-            last_probe = Some(Instant::now());
-            let activity = liveness();
-            let quiet_enough = activity == Some(false)
-                || (activity.is_none() && last_change.elapsed() >= stall_after * 4);
-            if quiet_enough {
-                return Ok(outcome(
-                    false, submitted, true, binding, marker, screen, reads, started,
-                ));
-            }
-        }
-        let elapsed = started.elapsed();
-        if elapsed >= timeout {
-            return Ok(outcome(
-                false, submitted, false, binding, marker, screen, reads, started,
-            ));
-        }
-        let remaining = timeout.saturating_sub(elapsed);
-        let interval = if matched {
-            COMPLETION_SETTLE_INTERVAL
-        } else if !subscribed {
-            FALLBACK_POLL_INTERVAL
-        } else {
-            SUBSCRIPTION_HEARTBEAT
-        }
-        .min(remaining);
-        if subscribed {
-            match changed.recv_timeout(interval) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(anyhow!("implementation-session change stream disconnected"));
-                }
-            }
-        } else {
-            std::thread::sleep(interval);
-        }
-    }
+    let outcome = terminals
+        .wait_for_completion(
+            binding,
+            marker,
+            timeout,
+            changed,
+            subscribed,
+            submitted,
+            liveness,
+            stall_after,
+        )
+        .context("bridge screen read failed")?;
+    Ok(BridgeOutcome {
+        completed: outcome.completed,
+        submitted: outcome.submitted,
+        stalled: outcome.stalled,
+        session: binding.token(),
+        completion_marker: marker.to_owned(),
+        screen: outcome.screen,
+        reads: outcome.reads,
+        elapsed_ms: outcome.elapsed.as_millis(),
+        next_command: format!("qol sessions next {}", binding.token()),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -975,6 +929,7 @@ mod tests {
     enum FakeCall {
         Ls,
         GetText,
+        GetTextMatch,
         SendText,
     }
 
@@ -1037,6 +992,20 @@ mod tests {
         fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             self.calls.lock().unwrap().push(FakeCall::GetText);
             Ok(self.next_screen())
+        }
+
+        fn read_screen_matching(
+            &self,
+            _target: &SessionBinding,
+            pattern: &str,
+        ) -> Result<String, TerminalError> {
+            self.calls.lock().unwrap().push(FakeCall::GetTextMatch);
+            let screen = self.next_screen();
+            Ok(if screen.contains(pattern) {
+                format!("1: {screen}")
+            } else {
+                String::new()
+            })
         }
     }
 
@@ -1138,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn hot_loop_reads_skip_the_capability_recheck_except_every_tenth() {
+    fn hot_loop_polls_marker_matches_and_reads_full_screens_only_every_tenth() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::new(
@@ -1193,6 +1162,10 @@ mod tests {
             .iter()
             .filter(|call| **call == FakeCall::GetText)
             .count() as u64;
+        let get_text_match = calls
+            .iter()
+            .filter(|call| **call == FakeCall::GetTextMatch)
+            .count() as u64;
         assert_eq!(
             calls
                 .iter()
@@ -1200,8 +1173,13 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(get_text, outcome.reads + 2);
         assert_eq!(ls, outcome.reads / 10 + 3);
+        assert_eq!(get_text_match, outcome.reads - 2);
+        assert_eq!(get_text, 5);
+        assert!(
+            get_text < outcome.reads,
+            "full reads must drop below the poll count"
+        );
         assert!(ls - 3 <= outcome.reads.div_ceil(10) + 1);
     }
 
