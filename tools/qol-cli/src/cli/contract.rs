@@ -243,9 +243,17 @@ fn app() -> HeadlessApp {
                 "next",
                 "Print the exact next command for each open bridge round.",
                 "qol sessions next [<session>] [--json]",
-                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
                 "Round phases and commands on stdout.",
                 "Exits non-zero when the bridge state cannot be read.",
+            ))
+            .subcommand(command(
+                "discard",
+                "Drop the checkpoint of a round whose terminal is gone.",
+                "qol sessions discard <session>",
+                "Removes the pending-bridge checkpoint of a session that no longer has a live terminal (verified via discovery); it refuses a live session, refuses when no checkpoint exists, and never touches last-send state or spawn locks. The session token comes from `qol sessions next`, which prints phase=gone with the exact discard command for orphaned rounds.",
+                "Removal confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when the session is live, has no checkpoint, or discovery fails.",
             ))
             .subcommand(command(
                 "resume",

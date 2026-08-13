@@ -209,6 +209,10 @@ impl SpawnLocks {
         Ok(SpawnLockGuard { file })
     }
 
+    pub(super) fn remove(&self, key: &SpawnKey) {
+        let _ = fs::remove_file(self.lock_for(key));
+    }
+
     fn lock_for(&self, key: &SpawnKey) -> PathBuf {
         let digest = Sha256::digest(key.as_str().as_bytes());
         self.dir.join(format!("{digest:x}.lock"))
@@ -462,59 +466,64 @@ pub(super) fn spawn_or_reuse(
         tool: tool_id.clone(),
         surface,
     };
-    let _lock = locks.acquire(&key)?;
-    let snapshot = terminals.snapshot().context("session discovery failed")?;
-    match decide(interpreter, snapshot.sessions(), &identity) {
-        SpawnDecision::Launch => {
-            let mut launch = launch;
-            if let Some(model) = model {
-                launch.args.extend(model_args(&tool_id, model)?);
+    let _guard = locks.acquire(&key)?;
+    let result = (|| {
+        let snapshot = terminals.snapshot().context("session discovery failed")?;
+        match decide(interpreter, snapshot.sessions(), &identity) {
+            SpawnDecision::Launch => {
+                let mut launch = launch;
+                if let Some(model) = model {
+                    launch.args.extend(model_args(&tool_id, model)?);
+                }
+                let request = SpawnRequest {
+                    identity: identity.clone(),
+                    launch,
+                    cwd: canonicalize_cwd(cwd)?,
+                    title: Some(title.to_owned()),
+                };
+                launch_ready(terminals, interpreter, &identity, &request, model, title)
             }
-            let request = SpawnRequest {
-                identity: identity.clone(),
-                launch,
-                cwd: canonicalize_cwd(cwd)?,
-                title: Some(title.to_owned()),
-            };
-            launch_ready(terminals, interpreter, &identity, &request, model, title)
-        }
-        SpawnDecision::Reuse(facts) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=reuse key={} tool={}",
-                identity.key,
+            SpawnDecision::Reuse(facts) => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=reuse key={} tool={}",
+                    identity.key,
+                    identity.tool
+                );
+                outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned), title)
+            }
+            SpawnDecision::Conflict(found) => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=conflict key={} requested_tool={} found_tool={}",
+                    identity.key,
+                    identity.tool,
+                    found
+                );
+                bail!(
+                    "spawn key `{key}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key"
+                )
+            }
+            SpawnDecision::WrongHarness { described } => bail!(
+                "spawn key `{key}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
                 identity.tool
-            );
-            outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned), title)
+            ),
+            SpawnDecision::Ambiguous(count) => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_SPAWN",
+                    "event=ambiguous key={} matches={}",
+                    identity.key,
+                    count
+                );
+                bail!(
+                    "spawn key `{key}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key"
+                )
+            }
         }
-        SpawnDecision::Conflict(found) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=conflict key={} requested_tool={} found_tool={}",
-                identity.key,
-                identity.tool,
-                found
-            );
-            bail!(
-                "spawn key `{key}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key"
-            )
-        }
-        SpawnDecision::WrongHarness { described } => bail!(
-            "spawn key `{key}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
-            identity.tool
-        ),
-        SpawnDecision::Ambiguous(count) => {
-            qol_runtime::probe!(
-                "CLI_SESSION_SPAWN",
-                "event=ambiguous key={} matches={}",
-                identity.key,
-                count
-            );
-            bail!(
-                "spawn key `{key}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key"
-            )
-        }
-    }
+    })();
+    drop(_guard);
+    locks.remove(&key);
+    result
 }
 
 fn launch_ready(
@@ -1627,6 +1636,115 @@ mod tests {
         .unwrap();
         assert!(!outcome.reused);
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn the_spawn_lock_file_is_removed_after_spawn_or_reuse_returns() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, _) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert!(
+            !path.exists(),
+            "a completed spawn must leave no lock file behind"
+        );
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(outcome.reused);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_spawn_lock_file_is_removed_on_error_paths_too() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, _) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+
+        let error = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            Some("os-window"),
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("refused the spawn request"), "{error}");
+        assert!(
+            !path.exists(),
+            "a failed spawn must leave no lock file behind"
+        );
+    }
+
+    #[test]
+    fn a_leftover_lock_file_from_a_crashed_spawn_does_not_block_a_fresh_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let key = SpawnKey::new("lane-1").unwrap();
+        let path = locks.lock_for(&key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "99999").unwrap();
+
+        let outcome = run_spawn(
+            &terminals,
+            "codex",
+            &cwd,
+            Some("lane-1"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        assert!(!path.exists());
     }
 
     #[test]
