@@ -5796,7 +5796,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.46.2"
+version = "0.47.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6585,7 +6585,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.53.1"
+version = "1.53.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -6711,7 +6711,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "candle-core",
