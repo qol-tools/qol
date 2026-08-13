@@ -17,8 +17,10 @@ const LINE_HOT: u32 = 0x33240f;
 const LINE_HOT_DIMMED: u32 = 0x262019;
 const TOKEN_WARM: u32 = 0x3d2e15;
 const TOKEN_HOT: u32 = 0x57401a;
-pub const TOKEN_IGNITE_FLASH: u32 = 0xffffff;
-pub const TOKEN_MORPH_FLARE: u32 = 0x9a6a20;
+pub const EMBER_CORE: u32 = 0xff8c42;
+pub const EMBER_RIM: u32 = 0xfff0da;
+pub const TOKEN_MORPH_FLARE: u32 = EMBER_CORE;
+pub const EVAP_GHOST: u32 = 0xb8bcc4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LineStyle {

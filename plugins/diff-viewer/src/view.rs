@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt as _, AnyElement, App, ClickEvent,
-    Context, CursorStyle, Div, ElementId, Entity, FocusHandle, Focusable, HighlightStyle,
-    KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, TextStyle, WhiteSpace,
-    Window,
+    div, ease_out_quint, point, px, rgb, rgba, Animation, AnimationExt as _, AnyElement, App,
+    BoxShadow, ClickEvent, Context, CursorStyle, Div, ElementId, Entity, FocusHandle, Focusable,
+    HighlightStyle, KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText,
+    TextStyle, WhiteSpace, Window,
 };
 use qol_cache::TtlCache;
 use qol_diff::token_path::{token_edit_path, TokenEdit, TokenFate};
@@ -42,11 +42,15 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const DIFF_TTL: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HEAT_TICK: Duration = Duration::from_secs(1);
-const TRANSITION_MS: Duration = Duration::from_millis(200);
+const TRANSITION_MS: Duration = Duration::from_millis(450);
 const MORPH_FADE: f32 = 0.4;
 const GHOST_DRIFT_PX: f32 = 8.0;
 const SLIDE_PX: f32 = 10.0;
-const EVAP_LIFT_PX: f32 = 4.0;
+const EVAP_LIFT_PX: f32 = 10.0;
+const EVAP_SHRINK: f32 = 0.15;
+const FLASH_SPAN: f32 = 0.4;
+const PULSE_PERIOD_S: f32 = 2.5;
+const PULSE_AMPLITUDE: f32 = 0.08;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
@@ -401,12 +405,14 @@ impl DiffView {
                 }
             })
             .collect();
-        if fingerprint == self.heat_fingerprint {
-            return false;
+        if fingerprint != self.heat_fingerprint {
+            self.heat_fingerprint = fingerprint;
+            qol_runtime::probe!("DIFF_VIEWER", "heat tick age={}s", age.as_secs());
+            return true;
         }
-        self.heat_fingerprint = fingerprint;
-        qol_runtime::probe!("DIFF_VIEWER", "heat tick age={}s", age.as_secs());
-        true
+        self.heat_fingerprint
+            .iter()
+            .any(|style| style.background_heat != HeatLevel::Cool)
     }
 
     fn heat_age(&self) -> Option<Duration> {
@@ -1029,9 +1035,9 @@ impl DiffView {
             .and_then(|index| self.lines.get(index))
             .and_then(|line| {
                 let fresh = surface::style_from_line(line);
-                surface::line_background(decayed_line_style(fresh, age))
+                pulsed_background(decayed_line_style(fresh, age), age)
             });
-        if let Some(bg) = surface::line_background(style) {
+        if let Some(bg) = pulsed_background(style, age) {
             row_el = row_el.bg(rgb(bg));
         } else if let Some(bg) = blank_bg {
             row_el = row_el.bg(rgb(bg));
@@ -1103,7 +1109,7 @@ impl DiffView {
             .overflow_hidden()
             .line_height(px(LINE_HEIGHT))
             .text_size(px(FONT_SIZE));
-        if let Some(bg) = surface::line_background(style) {
+        if let Some(bg) = pulsed_background(style, age) {
             row = row.bg(rgb(bg));
         }
         let body = if self.active_transition().is_some() {
@@ -1293,7 +1299,7 @@ impl DiffView {
         let width = transition.old_gutter_width;
         let style = decayed_line_style(surface::style_from_line(line), age);
         let mut row = ghost_base(top);
-        if let Some(bg) = surface::line_background(style) {
+        if let Some(bg) = pulsed_background(style, age) {
             row = row.bg(rgb(bg));
         }
         row.child(
@@ -1340,7 +1346,7 @@ impl DiffView {
         let label = if is_old_side { labels.0 } else { labels.1 };
         let style = decayed_line_style(surface::style_from_line(line), age);
         let mut row = ghost_base(top);
-        if let Some(bg) = surface::line_background(style) {
+        if let Some(bg) = pulsed_background(style, age) {
             row = row.bg(rgb(bg));
         }
         let glyph = match (is_old_side, line.kind) {
@@ -1403,24 +1409,49 @@ fn token_edit_elements(
                 .flex_none()
                 .whitespace_nowrap()
                 .with_animation(id, animation, move |element, progress| {
+                    let t = linear_time(progress);
+                    let flash = (1.0 - t / FLASH_SPAN).clamp(0.0, 1.0);
                     element
-                        .bg(rgba(flash_hex(span_bg, 1.0 - progress)))
-                        .text_color(rgb(color))
-                        .child(div().opacity(progress).child(text.clone()))
+                        .bg(rgba(flash_hex(span_bg, flash)))
+                        .shadow(vec![
+                            BoxShadow {
+                                color: rgba(
+                                    (surface::EMBER_RIM << 8) | ((flash * 255.0).round() as u32),
+                                )
+                                .into(),
+                                offset: point(px(0.0), px(0.0)),
+                                blur_radius: px(1.0),
+                                spread_radius: px(1.0),
+                            },
+                            BoxShadow {
+                                color: rgba(
+                                    (surface::EMBER_CORE << 8) | ((flash * 217.0).round() as u32),
+                                )
+                                .into(),
+                                offset: point(px(0.0), px(0.0)),
+                                blur_radius: px(4.0),
+                                spread_radius: px(2.0),
+                            },
+                        ])
+                        .text_color(rgb(mix_hex(color, surface::EMBER_RIM, flash)))
+                        .child(div().opacity(1.0 - flash).child(text.clone()))
                 })
                 .into_any_element()]
         }
         TokenFate::Evaporated => {
             let text = SharedString::from(edit.text.clone());
+            let start_color = span_color.unwrap_or(surface::TEXT_PRIMARY);
             vec![div()
                 .flex_none()
                 .relative()
                 .whitespace_nowrap()
-                .text_color(rgb(surface::TEXT_MUTED))
                 .with_animation(id, animation, move |element, progress| {
+                    let t = linear_time(progress);
                     element
-                        .top(px(-EVAP_LIFT_PX * progress))
-                        .opacity(1.0 - progress)
+                        .text_size(px(FONT_SIZE * (1.0 - EVAP_SHRINK * t)))
+                        .top(px(-EVAP_LIFT_PX * t))
+                        .opacity(1.0 - t)
+                        .text_color(rgb(mix_hex(start_color, surface::EVAP_GHOST, t)))
                         .child(text.clone())
                 })
                 .into_any_element()]
@@ -1445,19 +1476,25 @@ fn token_edit_elements(
                     .flex_none()
                     .whitespace_nowrap()
                     .with_animation(id, animation, move |element, progress| {
-                        let settle = MORPH_FADE + (1.0 - MORPH_FADE) * progress;
+                        let t = linear_time(progress);
+                        let bump = 4.0 * t * (1.0 - t);
+                        let settle = MORPH_FADE + (1.0 - MORPH_FADE) * t;
                         element
-                            .bg(rgba(flare_hex(span_bg, 4.0 * progress * (1.0 - progress))))
+                            .bg(rgba(flare_hex(span_bg, bump)))
+                            .shadow(vec![BoxShadow {
+                                color: rgba(
+                                    (surface::EMBER_CORE << 8) | ((bump * 200.0).round() as u32),
+                                )
+                                .into(),
+                                offset: point(px(0.0), px(0.0)),
+                                blur_radius: px(2.0),
+                                spread_radius: px(1.0),
+                            }])
                             .child(
                                 div()
                                     .opacity(settle)
                                     .text_color(rgba(
-                                        (mix_hex(
-                                            color,
-                                            surface::TOKEN_IGNITE_FLASH,
-                                            1.0 - progress,
-                                        ) << 8)
-                                            | 0xff,
+                                        (mix_hex(color, surface::EMBER_RIM, 1.0 - t) << 8) | 0xff,
                                     ))
                                     .child(changed.clone()),
                             )
@@ -1764,10 +1801,31 @@ fn mix_hex(from: u32, to: u32, amount: f32) -> u32 {
         | channel(from & 0xff, to & 0xff)
 }
 
+fn linear_time(progress: f32) -> f32 {
+    1.0 - (1.0 - progress).powf(0.2)
+}
+
+fn scale_hex(hex: u32, factor: f32) -> u32 {
+    let channel = |shift: u32| {
+        ((hex >> shift & 0xff) as f32 * factor)
+            .round()
+            .clamp(0.0, 255.0) as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+fn pulsed_background(style: LineStyle, age: Option<Duration>) -> Option<u32> {
+    let bg = surface::line_background(style)?;
+    let phase = age.map_or(0.0, |age| {
+        age.as_secs_f32() * std::f32::consts::TAU / PULSE_PERIOD_S
+    });
+    Some(scale_hex(bg, 1.0 + PULSE_AMPLITUDE * phase.sin()))
+}
+
 fn flash_hex(base: Option<u32>, amount: f32) -> u32 {
     match base {
-        Some(bg) => (mix_hex(bg, surface::TOKEN_IGNITE_FLASH, amount) << 8) | 0xff,
-        None => (surface::TOKEN_IGNITE_FLASH << 8) | ((amount * 255.0).round() as u32),
+        Some(bg) => (mix_hex(surface::EMBER_CORE, bg, 1.0 - amount) << 8) | 0xff,
+        None => (surface::EMBER_CORE << 8) | ((amount * 255.0).round() as u32),
     }
 }
 
@@ -2269,16 +2327,73 @@ mod tests {
     }
 
     #[test]
-    fn flash_and_flare_hex_anchor_at_both_ends() {
-        assert_eq!(flash_hex(None, 1.0), 0xffffffff);
-        assert_eq!(flash_hex(None, 0.0), 0xffffff00);
-        assert_eq!(flash_hex(Some(0x000000), 1.0), 0xffffffff);
+    fn flash_hex_burns_ember_core_and_settles_onto_the_span_bg() {
+        assert_eq!(flash_hex(None, 1.0), (surface::EMBER_CORE << 8) | 0xff);
+        assert_eq!(flash_hex(None, 0.0), surface::EMBER_CORE << 8);
+        assert_eq!(
+            flash_hex(Some(0x000000), 1.0),
+            (surface::EMBER_CORE << 8) | 0xff,
+            "the peak flash is the ember core, not white"
+        );
         assert_eq!(flash_hex(Some(0x000000), 0.0), 0x000000ff);
+    }
+
+    #[test]
+    fn flare_hex_peaks_at_the_ember_core() {
         assert_eq!(flare_hex(None, 0.0), surface::TOKEN_MORPH_FLARE << 8);
+        assert_eq!(
+            flare_hex(None, 1.0),
+            (surface::TOKEN_MORPH_FLARE << 8) | 0xff
+        );
         assert_eq!(
             flare_hex(Some(0x000000), 1.0),
             (surface::TOKEN_MORPH_FLARE << 8) | 0xff
         );
+        assert_eq!(surface::TOKEN_MORPH_FLARE, surface::EMBER_CORE);
+    }
+
+    #[test]
+    fn linear_time_inverts_the_quint_out_easing() {
+        assert_eq!(linear_time(0.0), 0.0);
+        assert_eq!(linear_time(1.0), 1.0);
+        let mid = linear_time(0.5);
+        assert!(
+            (mid - 0.12945).abs() < 0.001,
+            "quint-out reaches 50% progress at 13% of wall time"
+        );
+        assert!((linear_time(0.96875) - 0.5).abs() < 0.001);
+        assert!(linear_time(0.5) < linear_time(0.96875));
+    }
+
+    #[test]
+    fn scale_hex_multiplies_each_channel_within_bounds() {
+        assert_eq!(scale_hex(0x808080, 1.5), 0xc0c0c0);
+        assert_eq!(scale_hex(0xff8080, 1.5), 0xffc0c0);
+        assert_eq!(scale_hex(0x000000, 0.5), 0x000000);
+        assert_eq!(scale_hex(0xffffff, 0.0), 0x000000);
+    }
+
+    #[test]
+    fn pulsed_background_breathes_heat_and_leaves_cool_alone() {
+        let hot = LineStyle {
+            background_heat: HeatLevel::Hot,
+            dimmed: false,
+        };
+        let cool = LineStyle {
+            background_heat: HeatLevel::Cool,
+            dimmed: false,
+        };
+        let base = surface::line_background(hot).unwrap();
+        assert_eq!(
+            pulsed_background(hot, None),
+            Some(base),
+            "no heat age means no pulse"
+        );
+        assert_eq!(pulsed_background(cool, Some(Duration::from_secs(5))), None);
+        let peak = pulsed_background(hot, Some(Duration::from_secs_f32(0.625))).unwrap();
+        assert!(peak > base, "hot backgrounds brighten on the pulse upswing");
+        let trough = pulsed_background(hot, Some(Duration::from_secs_f32(1.875))).unwrap();
+        assert!(trough < base, "hot backgrounds dim on the pulse downswing");
     }
 
     #[test]
