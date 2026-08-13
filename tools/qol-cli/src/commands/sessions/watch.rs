@@ -13,6 +13,7 @@ use super::spawn::SpawnLocks;
 const POLL_BASE: Duration = Duration::from_secs(10);
 const POLL_CAP: Duration = Duration::from_secs(30);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
+const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WATCH_ALL_KEY: &str = "watch-all";
 
 #[derive(Clone, Copy)]
@@ -190,6 +191,7 @@ fn poll_round(
     if screen.contains(&round.marker) {
         emit_completed(out, &round.session, &round.marker)?;
         pending.observe(&round.binding, &round.marker, true)?;
+        pending.store_screen(&round.binding, &round.marker, screen_tail(&screen))?;
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
             "event=completed session={} reads={}",
@@ -282,6 +284,17 @@ fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) ->
                 .any(|session| session.id == *binding.session_id())
         })
         .unwrap_or(false)
+}
+
+fn screen_tail(screen: &str) -> &str {
+    if screen.len() <= SCREEN_SNAPSHOT_MAX_BYTES {
+        return screen;
+    }
+    let mut start = screen.len() - SCREEN_SNAPSHOT_MAX_BYTES;
+    while !screen.is_char_boundary(start) {
+        start += 1;
+    }
+    &screen[start..]
 }
 
 fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
@@ -521,6 +534,59 @@ mod tests {
         assert_eq!(events[0]["marker"], "QOL_BRIDGE_DONE_round");
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
+    }
+
+    #[test]
+    fn completion_stores_the_screen_tail_and_keeps_the_checkpoint() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800")
+            .unwrap();
+        let final_screen = format!("{}\ndone\nQOL_BRIDGE_DONE_round", "x".repeat(70 * 1024));
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["idle".to_owned(), final_screen.clone()],
+        );
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], "completed");
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.completed,
+            "the completed checkpoint must stay collectable"
+        );
+        let stored = round.screen.unwrap();
+        assert_eq!(stored, screen_tail(&final_screen));
+        assert_eq!(stored.len(), 64 * 1024);
+        assert!(stored.ends_with("QOL_BRIDGE_DONE_round"));
+    }
+
+    #[test]
+    fn screen_tail_caps_at_64_kib_and_keeps_the_char_boundary() {
+        let short = "a short screen";
+        assert_eq!(screen_tail(short), short);
+
+        let screen = format!("{}abc", "€".repeat(30_000));
+        let trimmed = screen_tail(&screen);
+        assert!(trimmed.len() <= 64 * 1024);
+        assert!(trimmed.len() < screen.len());
+        assert!(trimmed.starts_with('€'));
+        assert!(screen.ends_with(trimmed));
+        assert!(trimmed.ends_with("abc"));
     }
 
     #[test]
