@@ -1,9 +1,12 @@
+use std::rc::Rc;
+
 use gpui::prelude::*;
 use gpui::{
     div, ease_out_quint, linear_color_stop, linear_gradient, point, px, rgb, rgba, Animation,
     AnimationExt as _, AnyElement, BoxShadow, DefiniteLength, Div, ElementId, LinearColorStop,
 };
 
+use crate::rail::{self, RailSpec};
 use crate::scrubber::Commit;
 use crate::view::{LINE_HEIGHT, TRANSITION_MS};
 
@@ -20,7 +23,6 @@ pub const ASH_END: u32 = 0x2a2430;
 const CHROME_RESERVED_PX: f32 = 62.0;
 const HORIZON_FRACTION: f32 = 0.66;
 const HORIZON_FROM_BOTTOM: f32 = 1.0 - HORIZON_FRACTION;
-const HORIZON_ALPHA: u32 = 0x38;
 const AURORA_PERIOD_S: f32 = 2.5;
 const AURORA_BASE_PX: f32 = 56.0;
 const AURORA_SWING_MIN_PX: f32 = 18.0;
@@ -36,7 +38,6 @@ const RIBBON_HEIGHT_FRACTION: f32 = 0.50;
 const RIBBON_WIDTH_FRACTION: f32 = 0.72;
 const RIBBON_MARGIN_FRACTION: f32 = (1.0 - RIBBON_WIDTH_FRACTION) / 2.0;
 const RIBBON_CORNER_PX: f32 = 10.0;
-const RIBBON_SHADOW_ALPHA: u32 = 0x80;
 const RIBBON_BLOOM_ALPHA: u32 = 0x1a;
 const STAR_SLOT_PX: f32 = 18.0;
 const STAR_MIN_PX: f32 = 4.0;
@@ -61,10 +62,6 @@ const ASH_ALPHA: u32 = 0xcc;
 const CONE_MIN_FRACTION: f32 = 0.015;
 const CONE_ALPHA: f32 = 0.45;
 const CONE_EDGE_ALPHA: u32 = 0xb0;
-const VIGNETTE_COLOR: u32 = 0x04050a;
-const VIGNETTE_ALPHA: u32 = 0x4d;
-const VIGNETTE_VERTICAL_FRACTION: f32 = 0.09;
-const VIGNETTE_HORIZONTAL_FRACTION: f32 = 0.07;
 
 pub struct AshSpec {
     pub seq: u64,
@@ -75,6 +72,15 @@ pub struct ConeSpec {
     pub seq: u64,
     pub from: usize,
     pub to: usize,
+}
+
+pub struct SceneState {
+    pub pane_height: f32,
+    pub phase_seconds: f32,
+    pub ash: Option<AshSpec>,
+    pub cone: Option<ConeSpec>,
+    pub rail: Option<Rc<RailSpec>>,
+    pub bloom_rank: u8,
 }
 
 pub fn background() -> gpui::Background {
@@ -91,16 +97,17 @@ pub fn ribbon_fit(pane_height: f32) -> usize {
         .max(1.0) as usize
 }
 
+pub fn bloom_alpha(rank: u8) -> u32 {
+    RIBBON_BLOOM_ALPHA * rank as u32 / 2
+}
+
 pub fn scene(
     rows: Vec<AnyElement>,
     commits: &[Commit],
     selected: usize,
-    pane_height: f32,
-    phase_seconds: f32,
-    ash: Option<AshSpec>,
-    cone: Option<ConeSpec>,
+    state: SceneState,
 ) -> AnyElement {
-    let phase = phase_seconds * std::f32::consts::TAU / AURORA_PERIOD_S;
+    let phase = state.phase_seconds * std::f32::consts::TAU / AURORA_PERIOD_S;
     let breath = 0.5 + 0.5 * phase.sin();
     let scale = magnitude_scale(commits);
     let aurora_height =
@@ -108,20 +115,18 @@ pub fn scene(
     let aurora_opacity = AURORA_OPACITY_BASE + AURORA_OPACITY_SWING * breath;
     let mut scene = div().relative().size_full();
     scene = scene.child(aurora(aurora_height, aurora_opacity));
-    scene = scene.child(horizon());
     for index in 0..commits.len() {
         scene = scene.child(star(commits, index, selected, phase));
     }
     if !rows.is_empty() {
-        scene = scene.child(ribbon(rows));
+        scene = scene.child(ribbon(rows, state.rail, bloom_alpha(state.bloom_rank)));
     }
-    if let Some(ash) = ash {
-        scene = scene.child(ash_layer(&ash, pane_height));
+    if let Some(ash) = state.ash {
+        scene = scene.child(ash_layer(&ash, state.pane_height));
     }
-    if let Some(cone) = cone {
+    if let Some(cone) = state.cone {
         scene = scene.child(light_cone(&cone, commits.len()));
     }
-    scene = scene.child(vignette());
     scene.into_any_element()
 }
 
@@ -152,16 +157,6 @@ fn aurora(height: f32, opacity: f32) -> Div {
                     stop(rgb(AURORA_WARM)),
                 )),
         )
-}
-
-fn horizon() -> Div {
-    div()
-        .absolute()
-        .top(fraction(HORIZON_FRACTION))
-        .left(px(0.0))
-        .right(px(0.0))
-        .h(px(1.0))
-        .bg(rgba((AURORA_WARM << 8) | HORIZON_ALPHA))
 }
 
 fn star(commits: &[Commit], index: usize, selected: usize, phase: f32) -> Div {
@@ -215,46 +210,67 @@ fn corona_ring(offset: f32, size: f32, color: u32, alpha: f32) -> Div {
         .bg(rgba((color << 8) | alpha_byte(alpha)))
 }
 
-fn ribbon(rows: Vec<AnyElement>) -> Div {
-    div()
+fn ribbon(rows: Vec<AnyElement>, rail: Option<Rc<RailSpec>>, bloom_alpha: u32) -> Div {
+    let row_count = rows.len();
+    let content = match rail {
+        Some(spec) => {
+            let element = rail::rail_element(Rc::clone(&spec), 1.0);
+            let element = if spec.morphing {
+                element
+                    .with_animation(
+                        ElementId::named_usize(format!("dw-rail-{}", spec.seq), 0),
+                        Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+                        move |_, delta| rail::rail_element(Rc::clone(&spec), delta),
+                    )
+                    .into_any_element()
+            } else {
+                element.into_any_element()
+            };
+            div()
+                .flex()
+                .flex_row()
+                .size_full()
+                .overflow_hidden()
+                .child(element)
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .children(rows),
+                )
+        }
+        None => div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .children(rows),
+    };
+    let mut ribbon = div()
         .absolute()
         .top(fraction(RIBBON_TOP_FRACTION))
         .left(fraction(RIBBON_MARGIN_FRACTION))
         .w(fraction(RIBBON_WIDTH_FRACTION))
-        .h(px(rows.len() as f32 * LINE_HEIGHT))
-        .child(
+        .h(px(row_count as f32 * LINE_HEIGHT));
+    if bloom_alpha > 0 {
+        ribbon = ribbon.child(
             div()
                 .absolute()
                 .size_full()
                 .rounded(px(RIBBON_CORNER_PX))
                 .shadow(vec![BoxShadow {
-                    color: rgba((AURORA_EMBER << 8) | RIBBON_BLOOM_ALPHA).into(),
+                    color: rgba((AURORA_EMBER << 8) | bloom_alpha).into(),
                     offset: point(px(0.0), px(0.0)),
                     blur_radius: px(48.0),
                     spread_radius: px(16.0),
                 }]),
-        )
-        .child(
-            div()
-                .absolute()
-                .size_full()
-                .rounded(px(RIBBON_CORNER_PX))
-                .shadow(vec![BoxShadow {
-                    color: rgba((VIGNETTE_COLOR << 8) | RIBBON_SHADOW_ALPHA).into(),
-                    offset: point(px(0.0), px(0.0)),
-                    blur_radius: px(10.0),
-                    spread_radius: px(2.0),
-                }]),
-        )
-        .child(
-            div()
-                .relative()
-                .size_full()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .children(rows),
-        )
+        );
+    }
+    ribbon.child(content)
 }
 
 fn ash_layer(spec: &AshSpec, pane_height: f32) -> Div {
@@ -329,62 +345,12 @@ fn light_cone(spec: &ConeSpec, commit_len: usize) -> AnyElement {
         .into_any_element()
 }
 
-fn vignette() -> Div {
-    div()
-        .absolute()
-        .size_full()
-        .child(
-            div()
-                .absolute()
-                .top(px(0.0))
-                .left(px(0.0))
-                .right(px(0.0))
-                .h(fraction(VIGNETTE_VERTICAL_FRACTION))
-                .bg(linear_gradient(0.0, vignette_edge(), transparent_stop())),
-        )
-        .child(
-            div()
-                .absolute()
-                .bottom(px(0.0))
-                .left(px(0.0))
-                .right(px(0.0))
-                .h(fraction(VIGNETTE_VERTICAL_FRACTION))
-                .bg(linear_gradient(180.0, vignette_edge(), transparent_stop())),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
-                .bottom(px(0.0))
-                .w(fraction(VIGNETTE_HORIZONTAL_FRACTION))
-                .bg(linear_gradient(270.0, vignette_edge(), transparent_stop())),
-        )
-        .child(
-            div()
-                .absolute()
-                .right(px(0.0))
-                .top(px(0.0))
-                .bottom(px(0.0))
-                .w(fraction(VIGNETTE_HORIZONTAL_FRACTION))
-                .bg(linear_gradient(90.0, vignette_edge(), transparent_stop())),
-        )
-}
-
-fn vignette_edge() -> LinearColorStop {
-    stop(rgba((VIGNETTE_COLOR << 8) | VIGNETTE_ALPHA))
-}
-
 fn cone_edge(transparent: bool) -> LinearColorStop {
     if transparent {
         stop_at(rgba(0x00000000), 0.0)
     } else {
         stop_at(rgba((AURORA_EMBER << 8) | CONE_EDGE_ALPHA), 1.0)
     }
-}
-
-fn transparent_stop() -> LinearColorStop {
-    stop_at(rgba(0x00000000), 1.0)
 }
 
 fn stop(color: gpui::Rgba) -> LinearColorStop {
@@ -623,34 +589,68 @@ mod tests {
 
     #[test]
     fn scene_builds_from_any_state() {
-        let _empty = scene(Vec::new(), &[], 0, 578.0, 0.0, None, None);
+        let _empty = scene(
+            Vec::new(),
+            &[],
+            0,
+            SceneState {
+                pane_height: 578.0,
+                phase_seconds: 0.0,
+                ash: None,
+                cone: None,
+                rail: None,
+                bloom_rank: 0,
+            },
+        );
         let _full = scene(
             Vec::new(),
             &commits(&[1, 2, 3]),
             1,
-            578.0,
-            3.7,
-            Some(AshSpec {
-                seq: 4,
-                removed_rows: vec![0.0, 54.0],
-            }),
-            Some(ConeSpec {
-                seq: 4,
-                from: 0,
-                to: 2,
-            }),
+            SceneState {
+                pane_height: 578.0,
+                phase_seconds: 3.7,
+                ash: Some(AshSpec {
+                    seq: 4,
+                    removed_rows: vec![0.0, 54.0],
+                }),
+                cone: Some(ConeSpec {
+                    seq: 4,
+                    from: 0,
+                    to: 2,
+                }),
+                rail: Some(Rc::new(RailSpec {
+                    seq: 4,
+                    morphing: true,
+                    scroll: 0,
+                    old_scroll: 0,
+                    marks: Vec::new(),
+                    deaths: Vec::new(),
+                })),
+                bloom_rank: 2,
+            },
         );
         let _both = scene(
             Vec::new(),
             &commits(&[1, 2, 3]),
             1,
-            578.0,
-            3.7,
-            Some(AshSpec {
-                seq: 4,
-                removed_rows: vec![0.0],
-            }),
-            None,
+            SceneState {
+                pane_height: 578.0,
+                phase_seconds: 3.7,
+                ash: Some(AshSpec {
+                    seq: 4,
+                    removed_rows: vec![0.0],
+                }),
+                cone: None,
+                rail: None,
+                bloom_rank: 1,
+            },
         );
+    }
+
+    #[test]
+    fn bloom_alpha_is_strictly_proportional_to_heat_rank() {
+        assert_eq!(bloom_alpha(0), 0, "all cool renders no bloom");
+        assert_eq!(bloom_alpha(2), RIBBON_BLOOM_ALPHA);
+        assert_eq!(bloom_alpha(1) * 2, bloom_alpha(2), "warm sits halfway");
     }
 }

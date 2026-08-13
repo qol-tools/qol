@@ -16,6 +16,8 @@ use gpui::{
     TextStyle, WhiteSpace, Window,
 };
 use qol_cache::TtlCache;
+use qol_diff::constructs::{self, Construct};
+use qol_diff::lexer::Lang;
 use qol_diff::token_path::{token_edit_path, TokenEdit, TokenFate};
 use qol_diff::transition::{NewLineFate, OldLineFate, TransitionPlan};
 use qol_diff::waveform::waveform;
@@ -26,9 +28,10 @@ use qol_gpui::surface::{DragGestureState, DRAG_THRESHOLD_PX};
 use qol_gpui::window_chrome::PanelChrome;
 use qol_gpui::WindowBar;
 
-use crate::field::{self, AshSpec, ConeSpec};
+use crate::field::{self, AshSpec, ConeSpec, SceneState};
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
+use crate::rail::{RailDeath, RailGeo, RailMark, RailSpec};
 use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
 use crate::surface::{self, CodeSurface, LineStyle};
 use crate::wave::{self, WaveMorph};
@@ -183,6 +186,8 @@ struct TransitionState {
     old_gutter_width: usize,
     plan: TransitionPlan,
     token_paths: Vec<Vec<TokenEdit>>,
+    old_constructs: Vec<Construct>,
+    old_arms: Vec<usize>,
 }
 
 struct TokenRowContext<'a> {
@@ -239,6 +244,8 @@ pub struct DiffView {
     heat_fingerprint: Vec<LineStyle>,
     transition: Option<TransitionState>,
     transition_seq: u64,
+    constructs: Vec<Construct>,
+    construct_arms: Vec<usize>,
     select_rx: Option<mpsc::Receiver<usize>>,
     chrome: PanelChrome,
     drag_gesture: Rc<RefCell<DragGestureState>>,
@@ -317,6 +324,8 @@ impl DiffView {
             heat_fingerprint: Vec::new(),
             transition: None,
             transition_seq: 0,
+            constructs: Vec::new(),
+            construct_arms: Vec::new(),
             select_rx: Some(select_rx),
             chrome: PanelChrome::new(window_title, Corner::TopLeft),
         };
@@ -667,6 +676,8 @@ impl DiffView {
                 }
                 self.begin_transition(&[]);
                 self.lines.clear();
+                self.constructs.clear();
+                self.construct_arms.clear();
                 self.line_text.clear();
                 self.line_highlights.clear();
                 self.unified_gutters.clear();
@@ -702,6 +713,13 @@ impl DiffView {
                     .collect();
                 self.surface.set_lines(&lines);
                 self.lines = lines;
+                let lang = self.file_lang();
+                self.constructs = constructs::detect_constructs(&self.lines, lang);
+                self.construct_arms = self
+                    .constructs
+                    .iter()
+                    .map(|construct| constructs::branch_arms(&self.lines, construct, lang))
+                    .collect();
                 self.pairs = pairs;
                 self.hunk_pair_starts = hunk_pair_starts;
                 self.hunk_line_starts = hunk_line_starts;
@@ -709,6 +727,8 @@ impl DiffView {
             }
             Err(error) => {
                 self.transition = None;
+                self.constructs.clear();
+                self.construct_arms.clear();
                 self.pane = DiffPane::Error(error);
             }
         }
@@ -742,6 +762,12 @@ impl DiffView {
                 token_edit_path(old_text, &line.text)
             })
             .collect();
+        let lang = self.file_lang();
+        let old_constructs = constructs::detect_constructs(&old_lines, lang);
+        let old_arms = old_constructs
+            .iter()
+            .map(|construct| constructs::branch_arms(&old_lines, construct, lang))
+            .collect();
         self.transition_seq += 1;
         self.transition = Some(TransitionState {
             seq: self.transition_seq,
@@ -753,6 +779,8 @@ impl DiffView {
             old_gutter_width: self.surface.gutter_width(),
             plan,
             token_paths,
+            old_constructs,
+            old_arms,
         });
     }
 
@@ -1095,11 +1123,132 @@ impl DiffView {
             rows,
             &self.scrub_commits,
             selected,
-            pane_height,
-            phase,
-            ash,
-            cone,
+            SceneState {
+                pane_height,
+                phase_seconds: phase,
+                ash,
+                cone,
+                rail: self.rail_spec().map(Rc::new),
+                bloom_rank: self.visible_bloom_rank(),
+            },
         )
+    }
+
+    fn file_lang(&self) -> Lang {
+        self.files
+            .selected_path()
+            .map(Lang::from_path)
+            .unwrap_or(Lang::Generic)
+    }
+
+    fn rail_spec(&self) -> Option<RailSpec> {
+        if self.lines.is_empty() {
+            return None;
+        }
+        let scroll = self.surface.scroll_offset();
+        let fit = self.field_fit.max(1);
+        let age = self.heat_age();
+        let transition = self.active_transition();
+        let mut marks = Vec::new();
+        for (index, construct) in self.constructs.iter().enumerate() {
+            if construct.end_line < scroll || construct.start_line >= scroll + fit {
+                continue;
+            }
+            let old = transition
+                .and_then(|transition| transition.construct_partner(construct))
+                .map(|(_, old_start, old_end, old_arms)| RailGeo {
+                    start: old_start,
+                    end: old_end,
+                    arms: old_arms,
+                });
+            marks.push(RailMark {
+                kind: construct.kind,
+                start: construct.start_line,
+                end: construct.end_line,
+                depth: construct.depth,
+                arms: self.construct_arms[index],
+                heat: self.construct_heat(&self.lines, construct, age),
+                old,
+            });
+        }
+        let mut deaths = Vec::new();
+        if let Some(transition) = transition {
+            for index in transition.death_indices(&self.constructs) {
+                let construct = &transition.old_constructs[index];
+                deaths.push(RailDeath {
+                    kind: construct.kind,
+                    start: construct.start_line,
+                    end: construct.end_line,
+                    depth: construct.depth,
+                    arms: transition.old_arms[index],
+                    heat: self.construct_heat(&transition.old_lines, construct, None),
+                });
+            }
+        }
+        if marks.is_empty() && deaths.is_empty() {
+            return None;
+        }
+        Some(RailSpec {
+            seq: transition.map(|transition| transition.seq).unwrap_or(0),
+            morphing: transition.is_some(),
+            scroll,
+            old_scroll: transition
+                .map(|transition| transition.old_scroll)
+                .unwrap_or(scroll),
+            marks,
+            deaths,
+        })
+    }
+
+    fn construct_heat(
+        &self,
+        lines: &[LineChange],
+        construct: &Construct,
+        age: Option<Duration>,
+    ) -> HeatLevel {
+        if lines.is_empty() {
+            return HeatLevel::Cool;
+        }
+        let start = construct.start_line.min(lines.len() - 1);
+        let end = construct.end_line.min(lines.len() - 1);
+        let mut rank = 0u8;
+        for line in lines.iter().take(end + 1).skip(start) {
+            let fresh = surface::style_from_line(line);
+            rank = rank.max(heat_rank(decayed_line_style(fresh, age).background_heat));
+        }
+        match rank {
+            0 => HeatLevel::Cool,
+            1 => HeatLevel::Warm,
+            _ => HeatLevel::Hot,
+        }
+    }
+
+    fn visible_bloom_rank(&self) -> u8 {
+        let age = self.heat_age();
+        let start = self.surface.scroll_offset();
+        let end = (start + self.field_fit.max(1)).min(self.lines.len());
+        let mut rank = 0u8;
+        for index in start..end {
+            let fresh = surface::style_from_line(&self.lines[index]);
+            rank = rank.max(heat_rank(decayed_line_style(fresh, age).background_heat));
+        }
+        rank
+    }
+
+    fn field_alive(&self) -> bool {
+        if self.active_transition().is_some() {
+            return true;
+        }
+        if !matches!(self.pane, DiffPane::Ready(_)) {
+            return false;
+        }
+        let age = self.heat_age();
+        let start = self.surface.scroll_offset();
+        let end = (start + self.field_fit.max(1)).min(self.lines.len());
+        (start..end).any(|index| {
+            let fresh = surface::style_from_line(&self.lines[index]);
+            decayed_line_style(fresh, age).background_heat != HeatLevel::Cool
+        })
     }
 
     fn field_rows(&self, base: &TextStyle, age: Option<Duration>) -> Vec<AnyElement> {
@@ -1578,6 +1727,45 @@ impl DiffView {
     }
 }
 
+fn heat_rank(heat: HeatLevel) -> u8 {
+    match heat {
+        HeatLevel::Cool => 0,
+        HeatLevel::Warm => 1,
+        HeatLevel::Hot => 2,
+    }
+}
+
+impl TransitionState {
+    fn construct_partner(&self, construct: &Construct) -> Option<(usize, usize, usize, usize)> {
+        let old_at = |line: usize| match self.plan.new.get(line) {
+            Some(NewLineFate::CarriedFrom(old)) | Some(NewLineFate::MorphedFrom(old)) => Some(*old),
+            _ => None,
+        };
+        let (keyword, closing) = construct.anchor;
+        let old_keyword = old_at(keyword)?;
+        let old_closing = old_at(closing)?;
+        self.old_constructs
+            .iter()
+            .enumerate()
+            .find(|(_, old)| old.kind == construct.kind && old.anchor == (old_keyword, old_closing))
+            .map(|(index, old)| (index, old.start_line, old.end_line, self.old_arms[index]))
+    }
+
+    fn death_indices(&self, new_constructs: &[Construct]) -> Vec<usize> {
+        let mut claimed = vec![false; self.old_constructs.len()];
+        for construct in new_constructs {
+            if let Some((index, _, _, _)) = self.construct_partner(construct) {
+                if let Some(slot) = claimed.get_mut(index) {
+                    *slot = true;
+                }
+            }
+        }
+        (0..self.old_constructs.len())
+            .filter(|index| !claimed[*index])
+            .collect()
+    }
+}
+
 fn token_edit_elements(
     edit: &TokenEdit,
     line_offset: usize,
@@ -1730,6 +1918,9 @@ impl Render for DiffView {
         let viewport_height = window.viewport_size().height.to_f64() as f32;
         self.last_fit = visible_fit(viewport_height, LINE_HEIGHT);
         self.field_fit = field::ribbon_fit(field::pane_height(viewport_height)).min(self.last_fit);
+        if matches!(self.layout, Layout::Field) && !self.field_folded && self.field_alive() {
+            window.request_animation_frame();
+        }
         self.update_overview(cx);
         if !self.rendered_once {
             self.rendered_once = true;
@@ -2286,6 +2477,159 @@ mod tests {
             old_line_no: old,
             new_line_no: new,
         }
+    }
+
+    fn code(text: &str, old: Option<u32>, new: Option<u32>) -> LineChange {
+        LineChange {
+            kind: LineKind::Context,
+            text: text.to_string(),
+            token_spans: qol_diff::lexer::classify(text, qol_diff::lexer::Lang::Rust),
+            old_line_no: old,
+            new_line_no: new,
+        }
+    }
+
+    fn transition_state(old: Vec<LineChange>, new: Vec<LineChange>) -> TransitionState {
+        let plan = TransitionPlan::between(&old, &new);
+        let old_constructs = constructs::detect_constructs(&old, Lang::Rust);
+        let old_arms = old_constructs
+            .iter()
+            .map(|construct| constructs::branch_arms(&old, construct, Lang::Rust))
+            .collect();
+        TransitionState {
+            seq: 1,
+            started: Instant::now(),
+            old_lines: old,
+            old_pair_of: Vec::new(),
+            old_layout: Layout::Field,
+            old_scroll: 0,
+            old_gutter_width: 0,
+            plan,
+            token_paths: Vec::new(),
+            old_constructs,
+            old_arms,
+        }
+    }
+
+    #[test]
+    fn construct_identity_links_carried_anchors_only() {
+        let old = vec![
+            code("fn alpha() {", Some(1), Some(1)),
+            code("    x();", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+            code("fn beta() {", Some(4), Some(4)),
+            code("    y();", Some(5), Some(5)),
+            code("}", Some(6), Some(6)),
+        ];
+        let new = vec![
+            code("fn alpha() {", Some(1), Some(1)),
+            code("    x();", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+            code("fn beta() {", Some(4), Some(4)),
+            code("    y(); // tweak", Some(5), Some(5)),
+            code("}", Some(6), Some(6)),
+            code("fn gamma() {", Some(7), Some(7)),
+            code("    z();", Some(8), Some(8)),
+            code("}", Some(9), Some(9)),
+        ];
+        let state = transition_state(old, new);
+        let new_constructs = vec![
+            Construct {
+                kind: qol_diff::constructs::ConstructKind::Arc,
+                start_line: 0,
+                end_line: 2,
+                depth: 0,
+                anchor: (0, 2),
+            },
+            Construct {
+                kind: qol_diff::constructs::ConstructKind::Arc,
+                start_line: 3,
+                end_line: 5,
+                depth: 0,
+                anchor: (3, 5),
+            },
+            Construct {
+                kind: qol_diff::constructs::ConstructKind::Arc,
+                start_line: 6,
+                end_line: 8,
+                depth: 0,
+                anchor: (6, 8),
+            },
+        ];
+        let (index, start, end, arms) = state
+            .construct_partner(&new_constructs[0])
+            .expect("alpha is carried");
+        assert_eq!((index, start, end, arms), (0, 0, 2, 0));
+        assert!(
+            state.construct_partner(&new_constructs[1]).is_some(),
+            "beta morphs"
+        );
+        assert!(
+            state.construct_partner(&new_constructs[2]).is_none(),
+            "gamma is born, not morphed"
+        );
+        assert_eq!(state.death_indices(&new_constructs), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn construct_kind_change_is_a_birth_and_a_death() {
+        let old = vec![
+            code("fn alpha() {", Some(1), Some(1)),
+            code("    x();", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+        ];
+        let changed = vec![
+            code("struct alpha {", Some(1), Some(1)),
+            code("    x: u32,", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+        ];
+        let state = transition_state(old, changed);
+        let new_constructs = vec![Construct {
+            kind: qol_diff::constructs::ConstructKind::Lattice,
+            start_line: 0,
+            end_line: 2,
+            depth: 0,
+            anchor: (0, 2),
+        }];
+        assert!(
+            state.construct_partner(&new_constructs[0]).is_none(),
+            "a kind change breaks identity"
+        );
+        assert_eq!(
+            state.death_indices(&new_constructs),
+            vec![0],
+            "the old arc collapses"
+        );
+    }
+
+    #[test]
+    fn removed_anchors_leave_no_partner_and_no_claim() {
+        let old = vec![
+            code("fn alpha() {", Some(1), Some(1)),
+            code("    x();", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+            code("fn beta() {", Some(4), Some(4)),
+            code("    y();", Some(5), Some(5)),
+            code("}", Some(6), Some(6)),
+        ];
+        let new = vec![
+            code("fn alpha() {", Some(1), Some(1)),
+            code("    x();", Some(2), Some(2)),
+            code("}", Some(3), Some(3)),
+        ];
+        let state = transition_state(old, new);
+        let new_constructs = vec![Construct {
+            kind: qol_diff::constructs::ConstructKind::Arc,
+            start_line: 0,
+            end_line: 2,
+            depth: 0,
+            anchor: (0, 2),
+        }];
+        assert_eq!(
+            state.death_indices(&new_constructs),
+            vec![1],
+            "the removed beta collapses"
+        );
     }
 
     fn hunks(blocks: Vec<Vec<LineChange>>) -> Vec<qol_diff::Hunk> {
