@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
+    ScreenReader, SessionBinding, SessionInventory, SpawnSurface, TerminalSessionService,
 };
 use serde_json::{json, Value};
 
@@ -30,6 +30,8 @@ pub(crate) struct McpSessionServer {
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
     locks: super::spawn::SpawnLocks,
+    spawn_model: Option<String>,
+    spawn_surface: Option<SpawnSurface>,
     round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
@@ -42,6 +44,8 @@ impl McpSessionServer {
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
+            spawn_model: super::spawn::config_spawn_model()?,
+            spawn_surface: super::spawn::config_surface()?,
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
@@ -57,6 +61,8 @@ impl McpSessionServer {
             interpreter,
             pending,
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            spawn_model: None,
+            spawn_surface: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
@@ -73,6 +79,8 @@ impl McpSessionServer {
             interpreter,
             pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
+            spawn_model: None,
+            spawn_surface: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
@@ -230,8 +238,9 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `task` must be a string".to_owned())
             })
             .transpose()?;
-        let model = super::spawn::resolve_model(model_flag.as_deref())
-            .map_err(|error| error.to_string())?;
+        let model =
+            super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
+                .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -241,7 +250,7 @@ impl McpSessionServer {
             surface.as_deref(),
             model.as_deref(),
             title.as_deref(),
-            super::spawn::config_surface().map_err(|error| error.to_string())?,
+            self.spawn_surface,
             &self.locks,
         )
         .map_err(|error| error.to_string())?;
@@ -395,7 +404,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), an optional\n  `model` argument overrides the spawned session's model (the sessions.toml\n  `spawn_model` entry is the fallback), and an optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and an\n  optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1022,6 +1031,7 @@ mod tests {
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut arguments = spawn_arguments("pi", "lane-one", None, &cwd);
+        arguments["model"] = json!("flash-x");
         arguments["title"] = json!("Lane One");
         arguments["task"] = json!("implement and test the bounded change");
         let response = tool_call(&server, "session_spawn", arguments);
@@ -1281,11 +1291,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let spawned = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut spawned_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
         assert_eq!(spawned["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
@@ -1402,11 +1410,9 @@ mod tests {
             .unwrap()
             .contains("was not spawned"));
 
-        tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut close_lane = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        close_lane["model"] = json!("flash-x");
+        tool_call(&server, "session_spawn", close_lane);
         let spawned = "v1:kitty:spawn-mcp-lane:200";
         let binding: SessionBinding = spawned.parse().unwrap();
         server
@@ -1488,11 +1494,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let response = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
@@ -1556,6 +1560,43 @@ mod tests {
     }
 
     #[test]
+    fn session_spawn_refuses_a_new_lane_without_an_explicit_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let missing = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(missing["result"]["isError"], true);
+        assert!(missing["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--model"));
+
+        let mut empty = spawn_arguments("codex", "mcp-lane-empty", None, &cwd);
+        empty["model"] = json!("");
+        let empty = tool_call(&server, "session_spawn", empty);
+        assert_eq!(empty["result"]["isError"], true);
+        assert!(empty["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--model"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
     fn session_spawn_reuses_the_live_match_and_never_launches_twice() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
@@ -1564,11 +1605,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let first = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        first_arguments["model"] = json!("flash-x");
+        let first = tool_call(&server, "session_spawn", first_arguments);
         assert_eq!(first["result"]["isError"], false);
         let second = tool_call(
             &server,
@@ -1598,11 +1637,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        first_arguments["model"] = json!("flash-x");
+        tool_call(&server, "session_spawn", first_arguments);
         let conflict = tool_call(
             &server,
             "session_spawn",
@@ -1674,11 +1711,10 @@ mod tests {
             .unwrap()
             .contains("invalid surface `floating`"));
 
-        let unsupported = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd),
-        );
+        let mut unsupported_arguments =
+            spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd);
+        unsupported_arguments["model"] = json!("flash-x");
+        let unsupported = tool_call(&server, "session_spawn", unsupported_arguments);
         assert_eq!(unsupported["result"]["isError"], true);
         assert!(unsupported["result"]["content"][0]["text"]
             .as_str()
