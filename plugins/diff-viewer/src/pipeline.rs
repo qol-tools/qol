@@ -76,6 +76,7 @@ pub fn commit_range(index: usize) -> String {
 }
 
 pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBuf> {
+    let mut resolved = None;
     if let Some(env) = env_repo {
         let candidate = if env.is_absolute() {
             env.to_path_buf()
@@ -83,19 +84,25 @@ pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBu
             launch_cwd.join(env)
         };
         if candidate.join(".git").exists() {
-            return Some(candidate);
+            resolved = Some(candidate);
         }
     }
-    for ancestor in launch_cwd.ancestors() {
-        if ancestor.join(".git").exists() {
-            let demo = ancestor.join("plugins/diff-viewer/demo");
-            if demo.join(".git").exists() {
-                return Some(demo);
+    if resolved.is_none() {
+        for ancestor in launch_cwd.ancestors() {
+            if ancestor.join(".git").exists() {
+                resolved = Some(ancestor.to_path_buf());
+                break;
             }
-            return Some(ancestor.to_path_buf());
         }
     }
-    None
+    resolved.map(|repo| {
+        let demo = repo.join("plugins/diff-viewer/demo");
+        if demo.join(".git").exists() {
+            demo
+        } else {
+            repo
+        }
+    })
 }
 
 pub fn send_refresh(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
@@ -428,6 +435,11 @@ mod tests {
         std::fs::create_dir_all(&launch).expect("launch dir");
         std::fs::create_dir_all(demo.join(".git")).expect("demo .git");
         assert_eq!(resolve_repo(&launch, None), Some(demo.clone()));
+        assert_eq!(
+            resolve_repo(&launch, Some(&dir)),
+            Some(demo),
+            "a valid env repo still yields its nested demo"
+        );
         std::fs::write(dir.join("tracked.txt"), "dirty").expect("dirty the root");
         assert_eq!(
             resolve_repo(&launch, None),
