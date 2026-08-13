@@ -23,7 +23,8 @@ pub struct Tab {
 pub struct KittyWindow {
     pub id: u64,
     pub title: String,
-    pub cwd: PathBuf,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
     pub pid: i32,
     #[serde(default)]
     pub at_prompt: bool,
@@ -40,7 +41,7 @@ pub struct ForegroundProcess {
     pub pid: i32,
     pub cmdline: Vec<String>,
     #[serde(default)]
-    pub cwd: PathBuf,
+    pub cwd: Option<PathBuf>,
 }
 
 fn basename(cmdline: &[String]) -> Option<String> {
@@ -65,8 +66,8 @@ impl KittyWindow {
             .foreground_processes
             .iter()
             .rev()
-            .find_map(|process| usable_cwd(&process.cwd))
-            .or_else(|| usable_cwd(&self.cwd))
+            .find_map(|process| process.cwd.as_deref().and_then(usable_cwd))
+            .or_else(|| self.cwd.as_deref().and_then(usable_cwd))
             .unwrap_or_default();
         let foreground_basenames = self
             .foreground_processes
@@ -177,6 +178,21 @@ mod tests {
         let sessions = parse_ls(body, backend_id()).unwrap().sessions(backend_id());
 
         assert_eq!(sessions[0].cwd, "/work/project");
+    }
+
+    #[test]
+    fn parser_tolerates_null_cwd_on_fresh_windows_and_processes() {
+        let body = r#"[{"id":1,"tabs":[{"windows":[
+{"id":10,"title":"Fresh","cwd":null,"pid":100,"foreground_processes":[{"pid":101,"cwd":null,"cmdline":["/usr/bin/pi"]}]},
+{"id":11,"title":"Shell","pid":200,"foreground_processes":[{"pid":201,"cmdline":["/bin/zsh"]}]}
+]}]}]"#;
+
+        let sessions = parse_ls(body, backend_id()).unwrap().sessions(backend_id());
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].cwd, "", "a null window cwd falls back to empty");
+        assert_eq!(sessions[0].title, "Fresh");
+        assert_eq!(sessions[1].cwd, "", "a missing cwd stays empty");
     }
 
     #[test]
