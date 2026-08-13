@@ -338,15 +338,20 @@ impl McpSessionServer {
         if !matches!(outcome, "accepted" | "paused") {
             return Err("session_loop_close `outcome` must be `accepted` or `paused`".to_owned());
         }
-        let receipt = render_close_receipt(&arguments, outcome)?;
+        let mut receipt = render_close_receipt(&arguments, outcome)?;
         self.pending
             .acknowledge(&binding, completion_marker, outcome == "accepted")
             .map_err(|error| error.to_string())?;
-        Ok(receipt)
+        if outcome == "accepted" {
+            let terminal_closed =
+                super::close::close_spawned_terminal(self.terminals.as_ref(), &binding).is_ok();
+            receipt["terminal_closed"] = json!(terminal_closed);
+        }
+        serde_json::to_string(&receipt).map_err(|error| format!("serialization failed: {error}"))
     }
 }
 
-fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<String, String> {
+fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<Value, String> {
     let landed = non_empty_argument(arguments, "landed")?;
     let before = non_empty_argument(arguments, "before")?;
     let now = non_empty_argument(arguments, "now")?;
@@ -355,12 +360,11 @@ fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<String, Stri
     let final_report = format!(
         "## What landed\n\n{landed}\n\n## Before\n\n{before}\n\n## Now\n\n{now}\n\n## Verification\n\n{verification}\n\n## Remaining\n\n{remaining}"
     );
-    serde_json::to_string(&json!({
+    Ok(json!({
         "loop_closed": true,
         "outcome": outcome,
         "final_report": final_report,
     }))
-    .map_err(|error| format!("serialization failed: {error}"))
 }
 
 pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
@@ -391,7 +395,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), an optional\n  `model` argument overrides the spawned session's model (the sessions.toml\n  `spawn_model` entry is the fallback), and an optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close acknowledges the\n  final response and records the architect's explicit accepted or paused\n  terminal transition.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), an optional\n  `model` argument overrides the spawned session's model (the sessions.toml\n  `spawn_model` entry is the fallback), and an optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1232,7 +1236,7 @@ mod tests {
 
     #[test]
     fn loop_close_returns_a_typed_terminal_receipt() {
-        let (server, _) = server(Vec::new(), false, false);
+        let (server, backend) = server(Vec::new(), false, false);
         for outcome in ["accepted", "paused"] {
             let binding: SessionBinding = token().parse().unwrap();
             server
@@ -1259,7 +1263,57 @@ mod tests {
                 .unwrap()
                 .contains("## Before"));
             assert!(receipt["final_report"].as_str().unwrap().contains("## Now"));
+            if outcome == "accepted" {
+                assert_eq!(receipt["terminal_closed"], false);
+            } else {
+                assert!(receipt.get("terminal_closed").is_none());
+            }
+            assert!(backend.closed.lock().unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn loop_close_accepted_terminates_a_spawned_implementation_terminal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let spawned = tool_call(
+            &server,
+            "session_spawn",
+            spawn_arguments("codex", "mcp-lane", None, &cwd),
+        );
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "")
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(session);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "accepted");
+        assert_eq!(receipt["terminal_closed"], true);
+        let closed = backend.closed.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0], binding);
     }
 
     #[test]

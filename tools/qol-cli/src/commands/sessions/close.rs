@@ -28,9 +28,8 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn execute(
+pub(super) fn close_spawned_terminal(
     terminals: &TerminalSessionService,
-    pending: &PendingBridgeStore,
     binding: &SessionBinding,
 ) -> Result<CloseOutcome> {
     if terminals.is_current(binding).unwrap_or(false) {
@@ -47,12 +46,6 @@ pub(super) fn execute(
             "`{binding}` was not spawned by the session workflow; only spawned implementation sessions can be closed"
         );
     };
-    if let Some(round) = pending.pending_round(binding)? {
-        bail!(
-            "session `{binding}` still has an open feature loop (marker {}); call session_loop_close first",
-            round.completion_marker
-        );
-    }
     terminals.close(binding).context("close failed")?;
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -66,4 +59,18 @@ pub(super) fn execute(
         tool: identity.tool.to_string(),
         closed: true,
     })
+}
+
+pub(super) fn execute(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    binding: &SessionBinding,
+) -> Result<CloseOutcome> {
+    if let Some(round) = pending.pending_round(binding)? {
+        bail!(
+            "session `{binding}` still has an open feature loop (marker {}); call session_loop_close first",
+            round.completion_marker
+        );
+    }
+    close_spawned_terminal(terminals, binding)
 }
