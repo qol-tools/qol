@@ -10,12 +10,13 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    div, ease_out_quint, px, rgb, Animation, AnimationExt as _, AnyElement, App, ClickEvent,
+    div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt as _, AnyElement, App, ClickEvent,
     Context, CursorStyle, Div, ElementId, Entity, FocusHandle, Focusable, HighlightStyle,
     KeyDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, StyledText, TextStyle, WhiteSpace,
     Window,
 };
 use qol_cache::TtlCache;
+use qol_diff::token_path::{token_edit_path, TokenEdit, TokenFate};
 use qol_diff::transition::{NewLineFate, OldLineFate, TransitionPlan};
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::placement::Corner;
@@ -45,6 +46,7 @@ const TRANSITION_MS: Duration = Duration::from_millis(200);
 const MORPH_FADE: f32 = 0.4;
 const GHOST_DRIFT_PX: f32 = 8.0;
 const SLIDE_PX: f32 = 10.0;
+const EVAP_LIFT_PX: f32 = 4.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
@@ -171,6 +173,15 @@ struct TransitionState {
     old_scroll: usize,
     old_gutter_width: usize,
     plan: TransitionPlan,
+    token_paths: Vec<Vec<TokenEdit>>,
+}
+
+struct TokenRowContext<'a> {
+    seq: u64,
+    line_index: usize,
+    dimmed: bool,
+    age: Option<Duration>,
+    line: &'a LineChange,
 }
 
 pub struct DiffView {
@@ -680,6 +691,20 @@ impl DiffView {
         let old_lines = self.lines.clone();
         let plan = TransitionPlan::between(&old_lines, new_lines);
         let old_pair_of = old_pair_rows(&self.pairs, old_lines.len());
+        let token_paths = new_lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let old_text = match plan.new.get(index) {
+                    Some(NewLineFate::CarriedFrom(old_index))
+                    | Some(NewLineFate::MorphedFrom(old_index)) => {
+                        old_lines[*old_index].text.as_str()
+                    }
+                    _ => "",
+                };
+                token_edit_path(old_text, &line.text)
+            })
+            .collect();
         self.transition_seq += 1;
         self.transition = Some(TransitionState {
             seq: self.transition_seq,
@@ -690,6 +715,7 @@ impl DiffView {
             old_scroll: self.surface.scroll_offset(),
             old_gutter_width: self.surface.gutter_width(),
             plan,
+            token_paths,
         });
     }
 
@@ -1080,24 +1106,59 @@ impl DiffView {
         if let Some(bg) = surface::line_background(style) {
             row = row.bg(rgb(bg));
         }
-        self.animate_new_line(
-            index,
-            row.child(
-                div()
-                    .flex_none()
-                    .px_1()
-                    .text_color(rgb(surface::GUTTER_TEXT))
-                    .child(self.unified_gutters[index].clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(GLYPH_WIDTH))
-                    .text_color(rgb(surface::kind_color(line.kind)))
-                    .child(surface::kind_glyph(line.kind)),
-            )
-            .child(self.code_text(index, style.dimmed, base, age)),
+        let body = if self.active_transition().is_some() {
+            self.token_line(index, style.dimmed, age).into_any_element()
+        } else {
+            self.code_text(index, style.dimmed, base, age)
+                .into_any_element()
+        };
+        row.child(
+            div()
+                .flex_none()
+                .px_1()
+                .text_color(rgb(surface::GUTTER_TEXT))
+                .child(self.unified_gutters[index].clone()),
         )
+        .child(
+            div()
+                .flex_none()
+                .w(px(GLYPH_WIDTH))
+                .text_color(rgb(surface::kind_color(line.kind)))
+                .child(surface::kind_glyph(line.kind)),
+        )
+        .child(body)
+        .into_any_element()
+    }
+
+    fn token_line(&self, line_index: usize, dimmed: bool, age: Option<Duration>) -> Div {
+        let transition = self
+            .active_transition()
+            .expect("token line needs a transition");
+        let edits = &transition.token_paths[line_index];
+        let context = TokenRowContext {
+            seq: transition.seq,
+            line_index,
+            dimmed,
+            age,
+            line: &self.lines[line_index],
+        };
+        let mut row = div()
+            .flex_1()
+            .flex()
+            .flex_row()
+            .overflow_hidden()
+            .whitespace_nowrap();
+        let mut offset = 0usize;
+        for (token_index, edit) in edits.iter().enumerate() {
+            let start = offset;
+            if edit.fate != TokenFate::Evaporated {
+                offset += edit.text.len();
+            }
+            for element in token_edit_elements(edit, start, token_index, &context) {
+                row = row.child(element);
+            }
+        }
+        row
     }
 
     fn code_text(
@@ -1311,6 +1372,109 @@ impl DiffView {
             },
         )
         .into_any_element()
+    }
+}
+
+fn token_edit_elements(
+    edit: &TokenEdit,
+    line_offset: usize,
+    token_index: usize,
+    context: &TokenRowContext,
+) -> Vec<AnyElement> {
+    let id = ElementId::named_usize(
+        format!("tw-tok-{}-{}", context.seq, context.line_index),
+        token_index,
+    );
+    let animation = Animation::new(TRANSITION_MS).with_easing(ease_out_quint());
+    let (span_bg, span_color) =
+        token_span_style(context.line, line_offset, edit.text.len(), context.age);
+    let color = span_color.unwrap_or_else(|| surface::text_color(context.dimmed));
+    match edit.fate {
+        TokenFate::Kept => {
+            let mut element = div().flex_none().whitespace_nowrap().text_color(rgb(color));
+            if let Some(bg) = span_bg {
+                element = element.bg(rgb(bg));
+            }
+            vec![element.child(edit.text.clone()).into_any_element()]
+        }
+        TokenFate::Ignited => {
+            let text = SharedString::from(edit.text.clone());
+            vec![div()
+                .flex_none()
+                .whitespace_nowrap()
+                .with_animation(id, animation, move |element, progress| {
+                    element
+                        .bg(rgba(flash_hex(span_bg, 1.0 - progress)))
+                        .text_color(rgb(color))
+                        .child(div().opacity(progress).child(text.clone()))
+                })
+                .into_any_element()]
+        }
+        TokenFate::Evaporated => {
+            let text = SharedString::from(edit.text.clone());
+            vec![div()
+                .flex_none()
+                .relative()
+                .whitespace_nowrap()
+                .text_color(rgb(surface::TEXT_MUTED))
+                .with_animation(id, animation, move |element, progress| {
+                    element
+                        .top(px(-EVAP_LIFT_PX * progress))
+                        .opacity(1.0 - progress)
+                        .child(text.clone())
+                })
+                .into_any_element()]
+        }
+        TokenFate::Morphed => {
+            let (start, len) = edit.changed_range.unwrap_or((0, edit.text.len()));
+            let prefix = SharedString::from(edit.text[..start].to_string());
+            let changed = SharedString::from(edit.text[start..start + len].to_string());
+            let suffix = SharedString::from(edit.text[start + len..].to_string());
+            let mut elements = Vec::new();
+            if !prefix.is_empty() {
+                elements.push(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .child(prefix)
+                        .into_any_element(),
+                );
+            }
+            elements.push(
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .with_animation(id, animation, move |element, progress| {
+                        let settle = MORPH_FADE + (1.0 - MORPH_FADE) * progress;
+                        element
+                            .bg(rgba(flare_hex(span_bg, 4.0 * progress * (1.0 - progress))))
+                            .child(
+                                div()
+                                    .opacity(settle)
+                                    .text_color(rgba(
+                                        (mix_hex(
+                                            color,
+                                            surface::TOKEN_IGNITE_FLASH,
+                                            1.0 - progress,
+                                        ) << 8)
+                                            | 0xff,
+                                    ))
+                                    .child(changed.clone()),
+                            )
+                    })
+                    .into_any_element(),
+            );
+            if !suffix.is_empty() {
+                elements.push(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .child(suffix)
+                        .into_any_element(),
+                );
+            }
+            elements
+        }
     }
 }
 
@@ -1567,6 +1731,50 @@ fn decayed_line_style(fresh: LineStyle, age: Option<Duration>) -> LineStyle {
             dimmed: fresh.dimmed,
         },
         None => fresh,
+    }
+}
+
+fn token_span_style(
+    line: &LineChange,
+    offset: usize,
+    len: usize,
+    age: Option<Duration>,
+) -> (Option<u32>, Option<u32>) {
+    let end = offset + len;
+    for span in &line.token_spans {
+        if span.start < end && span.start + span.len > offset {
+            let heat = age.map_or(span.heat, |age| qol_diff::decayed_heat(span.heat, age));
+            return (
+                surface::token_background(heat),
+                match (heat, span.kind) {
+                    (HeatLevel::Cool, TokenKind::Plain) => None,
+                    (HeatLevel::Cool, kind) => surface::token_kind_color(kind),
+                    _ => None,
+                },
+            );
+        }
+    }
+    (None, None)
+}
+
+fn mix_hex(from: u32, to: u32, amount: f32) -> u32 {
+    let channel = |a: u32, b: u32| (a as f32 + (b as f32 - a as f32) * amount).round() as u32;
+    (channel(from >> 16 & 0xff, to >> 16 & 0xff) << 16)
+        | (channel(from >> 8 & 0xff, to >> 8 & 0xff) << 8)
+        | channel(from & 0xff, to & 0xff)
+}
+
+fn flash_hex(base: Option<u32>, amount: f32) -> u32 {
+    match base {
+        Some(bg) => (mix_hex(bg, surface::TOKEN_IGNITE_FLASH, amount) << 8) | 0xff,
+        None => (surface::TOKEN_IGNITE_FLASH << 8) | ((amount * 255.0).round() as u32),
+    }
+}
+
+fn flare_hex(base: Option<u32>, amount: f32) -> u32 {
+    match base {
+        Some(bg) => (mix_hex(bg, surface::TOKEN_MORPH_FLARE, amount) << 8) | 0xff,
+        None => (surface::TOKEN_MORPH_FLARE << 8) | ((amount * 255.0).round() as u32),
     }
 }
 
@@ -2019,5 +2227,65 @@ mod tests {
             },
             "dimmed survives decay"
         );
+    }
+
+    #[test]
+    fn token_span_style_maps_heat_and_kind() {
+        let line = LineChange {
+            kind: LineKind::Added,
+            text: "fn main".to_string(),
+            token_spans: vec![
+                qol_diff::TokenSpan {
+                    start: 0,
+                    len: 2,
+                    heat: HeatLevel::Cool,
+                    kind: TokenKind::Keyword,
+                },
+                qol_diff::TokenSpan {
+                    start: 2,
+                    len: 5,
+                    heat: HeatLevel::Hot,
+                    kind: TokenKind::Plain,
+                },
+            ],
+            old_line_no: None,
+            new_line_no: Some(1),
+        };
+        assert_eq!(
+            token_span_style(&line, 0, 2, None),
+            (None, surface::token_kind_color(TokenKind::Keyword))
+        );
+        assert_eq!(
+            token_span_style(&line, 2, 2, None),
+            (surface::token_background(HeatLevel::Hot), None)
+        );
+        assert_eq!(
+            token_span_style(&line, 2, 2, Some(Duration::from_secs(60))),
+            (surface::token_background(HeatLevel::Warm), None),
+            "age decays hot to warm before the mapping runs"
+        );
+        assert_eq!(token_span_style(&line, 7, 2, None), (None, None));
+        assert_eq!(token_span_style(&line, 20, 4, None), (None, None));
+    }
+
+    #[test]
+    fn flash_and_flare_hex_anchor_at_both_ends() {
+        assert_eq!(flash_hex(None, 1.0), 0xffffffff);
+        assert_eq!(flash_hex(None, 0.0), 0xffffff00);
+        assert_eq!(flash_hex(Some(0x000000), 1.0), 0xffffffff);
+        assert_eq!(flash_hex(Some(0x000000), 0.0), 0x000000ff);
+        assert_eq!(flare_hex(None, 0.0), surface::TOKEN_MORPH_FLARE << 8);
+        assert_eq!(
+            flare_hex(Some(0x000000), 1.0),
+            (surface::TOKEN_MORPH_FLARE << 8) | 0xff
+        );
+    }
+
+    #[test]
+    fn mix_hex_interpolates_each_channel() {
+        assert_eq!(mix_hex(0x000000, 0xffffff, 0.5), 0x808080);
+        assert_eq!(mix_hex(0x112233, 0x112233, 0.75), 0x112233);
+        assert_eq!(mix_hex(0xff0000, 0x0000ff, 1.0), 0x0000ff);
+        assert_eq!(mix_hex(0xff0000, 0x0000ff, 0.0), 0xff0000);
     }
 }
