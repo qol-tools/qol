@@ -179,6 +179,7 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
   }
 
   let watcherChild: ReturnType<typeof spawn> | null = null;
+  let stdoutBuffer = "";
 
   async function startWatcher(ctx) {
     if (watcherChild !== null && watcherChild.exitCode == null) return;
@@ -193,7 +194,10 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
       });
       watcherChild = child;
       child.stdout.on("data", (chunk) => {
-        for (const line of chunk.toString().split("\n")) {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";
+        for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
           let event;
@@ -464,6 +468,22 @@ mod tests {
         assert!(WATCH_GLUE.contains("watcherChild.kill(\"SIGTERM\")"));
         assert!(WATCH_GLUE.contains("detached: true"));
         assert!(WATCH_GLUE.contains("stdio: [\"ignore\", \"pipe\", \"pipe\"]"));
+    }
+
+    #[test]
+    fn pi_adapter_buffers_fragmented_watcher_stdout_lines() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("let stdoutBuffer = \"\";"));
+        assert!(source.contains("stdoutBuffer += chunk.toString();"));
+        assert!(source.contains("const lines = stdoutBuffer.split(\"\\n\");"));
+        assert!(source.contains("stdoutBuffer = lines.pop() ?? \"\";"));
+        assert!(WATCH_GLUE.contains("for (const line of lines)"));
+        assert!(WATCH_GLUE.contains("const trimmed = line.trim();"));
+        assert!(WATCH_GLUE.contains("JSON.parse(trimmed)"));
+        assert!(WATCH_GLUE.contains("typeof event?.event !== \"string\""));
+        assert!(WATCH_GLUE.contains(
+            "pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })"
+        ));
     }
 
     #[test]
