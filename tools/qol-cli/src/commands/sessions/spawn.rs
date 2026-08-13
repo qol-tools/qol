@@ -29,6 +29,7 @@ pub(super) struct SpawnOutcome {
     pub(super) reused: bool,
     pub(super) cwd: String,
     pub(super) surface: String,
+    pub(super) model: Option<String>,
     pub(super) elapsed_ms: u128,
 }
 
@@ -68,6 +69,7 @@ fn resolve_surface(flag: Option<&str>, config: Option<SpawnSurface>) -> Result<S
 #[derive(serde::Deserialize)]
 struct SpawnConfigFile {
     spawn_surface: Option<String>,
+    spawn_model: Option<String>,
 }
 
 pub(super) fn config_surface() -> Result<Option<SpawnSurface>> {
@@ -95,6 +97,45 @@ fn config_surface_at(path: &Path) -> Result<Option<SpawnSurface>> {
         )
     })?;
     Ok(Some(surface))
+}
+
+pub(super) fn config_spawn_model() -> Result<Option<String>> {
+    let Some(config_dir) = qol_config::config_dir() else {
+        return Ok(None);
+    };
+    config_spawn_model_at(&config_dir.join("sessions.toml"))
+}
+
+fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
+    let encoded = match fs::read_to_string(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to read spawn model config"),
+    };
+    let config: SpawnConfigFile =
+        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(config.spawn_model)
+}
+
+fn resolve_model_with(flag: Option<&str>, config: Option<String>) -> Result<Option<String>> {
+    Ok(match flag {
+        Some(model) => Some(model.to_owned()),
+        None => config,
+    })
+}
+
+pub(super) fn resolve_model(flag: Option<&str>) -> Result<Option<String>> {
+    resolve_model_with(flag, config_spawn_model()?)
+}
+
+fn model_args(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
+    let flag = match tool.as_str() {
+        "pi" | "codex" | "claude" | "kimi" => "--model",
+        other => bail!(
+            "tool `{other}` has no model override flag; launch it directly with the model instead"
+        ),
+    };
+    Ok(vec![flag.to_owned(), model.to_owned()])
 }
 
 pub(super) struct SpawnLocks {
@@ -208,14 +249,16 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 }
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
-    let (tool, cwd, key, surface) = parse_args(args)?;
+    let parsed = parse_args(args)?;
+    let model = resolve_model(parsed.model.as_deref())?;
     let outcome = spawn_or_reuse(
         &TerminalSessionService::system(),
         &CliSessionInterpreter::system(),
-        &tool,
-        &cwd,
-        key.as_deref(),
-        surface.as_deref(),
+        &parsed.tool,
+        &parsed.cwd,
+        parsed.key.as_deref(),
+        parsed.surface.as_deref(),
+        model.as_deref(),
         config_surface()?,
         &SpawnLocks::system()?,
     )?;
@@ -226,12 +269,21 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_args(args: &[OsString]) -> Result<(String, String, Option<String>, Option<String>)> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]";
+struct SpawnArgs {
+    tool: String,
+    cwd: String,
+    key: Option<String>,
+    surface: Option<String>,
+    model: Option<String>,
+}
+
+fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
     let mut surface = None;
+    let mut model = None;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -254,12 +306,22 @@ fn parse_args(args: &[OsString]) -> Result<(String, String, Option<String>, Opti
                 surface = Some(flag_value(args, index, "--surface", usage)?);
                 index += 2;
             }
+            "--model" => {
+                model = Some(flag_value(args, index, "--model", usage)?);
+                index += 2;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
     let tool = tool.ok_or_else(|| anyhow!("usage: {usage}"))?;
     let cwd = cwd.ok_or_else(|| anyhow!("usage: {usage}"))?;
-    Ok((tool, cwd, key, surface))
+    Ok(SpawnArgs {
+        tool,
+        cwd,
+        key,
+        surface,
+        model,
+    })
 }
 
 fn flag_value(args: &[OsString], index: usize, flag: &str, usage: &str) -> Result<String> {
@@ -281,6 +343,7 @@ pub(super) fn spawn_or_reuse(
     cwd: &str,
     key: Option<&str>,
     surface: Option<&str>,
+    model: Option<&str>,
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
 ) -> Result<SpawnOutcome> {
@@ -298,20 +361,24 @@ pub(super) fn spawn_or_reuse(
     let surface = resolve_surface(surface, config)?;
     let identity = SpawnIdentity {
         key: key.clone(),
-        tool: tool_id,
+        tool: tool_id.clone(),
         surface,
     };
     let _lock = locks.acquire(&key)?;
     let snapshot = terminals.snapshot().context("session discovery failed")?;
     match decide(interpreter, snapshot.sessions(), &identity) {
         SpawnDecision::Launch => {
+            let mut launch = launch;
+            if let Some(model) = model {
+                launch.args.extend(model_args(&tool_id, model)?);
+            }
             let request = SpawnRequest {
                 identity: identity.clone(),
                 launch,
                 cwd: canonicalize_cwd(cwd)?,
                 title: None,
             };
-            launch_ready(terminals, interpreter, &identity, &request)
+            launch_ready(terminals, interpreter, &identity, &request, model)
         }
         SpawnDecision::Reuse(facts) => {
             qol_runtime::probe!(
@@ -320,7 +387,7 @@ pub(super) fn spawn_or_reuse(
                 identity.key,
                 identity.tool
             );
-            outcome_from_facts(&facts, interpreter, true)
+            outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned))
         }
         SpawnDecision::Conflict(found) => {
             qol_runtime::probe!(
@@ -357,6 +424,7 @@ fn launch_ready(
     interpreter: &CliSessionInterpreter,
     identity: &SpawnIdentity,
     request: &SpawnRequest,
+    model: Option<&str>,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -364,10 +432,11 @@ fn launch_ready(
         .context("terminal backend refused the spawn request")?;
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
-        "event=launch key={} tool={} surface={}",
+        "event=launch key={} tool={} surface={} model={}",
         identity.key,
         identity.tool,
-        surface_token(identity.surface)
+        surface_token(identity.surface),
+        model.unwrap_or("default")
     );
     let facts = poll_ready(
         terminals,
@@ -376,7 +445,7 @@ fn launch_ready(
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
     )?;
-    let mut outcome = outcome_from_facts(&facts, interpreter, false)?;
+    let mut outcome = outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned))?;
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -454,6 +523,7 @@ fn outcome_from_facts(
     facts: &SessionFacts,
     interpreter: &CliSessionInterpreter,
     reused: bool,
+    model: Option<String>,
 ) -> Result<SpawnOutcome> {
     let binding = facts
         .binding()
@@ -469,6 +539,7 @@ fn outcome_from_facts(
         reused,
         cwd: facts.cwd.clone(),
         surface: surface_token(identity.surface).to_owned(),
+        model,
         elapsed_ms: 0,
     })
 }
@@ -707,12 +778,14 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_spawn(
         terminals: &TerminalSessionService,
         tool: &str,
         cwd: &str,
         key: Option<&str>,
         surface: Option<&str>,
+        model: Option<&str>,
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
     ) -> Result<SpawnOutcome> {
@@ -723,6 +796,7 @@ mod tests {
             cwd,
             key,
             surface,
+            model,
             config,
             locks,
         )
@@ -730,7 +804,7 @@ mod tests {
 
     #[test]
     fn spawn_args_parse_required_and_optional_flags() {
-        let (tool, cwd, key, surface) = parse_args(&[
+        let parsed = parse_args(&[
             "--tool".into(),
             "codex".into(),
             "--cwd".into(),
@@ -739,19 +813,75 @@ mod tests {
             "lane-1".into(),
             "--surface".into(),
             "os-window".into(),
+            "--model".into(),
+            "flash-x".into(),
         ])
         .unwrap();
-        assert_eq!(tool, "codex");
-        assert_eq!(cwd, "/work/project");
-        assert_eq!(key.as_deref(), Some("lane-1"));
-        assert_eq!(surface.as_deref(), Some("os-window"));
+        assert_eq!(parsed.tool, "codex");
+        assert_eq!(parsed.cwd, "/work/project");
+        assert_eq!(parsed.key.as_deref(), Some("lane-1"));
+        assert_eq!(parsed.surface.as_deref(), Some("os-window"));
+        assert_eq!(parsed.model.as_deref(), Some("flash-x"));
 
-        let (tool, cwd, key, surface) =
+        let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
-        assert_eq!(tool, "pi");
-        assert_eq!(cwd, "/tmp");
-        assert_eq!(key, None);
-        assert_eq!(surface, None);
+        assert_eq!(parsed.tool, "pi");
+        assert_eq!(parsed.cwd, "/tmp");
+        assert_eq!(parsed.key, None);
+        assert_eq!(parsed.surface, None);
+        assert_eq!(parsed.model, None);
+    }
+
+    #[test]
+    fn spawn_model_config_parses_and_missing_file_stays_absent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("sessions.toml");
+        assert_eq!(config_spawn_model_at(&path).unwrap(), None);
+
+        fs::write(&path, "spawn_model = \"flash-x\"\n").unwrap();
+        assert_eq!(
+            config_spawn_model_at(&path).unwrap().as_deref(),
+            Some("flash-x")
+        );
+
+        fs::write(
+            &path,
+            "spawn_surface = \"tab\"\nspawn_model = \"flash-y\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config_spawn_model_at(&path).unwrap().as_deref(),
+            Some("flash-y")
+        );
+    }
+
+    #[test]
+    fn model_resolution_prefers_the_explicit_override_over_config() {
+        assert_eq!(
+            resolve_model_with(Some("flash-x"), Some("flash-y".to_owned())).unwrap(),
+            Some("flash-x".to_owned())
+        );
+        assert_eq!(
+            resolve_model_with(None, Some("flash-y".to_owned())).unwrap(),
+            Some("flash-y".to_owned())
+        );
+        assert_eq!(resolve_model_with(None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn model_args_map_registered_tools_and_reject_unknown_tools() {
+        for tool in ["pi", "codex", "claude", "kimi"] {
+            let args = model_args(&CliToolId::new(tool).unwrap(), "flash-x").unwrap();
+            assert_eq!(
+                args,
+                vec!["--model".to_owned(), "flash-x".to_owned()],
+                "tool: {tool}"
+            );
+        }
+        let error = model_args(&CliToolId::new("generic").unwrap(), "flash-x")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no model override flag"), "{error}");
     }
 
     #[test]
@@ -862,6 +992,7 @@ mod tests {
                 Some("lane-1"),
                 None,
                 None,
+                None,
                 &locks(&root),
             )
             .unwrap_err()
@@ -888,6 +1019,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             None,
+            Some("flash-x"),
             None,
             &locks(&root),
         )
@@ -899,13 +1031,17 @@ mod tests {
         assert_eq!(outcome.key, "lane-1");
         assert_eq!(outcome.cwd, cwd);
         assert_eq!(outcome.surface, "tab");
+        assert_eq!(outcome.model.as_deref(), Some("flash-x"));
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
 
         let expected = identity("lane-1", "codex", SpawnSurface::Tab);
         let request = backend.last_request.lock().unwrap().clone().unwrap();
         assert_eq!(request.identity, expected);
         assert_eq!(request.launch.program, "codex");
-        assert!(request.launch.args.is_empty());
+        assert_eq!(
+            request.launch.args,
+            vec!["--model".to_owned(), "flash-x".to_owned()]
+        );
         assert_eq!(request.cwd, std::path::PathBuf::from(&cwd));
         assert_eq!(request.title, None);
     }
@@ -925,13 +1061,24 @@ mod tests {
             Some("mcp-key"),
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap();
         assert_eq!(outcome.key, "mcp-key");
 
         let (terminals, _) = harness(vec![vec![]]);
-        let outcome = run_spawn(&terminals, "pi", &cwd, None, None, None, &locks(&root)).unwrap();
+        let outcome = run_spawn(
+            &terminals,
+            "pi",
+            &cwd,
+            None,
+            None,
+            None,
+            None,
+            &locks(&root),
+        )
+        .unwrap();
         assert_eq!(outcome.key.len(), 20);
         assert!(SpawnKey::new(&outcome.key).is_ok());
     }
@@ -951,6 +1098,7 @@ mod tests {
             "missing-requested-dir",
             Some("lane-1"),
             Some("os-window"),
+            None,
             None,
             &locks(&root),
         )
@@ -978,6 +1126,7 @@ mod tests {
             Some("lane-1"),
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap_err()
@@ -997,6 +1146,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1019,6 +1169,7 @@ mod tests {
             "codex",
             "/work",
             Some("lane-1"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1231,6 +1382,7 @@ mod tests {
             Some("lane-1"),
             None,
             None,
+            None,
             &locks(&root),
         )
         .unwrap_err()
@@ -1241,6 +1393,7 @@ mod tests {
             "codex",
             cwd.join("file").to_str().unwrap(),
             Some("lane-2"),
+            None,
             None,
             None,
             &locks(&root),
@@ -1265,6 +1418,7 @@ mod tests {
             &cwd,
             Some("lane-1"),
             Some("os-window"),
+            None,
             None,
             &locks(&root),
         )
@@ -1292,6 +1446,7 @@ mod tests {
             Some("lane-1"),
             None,
             None,
+            None,
             &locks,
         )
         .unwrap_err()
@@ -1308,6 +1463,7 @@ mod tests {
             "codex",
             &cwd,
             Some("lane-1"),
+            None,
             None,
             None,
             &locks,

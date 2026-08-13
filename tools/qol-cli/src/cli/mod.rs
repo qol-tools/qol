@@ -262,7 +262,7 @@ mod tests {
         let execution = contract_execution(&args).unwrap().unwrap();
         assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
         assert!(execution.stdout.contains(
-            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]"
+            "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
         assert!(execution
             .stdout

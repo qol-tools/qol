@@ -218,8 +218,8 @@ fn app() -> HeadlessApp {
             .subcommand(command(
                 "spawn",
                 "Launch a tagged tool session or reuse its live match.",
-                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window]",
-                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, and surface. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab.",
+                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]",
+                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, surface, and model. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab; an explicit --model overrides the spawned session's model, with spawn_model in the same file as the fallback.",
                 "Spawn JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on orchestration, identity, capability, or readiness failure.",
             ))
