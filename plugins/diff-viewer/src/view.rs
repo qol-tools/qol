@@ -18,6 +18,7 @@ use gpui::{
 use qol_cache::TtlCache;
 use qol_diff::token_path::{token_edit_path, TokenEdit, TokenFate};
 use qol_diff::transition::{NewLineFate, OldLineFate, TransitionPlan};
+use qol_diff::waveform::waveform;
 use qol_diff::{DiffError, FileDiff, HeatLevel, LineChange, LineKind, TokenKind};
 use qol_gpui::placement::Corner;
 use qol_gpui::scroll_list::ScrollList;
@@ -29,6 +30,7 @@ use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
 use crate::scrubber::{Commit as ScrubCommit, ScrubberView};
 use crate::surface::{self, CodeSurface, LineStyle};
+use crate::wave::{self, WaveMorph};
 
 pub const WINDOW_WIDTH: f32 = 960.0;
 pub const WINDOW_HEIGHT: f32 = 640.0;
@@ -160,6 +162,7 @@ enum DiffPane {
 enum Layout {
     Unified,
     Split,
+    Wave,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +217,7 @@ pub struct DiffView {
     side_gutters: Vec<(String, String)>,
     last_markers_diff: Option<Arc<FileDiff>>,
     last_markers_layout: Layout,
+    wave_folded: bool,
     font_family: SharedString,
     focus_handle: FocusHandle,
     scrubber_view: Entity<ScrubberView>,
@@ -286,6 +290,7 @@ impl DiffView {
             side_gutters: Vec::new(),
             last_markers_diff: None,
             last_markers_layout: Layout::Split,
+            wave_folded: false,
             font_family: pick_monospace(cx),
             focus_handle: cx.focus_handle(),
             scrubber_view,
@@ -768,11 +773,18 @@ impl DiffView {
             (ActivePane::Code, "s") => {
                 self.layout = match self.layout {
                     Layout::Unified => Layout::Split,
-                    Layout::Split => Layout::Unified,
+                    Layout::Split => Layout::Wave,
+                    Layout::Wave => Layout::Unified,
                 };
+                self.wave_folded = false;
                 let max = self.row_count().saturating_sub(self.last_fit.max(1));
                 self.surface
                     .set_scroll_offset(self.surface.scroll_offset().min(max));
+            }
+            (ActivePane::Code, "t") if self.layout == Layout::Wave => {
+                self.wave_folded = !self.wave_folded;
+                let lines = self.lines.clone();
+                self.begin_transition(&lines);
             }
             (ActivePane::Code, "pagedown") | (ActivePane::Code, "page_down") => {
                 self.scroll_lines(page as isize)
@@ -815,6 +827,13 @@ impl DiffView {
     }
 
     fn scroll_lines(&mut self, delta: isize) {
+        if self.layout == Layout::Wave && !self.wave_folded {
+            let max = self.row_count().saturating_sub(1);
+            let target = self.surface.scroll_offset() as isize + delta;
+            self.surface
+                .set_scroll_offset(target.clamp(0, max as isize) as usize);
+            return;
+        }
         let max = self.row_count().saturating_sub(self.last_fit.max(1));
         let target = self.surface.scroll_offset() as isize + delta;
         self.surface
@@ -825,6 +844,7 @@ impl DiffView {
         match self.layout {
             Layout::Unified => self.lines.len(),
             Layout::Split => self.pairs.len(),
+            Layout::Wave => self.lines.len(),
         }
     }
 
@@ -951,8 +971,56 @@ impl DiffView {
                         .children(self.code_rows(&text_style, age))
                         .children(self.unified_ghosts(&text_style, age))
                         .into_any_element(),
+                    Layout::Wave if self.wave_folded => pane
+                        .children(self.code_rows(&text_style, age))
+                        .children(self.unified_ghosts(&text_style, age))
+                        .into_any_element(),
+                    Layout::Wave => pane.child(self.wave_pane(age)).into_any_element(),
                 }
             }
+        }
+    }
+
+    fn wave_pane(&self, age: Option<Duration>) -> AnyElement {
+        let heats: Vec<HeatLevel> = self
+            .lines
+            .iter()
+            .map(|line| decayed_line_style(surface::style_from_line(line), age).background_heat)
+            .collect();
+        let points = Rc::new(waveform(&self.lines, &heats));
+        let playhead = self
+            .surface
+            .scroll_offset()
+            .min(self.lines.len().saturating_sub(1));
+        match self.active_transition() {
+            Some(transition) => {
+                let old_heats: Vec<HeatLevel> = transition
+                    .old_lines
+                    .iter()
+                    .map(|line| surface::style_from_line(line).background_heat)
+                    .collect();
+                let old_points = Rc::new(waveform(&transition.old_lines, &old_heats));
+                let morph = Rc::new(WaveMorph {
+                    old_points,
+                    plan: Rc::new(transition.plan.clone()),
+                });
+                let seq = transition.seq;
+                wave::wave_element(points.clone(), Some(Rc::clone(&morph)), playhead, 1.0)
+                    .with_animation(
+                        ElementId::named_usize(format!("dw-wave-{seq}"), 0),
+                        Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+                        move |_canvas, delta| {
+                            wave::wave_element(
+                                points.clone(),
+                                Some(Rc::clone(&morph)),
+                                playhead,
+                                delta,
+                            )
+                        },
+                    )
+                    .into_any_element()
+            }
+            None => wave::wave_element(points, None, playhead, 1.0).into_any_element(),
         }
     }
 
@@ -1610,7 +1678,7 @@ impl DiffView {
             let markers = match &self.pane {
                 DiffPane::Ready(diff) => {
                     let starts = match self.layout {
-                        Layout::Unified => &self.hunk_line_starts,
+                        Layout::Unified | Layout::Wave => &self.hunk_line_starts,
                         Layout::Split => &self.hunk_pair_starts,
                     };
                     let total = self.row_count();

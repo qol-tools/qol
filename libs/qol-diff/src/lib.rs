@@ -6,6 +6,7 @@ pub mod engine;
 pub mod lexer;
 pub mod token_path;
 pub mod transition;
+pub mod waveform;
 
 pub const HOT_TO_WARM_AFTER: Duration = Duration::from_secs(60);
 pub const WARM_TO_COOL_AFTER: Duration = Duration::from_secs(300);
