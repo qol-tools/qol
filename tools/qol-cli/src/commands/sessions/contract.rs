@@ -124,6 +124,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Bounded first-round task delivered at spawn time; the round is open when the call returns and session_bridge (no task) waits for it",
                     },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Fire-and-forget launch: embed the first task in the launch command, queue the pending round at spawn time, and return without waiting for the live UI (requires task); the pi extension wakes the initiator when a watcher detects the round",
+                    },
                 },
                 "required": ["tool", "cwd", "key"],
             }),
@@ -255,6 +259,27 @@ mod tests {
                 "session_loop_close",
                 "session_close"
             ]
+        );
+    }
+
+    #[test]
+    fn session_spawn_schema_declares_the_background_flag_as_optional_boolean() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .unwrap();
+        assert_eq!(
+            spec.input_schema["properties"]["background"]["type"],
+            "boolean"
+        );
+        assert!(
+            !spec.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "background"),
+            "background must default to false when omitted"
         );
     }
 

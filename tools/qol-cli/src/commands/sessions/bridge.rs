@@ -363,14 +363,14 @@ fn older_than(path: &Path, age: Duration) -> bool {
         .is_ok_and(|modified| modified.elapsed().is_ok_and(|elapsed| elapsed >= age))
 }
 
-struct CompletionMarker {
-    token: String,
+pub(super) struct CompletionMarker {
+    pub(super) token: String,
     left: String,
     right: String,
 }
 
 impl CompletionMarker {
-    fn generate() -> Self {
+    pub(super) fn generate() -> Self {
         let elapsed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -385,7 +385,7 @@ impl CompletionMarker {
         Self::from_nonce(&nonce[..20])
     }
 
-    fn from_nonce(nonce: &str) -> Self {
+    pub(super) fn from_nonce(nonce: &str) -> Self {
         Self {
             token: format!("QOL_BRIDGE_DONE_{nonce}"),
             left: "QOL_BRIDGE_DONE_".to_owned(),
@@ -797,7 +797,7 @@ pub(super) fn session_liveness<'a>(
     }
 }
 
-fn driver_token(terminals: &TerminalSessionService) -> String {
+pub(super) fn driver_token(terminals: &TerminalSessionService) -> String {
     let Ok(sessions) = terminals.discover() else {
         return String::new();
     };
@@ -895,14 +895,14 @@ fn kickstart_prompt(marker: &CompletionMarker) -> String {
     )
 }
 
-fn bridge_prompt(task: &str, marker: &CompletionMarker) -> String {
+pub(super) fn bridge_prompt(task: &str, marker: &CompletionMarker) -> String {
     format!(
         "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
         marker.left, marker.right
     )
 }
 
-fn validate_task(task: &str) -> Result<()> {
+pub(super) fn validate_task(task: &str) -> Result<()> {
     if task.trim().is_empty() {
         bail!("bridge task must not be empty");
     }

@@ -17,13 +17,14 @@ mod export;
 mod last_send;
 mod mcp;
 mod spawn;
+mod watch;
 
 pub(crate) struct SessionSubcommand {
     pub(crate) name: &'static str,
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 15] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 16] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -75,6 +76,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 15] = [
     SessionSubcommand {
         name: "focus",
         run: |rest, _format| focus(rest),
+    },
+    SessionSubcommand {
+        name: "watch",
+        run: |rest, _format| watch::run(rest),
     },
     SessionSubcommand {
         name: "mcp",
@@ -132,6 +137,7 @@ Diagnostics:
   qol sessions read <session>
   qol sessions wait <session> [--timeout-ms N] [--expect TEXT]
   qol sessions focus <session>
+  qol sessions watch [TOKEN...]
   qol sessions mcp
   qol sessions export [pi]
   qol sessions help
@@ -191,6 +197,12 @@ Details:
   close terminates a spawned implementation session's terminal after its
   feature loop is closed. It refuses the calling terminal, sessions without
   a spawn identity, and sessions with an open loop.
+  watch is long-running infrastructure for event-driven lane wakeup: it
+  polls each watched round's screen for its completion marker, prints one
+  JSON line per event (completed, gone, stalled), and exits 0 when no
+  watched rounds remain pending. With no tokens it watches every pending
+  round in the checkpoint store and takes a spawn lock so two watchers do
+  not double-poll; explicit tokens need no lock. It is not an agent tool.
   The MCP and generated agent surfaces expose sessions_list, session_spawn,
   session_bridge, session_loop_close, and session_close. The remaining
   commands are human diagnostics.

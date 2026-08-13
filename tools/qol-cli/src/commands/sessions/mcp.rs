@@ -238,6 +238,15 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `task` must be a string".to_owned())
             })
             .transpose()?;
+        let background = arguments
+            .get("background")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_spawn `background` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         let model =
             super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
                 .map_err(|error| error.to_string())?;
@@ -252,19 +261,11 @@ impl McpSessionServer {
             title.as_deref(),
             self.spawn_surface,
             &self.locks,
+            background,
+            task.as_deref(),
+            &self.pending,
         )
         .map_err(|error| error.to_string())?;
-        let outcome = match task {
-            Some(task) => super::spawn::deliver_task(
-                self.terminals.as_ref(),
-                &self.interpreter,
-                outcome,
-                &task,
-                &self.pending,
-            )
-            .map_err(|error| error.to_string())?,
-            None => outcome,
-        };
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
@@ -1588,6 +1589,127 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--model"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn background_spawn_queues_the_round_without_pasting_and_reuse_stays_unchanged() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], false, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-bg", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement the fix");
+        arguments["background"] = json!(true);
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["background"], true);
+        assert_eq!(outcome["reused"], false);
+        assert_eq!(outcome["task_submitted"], true);
+        assert_eq!(outcome["session"], "v1:kitty:spawn-mcp-bg:200");
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            0,
+            "background embeds the task in the launch instead of pasting it"
+        );
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "pi");
+        assert!(launch.args.last().unwrap().contains("[qol session bridge]"));
+        assert!(launch.args.last().unwrap().contains("implement the fix"));
+
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(round.completion_marker, marker);
+        assert!(!round.completed);
+
+        let second = tool_call(
+            &server,
+            "session_spawn",
+            json!({
+                "tool": "pi",
+                "cwd": cwd,
+                "key": "mcp-bg",
+                "model": "flash-x",
+                "task": "second round",
+                "background": true,
+            }),
+        );
+        assert_eq!(second["result"]["isError"], true);
+        assert!(second["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already pending"));
+        assert_eq!(backend.sent.lock().unwrap().len(), 0);
+
+        server
+            .pending
+            .acknowledge(&binding, &marker, false)
+            .unwrap();
+        let reused = tool_call(
+            &server,
+            "session_spawn",
+            json!({
+                "tool": "pi",
+                "cwd": cwd,
+                "key": "mcp-bg",
+                "model": "flash-x",
+                "task": "second round",
+                "background": true,
+            }),
+        );
+        assert_eq!(reused["result"]["isError"], false);
+        let reused_outcome: Value =
+            serde_json::from_str(reused["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(reused_outcome["reused"], true);
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            1,
+            "the reuse path keeps foreground delivery semantics"
+        );
+    }
+
+    #[test]
+    fn background_spawn_rejects_non_boolean_flags_and_missing_tasks() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut bad_flag = spawn_arguments("pi", "mcp-bg", None, &cwd);
+        bad_flag["model"] = json!("flash-x");
+        bad_flag["background"] = json!("yes");
+        let response = tool_call(&server, "session_spawn", bad_flag);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("background` must be a boolean"));
+
+        let mut no_task = spawn_arguments("pi", "mcp-bg", None, &cwd);
+        no_task["model"] = json!("flash-x");
+        no_task["background"] = json!(true);
+        let response = tool_call(&server, "session_spawn", no_task);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--task"));
         assert_eq!(
             backend
                 .spawn_count

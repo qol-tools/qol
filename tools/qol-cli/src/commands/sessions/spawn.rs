@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
     SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
@@ -37,6 +37,12 @@ pub(super) struct SpawnOutcome {
     pub(super) screen: Option<String>,
     pub(super) next_command: Option<String>,
     pub(super) elapsed_ms: u128,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) background: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -294,7 +300,7 @@ fn run_with(
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
 ) -> Result<SpawnOutcome> {
-    let outcome = spawn_or_reuse(
+    spawn_or_reuse(
         terminals,
         &CliSessionInterpreter::system(),
         &parsed.tool,
@@ -305,17 +311,10 @@ fn run_with(
         parsed.title.as_deref(),
         config,
         locks,
-    )?;
-    if let Some(task) = parsed.task.as_deref() {
-        Ok(submit_first_round(
-            terminals,
-            &CliSessionInterpreter::system(),
-            outcome,
-            task,
-        )?)
-    } else {
-        Ok(outcome)
-    }
+        parsed.background,
+        parsed.task.as_deref(),
+        &super::bridge::PendingBridgeStore::system()?,
+    )
 }
 
 pub(super) fn deliver_task(
@@ -336,21 +335,6 @@ pub(super) fn deliver_task(
     outcome.screen = Some(submitted.screen);
     outcome.next_command = Some(submitted.next_command);
     Ok(outcome)
-}
-
-fn submit_first_round(
-    terminals: &TerminalSessionService,
-    interpreter: &CliSessionInterpreter,
-    outcome: SpawnOutcome,
-    task: &str,
-) -> Result<SpawnOutcome> {
-    deliver_task(
-        terminals,
-        interpreter,
-        outcome,
-        task,
-        &super::bridge::PendingBridgeStore::system()?,
-    )
 }
 
 fn wait_until_live(
@@ -394,10 +378,11 @@ struct SpawnArgs {
     model: Option<String>,
     title: Option<String>,
     task: Option<String>,
+    background: bool,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK]\n--model is required when launching a new session; the reuse path needs no model";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -405,6 +390,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut model = None;
     let mut title = None;
     let mut task = None;
+    let mut background = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -439,6 +425,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 task = Some(flag_value(args, index, "--task", usage)?);
                 index += 2;
             }
+            "--background" => {
+                background = true;
+                index += 1;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -452,6 +442,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         model,
         title,
         task,
+        background,
     })
 }
 
@@ -466,19 +457,22 @@ fn flag_value(args: &[OsString], index: usize, flag: &str, usage: &str) -> Resul
     Ok(value.to_owned())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_or_reuse(
-    terminals: &TerminalSessionService,
+struct SpawnContext {
+    tool_id: CliToolId,
+    launch: CliLaunchProgram,
+    key: SpawnKey,
+    identity: SpawnIdentity,
+    title: String,
+}
+
+fn prepare_spawn(
     interpreter: &CliSessionInterpreter,
     tool: &str,
-    cwd: &str,
     key: Option<&str>,
     surface: Option<&str>,
-    model: Option<&str>,
     title: Option<&str>,
     config: Option<SpawnSurface>,
-    locks: &SpawnLocks,
-) -> Result<SpawnOutcome> {
+) -> Result<SpawnContext> {
     let tool_id = CliToolId::new(tool.to_owned())
         .map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
     let launch = interpreter.launch_for(&tool_id).ok_or_else(|| {
@@ -491,72 +485,213 @@ pub(super) fn spawn_or_reuse(
             .map_err(|error| anyhow!("generated spawn key is invalid: {error}"))?,
     };
     let surface = resolve_surface(surface, config)?;
-    let key_string = key.to_string();
-    let title = title.unwrap_or(&key_string);
+    let title = title.unwrap_or(&key.to_string()).to_owned();
     let identity = SpawnIdentity {
         key: key.clone(),
         tool: tool_id.clone(),
         surface,
     };
-    let _guard = locks.acquire(&key)?;
+    Ok(SpawnContext {
+        tool_id,
+        launch,
+        key,
+        identity,
+        title,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_or_reuse(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    tool: &str,
+    cwd: &str,
+    key: Option<&str>,
+    surface: Option<&str>,
+    model: Option<&str>,
+    title: Option<&str>,
+    config: Option<SpawnSurface>,
+    locks: &SpawnLocks,
+    background: bool,
+    task: Option<&str>,
+    pending: &super::bridge::PendingBridgeStore,
+) -> Result<SpawnOutcome> {
+    if background && task.is_none() {
+        bail!(
+            "background spawn requires --task so the first round is queued at launch; the reuse path takes no --background"
+        );
+    }
+    let prepared = prepare_spawn(interpreter, tool, key, surface, title, config)?;
+    let _guard = locks.acquire(&prepared.key)?;
     let result = (|| {
         let snapshot = terminals.snapshot().context("session discovery failed")?;
-        match decide(interpreter, snapshot.sessions(), &identity) {
+        match decide(interpreter, snapshot.sessions(), &prepared.identity) {
             SpawnDecision::Launch => {
                 require_model_for_launch(model)?;
-                let mut launch = launch;
+                let mut launch = prepared.launch.clone();
                 if let Some(model) = model {
-                    launch.args.extend(model_args(&tool_id, model)?);
+                    launch.args.extend(model_args(&prepared.tool_id, model)?);
                 }
-                let request = SpawnRequest {
-                    identity: identity.clone(),
-                    launch,
-                    cwd: canonicalize_cwd(cwd)?,
-                    title: Some(title.to_owned()),
-                };
-                launch_ready(terminals, interpreter, &identity, &request, model, title)
+                if background {
+                    let round_task =
+                        task.expect("the background guard above guarantees a task");
+                    super::bridge::validate_task(round_task)?;
+                    let marker = super::bridge::CompletionMarker::generate();
+                    launch.args.push(super::bridge::bridge_prompt(round_task, &marker));
+                    let request = SpawnRequest {
+                        identity: prepared.identity.clone(),
+                        launch,
+                        cwd: canonicalize_cwd(cwd)?,
+                        title: Some(prepared.title.clone()),
+                    };
+                    launch_background(
+                        terminals,
+                        interpreter,
+                        pending,
+                        &prepared.identity,
+                        &request,
+                        &marker.token,
+                        model,
+                        &prepared.title,
+                    )
+                } else {
+                    let request = SpawnRequest {
+                        identity: prepared.identity.clone(),
+                        launch,
+                        cwd: canonicalize_cwd(cwd)?,
+                        title: Some(prepared.title.clone()),
+                    };
+                    let outcome = launch_ready(
+                        terminals,
+                        interpreter,
+                        &prepared.identity,
+                        &request,
+                        model,
+                        &prepared.title,
+                    )?;
+                    match task {
+                        Some(round_task) => {
+                            deliver_task(terminals, interpreter, outcome, round_task, pending)
+                        }
+                        None => Ok(outcome),
+                    }
+                }
             }
             SpawnDecision::Reuse(facts) => {
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=reuse key={} tool={}",
-                    identity.key,
-                    identity.tool
+                    prepared.identity.key,
+                    prepared.identity.tool
                 );
-                outcome_from_facts(&facts, interpreter, true, model.map(str::to_owned), title)
+                let outcome = outcome_from_facts(
+                    &facts,
+                    interpreter,
+                    true,
+                    model.map(str::to_owned),
+                    &prepared.title,
+                )?;
+                match task {
+                    Some(round_task) => {
+                        deliver_task(terminals, interpreter, outcome, round_task, pending)
+                    }
+                    None => Ok(outcome),
+                }
             }
             SpawnDecision::Conflict(found) => {
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=conflict key={} requested_tool={} found_tool={}",
-                    identity.key,
-                    identity.tool,
+                    prepared.identity.key,
+                    prepared.identity.tool,
                     found
                 );
                 bail!(
-                    "spawn key `{key}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key"
+                    "spawn key `{}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key",
+                    prepared.key
                 )
             }
             SpawnDecision::WrongHarness { described } => bail!(
-                "spawn key `{key}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
-                identity.tool
+                "spawn key `{}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
+                prepared.key, prepared.identity.tool
             ),
             SpawnDecision::Ambiguous(count) => {
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=ambiguous key={} matches={}",
-                    identity.key,
+                    prepared.identity.key,
                     count
                 );
                 bail!(
-                    "spawn key `{key}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key"
+                    "spawn key `{}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key",
+                    prepared.key
                 )
             }
         }
     })();
     drop(_guard);
-    locks.remove(&key);
+    locks.remove(&prepared.key);
     result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_background(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    pending: &super::bridge::PendingBridgeStore,
+    identity: &SpawnIdentity,
+    request: &SpawnRequest,
+    marker: &str,
+    model: Option<&str>,
+    title: &str,
+) -> Result<SpawnOutcome> {
+    let started = Instant::now();
+    let session_id = terminals
+        .spawn_on(qol_terminal_sessions::kitty::backend_id(), request)
+        .context("terminal backend refused the spawn request")?;
+    qol_runtime::probe!(
+        "CLI_SESSION_SPAWN",
+        "event=background key={} tool={} surface={} model={}",
+        identity.key,
+        identity.tool,
+        surface_token(identity.surface),
+        model.unwrap_or("default")
+    );
+    let facts = terminals
+        .discover()
+        .context("spawn discovery failed")?
+        .into_iter()
+        .find(|facts| facts.id == session_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "spawned session `{session_id}` was not discoverable right after launch; the lane may have exited before tagging - rerun with the same key"
+            )
+        })?;
+    if facts.spawn_identity.as_ref() != Some(identity) {
+        bail!(
+            "spawned session `{session_id}` appeared with a different spawn identity than requested (key `{}`, tool `{}`); refusing to queue a round for it",
+            identity.key, identity.tool
+        );
+    }
+    let binding = facts
+        .binding()
+        .context("spawned session cannot bind to a stable token")?;
+    pending.start(&binding, marker, &super::bridge::driver_token(terminals))?;
+    let mut outcome =
+        outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
+    outcome.background = true;
+    outcome.task_submitted = Some(true);
+    outcome.completion_marker = Some(marker.to_owned());
+    outcome.next_command = Some(format!("qol sessions next {}", binding.token()));
+    outcome.elapsed_ms = started.elapsed().as_millis();
+    qol_runtime::probe!(
+        "CLI_SESSION_SPAWN",
+        "event=queued key={} tool={} elapsed_ms={}",
+        identity.key,
+        identity.tool,
+        outcome.elapsed_ms
+    );
+    Ok(outcome)
 }
 
 fn launch_ready(
@@ -689,6 +824,7 @@ fn outcome_from_facts(
         screen: None,
         next_command: None,
         elapsed_ms: 0,
+        background: false,
     })
 }
 
@@ -938,6 +1074,28 @@ mod tests {
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
     ) -> Result<SpawnOutcome> {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        run_spawn_with(
+            terminals, tool, cwd, key, surface, model, title, config, locks, false, None, &pending,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_spawn_with(
+        terminals: &TerminalSessionService,
+        tool: &str,
+        cwd: &str,
+        key: Option<&str>,
+        surface: Option<&str>,
+        model: Option<&str>,
+        title: Option<&str>,
+        config: Option<SpawnSurface>,
+        locks: &SpawnLocks,
+        background: bool,
+        task: Option<&str>,
+        pending: &super::super::bridge::PendingBridgeStore,
+    ) -> Result<SpawnOutcome> {
         spawn_or_reuse(
             terminals,
             &CliSessionInterpreter::system(),
@@ -949,6 +1107,9 @@ mod tests {
             title,
             config,
             locks,
+            background,
+            task,
+            pending,
         )
     }
 
@@ -969,6 +1130,7 @@ mod tests {
             "Lane One".into(),
             "--task".into(),
             "implement the fix".into(),
+            "--background".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -978,6 +1140,7 @@ mod tests {
         assert_eq!(parsed.model.as_deref(), Some("flash-x"));
         assert_eq!(parsed.title.as_deref(), Some("Lane One"));
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
+        assert!(parsed.background);
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -988,6 +1151,7 @@ mod tests {
         assert_eq!(parsed.model, None);
         assert_eq!(parsed.title, None);
         assert_eq!(parsed.task, None);
+        assert!(!parsed.background);
     }
 
     #[test]
@@ -1100,6 +1264,135 @@ mod tests {
         .unwrap();
         assert!(reused.reused);
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn background_launch_embeds_the_task_queues_the_round_and_skips_the_liveness_wait() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.background);
+        assert!(!outcome.reused);
+        assert_eq!(outcome.session, "v1:kitty:spawn-lane-bg:10");
+        assert_eq!(outcome.task_submitted, Some(true));
+        assert_eq!(outcome.screen, None);
+        let marker = outcome.completion_marker.as_deref().unwrap();
+        assert!(marker.starts_with("QOL_BRIDGE_DONE_"));
+        assert_eq!(
+            outcome.next_command.as_deref(),
+            Some("qol sessions next v1:kitty:spawn-lane-bg:10")
+        );
+
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.launch.program, "pi");
+        assert_eq!(
+            request.launch.args[..2],
+            ["--model".to_owned(), "flash-x".to_owned()]
+        );
+        let prompt = &request.launch.args[2];
+        assert!(prompt.contains("[qol session bridge]"));
+        assert!(prompt.contains("implement the fix"));
+        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+        assert!(
+            !prompt.contains(marker),
+            "the launch prompt never joins the fragments"
+        );
+
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(round.completion_marker, marker);
+        assert!(!round.completed);
+
+        let foreground = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            foreground.contains("screen read failed while waiting for its live UI"),
+            "foreground still waits for the live UI: {foreground}"
+        );
+    }
+
+    #[test]
+    fn background_requires_a_task_and_never_bypasses_model_enforcement() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let no_task = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            true,
+            None,
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(no_task.contains("--task"), "{no_task}");
+
+        let no_model = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-bg"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            true,
+            Some("implement the fix"),
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(no_model.contains("--model"), "{no_model}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
     }
 
     #[test]
