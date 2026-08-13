@@ -89,19 +89,13 @@ pub fn resolve_repo(launch_cwd: &Path, env_repo: Option<&Path>) -> Option<PathBu
     for ancestor in launch_cwd.ancestors() {
         if ancestor.join(".git").exists() {
             let demo = ancestor.join("plugins/diff-viewer/demo");
-            if demo.join(".git").exists() && is_clean_worktree(ancestor) {
+            if demo.join(".git").exists() {
                 return Some(demo);
             }
             return Some(ancestor.to_path_buf());
         }
     }
     None
-}
-
-fn is_clean_worktree(repo: &Path) -> bool {
-    qol_git::status_porcelain(repo)
-        .map(|entries| entries.is_empty())
-        .unwrap_or(false)
 }
 
 pub fn send_refresh(git_tx: &mpsc::Sender<GitRequest>, generation: &AtomicU64) {
@@ -327,6 +321,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_tree_prefers_the_nested_demo_when_present() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let demo = manifest.join("demo");
+        if !demo.join(".git").exists() {
+            eprintln!("demo absent; nothing to assert");
+            return;
+        }
+        let resolved = resolve_repo(manifest, None);
+        assert_eq!(
+            resolved,
+            Some(demo),
+            "a clean root with a nested demo must resolve the demo"
+        );
+    }
+
+    #[test]
     fn watch_noise_filters_build_and_vcs_output() {
         assert!(is_watch_noise(Path::new("/repo/target/debug/plugin")),);
         assert!(is_watch_noise(Path::new("/repo/.git/index")));
@@ -421,8 +431,8 @@ mod tests {
         std::fs::write(dir.join("tracked.txt"), "dirty").expect("dirty the root");
         assert_eq!(
             resolve_repo(&launch, None),
-            Some(dir.clone()),
-            "a dirty root repo wins over the nested demo"
+            Some(demo),
+            "the nested demo wins even when the root tree is dirty"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
