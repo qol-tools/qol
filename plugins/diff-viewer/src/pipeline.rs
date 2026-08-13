@@ -437,13 +437,13 @@ mod tests {
         assert_eq!(resolve_repo(&launch, None), Some(demo.clone()));
         assert_eq!(
             resolve_repo(&launch, Some(&dir)),
-            Some(demo),
+            Some(demo.clone()),
             "a valid env repo still yields its nested demo"
         );
         std::fs::write(dir.join("tracked.txt"), "dirty").expect("dirty the root");
         assert_eq!(
             resolve_repo(&launch, None),
-            Some(demo),
+            Some(demo.clone()),
             "the nested demo wins even when the root tree is dirty"
         );
         let _ = std::fs::remove_dir_all(&dir);
