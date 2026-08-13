@@ -1853,7 +1853,7 @@ mod tests {
     #[test]
     fn gate_step_reports_pass_and_fail_from_the_exit_status() {
         let cwd = std::env::temp_dir();
-        let pass = run_gate_step("/bin/true", &cwd);
+        let pass = run_gate_step("true", &cwd);
         assert!(
             pass.passed,
             "{}",
@@ -1861,7 +1861,7 @@ mod tests {
         );
         assert!(pass.reason.is_none());
 
-        let fail = run_gate_step("/bin/false", &cwd);
+        let fail = run_gate_step("false", &cwd);
         assert!(!fail.passed);
         assert_eq!(fail.reason.as_deref(), Some("exit code 1"));
         assert!(fail.elapsed < Duration::from_secs(30));

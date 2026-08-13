@@ -107,43 +107,15 @@ pub(super) fn watch(
     } else {
         None
     };
-    let result = (|| {
-        let mut watched = load_rounds(pending, tokens)?
-            .into_iter()
-            .map(WatchedRound::new)
-            .collect::<Result<Vec<_>>>()?;
-        let mut poll_interval = config.poll_base;
-        loop {
-            if watched.is_empty() {
-                return Ok(());
-            }
-            reconcile(pending, &mut watched)?;
-            if watched.is_empty() {
-                return Ok(());
-            }
-            let mut changed = false;
-            let mut remaining = Vec::with_capacity(watched.len());
-            for mut round in watched {
-                let outcome = poll_round(terminals, pending, &mut round, out, config)?;
-                changed |= outcome.changed;
-                if outcome.keep {
-                    remaining.push(round);
-                }
-            }
-            watched = remaining;
-            let sleep = if changed {
-                config.poll_base
-            } else {
-                poll_interval
-            };
-            poll_interval = if changed {
-                config.poll_base
-            } else {
-                next_poll_interval(poll_interval, config.poll_cap)
-            };
-            std::thread::sleep(sleep);
-        }
-    })();
+    let result = watch_loop(
+        terminals,
+        pending,
+        locks,
+        tokens,
+        out,
+        config,
+        &mut |duration| std::thread::sleep(duration),
+    );
     if let Some((key, guard)) = watch_lock {
         drop(guard);
         locks.remove(&key);
@@ -337,6 +309,52 @@ fn screen_tail(screen: &str) -> &str {
         start += 1;
     }
     &screen[start..]
+}
+
+fn watch_loop(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    _locks: &SpawnLocks,
+    tokens: &[String],
+    out: &mut dyn Write,
+    config: WatchConfig,
+    sleep: &mut dyn FnMut(Duration),
+) -> Result<()> {
+    let mut watched = load_rounds(pending, tokens)?
+        .into_iter()
+        .map(WatchedRound::new)
+        .collect::<Result<Vec<_>>>()?;
+    let mut poll_interval = config.poll_base;
+    loop {
+        if watched.is_empty() {
+            return Ok(());
+        }
+        reconcile(pending, &mut watched)?;
+        if watched.is_empty() {
+            return Ok(());
+        }
+        let mut changed = false;
+        let mut remaining = Vec::with_capacity(watched.len());
+        for mut round in watched {
+            let outcome = poll_round(terminals, pending, &mut round, out, config)?;
+            changed |= outcome.changed;
+            if outcome.keep {
+                remaining.push(round);
+            }
+        }
+        watched = remaining;
+        let sleep_for = if changed {
+            config.poll_base
+        } else {
+            poll_interval
+        };
+        poll_interval = if changed {
+            config.poll_base
+        } else {
+            next_poll_interval(poll_interval, config.poll_cap)
+        };
+        sleep(sleep_for);
+    }
 }
 
 fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
@@ -841,10 +859,11 @@ mod tests {
         .into_iter()
         .collect();
         let backend = FakeBackend::new(facts("7", 100), screens);
-        let (terminals, backend) = harness(backend);
+        let (terminals, _backend) = harness(backend);
         let mut out = Vec::new();
 
-        watch(
+        let mut requested = Vec::new();
+        watch_loop(
             &terminals,
             &pending,
             &locks(&root),
@@ -855,21 +874,23 @@ mod tests {
                 poll_cap: Duration::from_millis(120),
                 stall_after: Duration::from_secs(3600),
             },
+            &mut |duration| requested.push(duration),
         )
         .unwrap();
 
-        let calls = backend.calls.lock().unwrap();
-        let gaps = calls
-            .windows(2)
-            .map(|pair| pair[1].1 - pair[0].1)
-            .collect::<Vec<_>>();
-        assert!(gaps.len() >= 6);
-        assert!(gaps[1] >= gaps[0] * 2 / 3, "gaps: {gaps:?}");
-        assert!(gaps[2] >= gaps[1] * 2 / 3, "gaps: {gaps:?}");
-        assert!(gaps[3] >= gaps[2] * 2 / 3, "gaps: {gaps:?}");
-        assert!(gaps[4] >= gaps[3] * 2 / 3, "gaps: {gaps:?}");
-        assert!(gaps[5] <= gaps[2] * 2 / 3, "gaps: {gaps:?}");
-        assert!(gaps[5] <= gaps[0] * 3, "gaps: {gaps:?}");
+        assert_eq!(
+            requested,
+            vec![
+                Duration::from_millis(30),
+                Duration::from_millis(30),
+                Duration::from_millis(60),
+                Duration::from_millis(120),
+                Duration::from_millis(120),
+                Duration::from_millis(30),
+                Duration::from_millis(30),
+                Duration::from_millis(30),
+            ]
+        );
     }
 
     #[test]
