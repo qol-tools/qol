@@ -6,8 +6,8 @@ use gpui::{
     AnimationExt as _, AnyElement, BoxShadow, DefiniteLength, Div, ElementId, LinearColorStop,
 };
 
-use crate::rail::{self, RailSpec};
 use crate::scrubber::Commit;
+use crate::terrain::{self, TerrainSpec};
 use crate::view::{LINE_HEIGHT, TRANSITION_MS};
 
 pub const FIELD_TOP: u32 = 0x0a0d1a;
@@ -21,8 +21,7 @@ pub const ASH_START: u32 = AURORA_EMBER;
 pub const ASH_END: u32 = 0x2a2430;
 
 const CHROME_RESERVED_PX: f32 = 62.0;
-const HORIZON_FRACTION: f32 = 0.66;
-const HORIZON_FROM_BOTTOM: f32 = 1.0 - HORIZON_FRACTION;
+const STAR_GROUND_GAP_PX: f32 = 6.0;
 const AURORA_PERIOD_S: f32 = 2.5;
 const AURORA_BASE_PX: f32 = 56.0;
 const AURORA_SWING_MIN_PX: f32 = 18.0;
@@ -79,7 +78,7 @@ pub struct SceneState {
     pub phase_seconds: f32,
     pub ash: Option<AshSpec>,
     pub cone: Option<ConeSpec>,
-    pub rail: Option<Rc<RailSpec>>,
+    pub terrain: Option<Rc<TerrainSpec>>,
     pub bloom_rank: u8,
 }
 
@@ -113,13 +112,17 @@ pub fn scene(
     let aurora_height =
         AURORA_BASE_PX + (AURORA_SWING_MIN_PX + AURORA_SWING_SCALE_PX * scale) * breath;
     let aurora_opacity = AURORA_OPACITY_BASE + AURORA_OPACITY_SWING * breath;
+    let ground = state.pane_height * terrain::TERRAIN_HEIGHT_FRACTION;
     let mut scene = div().relative().size_full();
-    scene = scene.child(aurora(aurora_height, aurora_opacity));
+    scene = scene.child(aurora(aurora_height, aurora_opacity, ground));
     for index in 0..commits.len() {
-        scene = scene.child(star(commits, index, selected, phase));
+        scene = scene.child(star(commits, index, selected, phase, ground));
+    }
+    if let Some(spec) = state.terrain {
+        scene = scene.child(terrain_layer(spec, state.phase_seconds));
     }
     if !rows.is_empty() {
-        scene = scene.child(ribbon(rows, state.rail, bloom_alpha(state.bloom_rank)));
+        scene = scene.child(ribbon(rows, bloom_alpha(state.bloom_rank)));
     }
     if let Some(ash) = state.ash {
         scene = scene.child(ash_layer(&ash, state.pane_height));
@@ -130,12 +133,12 @@ pub fn scene(
     scene.into_any_element()
 }
 
-fn aurora(height: f32, opacity: f32) -> Div {
+fn aurora(height: f32, opacity: f32, ground: f32) -> Div {
     div()
         .absolute()
         .left(px(0.0))
         .right(px(0.0))
-        .bottom(fraction(HORIZON_FROM_BOTTOM))
+        .bottom(px(ground))
         .h(px(height))
         .rounded(px(AURORA_CORNER_PX))
         .bg(linear_gradient(
@@ -159,7 +162,7 @@ fn aurora(height: f32, opacity: f32) -> Div {
         )
 }
 
-fn star(commits: &[Commit], index: usize, selected: usize, phase: f32) -> Div {
+fn star(commits: &[Commit], index: usize, selected: usize, phase: f32, ground: f32) -> Div {
     let commit = &commits[index];
     let t = heat_t(index, commits.len());
     let brightness = magnitude_curve(commit.magnitude as f32);
@@ -169,7 +172,7 @@ fn star(commits: &[Commit], index: usize, selected: usize, phase: f32) -> Div {
     let mut slot = div()
         .absolute()
         .left(fraction(star_x(index, commits.len())))
-        .bottom(fraction(HORIZON_FROM_BOTTOM))
+        .bottom(px(ground + STAR_GROUND_GAP_PX))
         .w(px(STAR_SLOT_PX))
         .h(px(STAR_SLOT_PX))
         .flex()
@@ -210,46 +213,15 @@ fn corona_ring(offset: f32, size: f32, color: u32, alpha: f32) -> Div {
         .bg(rgba((color << 8) | alpha_byte(alpha)))
 }
 
-fn ribbon(rows: Vec<AnyElement>, rail: Option<Rc<RailSpec>>, bloom_alpha: u32) -> Div {
+fn ribbon(rows: Vec<AnyElement>, bloom_alpha: u32) -> Div {
     let row_count = rows.len();
-    let content = match rail {
-        Some(spec) => {
-            let element = rail::rail_element(Rc::clone(&spec), 1.0);
-            let element = if spec.morphing {
-                element
-                    .with_animation(
-                        ElementId::named_usize(format!("dw-rail-{}", spec.seq), 0),
-                        Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
-                        move |_, delta| rail::rail_element(Rc::clone(&spec), delta),
-                    )
-                    .into_any_element()
-            } else {
-                element.into_any_element()
-            };
-            div()
-                .flex()
-                .flex_row()
-                .size_full()
-                .overflow_hidden()
-                .child(element)
-                .child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .overflow_hidden()
-                        .children(rows),
-                )
-        }
-        None => div()
-            .relative()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .children(rows),
-    };
+    let content = div()
+        .relative()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .children(rows);
     let mut ribbon = div()
         .absolute()
         .top(fraction(RIBBON_TOP_FRACTION))
@@ -271,6 +243,30 @@ fn ribbon(rows: Vec<AnyElement>, rail: Option<Rc<RailSpec>>, bloom_alpha: u32) -
         );
     }
     ribbon.child(content)
+}
+
+fn terrain_layer(spec: Rc<TerrainSpec>, phase: f32) -> AnyElement {
+    let element = terrain::terrain_element(Rc::clone(&spec), 1.0, phase);
+    let element = if spec.morphing {
+        element
+            .with_animation(
+                ElementId::named_usize(format!("dw-terrain-{}", spec.seq), 0),
+                Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
+                move |_, delta| terrain::terrain_element(Rc::clone(&spec), delta, phase),
+            )
+            .into_any_element()
+    } else {
+        element.into_any_element()
+    };
+    div()
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .h(fraction(terrain::TERRAIN_HEIGHT_FRACTION))
+        .overflow_hidden()
+        .child(element)
+        .into_any_element()
 }
 
 fn ash_layer(spec: &AshSpec, pane_height: f32) -> Div {
@@ -598,7 +594,7 @@ mod tests {
                 phase_seconds: 0.0,
                 ash: None,
                 cone: None,
-                rail: None,
+                terrain: None,
                 bloom_rank: 0,
             },
         );
@@ -618,11 +614,10 @@ mod tests {
                     from: 0,
                     to: 2,
                 }),
-                rail: Some(Rc::new(RailSpec {
+                terrain: Some(Rc::new(TerrainSpec {
                     seq: 4,
                     morphing: true,
-                    scroll: 0,
-                    old_scroll: 0,
+                    rows: 40,
                     marks: Vec::new(),
                     deaths: Vec::new(),
                 })),
@@ -641,7 +636,7 @@ mod tests {
                     removed_rows: vec![0.0],
                 }),
                 cone: None,
-                rail: None,
+                terrain: None,
                 bloom_rank: 1,
             },
         );
@@ -652,5 +647,21 @@ mod tests {
         assert_eq!(bloom_alpha(0), 0, "all cool renders no bloom");
         assert_eq!(bloom_alpha(2), RIBBON_BLOOM_ALPHA);
         assert_eq!(bloom_alpha(1) * 2, bloom_alpha(2), "warm sits halfway");
+    }
+
+    #[test]
+    fn the_middle_region_holds_only_the_ribbon() {
+        let ribbon_bottom = RIBBON_TOP_FRACTION + RIBBON_HEIGHT_FRACTION;
+        let terrain_top = 1.0 - terrain::TERRAIN_HEIGHT_FRACTION;
+        assert!(
+            ribbon_bottom < terrain_top,
+            "the ribbon's full window ends above the terrain band"
+        );
+        let pane = pane_height(640.0);
+        let gap = pane * terrain_top - pane * ribbon_bottom;
+        assert!(
+            gap > 2.0 * LINE_HEIGHT,
+            "a full ribbon clears the terrain top by more than two rows"
+        );
     }
 }

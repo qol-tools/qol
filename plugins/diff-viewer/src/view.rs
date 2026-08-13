@@ -31,9 +31,9 @@ use qol_gpui::WindowBar;
 use crate::field::{self, AshSpec, ConeSpec, SceneState};
 use crate::overview::{HunkMarker, OverviewView};
 use crate::pipeline::{self, commit_range, Facts, GitRequest, GitResult};
-use crate::rail::{RailDeath, RailGeo, RailMark, RailSpec};
 use crate::scrubber::{arrow_delta, Commit as ScrubCommit, ScrubberView};
 use crate::surface::{self, CodeSurface, LineStyle};
+use crate::terrain::{TerrainDeath, TerrainGeo, TerrainMark, TerrainSpec};
 use crate::wave::{self, WaveMorph};
 
 pub const WINDOW_WIDTH: f32 = 960.0;
@@ -1114,7 +1114,7 @@ impl DiffView {
                 phase_seconds: phase,
                 ash,
                 cone,
-                rail: self.rail_spec().map(Rc::new),
+                terrain: self.terrain_spec().map(Rc::new),
                 bloom_rank: self.visible_bloom_rank(),
             },
         )
@@ -1127,27 +1127,25 @@ impl DiffView {
             .unwrap_or(Lang::Generic)
     }
 
-    fn rail_spec(&self) -> Option<RailSpec> {
+    fn terrain_spec(&self) -> Option<TerrainSpec> {
         if self.lines.is_empty() {
             return None;
         }
-        let scroll = self.surface.scroll_offset();
-        let fit = self.field_fit.max(1);
+        let rows = self.lines.len();
         let age = self.heat_age();
         let transition = self.active_transition();
+        let old_rows = transition.map(|transition| transition.old_lines.len());
         let mut marks = Vec::new();
         for (index, construct) in self.constructs.iter().enumerate() {
-            if construct.end_line < scroll || construct.start_line >= scroll + fit {
-                continue;
-            }
             let old = transition
                 .and_then(|transition| transition.construct_partner(construct))
-                .map(|(_, old_start, old_end, old_arms)| RailGeo {
+                .map(|(_, old_start, old_end, old_arms)| TerrainGeo {
                     start: old_start,
                     end: old_end,
                     arms: old_arms,
+                    rows: old_rows.unwrap_or(0),
                 });
-            marks.push(RailMark {
+            marks.push(TerrainMark {
                 kind: construct.kind,
                 start: construct.start_line,
                 end: construct.end_line,
@@ -1161,26 +1159,24 @@ impl DiffView {
         if let Some(transition) = transition {
             for index in transition.death_indices(&self.constructs) {
                 let construct = &transition.old_constructs[index];
-                deaths.push(RailDeath {
+                deaths.push(TerrainDeath {
                     kind: construct.kind,
                     start: construct.start_line,
                     end: construct.end_line,
                     depth: construct.depth,
                     arms: transition.old_arms[index],
                     heat: self.construct_heat(&transition.old_lines, construct, None),
+                    rows: transition.old_lines.len(),
                 });
             }
         }
         if marks.is_empty() && deaths.is_empty() {
             return None;
         }
-        Some(RailSpec {
+        Some(TerrainSpec {
             seq: transition.map(|transition| transition.seq).unwrap_or(0),
             morphing: transition.is_some(),
-            scroll,
-            old_scroll: transition
-                .map(|transition| transition.old_scroll)
-                .unwrap_or(scroll),
+            rows,
             marks,
             deaths,
         })
