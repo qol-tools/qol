@@ -31,7 +31,8 @@ pub(super) fn schedule_self_restart_after_idle(
             });
             return;
         };
-        let staged = match restart.stage_restart_binary(&repo_root, &restart_binary) {
+        let staging_root = crate::paths::default_workspace_root().unwrap_or(repo_root.clone());
+        let staged = match restart.stage_restart_binary(&staging_root, &restart_binary) {
             Ok(staged) => staged,
             Err(message) => {
                 events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
@@ -46,7 +47,7 @@ pub(super) fn schedule_self_restart_after_idle(
             plugin_manager,
             runtime.as_ref(),
             restart.as_ref(),
-            &repo_root,
+            &staging_root,
             &staged,
             worktree_branch.as_deref(),
             events.as_ref(),
@@ -100,7 +101,7 @@ fn exec_restart_after_cleanup(
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
-    repo_root: &Path,
+    staging_root: &Path,
     staged: &qol_dev_build::tray::StagedRuntimeGeneration,
     worktree_branch: Option<&str>,
     events: &crate::daemon::EventBus,
@@ -137,7 +138,7 @@ fn exec_restart_after_cleanup(
     if let Some(current) = current.as_deref() {
         protected.push(current);
     }
-    if let Err(error) = qol_dev_build::tray::prune_runtime_generations(repo_root, &protected) {
+    if let Err(error) = qol_dev_build::tray::prune_runtime_generations(staging_root, &protected) {
         log::warn!("Self recompile runtime prune failed: {error}");
     }
     if let Err(error) = restart.exec_restart(staged.executable()) {

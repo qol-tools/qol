@@ -219,6 +219,35 @@ mod tests {
     }
 
     #[test]
+    fn generation_root_derives_only_from_the_passed_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("base");
+        let worktree = tmp
+            .path()
+            .join("worktrees")
+            .join("feat")
+            .join("qol-monorepo");
+        let source = worktree
+            .join("target")
+            .join("qol-dev")
+            .join("build")
+            .join("debug")
+            .join("qol-tray");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"worktree runtime").unwrap();
+
+        let staged = stage_bytes(&base, &source).unwrap();
+
+        assert!(
+            staged
+                .executable()
+                .starts_with(base.join("target/qol-dev/runtime")),
+            "a source binary inside a worktree must not move the generation root"
+        );
+        assert!(!staged.executable().starts_with(&worktree));
+    }
+
+    #[test]
     fn runtime_generation_survives_source_replacement() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("qol-tray");

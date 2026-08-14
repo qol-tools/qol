@@ -126,6 +126,17 @@ pub fn marker_path(config_dir: &Path) -> PathBuf {
     config_dir.join("dev").join("active-worktree.txt")
 }
 
+pub fn default_workspace_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("dev").join("default-workspace.txt")
+}
+
+pub fn read_default_workspace(config_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(default_workspace_path(config_dir))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub fn read_active_worktree_marker(config_dir: &Path) -> Option<String> {
     std::fs::read_to_string(marker_path(config_dir))
         .ok()
@@ -771,6 +782,24 @@ path = \"src/main.rs\"
             assert_eq!(command.get_current_dir(), Some(root));
             assert_eq!(command.get_program(), OsStr::new("cargo"));
         }
+    }
+
+    #[test]
+    fn default_workspace_marker_reads_only_nonempty_content() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(read_default_workspace(tmp.path()), None);
+
+        std::fs::create_dir_all(default_workspace_path(tmp.path()).parent().unwrap()).unwrap();
+        std::fs::write(default_workspace_path(tmp.path()), "/qol/base\n").unwrap();
+
+        assert_eq!(
+            read_default_workspace(tmp.path()).as_deref(),
+            Some("/qol/base")
+        );
+        assert!(default_workspace_path(tmp.path()).ends_with("dev/default-workspace.txt"));
+
+        std::fs::write(default_workspace_path(tmp.path()), "\n").unwrap();
+        assert_eq!(read_default_workspace(tmp.path()), None);
     }
 
     #[test]

@@ -26,10 +26,10 @@ impl RestartPort for PlatformRestartPort {
     fn resolve_restart_binary(&self) -> Option<PathBuf> {
         let mut candidates = Vec::new();
 
-        let debug_binary = qol_dev_build::tray::debug_binary_path(
-            &paths::repo_root_from_manifest_dir(),
-            platform::binary_name(),
-        );
+        let restart_root = crate::paths::default_workspace_root()
+            .unwrap_or_else(paths::repo_root_from_manifest_dir);
+        let debug_binary =
+            qol_dev_build::tray::debug_binary_path(&restart_root, platform::binary_name());
         candidates.push(debug_binary);
 
         if let Ok(current) = std::env::current_exe() {

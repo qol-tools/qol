@@ -295,10 +295,52 @@ pub fn repo_root_from_manifest_dir() -> PathBuf {
     qol_workspace::workspace_root_from(&manifest).unwrap_or(manifest)
 }
 
+#[cfg(feature = "dev")]
+pub fn default_workspace_root() -> Option<PathBuf> {
+    let config_dir = shared_config_dir().ok()?;
+    let configured = qol_dev_build::tray::read_default_workspace(&config_dir)?;
+    Some(
+        qol_workspace::workspace_root_from(Path::new(&configured))
+            .unwrap_or_else(|_| PathBuf::from(configured)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn default_workspace_root_follows_recorded_workspace_not_manifest_dir() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+        let base = tmp.path().join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let config_dir = shared_config_dir().unwrap();
+        std::fs::create_dir_all(config_dir.join("dev")).unwrap();
+        std::fs::write(
+            config_dir.join("dev").join("default-workspace.txt"),
+            format!("{}\n", base.display()),
+        )
+        .unwrap();
+
+        assert_eq!(default_workspace_root(), Some(base.clone()));
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn default_workspace_root_is_none_without_a_recorded_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        assert_eq!(default_workspace_root(), None);
+    }
 
     #[test]
     fn paths_have_correct_suffixes() {

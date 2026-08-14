@@ -1011,6 +1011,44 @@ mod tests {
 
     #[cfg(feature = "dev")]
     #[test]
+    fn apply_worktree_override_never_remaps_installed_entries() {
+        let repo = crate::test_support::GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        let linked = repo.plugin(&feat, "plugin-foo");
+        let release = repo.root.join("plugins").join("plugin-bar");
+        let registry = Registry {
+            version: 1,
+            entries: vec![
+                dev_linked_entry(linked.to_str().unwrap(), None),
+                installed_entry("plugin-bar", &release),
+            ],
+        };
+        let config_dir = TempDir::new().unwrap();
+        qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("feat")).unwrap();
+
+        let mut effective = registry.clone();
+        apply_worktree_override(&mut effective, config_dir.path());
+
+        let installed = effective
+            .entries
+            .iter()
+            .find(|entry| entry.id == "plugin-bar")
+            .expect("installed entry survives");
+        assert_eq!(installed.active.path, release);
+        assert!(
+            matches!(installed.active.source, SlotSource::ReleaseAsset),
+            "a non-linked plugin must never resolve into a foreign worktree target"
+        );
+        let remapped = effective
+            .entries
+            .iter()
+            .find(|entry| entry.id == "plugin-foo")
+            .expect("dev-linked entry survives");
+        assert_eq!(remapped.active.path, linked);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
     fn apply_worktree_override_keeps_links_without_selection() {
         let repo = crate::test_support::GitRepo::new();
         let feat = repo.add_worktree("feat");

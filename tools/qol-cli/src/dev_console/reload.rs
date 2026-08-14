@@ -239,7 +239,7 @@ fn hand_off_to_prebuilt(
         dash.push_log(note);
     }
     let built_binary = crate::commands::dev::dev_binary_path(&target.root);
-    let runtime = qol_dev_build::tray::stage_runtime_generation(&target.root, &built_binary)
+    let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(anyhow::Error::msg)?;
     let run_root = crate::commands::dev::dev_run_root(&target.root);
     let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, dash)?;
@@ -262,7 +262,7 @@ fn hand_off_to_prebuilt(
     *child = next;
     *lines = next_lines;
     if let Err(error) =
-        qol_dev_build::tray::prune_runtime_generations(&target.root, &[runtime.executable()])
+        qol_dev_build::tray::prune_runtime_generations(&root, &[runtime.executable()])
     {
         dash.push_log(format!("[qol dev] runtime prune failed: {error}"));
     }

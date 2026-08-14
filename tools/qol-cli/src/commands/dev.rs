@@ -68,7 +68,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     )?;
     let run_root = dev_run_root(&target.root);
     let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose)?;
-    let runtime = qol_dev_build::tray::stage_runtime_generation(&target.root, &built_binary)
+    let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(anyhow::Error::msg)?;
     apply_marker_update(&plan.marker_update)?;
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
@@ -78,7 +78,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     };
     dev_step_label("stop", StepKind::Info, shutdown_detail, verbose);
     if let Err(error) =
-        qol_dev_build::tray::prune_runtime_generations(&target.root, &[runtime.executable()])
+        qol_dev_build::tray::prune_runtime_generations(&root, &[runtime.executable()])
     {
         dev_step_label("prune", StepKind::Info, &error, verbose);
     }
