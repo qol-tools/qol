@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use qol_diff::{DiffError, FileDiff};
+use qol_diff::{constructs, lexer::Lang, DiffError, FileDiff, LineChange};
 use qol_git::NumstatEntry;
 
 pub const DEFAULT_RANGE: &str = "HEAD";
@@ -54,6 +54,8 @@ pub enum GitResult {
 #[derive(Debug, Clone, Default)]
 pub struct Facts {
     pub numstat: Vec<NumstatEntry>,
+    pub tracked: Vec<String>,
+    pub default_path: Option<String>,
     pub changed: Vec<PathBuf>,
 }
 
@@ -196,6 +198,7 @@ pub fn spawn_git_facts_thread(
         .name("diff-viewer-git-facts".to_owned())
         .spawn(move || {
             let mut last_head: Option<String> = None;
+            let mut last_dirty: Option<Vec<String>> = None;
             let mut heat_stamps: HashMap<PathBuf, Instant> = HashMap::new();
             while let Ok(first) = requests.recv() {
                 let mut pending = vec![first];
@@ -217,6 +220,7 @@ pub fn spawn_git_facts_thread(
                         &results,
                         &generation,
                         &mut last_head,
+                        &mut last_dirty,
                         &mut heat_stamps,
                     );
                 }
@@ -231,6 +235,7 @@ fn handle_request(
     results: &mpsc::Sender<GitResult>,
     generation: &AtomicU64,
     last_head: &mut Option<String>,
+    last_dirty: &mut Option<Vec<String>>,
     heat_stamps: &mut HashMap<PathBuf, Instant>,
 ) {
     match request {
@@ -245,11 +250,23 @@ fn handle_request(
                 .into_iter()
                 .map(|path| repo_relative(repo, &path))
                 .collect();
+            let has_changes = !changed.is_empty();
             let now = Instant::now();
             for path in &changed {
                 heat_stamps.insert(path.clone(), now);
             }
-            let outcome = refresh_facts(repo, changed);
+            let mut outcome = refresh_facts(repo, changed);
+            if let Ok(facts) = &mut outcome {
+                let dirty_paths: Vec<String> = facts
+                    .numstat
+                    .iter()
+                    .map(|entry| entry.path.clone())
+                    .collect();
+                if last_dirty.as_ref() != Some(&dirty_paths) || has_changes {
+                    facts.default_path = rank_default_path(repo, &dirty_paths);
+                    *last_dirty = Some(dirty_paths);
+                }
+            }
             if !is_live(g, generation) {
                 return;
             }
@@ -311,7 +328,39 @@ fn is_live(generation: u64, current: &AtomicU64) -> bool {
 
 fn refresh_facts(repo: &Path, changed: Vec<PathBuf>) -> Result<Facts, String> {
     let numstat = qol_git::diff_numstat(repo, DEFAULT_RANGE).map_err(|error| error.to_string())?;
-    Ok(Facts { numstat, changed })
+    let tracked = qol_git::tracked_files(repo).map_err(|error| error.to_string())?;
+    Ok(Facts {
+        numstat,
+        tracked,
+        default_path: None,
+        changed,
+    })
+}
+
+pub fn rank_default_path(repo: &Path, dirty_paths: &[String]) -> Option<String> {
+    let mut best: Option<(String, usize)> = None;
+    for path in dirty_paths {
+        let Ok(diff) = selected_file_diff(repo, path, DEFAULT_RANGE) else {
+            continue;
+        };
+        let lines: Vec<LineChange> = diff
+            .hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter().cloned())
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        let count = constructs::detect_constructs(&lines, Lang::from_path(path)).len();
+        if count > 0
+            && best
+                .as_ref()
+                .is_none_or(|(_, best_count)| count > *best_count)
+        {
+            best = Some((path.clone(), count));
+        }
+    }
+    best.map(|(path, _)| path)
 }
 
 fn selected_file_diff(repo: &Path, path: &str, range: &str) -> Result<FileDiff, DiffError> {
@@ -496,6 +545,59 @@ mod tests {
         assert_eq!(added.old_line_no, None);
         assert_eq!(added.new_line_no, Some(1));
         assert!(!added.token_spans.is_empty(), "heat spans must be computed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rank_default_path_picks_the_most_structural_dirty_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "diff-viewer-rank-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create repo dir");
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git run");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("code.rs"), "fn old() {}\n").expect("write");
+        std::fs::write(dir.join("data.txt"), "one\n").expect("write");
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "base"]);
+        std::fs::write(
+            dir.join("code.rs"),
+            "fn old() {}\nfn fresh() {}\n    for i in 0..2 {}\n",
+        )
+        .expect("write");
+        std::fs::write(dir.join("data.txt"), "one\ntwo\n").expect("write");
+        let dirty = vec!["code.rs".to_string(), "data.txt".to_string()];
+        assert_eq!(
+            rank_default_path(&dir, &dirty),
+            Some("code.rs".to_string()),
+            "the file whose working-tree diff carries constructs wins"
+        );
+        assert_eq!(
+            rank_default_path(&dir, &[]),
+            None,
+            "no dirty files, no default"
+        );
+        assert_eq!(
+            rank_default_path(&dir, &["data.txt".to_string()]),
+            None,
+            "a structuraless dirty file yields no default"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -237,6 +237,12 @@ pub struct DiffView {
     drag_gesture: Rc<RefCell<DragGestureState>>,
 }
 
+pub fn default_file_index(files: &[FileRow], default_path: Option<&str>) -> usize {
+    default_path
+        .and_then(|path| files.iter().position(|file| file.path == path))
+        .unwrap_or(0)
+}
+
 impl DiffView {
     pub fn new(
         repo: Option<PathBuf>,
@@ -610,12 +616,23 @@ impl DiffView {
         if !facts_equal {
             changed = true;
             self.last_facts = Some(facts.clone());
-            let files = facts
+            let had_selection = self.files.selected_path().is_some();
+            let mut files: Vec<FileRow> = facts
                 .numstat
                 .iter()
                 .map(|entry| FileRow::new(entry.path.clone(), entry.added, entry.deleted))
                 .collect();
+            for path in &facts.tracked {
+                if !files.iter().any(|file| file.path == *path) {
+                    files.push(FileRow::new(path.clone(), None, None));
+                }
+            }
             self.files.set_files(files);
+            if !had_selection {
+                let index = default_file_index(&self.files.files, facts.default_path.as_deref());
+                self.files.list.selected = index;
+                self.files.list.sync(self.files.files.len());
+            }
             if self.files.files.is_empty() {
                 self.pane = DiffPane::Empty;
                 return true;
@@ -2332,6 +2349,15 @@ mod tests {
         let binary = row("logo.png", None, None);
         assert_eq!(binary.added_label, None, "binary files carry no counts");
         assert_eq!(binary.deleted_label, None);
+    }
+
+    #[test]
+    fn default_file_index_lands_on_the_ranked_path_and_falls_back_to_zero() {
+        let files = vec![row("a.md", None, None), row("b.py", None, None)];
+        assert_eq!(default_file_index(&files, Some("b.py")), 1);
+        assert_eq!(default_file_index(&files, Some("missing.rs")), 0);
+        assert_eq!(default_file_index(&files, None), 0);
+        assert_eq!(default_file_index(&[], Some("b.py")), 0);
     }
 
     #[test]

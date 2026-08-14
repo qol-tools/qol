@@ -104,6 +104,15 @@ pub fn status_porcelain(repo: impl AsRef<Path>) -> Result<Vec<StatusEntry>, Erro
         .collect()
 }
 
+pub fn tracked_files(repo: impl AsRef<Path>) -> Result<Vec<String>, Error> {
+    let out = run_git(repo.as_ref(), &["ls-files"])?;
+    Ok(out
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub fn diff_numstat(repo: impl AsRef<Path>, range: &str) -> Result<Vec<NumstatEntry>, Error> {
     let out = run_git(repo.as_ref(), &["diff", "--numstat", "--no-renames", range])?;
     let mut entries = Vec::new();
@@ -568,5 +577,21 @@ mod tests {
         assert_eq!(stats[1].magnitude(), 1, "main adds one line");
         assert_eq!(stats[2].magnitude(), 1, "side adds one line");
         assert_eq!(stats[3].magnitude(), 1, "root commit counts its tree");
+    }
+
+    #[test]
+    fn tracked_files_lists_committed_paths_only() {
+        let repo = repo("tracked-files");
+        write(&repo, "a.txt", b"1\n");
+        write(&repo, "sub/b.txt", b"2\n");
+        stage_all(&repo);
+        commit(&repo, "one");
+        write(&repo, "c.txt", b"3\n");
+        let files = tracked_files(&repo).expect("ls-files");
+        assert_eq!(files, vec!["a.txt", "sub/b.txt"]);
+        stage_all(&repo);
+        commit(&repo, "two");
+        let files = tracked_files(&repo).expect("ls-files");
+        assert_eq!(files, vec!["a.txt", "c.txt", "sub/b.txt"]);
     }
 }
