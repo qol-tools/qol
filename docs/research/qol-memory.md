@@ -1551,3 +1551,5 @@ Every later tier plugs into this without redesign.
     store, 437ms live (the documented ~310ms grew with the corpus;
     the diff adds no measurable latency). Zero new deps, 8 suites +
     test-alias ALL PASS. Pending candidate ea68bfe6d9258010 untouched.
+
+Workflow rule (2026-08-14): one worktree = one remote branch per feature. New work on the same feature lands on the existing branch; no new branches or worktrees per addition. The feature line was consolidated from the legacy qol-memory-tier1 branch (superseded, remote deleted) onto multi-layer-context-retrieval, which carries the landing squash (promote gate, folded-scalar edge) plus the m4a1 units-layer fix and decision-note redaction.
