@@ -165,6 +165,22 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
     return [];
   }
 
+  function dropWatchedToken(sessionId, token) {
+    let tokens = [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(watchStateFile(sessionId), "utf8"));
+      tokens = Array.isArray(parsed) ? parsed.filter((candidate) => typeof candidate === "string") : [];
+    } catch {}
+    const remaining = tokens.filter((candidate) => candidate !== token);
+    if (remaining.length === tokens.length) return null;
+    try {
+      fs.writeFileSync(watchStateFile(sessionId), JSON.stringify(remaining));
+    } catch {
+      return null;
+    }
+    return remaining;
+  }
+
   async function recordWatchedToken(sessionId, token) {
     try {
       await fsp.mkdir(sessionsDir(), { recursive: true });
@@ -212,7 +228,7 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
       });
       watcherChild = child;
       wakeDebugLog(sessionId, `watch spawn pid=${child.pid}`);
-      child.stdout.on("data", (chunk) => {
+      child.stdout.on("data", async (chunk) => {
         stdoutBuffer += chunk.toString();
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() ?? "";
@@ -226,6 +242,19 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
           } catch {}
           if (typeof event?.event !== "string" || typeof event?.session !== "string") continue;
           wakeDebugLog(sessionId, `event=${event.event} session=${event.session} screen=${typeof event.screen === "string" ? event.screen.length : 0}`);
+          const remaining = dropWatchedToken(sessionId, event.session);
+          if (remaining === null) {
+            wakeDebugLog(sessionId, `delivery skip session=${event.session} reason=already_delivered`);
+            continue;
+          }
+          wakeDebugLog(sessionId, `token removed remaining=${remaining.length}`);
+          if (watcherChild !== null && watcherChild.exitCode == null) {
+            watcherChild.kill("SIGTERM");
+            watcherChild = null;
+          }
+          if (remaining.length > 0) {
+            await startWatcher(ctx);
+          }
           const action =
             event.event === "gone"
               ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
@@ -504,6 +533,30 @@ mod tests {
         assert!(WATCH_GLUE
             .contains("if (watcherChild !== null && watcherChild.exitCode == null) return;"));
         assert!(WATCH_GLUE.contains("const tokens = await readWatchedTokens(sessionId);"));
+    }
+
+    #[test]
+    fn pi_adapter_prunes_delivered_tokens_and_respawns_the_watcher() {
+        let drop_at = WATCH_GLUE
+            .find("dropWatchedToken(sessionId, event.session)")
+            .expect("delivery prunes the token");
+        let send_at = WATCH_GLUE
+            .find("pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })")
+            .expect("wake send");
+        assert!(
+            drop_at < send_at,
+            "the token must be dropped before the wake is sent"
+        );
+        assert!(WATCH_GLUE.contains("function dropWatchedToken(sessionId, token)"));
+        assert!(WATCH_GLUE.contains("fs.readFileSync(watchStateFile(sessionId), \"utf8\")"));
+        assert!(WATCH_GLUE
+            .contains("fs.writeFileSync(watchStateFile(sessionId), JSON.stringify(remaining))"));
+        assert!(WATCH_GLUE.contains("if (remaining === null)"));
+        assert!(WATCH_GLUE.contains("reason=already_delivered"));
+        assert!(WATCH_GLUE.contains("token removed remaining=${remaining.length}"));
+        assert!(WATCH_GLUE.contains("if (remaining.length > 0)"));
+        assert!(WATCH_GLUE.contains("await startWatcher(ctx)"));
+        assert!(WATCH_GLUE.contains("pi.on(\"session_shutdown\", async () => {"));
     }
 
     #[test]

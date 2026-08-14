@@ -274,6 +274,29 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
     Ok(())
 }
 
+fn prune_stale_tokens(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    tokens: &[String],
+) -> Result<Vec<String>> {
+    if tokens.is_empty() {
+        return Ok(tokens.to_vec());
+    }
+    let mut kept = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let binding: SessionBinding = token.parse().context("invalid session token")?;
+        let round_open = pending
+            .pending_round(&binding)?
+            .is_some_and(|round| !round.completed);
+        if round_open || !session_gone(terminals, &binding) {
+            kept.push(token.clone());
+        } else {
+            qol_runtime::probe!("CLI_SESSION_WATCH", "event=pruned_stale session={}", token);
+        }
+    }
+    Ok(kept)
+}
+
 fn load_rounds(pending: &PendingBridgeStore, tokens: &[String]) -> Result<Vec<PendingRound>> {
     if tokens.is_empty() {
         return pending.pending_rounds();
@@ -320,7 +343,8 @@ fn watch_loop(
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<()> {
-    let mut watched = load_rounds(pending, tokens)?
+    let tokens = prune_stale_tokens(terminals, pending, tokens)?;
+    let mut watched = load_rounds(pending, &tokens)?
         .into_iter()
         .map(WatchedRound::new)
         .collect::<Result<Vec<_>>>()?;
@@ -798,6 +822,126 @@ mod tests {
         assert_eq!(events[0]["event"], "gone");
         assert_eq!(events[0]["session"], "v1:fake:7:100");
         assert!(pending.pending_round(&binding).unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_tokens_with_gone_terminals_and_no_open_round_are_pruned_without_events() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let absent_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let collected_binding: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        pending
+            .start(
+                &collected_binding,
+                "QOL_BRIDGE_DONE_collected",
+                "v1:fake:9:900",
+                false,
+            )
+            .unwrap();
+        pending
+            .observe(&collected_binding, "QOL_BRIDGE_DONE_collected", true)
+            .unwrap();
+        let backend = FakeBackend::new(facts("9", 900), Vec::new());
+        backend.mark_gone();
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &[
+                absent_binding.token().to_owned(),
+                collected_binding.token().to_owned(),
+            ],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        assert!(
+            out.is_empty(),
+            "a stale token must not wake its owner: {out:?}"
+        );
+        let round = pending.pending_round(&collected_binding).unwrap().unwrap();
+        assert!(
+            round.completed,
+            "the collected checkpoint must not be discarded by the prune"
+        );
+    }
+
+    #[test]
+    fn stale_token_is_pruned_while_an_open_round_still_wakes() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let stale_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &stale_binding,
+                "QOL_BRIDGE_DONE_stale",
+                "v1:fake:8:800",
+                false,
+            )
+            .unwrap();
+        pending
+            .observe(&stale_binding, "QOL_BRIDGE_DONE_stale", true)
+            .unwrap();
+        let live_binding: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        pending
+            .start(
+                &live_binding,
+                "QOL_BRIDGE_DONE_live",
+                "v1:fake:8:800",
+                false,
+            )
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("8", 200),
+            vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_live".to_owned()],
+        );
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned(), "v1:fake:8:200".to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(
+            events.len(),
+            1,
+            "only the live open round may wake: {events:?}"
+        );
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["session"], "v1:fake:8:200");
+    }
+
+    #[test]
+    fn live_terminal_without_an_open_round_stays_unwatched() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]);
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &[binding.token().to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        assert!(
+            out.is_empty(),
+            "a token without an open round must never be watched: {out:?}"
+        );
     }
 
     #[test]
