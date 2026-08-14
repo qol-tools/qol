@@ -75,6 +75,16 @@ struct Geo {
     count: usize,
 }
 
+fn offset_geo(geo: Geo, ox: f32, oy: f32) -> Geo {
+    Geo {
+        x0: geo.x0 + ox,
+        x1: geo.x1 + ox,
+        top: geo.top + oy,
+        floor: geo.floor + oy,
+        count: geo.count,
+    }
+}
+
 pub fn terrain_element(spec: Rc<TerrainSpec>, progress: f32, phase: f32) -> Canvas<TerrainPaint> {
     canvas(
         move |bounds, _, _| paint(&spec, progress, phase, bounds),
@@ -90,16 +100,21 @@ pub fn terrain_element(spec: Rc<TerrainSpec>, progress: f32, phase: f32) -> Canv
 fn paint(spec: &TerrainSpec, progress: f32, phase: f32, bounds: Bounds<Pixels>) -> TerrainPaint {
     let width = bounds.size.width.to_f64() as f32;
     let height = bounds.size.height.to_f64() as f32;
+    let ox = bounds.origin.x.to_f64() as f32;
+    let oy = bounds.origin.y.to_f64() as f32;
     let mut layers = Vec::new();
     for death in &spec.deaths {
-        layers.extend(death_layers(death, progress, phase, width, height));
+        layers.extend(death_layers(death, progress, phase, width, height, ox, oy));
     }
     for mark in &spec.marks {
-        layers.extend(mark_layers(spec, mark, progress, phase, width, height));
+        layers.extend(mark_layers(
+            spec, mark, progress, phase, width, height, ox, oy,
+        ));
     }
     TerrainPaint { layers }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mark_layers(
     spec: &TerrainSpec,
     mark: &TerrainMark,
@@ -107,6 +122,8 @@ fn mark_layers(
     phase: f32,
     width: f32,
     height: f32,
+    ox: f32,
+    oy: f32,
 ) -> Vec<(Path<Pixels>, u32)> {
     let (new_x0, new_x1) = band_span(mark.start, mark.end, spec.rows, width);
     let birth = mark.old.is_none();
@@ -148,13 +165,17 @@ fn mark_layers(
     } else {
         ((alpha as f32) * progress).round() as u32
     };
-    let geo = Geo {
-        x0: x0.clamp(0.0, width),
-        x1: x1.clamp(0.0, width),
-        top: top.clamp(0.0, height),
-        floor: height,
-        count: mark_count(mark),
-    };
+    let geo = offset_geo(
+        Geo {
+            x0: x0.clamp(0.0, width),
+            x1: x1.clamp(0.0, width),
+            top: top.clamp(0.0, height),
+            floor: height,
+            count: mark_count(mark),
+        },
+        ox,
+        oy,
+    );
     kind_layers(mark.kind, &geo, old_count, color, alpha, extra_alpha)
 }
 
@@ -164,6 +185,8 @@ fn death_layers(
     phase: f32,
     width: f32,
     height: f32,
+    ox: f32,
+    oy: f32,
 ) -> Vec<(Path<Pixels>, u32)> {
     let (old_x0, old_x1) = band_span(death.start, death.end, death.rows, width);
     let keyword = band_x(death.start, death.rows, width);
@@ -175,13 +198,18 @@ fn death_layers(
         lerp(old_x1, keyword, progress),
         width,
     );
-    let geo = Geo {
-        x0: x0.clamp(0.0, width),
-        x1: x1.clamp(0.0, width),
-        top: (height - glyph_height(death.kind, death.depth) * (1.0 - progress)).clamp(0.0, height),
-        floor: height,
-        count: count_for(death.kind, death.arms, death.end - death.start + 1),
-    };
+    let geo = offset_geo(
+        Geo {
+            x0: x0.clamp(0.0, width),
+            x1: x1.clamp(0.0, width),
+            top: (height - glyph_height(death.kind, death.depth) * (1.0 - progress))
+                .clamp(0.0, height),
+            floor: height,
+            count: count_for(death.kind, death.arms, death.end - death.start + 1),
+        },
+        ox,
+        oy,
+    );
     kind_layers(
         death.kind,
         &geo,
@@ -544,6 +572,37 @@ mod tests {
             Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height))),
         )
         .layers
+    }
+
+    #[test]
+    fn offset_geo_shifts_geometry_into_window_space() {
+        let shifted = offset_geo(
+            Geo {
+                x0: 10.0,
+                x1: 40.0,
+                top: 60.0,
+                floor: 100.0,
+                count: 3,
+            },
+            320.0,
+            180.0,
+        );
+        assert_eq!((shifted.x0, shifted.x1), (330.0, 360.0));
+        assert_eq!((shifted.top, shifted.floor), (240.0, 280.0));
+        assert_eq!(shifted.count, 3);
+        let same = offset_geo(
+            Geo {
+                x0: 10.0,
+                x1: 40.0,
+                top: 60.0,
+                floor: 100.0,
+                count: 3,
+            },
+            0.0,
+            0.0,
+        );
+        assert_eq!((same.x0, same.x1), (10.0, 40.0));
+        assert_eq!((same.top, same.floor), (60.0, 100.0));
     }
 
     #[test]
