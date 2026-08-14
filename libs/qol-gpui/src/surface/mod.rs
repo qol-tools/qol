@@ -617,8 +617,6 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         );
         if !readiness.ready() {
             reveal_pending.set(false);
-            let _scope = crate::popup_window::reason_scope("surface-reveal-failed");
-            crate::popup_window::hide_invisible(&title);
             let _ = cx.update(|cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             });
