@@ -557,7 +557,9 @@ pub(super) fn spawn_or_reuse(
                         task.expect("the background guard above guarantees a task");
                     super::bridge::validate_task(round_task)?;
                     let marker = super::bridge::CompletionMarker::generate();
-                    launch.args.push(super::bridge::bridge_prompt(round_task, &marker));
+                    launch
+                        .args
+                        .push(super::bridge::bridge_prompt(round_task, &marker, super::bridge::Role::Lane));
                     let request = SpawnRequest {
                         identity: prepared.identity.clone(),
                         launch,
@@ -585,6 +587,7 @@ pub(super) fn spawn_or_reuse(
                     let outcome = launch_ready(
                         terminals,
                         interpreter,
+                        pending,
                         &prepared.identity,
                         &request,
                         model,
@@ -624,6 +627,10 @@ pub(super) fn spawn_or_reuse(
                     model.map(str::to_owned),
                     &prepared.title,
                 )?;
+                let binding = facts
+                    .binding()
+                    .context("spawned session cannot bind to a stable token")?;
+                pending.set_role(&binding, super::bridge::Role::Lane)?;
                 match task {
                     Some(round_task) => {
                         deliver_task(terminals, interpreter, outcome, round_task, pending, false)
@@ -710,6 +717,7 @@ fn launch_background(
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
+    pending.set_role(&binding, super::bridge::Role::Lane)?;
     pending.start(
         &binding,
         marker,
@@ -734,9 +742,11 @@ fn launch_background(
     Ok(outcome)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn launch_ready(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
+    pending: &super::bridge::PendingBridgeStore,
     identity: &SpawnIdentity,
     request: &SpawnRequest,
     model: Option<&str>,
@@ -762,6 +772,10 @@ fn launch_ready(
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
     )?;
+    let binding = facts
+        .binding()
+        .context("spawned session cannot bind to a stable token")?;
+    pending.set_role(&binding, super::bridge::Role::Lane)?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
     outcome.autoclose = autoclose;
@@ -1373,6 +1387,11 @@ mod tests {
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert_eq!(round.completion_marker, marker);
         assert!(!round.completed);
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "a background launch writes the lane role marker"
+        );
 
         let foreground = run_spawn_with(
             &terminals,
@@ -1394,6 +1413,91 @@ mod tests {
         assert!(
             foreground.contains("screen read failed while waiting for its live UI"),
             "foreground still waits for the live UI: {foreground}"
+        );
+    }
+
+    #[test]
+    fn launch_and_reuse_write_the_lane_role_marker() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(!outcome.reused);
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "a fresh launch writes the lane role marker"
+        );
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        let binding: SessionBinding = reused.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "the keyed reuse path writes the lane role marker idempotently"
+        );
+
+        let reused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-role"),
+            None,
+            None,
+            None,
+            None,
+            &locks,
+            false,
+            false,
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        let binding: SessionBinding = reused.session.parse().unwrap();
+        assert_eq!(
+            pending.role(&binding).unwrap(),
+            super::super::bridge::Role::Lane,
+            "set_role stays idempotent across repeated reuse"
         );
     }
 

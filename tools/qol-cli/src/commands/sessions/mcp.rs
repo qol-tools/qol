@@ -420,7 +420,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and an\n  optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and an\n  optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -852,6 +852,7 @@ mod tests {
             true,
             &|| Some(false),
             Duration::from_millis(50),
+            super::super::bridge::Role::Architect,
         )
         .unwrap();
         assert!(!outcome.completed);
@@ -872,6 +873,7 @@ mod tests {
             true,
             &|| Some(true),
             Duration::from_millis(50),
+            super::super::bridge::Role::Architect,
         )
         .unwrap();
         assert!(!outcome.completed);
@@ -1018,7 +1020,10 @@ mod tests {
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].2, DeliveryMode::Submit);
-        assert!(sent[0].1.contains("[qol session bridge]"));
+        assert!(
+            sent[0].1.starts_with("[qol session bridge to architect]"),
+            "a session without a role record is an architect receiver"
+        );
         drop(sent);
 
         let binding: SessionBinding = token().parse().unwrap();

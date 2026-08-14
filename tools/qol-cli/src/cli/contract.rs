@@ -276,7 +276,7 @@ fn app() -> HeadlessApp {
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition.",
+                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition. The round envelope is generated server-side from the target's durable role record (lane marker written at spawn; absent means architect): bridging a non-lane session is an architect-receiver round - the receiver may accept the request into its own loop or decline with a reason, and returns the completion fragments either way. The caller never chooses the receiver's role.",
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

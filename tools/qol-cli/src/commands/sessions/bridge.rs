@@ -39,11 +39,19 @@ pub(super) const TIMEOUT_MAX_MS: u64 = 86_400_000;
 
 static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Role {
+    Lane,
+    Architect,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct BridgeOutcome {
     pub(super) completed: bool,
     pub(super) submitted: bool,
     pub(super) stalled: bool,
+    pub(super) role: Role,
     pub(super) session: String,
     pub(super) completion_marker: String,
     pub(super) screen: String,
@@ -109,6 +117,11 @@ impl From<StoredCheckpoint> for BridgeCheckpoint {
             closed: stored.closed,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredRole {
+    role: Role,
 }
 
 pub(super) struct PendingBridgeStore {
@@ -278,6 +291,29 @@ impl PendingBridgeStore {
             }))
     }
 
+    pub(super) fn set_role(&self, binding: &SessionBinding, role: Role) -> Result<()> {
+        let _lock = self.lock_role(binding)?;
+        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
+        let file = self.role_file_for(binding);
+        let temporary = file.with_extension("tmp");
+        let encoded = serde_json::to_string(&StoredRole { role })?;
+        fs::write(&temporary, encoded).context("failed to write session role record")?;
+        fs::rename(&temporary, &file).context("failed to publish session role record")
+    }
+
+    pub(super) fn role(&self, binding: &SessionBinding) -> Result<Role> {
+        let _lock = self.lock_role(binding)?;
+        let file = self.role_file_for(binding);
+        let encoded = match fs::read_to_string(&file) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Role::Architect),
+            Err(error) => return Err(error).context("failed to read session role record"),
+        };
+        Ok(serde_json::from_str::<StoredRole>(&encoded)
+            .map(|stored| stored.role)
+            .unwrap_or(Role::Architect))
+    }
+
     pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
         let mut rounds = self
             .open_checkpoints()?
@@ -334,10 +370,15 @@ impl PendingBridgeStore {
             let path = entry
                 .context("failed to read pending bridge directory")?
                 .path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
             match path.extension().and_then(|extension| extension.to_str()) {
                 Some("tmp") if older_than(&path, STALE_TMP_AFTER) => {
                     let _ = fs::remove_file(&path);
                 }
+                Some("json") if name.starts_with("role-") => {}
                 Some("json") => {
                     let Ok(encoded) = fs::read_to_string(&path) else {
                         continue;
@@ -421,6 +462,28 @@ impl PendingBridgeStore {
     fn file_for(&self, binding: &SessionBinding) -> PathBuf {
         let digest = Sha256::digest(binding.token().as_bytes());
         self.dir.join(format!("{digest:x}.json"))
+    }
+
+    fn role_file_for(&self, binding: &SessionBinding) -> PathBuf {
+        let digest = Sha256::digest(binding.token().as_bytes());
+        self.dir.join(format!("role-{digest:x}.json"))
+    }
+
+    fn role_lock_for(&self, binding: &SessionBinding) -> PathBuf {
+        self.role_file_for(binding).with_extension("lock")
+    }
+
+    fn lock_role(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
+        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.role_lock_for(binding))
+            .context("failed to open session role lock")?;
+        file.lock().context("failed to lock session role record")?;
+        Ok(PendingBridgeLock { file })
     }
 
     fn lock_for(&self, binding: &SessionBinding) -> PathBuf {
@@ -534,7 +597,8 @@ pub(super) fn execute(
     let subscribed = subscription.is_some();
 
     let marker = CompletionMarker::generate();
-    let prompt = bridge_prompt(task, &marker);
+    let role = pending.role(binding)?;
+    let prompt = bridge_prompt(task, &marker, role);
     pending.start(binding, &marker.token, &driver_token(terminals), false)?;
 
     let liveness = session_liveness(terminals, interpreter, binding);
@@ -602,6 +666,7 @@ pub(super) fn execute(
         true,
         &session_liveness(terminals, interpreter, binding),
         STALL_PROBE_AFTER,
+        role,
     )?;
     pending.observe(binding, &marker.token, outcome.completed)?;
     qol_runtime::probe!(
@@ -647,7 +712,8 @@ pub(super) fn submit(
         );
     }
     let marker = CompletionMarker::generate();
-    let prompt = bridge_prompt(task, &marker);
+    let role = pending.role(binding)?;
+    let prompt = bridge_prompt(task, &marker, role);
     pending.start(binding, &marker.token, &driver_token(terminals), autoclose)?;
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -709,6 +775,7 @@ pub(super) fn submit(
         false,
         true,
         false,
+        role,
         binding,
         &marker.token,
         screen,
@@ -740,6 +807,7 @@ fn resume_owned(
     let round = pending.pending_round(binding)?.ok_or_else(|| {
         anyhow!("no pending bridge exists for `{binding}`; run `qol sessions next`")
     })?;
+    let role = pending.role(binding)?;
     if round.completed {
         let started = Instant::now();
         let screen = match terminals.read_screen(binding) {
@@ -753,6 +821,7 @@ fn resume_owned(
                     completed: true,
                     submitted: false,
                     stalled: false,
+                    role,
                     session: binding.token(),
                     completion_marker: round.completion_marker.clone(),
                     screen: snapshot.to_owned(),
@@ -768,6 +837,7 @@ fn resume_owned(
             true,
             false,
             false,
+            role,
             binding,
             &round.completion_marker,
             screen,
@@ -839,6 +909,7 @@ fn resume_owned(
         false,
         &session_liveness(terminals, interpreter, binding),
         STALL_PROBE_AFTER,
+        role,
     )?;
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
@@ -936,6 +1007,7 @@ pub(super) fn wait_for_completion(
     submitted: bool,
     liveness: &dyn Fn() -> Option<bool>,
     stall_after: Duration,
+    role: Role,
 ) -> Result<BridgeOutcome> {
     let outcome = terminals
         .wait_for_completion(
@@ -953,6 +1025,7 @@ pub(super) fn wait_for_completion(
         completed: outcome.completed,
         submitted: outcome.submitted,
         stalled: outcome.stalled,
+        role,
         session: binding.token(),
         completion_marker: marker.to_owned(),
         screen: outcome.screen,
@@ -968,6 +1041,7 @@ fn outcome(
     completed: bool,
     submitted: bool,
     stalled: bool,
+    role: Role,
     binding: &SessionBinding,
     marker: &str,
     screen: String,
@@ -978,6 +1052,7 @@ fn outcome(
         completed,
         submitted,
         stalled,
+        role,
         session: binding.token(),
         completion_marker: marker.to_owned(),
         screen,
@@ -995,11 +1070,17 @@ fn kickstart_prompt(marker: &CompletionMarker) -> String {
     )
 }
 
-pub(super) fn bridge_prompt(task: &str, marker: &CompletionMarker) -> String {
-    format!(
-        "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
-        marker.left, marker.right
-    )
+pub(super) fn bridge_prompt(task: &str, marker: &CompletionMarker, role: Role) -> String {
+    match role {
+        Role::Lane => format!(
+            "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
+            marker.left, marker.right
+        ),
+        Role::Architect => format!(
+            "[qol session bridge to architect]\nA request is open on this session. Your durable role record has no lane marker, so you are the architect: this message does not change your role. Treat the task below as a collaborator request: accept it into your own loop (you may plan, spawn your own lanes, review, and report with your own verdict) or decline it with a reason. Either way, end your final response with the completion fragments joined with no spaces or punctuation so the sender's transaction completes.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
+            marker.left, marker.right
+        ),
+    }
 }
 
 pub(super) fn validate_task(task: &str) -> Result<()> {
@@ -1447,11 +1528,153 @@ mod tests {
     #[test]
     fn prompt_never_contains_the_joined_completion_marker() {
         let marker = CompletionMarker::from_nonce("abc123");
-        let prompt = bridge_prompt("implement the bounded change", &marker);
+        for prompt in [
+            bridge_prompt("implement the bounded change", &marker, Role::Lane),
+            bridge_prompt("collaborator request", &marker, Role::Architect),
+        ] {
+            assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+            assert!(prompt.contains("abc123"));
+            assert!(!prompt.contains(&marker.token));
+        }
+    }
 
-        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
-        assert!(prompt.contains("abc123"));
-        assert!(!prompt.contains(&marker.token));
+    #[test]
+    fn bridge_prompt_renders_the_lane_and_architect_envelopes() {
+        let marker = CompletionMarker::from_nonce("abc123");
+        let lane = bridge_prompt("implement the bounded change", &marker, Role::Lane);
+        assert_eq!(
+            lane,
+            "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\nimplement the bounded change\n\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
+        );
+
+        let architect = bridge_prompt("collaborator request", &marker, Role::Architect);
+        assert!(architect.starts_with("[qol session bridge to architect]\n"));
+        assert!(architect.contains("durable role record has no lane marker"));
+        assert!(architect.contains("does not change your role"));
+        assert!(architect.contains("accept it into your own loop"));
+        assert!(architect.contains("decline it with a reason"));
+        assert!(architect.contains("Completion fragments: `QOL_BRIDGE_DONE_` and `abc123`."));
+    }
+
+    #[test]
+    fn role_records_roundtrip_and_absent_or_invalid_records_default_to_architect() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let lane = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let architect = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        let corrupt = SessionBinding::from_str("v1:fake:3:300").unwrap();
+
+        assert_eq!(
+            store.role(&lane).unwrap(),
+            Role::Architect,
+            "an absent record defaults to architect"
+        );
+        store.set_role(&lane, Role::Lane).unwrap();
+        assert_eq!(store.role(&lane).unwrap(), Role::Lane);
+        store.set_role(&lane, Role::Lane).unwrap();
+        assert_eq!(
+            store.role(&lane).unwrap(),
+            Role::Lane,
+            "set_role is idempotent"
+        );
+        store.set_role(&architect, Role::Architect).unwrap();
+        assert_eq!(store.role(&architect).unwrap(), Role::Architect);
+        assert_eq!(store.role(&corrupt).unwrap(), Role::Architect);
+
+        fs::write(store.role_file_for(&corrupt), "not json").unwrap();
+        assert_eq!(
+            store.role(&corrupt).unwrap(),
+            Role::Architect,
+            "an unparsable record defaults to architect"
+        );
+        assert_eq!(
+            store.role(&lane).unwrap(),
+            Role::Lane,
+            "corrupting one record must not affect another"
+        );
+
+        assert!(store.pending_rounds().unwrap().is_empty());
+        assert!(
+            store.role_file_for(&lane).exists(),
+            "the checkpoint sweep must never delete role records"
+        );
+        assert!(
+            store.role_file_for(&corrupt).exists(),
+            "the checkpoint sweep must never delete role records"
+        );
+    }
+
+    #[test]
+    fn execute_and_submit_resolve_the_envelope_role_from_the_durable_record() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::new(
+            SessionId::new(BackendId::new("fake").unwrap(), "7").unwrap(),
+            123,
+        )
+        .unwrap();
+        pending.set_role(&binding, Role::Architect).unwrap();
+        let backend = FakeBackend::new(
+            facts(&binding),
+            vec![
+                ">>> ready".to_owned(),
+                ">>> [qol session bridge to architect]\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
+                    .to_owned(),
+            ],
+        );
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::new(TickerStrategy) as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+
+        let outcome = execute(
+            &terminals,
+            &interpreter,
+            &binding,
+            "collaborator request",
+            Duration::from_secs(10),
+            &pending,
+            None,
+        )
+        .unwrap();
+        assert!(outcome.completed);
+        assert_eq!(outcome.role, Role::Architect);
+        let sent = backend.sent.lock().unwrap();
+        let prompt = &sent.last().expect("execute must send exactly one prompt").1;
+        assert!(prompt.starts_with("[qol session bridge to architect]"));
+        assert!(prompt.contains("durable role record"));
+        drop(sent);
+        pending
+            .acknowledge(&binding, &outcome.completion_marker, true)
+            .unwrap();
+
+        pending.set_role(&binding, Role::Lane).unwrap();
+        let backend = FakeBackend::new(facts(&binding), vec![">>> ready".to_owned()]);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let outcome = submit(
+            &terminals,
+            &interpreter,
+            &binding,
+            "implement the fix",
+            &pending,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(outcome.submitted);
+        assert_eq!(outcome.role, Role::Lane);
+        let sent = backend.sent.lock().unwrap();
+        let prompt = &sent.last().expect("submit must send exactly one prompt").1;
+        assert!(prompt.starts_with("[qol session bridge]\n"));
+        assert!(!prompt.starts_with("[qol session bridge to architect]"));
+        assert!(prompt.contains("Act as the implementation agent"));
     }
 
     #[test]
