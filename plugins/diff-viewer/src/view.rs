@@ -472,7 +472,7 @@ impl DiffView {
                         self.heat_stamps.insert(path.clone(), stamp);
                         self.heat_stamp = Some(stamp);
                     } else {
-                        self.heat_stamp = None;
+                        self.heat_stamp = Some(Instant::now());
                     }
                     changed |= self.apply_diff(diff, &range);
                     self.in_flight = None;
@@ -546,7 +546,7 @@ impl DiffView {
             self.heat_stamp = if range == pipeline::DEFAULT_RANGE {
                 self.heat_stamps.get(&path).copied()
             } else {
-                None
+                Some(Instant::now())
             };
             self.apply_diff(Ok(diff), &range);
             return;
@@ -2864,6 +2864,23 @@ mod tests {
                 dimmed: true
             },
             "dimmed survives decay"
+        );
+    }
+
+    #[test]
+    fn field_alive_condition_needs_a_heat_stamp_age() {
+        let hot = LineStyle {
+            background_heat: HeatLevel::Hot,
+            dimmed: false,
+        };
+        let alive = |style: LineStyle| style.background_heat != HeatLevel::Cool;
+        assert!(
+            alive(decayed_line_style(hot, None)),
+            "a missing heat_stamp age keeps the field alive forever"
+        );
+        assert!(
+            !alive(decayed_line_style(hot, Some(Duration::from_secs(300)))),
+            "a full decay window cools the field so the frame loop sleeps"
         );
     }
 
