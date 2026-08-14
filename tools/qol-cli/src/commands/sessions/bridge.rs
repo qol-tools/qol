@@ -65,6 +65,7 @@ pub(super) struct BridgeOutcome {
 #[derive(Debug)]
 pub(super) struct PendingRound {
     pub(super) session: String,
+    pub(super) driver: String,
     pub(super) completion_marker: String,
     pub(super) completed: bool,
     pub(super) screen: Option<String>,
@@ -105,6 +106,8 @@ struct StoredCheckpoint {
     screen: Option<String>,
     #[serde(default)]
     autoclose: bool,
+    #[serde(default)]
+    wake_event: Option<String>,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -171,7 +174,7 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, driver, false, None, autoclose)
+        self.write_unlocked(binding, marker, driver, false, None, autoclose, None)
     }
 
     pub(super) fn observe(
@@ -194,6 +197,7 @@ impl PendingBridgeStore {
             completed,
             checkpoint.screen.as_deref(),
             checkpoint.autoclose,
+            checkpoint.wake_event.as_deref(),
         )
     }
 
@@ -217,9 +221,34 @@ impl PendingBridgeStore {
             checkpoint.completed,
             Some(screen),
             checkpoint.autoclose,
+            checkpoint.wake_event.as_deref(),
         )
     }
 
+    pub(super) fn claim_wake(&self, binding: &SessionBinding, event: &str) -> Result<bool> {
+        let _lock = self.lock(binding)?;
+        let Some(checkpoint) = self.load_unlocked(binding)? else {
+            return Ok(false);
+        };
+        if checkpoint.closed
+            || checkpoint.completed
+            || checkpoint.wake_event.as_deref() == Some(event)
+        {
+            return Ok(false);
+        }
+        self.write_unlocked(
+            binding,
+            &checkpoint.completion_marker,
+            &checkpoint.driver,
+            false,
+            checkpoint.screen.as_deref(),
+            checkpoint.autoclose,
+            Some(event),
+        )?;
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn write_unlocked(
         &self,
         binding: &SessionBinding,
@@ -228,6 +257,7 @@ impl PendingBridgeStore {
         completed: bool,
         screen: Option<&str>,
         autoclose: bool,
+        wake_event: Option<&str>,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -240,6 +270,7 @@ impl PendingBridgeStore {
             closed: false,
             screen: screen.map(str::to_owned),
             autoclose,
+            wake_event: wake_event.map(str::to_owned),
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -284,6 +315,7 @@ impl PendingBridgeStore {
             .filter(|checkpoint| !checkpoint.closed)
             .map(|checkpoint| PendingRound {
                 session: binding.token(),
+                driver: checkpoint.driver,
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
@@ -321,6 +353,7 @@ impl PendingBridgeStore {
             .filter(|checkpoint| !checkpoint.session.is_empty())
             .map(|checkpoint| PendingRound {
                 session: checkpoint.session,
+                driver: checkpoint.driver,
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
@@ -1941,6 +1974,59 @@ mod tests {
         assert!(
             !round.autoclose,
             "an old-shape checkpoint without the field must deserialize as false"
+        );
+    }
+
+    #[test]
+    fn claim_wake_is_exactly_once_per_event_and_preserved_by_later_writes() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(&binding, "QOL_BRIDGE_DONE_wake", "v1:fake:8:800", true)
+            .unwrap();
+
+        assert!(
+            store.claim_wake(&binding, "completed").unwrap(),
+            "the first watcher claims the completion wake"
+        );
+        assert!(
+            !store.claim_wake(&binding, "completed").unwrap(),
+            "a concurrent watcher must not re-claim the same event"
+        );
+        assert!(
+            store.claim_wake(&binding, "stalled").unwrap(),
+            "a different event can still be claimed before the round is observed"
+        );
+        assert!(
+            !store.claim_wake(&binding, "stalled").unwrap(),
+            "the stalled event is exactly once too"
+        );
+
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_wake", true)
+            .unwrap();
+        store
+            .store_screen(&binding, "QOL_BRIDGE_DONE_wake", "done tail")
+            .unwrap();
+        assert!(
+            !store.claim_wake(&binding, "completed").unwrap(),
+            "a collected round never wakes again"
+        );
+        assert!(
+            !store.claim_wake(&binding, "stalled").unwrap(),
+            "a collected round never stalls again"
+        );
+
+        let legacy = SessionBinding::from_str("v1:fake:9:900").unwrap();
+        fs::write(
+            store.file_for(&legacy),
+            r#"{"session":"v1:fake:9:900","driver":"v1:fake:8:800","completion_marker":"QOL_BRIDGE_DONE_legacy","completed":false,"closed":false}"#,
+        )
+        .unwrap();
+        assert!(
+            store.claim_wake(&legacy, "completed").unwrap(),
+            "an old-shape checkpoint without the field may still claim a wake"
         );
     }
 

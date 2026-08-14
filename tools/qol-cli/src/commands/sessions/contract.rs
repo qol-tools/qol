@@ -126,7 +126,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Fire-and-forget launch: embed the first task in the launch command, queue the pending round at spawn time, and return without waiting for the live UI (requires task); the pi extension wakes the initiator when a watcher detects the round",
+                        "description": "Fire-and-forget launch: embed the first task in the launch command, queue the pending round at spawn time, and return without waiting for the live UI (requires task); the client watcher wakes the initiator when it detects the round",
                     },
                     "autoclose": {
                         "type": "boolean",

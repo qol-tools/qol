@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
-    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
+    DeliveryMode, ScreenReader, SessionBinding, SessionInventory, TerminalSessionService, TextInput,
 };
 
 use super::bridge::{PendingBridgeStore, PendingRound};
@@ -14,6 +14,7 @@ const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(30);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
+const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
 const WATCH_ALL_KEY: &str = "watch-all";
 
 #[derive(Clone, Copy)]
@@ -36,6 +37,7 @@ impl Default for WatchConfig {
 struct WatchedRound {
     session: String,
     binding: SessionBinding,
+    driver: String,
     marker: String,
     reads: u64,
     last_screen: Option<String>,
@@ -54,6 +56,7 @@ impl WatchedRound {
         Ok(Self {
             session: round.session,
             binding,
+            driver: round.driver,
             marker: round.completion_marker,
             reads: 0,
             last_screen: None,
@@ -79,12 +82,14 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             Ok(token)
         })
         .collect::<Result<Vec<_>>>()?;
+    let trace_dir = qol_config::data_subdir("sessions").unwrap_or_else(|| ".".into());
     watch(
         &TerminalSessionService::system(),
         &PendingBridgeStore::system()?,
         &SpawnLocks::system()?,
         &tokens,
         &mut std::io::stdout(),
+        &trace_dir,
         WatchConfig::default(),
     )
 }
@@ -95,6 +100,7 @@ pub(super) fn watch(
     locks: &SpawnLocks,
     tokens: &[String],
     out: &mut dyn Write,
+    trace_dir: &std::path::Path,
     config: WatchConfig,
 ) -> Result<()> {
     let watch_lock = if tokens.is_empty() {
@@ -113,6 +119,7 @@ pub(super) fn watch(
         locks,
         tokens,
         out,
+        trace_dir,
         config,
         &mut |duration| std::thread::sleep(duration),
     );
@@ -133,6 +140,7 @@ fn poll_round(
     pending: &PendingBridgeStore,
     round: &mut WatchedRound,
     out: &mut dyn Write,
+    trace_dir: &std::path::Path,
     config: WatchConfig,
 ) -> Result<RoundPoll> {
     round.reads += 1;
@@ -145,13 +153,68 @@ fn poll_round(
         Ok(screen) => screen,
         Err(_) => {
             if session_gone(terminals, &round.binding) {
-                emit_gone(out, &round.session)?;
+                if round.marker_seen {
+                    if !pending.claim_wake(&round.binding, "completed")? {
+                        return Ok(RoundPoll {
+                            keep: false,
+                            changed: false,
+                        });
+                    }
+                    let last = round.last_screen.clone().unwrap_or_default();
+                    let tail = screen_tail(&last);
+                    let delivery = deliver_wake(
+                        terminals,
+                        trace_dir,
+                        &round.session,
+                        &round.driver,
+                        "completed",
+                        &wake_message(&round.session, "completed", tail, false),
+                    )?;
+                    pending.observe(&round.binding, &round.marker, true)?;
+                    pending.store_screen(&round.binding, &round.marker, tail)?;
+                    qol_runtime::probe!(
+                        "CLI_SESSION_WATCH",
+                        "event=completed_after_exit session={} reads={} delivered={} autoclose={}",
+                        round.session,
+                        round.reads,
+                        delivery.delivered,
+                        round.autoclose
+                    );
+                    emit_completed(
+                        out,
+                        &round.session,
+                        &round.marker,
+                        tail,
+                        round.autoclose,
+                        &delivery,
+                    )?;
+                    return Ok(RoundPoll {
+                        keep: false,
+                        changed: true,
+                    });
+                }
+                if !pending.claim_wake(&round.binding, "gone")? {
+                    return Ok(RoundPoll {
+                        keep: false,
+                        changed: false,
+                    });
+                }
+                let delivery = deliver_wake(
+                    terminals,
+                    trace_dir,
+                    &round.session,
+                    &round.driver,
+                    "gone",
+                    &wake_message(&round.session, "gone", "", false),
+                )?;
+                emit_gone(out, &round.session, &delivery)?;
                 pending.discard(&round.binding)?;
                 qol_runtime::probe!(
                     "CLI_SESSION_WATCH",
-                    "event=gone session={} reads={}",
+                    "event=gone session={} reads={} delivered={}",
                     round.session,
-                    round.reads
+                    round.reads,
+                    delivery.delivered
                 );
                 return Ok(RoundPoll {
                     keep: false,
@@ -188,20 +251,42 @@ fn poll_round(
             }
             Some(_) => {
                 if round.marker_seen {
+                    if !pending.claim_wake(&round.binding, "completed")? {
+                        return Ok(RoundPoll {
+                            keep: false,
+                            changed: false,
+                        });
+                    }
                     let tail = screen_tail(&screen);
-                    emit_completed(out, &round.session, &round.marker, tail, round.autoclose)?;
+                    let delivery = deliver_wake(
+                        terminals,
+                        trace_dir,
+                        &round.session,
+                        &round.driver,
+                        "completed",
+                        &wake_message(&round.session, "completed", tail, round.autoclose),
+                    )?;
+                    if round.autoclose && delivery.delivered {
+                        close_lane_terminal(terminals, &round.binding);
+                    }
                     pending.observe(&round.binding, &round.marker, true)?;
                     pending.store_screen(&round.binding, &round.marker, tail)?;
                     qol_runtime::probe!(
                         "CLI_SESSION_WATCH",
-                        "event=completed session={} reads={} autoclose={}",
+                        "event=completed session={} reads={} delivered={} autoclose={}",
                         round.session,
                         round.reads,
+                        delivery.delivered,
                         round.autoclose
                     );
-                    if round.autoclose {
-                        close_lane_terminal(terminals, &round.binding);
-                    }
+                    emit_completed(
+                        out,
+                        &round.session,
+                        &round.marker,
+                        tail,
+                        round.autoclose,
+                        &delivery,
+                    )?;
                     return Ok(RoundPoll {
                         keep: false,
                         changed: true,
@@ -229,13 +314,24 @@ fn poll_round(
     }
     if !round.stalled_reported && round.last_change.elapsed() >= config.stall_after {
         round.stalled_reported = true;
-        emit_stalled(out, &round.session)?;
-        qol_runtime::probe!(
-            "CLI_SESSION_WATCH",
-            "event=stalled session={} reads={}",
-            round.session,
-            round.reads
-        );
+        if pending.claim_wake(&round.binding, "stalled")? {
+            let delivery = deliver_wake(
+                terminals,
+                trace_dir,
+                &round.session,
+                &round.driver,
+                "stalled",
+                &wake_message(&round.session, "stalled", "", false),
+            )?;
+            emit_stalled(out, &round.session, &delivery)?;
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=stalled session={} reads={} delivered={}",
+                round.session,
+                round.reads,
+                delivery.delivered
+            );
+        }
         changed = true;
     }
     Ok(RoundPoll {
@@ -334,12 +430,14 @@ fn screen_tail(screen: &str) -> &str {
     &screen[start..]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn watch_loop(
     terminals: &TerminalSessionService,
     pending: &PendingBridgeStore,
     _locks: &SpawnLocks,
     tokens: &[String],
     out: &mut dyn Write,
+    trace_dir: &std::path::Path,
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<()> {
@@ -364,7 +462,7 @@ fn watch_loop(
         let mut changed = false;
         let mut remaining = Vec::with_capacity(watched.len());
         for mut round in watched {
-            let outcome = poll_round(terminals, pending, &mut round, out, config)?;
+            let outcome = poll_round(terminals, pending, &mut round, out, trace_dir, config)?;
             changed |= outcome.changed;
             if outcome.keep {
                 remaining.push(round);
@@ -390,6 +488,14 @@ fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
 }
 
 fn close_lane_terminal(terminals: &TerminalSessionService, binding: &SessionBinding) {
+    if session_gone(terminals, binding) {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=autoclose_skipped session={} reason=already_gone",
+            binding.token()
+        );
+        return;
+    }
     if terminals.is_current(binding).unwrap_or(false) {
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
@@ -417,31 +523,166 @@ fn close_lane_terminal(terminals: &TerminalSessionService, binding: &SessionBind
     }
 }
 
+struct WakeDelivery {
+    delivered: bool,
+    error: Option<String>,
+}
+
+fn wake_message(session: &str, event: &str, screen: &str, autoclose: bool) -> String {
+    match event {
+        "completed" => format!(
+            "qol sessions: lane {session} completed.\n\n{}\n\nReview it, then close the loop with session_loop_close.{}",
+            report_snippet(screen),
+            if autoclose { "\n\n(lane auto-closed)" } else { "" }
+        ),
+        "gone" => format!(
+            "qol sessions: lane {session} gone. The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
+        ),
+        _ => format!(
+            "qol sessions: lane {session} stalled. The lane produced no output for 15 minutes; nudge it with qol sessions resume --kickstart, or collect with session_bridge."
+        ),
+    }
+}
+
+fn report_snippet(screen: &str) -> String {
+    if screen.len() <= WAKE_SNIPPET_MAX_BYTES {
+        return screen.to_owned();
+    }
+    let mut start = screen.len() - WAKE_SNIPPET_MAX_BYTES;
+    while !screen.is_char_boundary(start) {
+        start += 1;
+    }
+    format!(
+        "(report tail; full screen via session_bridge)\n{}",
+        &screen[start..]
+    )
+}
+
+fn wake_failure_path(trace_dir: &std::path::Path, session: &str) -> std::path::PathBuf {
+    let key = session.replace([':', '.'], "_");
+    trace_dir.join(format!("wake-failed-{key}.json"))
+}
+
+fn record_wake_failure(
+    trace_dir: &std::path::Path,
+    session: &str,
+    driver: &str,
+    event: &str,
+    error: &str,
+) {
+    let path = wake_failure_path(trace_dir, session);
+    let record = serde_json::json!({
+        "session": session,
+        "driver": driver,
+        "event": event,
+        "error": error,
+        "at": chrono::Utc::now().to_rfc3339(),
+    });
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&record).unwrap_or_default(),
+    );
+}
+
+fn deliver_wake(
+    terminals: &TerminalSessionService,
+    trace_dir: &std::path::Path,
+    session: &str,
+    driver: &str,
+    event: &str,
+    message: &str,
+) -> Result<WakeDelivery> {
+    let outcome = if driver.is_empty() {
+        WakeDelivery {
+            delivered: false,
+            error: Some(
+                "the initiator terminal is unknown; the spawn ran outside a terminal".to_owned(),
+            ),
+        }
+    } else {
+        match driver.parse::<SessionBinding>() {
+            Ok(binding) => {
+                if session_gone(terminals, &binding) {
+                    WakeDelivery {
+                        delivered: false,
+                        error: Some("the initiator terminal is no longer live".to_owned()),
+                    }
+                } else {
+                    match terminals.send_text(&binding, message, DeliveryMode::Submit) {
+                        Ok(()) => WakeDelivery {
+                            delivered: true,
+                            error: None,
+                        },
+                        Err(error) => WakeDelivery {
+                            delivered: false,
+                            error: Some(error.to_string()),
+                        },
+                    }
+                }
+            }
+            Err(error) => WakeDelivery {
+                delivered: false,
+                error: Some(format!("the initiator token is invalid: {error}")),
+            },
+        }
+    };
+    if !outcome.delivered {
+        record_wake_failure(
+            trace_dir,
+            session,
+            driver,
+            event,
+            outcome.error.as_deref().unwrap_or("delivery failed"),
+        );
+    }
+    Ok(outcome)
+}
+
 fn emit_completed(
     out: &mut dyn Write,
     session: &str,
     marker: &str,
     screen: &str,
     autoclose: bool,
+    delivery: &WakeDelivery,
 ) -> Result<()> {
-    emit(
-        out,
-        serde_json::json!({ "event": "completed", "session": session, "marker": marker, "screen": screen, "autoclose": autoclose }),
-    )
+    let mut event = serde_json::json!({
+        "event": "completed",
+        "session": session,
+        "marker": marker,
+        "screen": screen,
+        "autoclose": autoclose,
+        "delivered": delivery.delivered,
+    });
+    if let Some(error) = &delivery.error {
+        event["wake_error"] = serde_json::json!(error);
+    }
+    emit(out, event)
 }
 
-fn emit_gone(out: &mut dyn Write, session: &str) -> Result<()> {
-    emit(
-        out,
-        serde_json::json!({ "event": "gone", "session": session }),
-    )
+fn emit_gone(out: &mut dyn Write, session: &str, delivery: &WakeDelivery) -> Result<()> {
+    let mut event = serde_json::json!({
+        "event": "gone",
+        "session": session,
+        "delivered": delivery.delivered,
+    });
+    if let Some(error) = &delivery.error {
+        event["wake_error"] = serde_json::json!(error);
+    }
+    emit(out, event)
 }
 
-fn emit_stalled(out: &mut dyn Write, session: &str) -> Result<()> {
-    emit(
-        out,
-        serde_json::json!({ "event": "stalled", "session": session }),
-    )
+fn emit_stalled(out: &mut dyn Write, session: &str, delivery: &WakeDelivery) -> Result<()> {
+    let mut event = serde_json::json!({
+        "event": "stalled",
+        "session": session,
+        "delivered": delivery.delivered,
+    });
+    if let Some(error) = &delivery.error {
+        event["wake_error"] = serde_json::json!(error);
+    }
+    emit(out, event)
 }
 
 fn emit(out: &mut dyn Write, line: serde_json::Value) -> Result<()> {
@@ -452,7 +693,7 @@ fn emit(out: &mut dyn Write, line: serde_json::Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -475,10 +716,15 @@ mod tests {
     struct FakeBackend {
         id: BackendId,
         facts: SessionFacts,
+        driver_facts: Mutex<Option<SessionFacts>>,
         gone: AtomicBool,
+        fail_send: AtomicBool,
+        die_after: AtomicU64,
+        read_count: AtomicU64,
         screens: Mutex<VecDeque<String>>,
         last: Mutex<Option<String>>,
         calls: Mutex<Vec<(CallKind, Instant)>>,
+        sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
         closed: Mutex<Vec<SessionBinding>>,
     }
 
@@ -487,16 +733,39 @@ mod tests {
             Arc::new(Self {
                 id: BackendId::new("fake").unwrap(),
                 facts,
+                driver_facts: Mutex::new(None),
                 gone: AtomicBool::new(false),
+                fail_send: AtomicBool::new(false),
+                die_after: AtomicU64::new(u64::MAX),
+                read_count: AtomicU64::new(0),
                 screens: Mutex::new(screens.into()),
                 last: Mutex::new(None),
                 calls: Mutex::new(Vec::new()),
+                sent: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
             })
         }
 
         fn mark_gone(&self) {
             self.gone.store(true, Ordering::Relaxed);
+        }
+
+        fn fail_sending(&self) {
+            self.fail_send.store(true, Ordering::Relaxed);
+        }
+
+        fn with_driver(self: Arc<Self>, driver: SessionFacts) -> Arc<Self> {
+            *self.driver_facts.lock().unwrap() = Some(driver);
+            self
+        }
+
+        fn die_after_reads(self: Arc<Self>, reads: u64) -> Arc<Self> {
+            self.die_after.store(reads, Ordering::Relaxed);
+            self
+        }
+
+        fn lane_alive(&self) -> bool {
+            self.read_count.load(Ordering::Relaxed) <= self.die_after.load(Ordering::Relaxed)
         }
 
         fn record(&self, kind: CallKind) {
@@ -516,10 +785,20 @@ mod tests {
     impl SessionInventory for FakeBackend {
         fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
             self.record(CallKind::Ls);
-            if self.gone.load(Ordering::Relaxed) {
-                return Ok(Vec::new());
+            if self.gone.load(Ordering::Relaxed) || !self.lane_alive() {
+                return Ok(self
+                    .driver_facts
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .into_iter()
+                    .collect());
             }
-            Ok(vec![self.facts.clone()])
+            let mut facts = vec![self.facts.clone()];
+            if let Some(driver) = self.driver_facts.lock().unwrap().clone() {
+                facts.push(driver);
+            }
+            Ok(facts)
         }
     }
 
@@ -527,7 +806,8 @@ mod tests {
         fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             self.record(CallKind::Ls);
             self.record(CallKind::Full);
-            if self.gone.load(Ordering::Relaxed) {
+            self.read_count.fetch_add(1, Ordering::Relaxed);
+            if self.gone.load(Ordering::Relaxed) || !self.lane_alive() {
                 return Err(TerminalError::TargetMissing(_target.clone()));
             }
             Ok(self.next_screen())
@@ -535,7 +815,8 @@ mod tests {
 
         fn read_screen_relaxed(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
             self.record(CallKind::Full);
-            if self.gone.load(Ordering::Relaxed) {
+            self.read_count.fetch_add(1, Ordering::Relaxed);
+            if self.gone.load(Ordering::Relaxed) || !self.lane_alive() {
                 return Err(TerminalError::TargetMissing(_target.clone()));
             }
             Ok(self.next_screen())
@@ -551,10 +832,17 @@ mod tests {
     impl TextInput for FakeBackend {
         fn send_text(
             &self,
-            _target: &SessionBinding,
-            _text: &str,
-            _mode: DeliveryMode,
+            target: &SessionBinding,
+            text: &str,
+            mode: DeliveryMode,
         ) -> Result<(), TerminalError> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((target.clone(), text.to_owned(), mode));
+            if self.fail_send.load(Ordering::Relaxed) {
+                return Err(TerminalError::TargetMissing(target.clone()));
+            }
             Ok(())
         }
 
@@ -658,6 +946,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -679,7 +968,7 @@ mod tests {
 
         let auto_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&auto_binding, "QOL_BRIDGE_DONE_auto", "v1:fake:8:800", true)
+            .start(&auto_binding, "QOL_BRIDGE_DONE_auto", "v1:fake:7:100", true)
             .unwrap();
         let auto_backend = FakeBackend::new(
             facts("7", 100),
@@ -693,6 +982,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -701,11 +991,25 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["autoclose"], true);
+        assert_eq!(events[0]["delivered"], true);
+        let sent = auto_backend.sent.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            1,
+            "the wake must be typed into the initiator terminal"
+        );
+        let (driver, text, mode) = &sent[0];
+        assert_eq!(driver.token(), auto_binding.token());
+        assert_eq!(*mode, DeliveryMode::Submit);
+        assert!(text.contains("qol sessions: lane"));
+        assert!(text.contains("QOL_BRIDGE_DONE_auto"));
+        assert!(text.contains("(lane auto-closed)"));
+        drop(sent);
         let closed = auto_backend.closed.lock().unwrap();
         assert_eq!(
             closed.as_slice(),
             &[auto_binding],
-            "an autoclose round must close the lane terminal"
+            "an autoclose round must close the lane terminal after delivery"
         );
         drop(closed);
 
@@ -714,7 +1018,7 @@ mod tests {
             .start(
                 &plain_binding,
                 "QOL_BRIDGE_DONE_plain",
-                "v1:fake:8:800",
+                "v1:fake:8:200",
                 false,
             )
             .unwrap();
@@ -730,6 +1034,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:8:200".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -738,9 +1043,140 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["autoclose"], false);
+        assert_eq!(events[0]["delivered"], true);
         assert!(
             plain_backend.closed.lock().unwrap().is_empty(),
             "a plain round must never close its terminal"
+        );
+    }
+
+    #[test]
+    fn autoclose_is_skipped_when_the_wake_cannot_be_delivered_and_a_trace_is_left() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", true)
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_round".to_owned(); 2],
+        );
+        backend.fail_sending();
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["delivered"], false);
+        assert!(
+            events[0]["wake_error"].as_str().is_some(),
+            "an undeliverable wake must name its error in the event"
+        );
+        assert!(
+            backend.closed.lock().unwrap().is_empty(),
+            "the lane must stay open when the wake could not be delivered"
+        );
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed, "the round still completed");
+        let trace = root.path().join("wake-failed-v1_fake_7_100.json");
+        assert!(trace.exists(), "a failed wake must leave a durable trace");
+        let record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(trace).unwrap()).unwrap();
+        assert_eq!(record["event"], "completed");
+        assert_eq!(record["session"], "v1:fake:7:100");
+    }
+
+    #[test]
+    fn a_claimed_wake_keeps_a_second_watcher_silent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        assert!(pending.claim_wake(&binding, "completed").unwrap());
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_round".to_owned(); 2],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        assert!(
+            out.is_empty(),
+            "a watcher whose wake was already claimed must stay silent: {out:?}"
+        );
+        assert!(
+            backend.sent.lock().unwrap().is_empty(),
+            "no second delivery may happen"
+        );
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.completed,
+            "the claiming watcher owns the observation"
+        );
+    }
+
+    #[test]
+    fn lane_exiting_after_the_marker_completes_with_the_last_screen_instead_of_going_gone() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:200", true)
+            .unwrap();
+        let final_screen = "done\nQOL_BRIDGE_DONE_round".to_owned();
+        let backend = FakeBackend::new(facts("7", 100), vec![final_screen.clone()])
+            .with_driver(facts("8", 200))
+            .die_after_reads(1);
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(
+            events[0]["event"], "completed",
+            "a marker seen before the lane window closed must not be reported as gone"
+        );
+        assert_eq!(events[0]["screen"], final_screen);
+        assert_eq!(events[0]["delivered"], true);
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed, "the checkpoint must stay collectable");
+        assert!(
+            backend.closed.lock().unwrap().is_empty(),
+            "an already-closed lane needs no autoclose"
         );
     }
 
@@ -765,6 +1201,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -817,6 +1254,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -858,6 +1296,7 @@ mod tests {
                 collected_binding.token().to_owned(),
             ],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -910,6 +1349,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned(), "v1:fake:8:200".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -948,6 +1388,7 @@ mod tests {
             &locks(&root),
             &[stale_binding.token().to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -977,6 +1418,7 @@ mod tests {
             &locks(&root),
             &[binding.token().to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1008,6 +1450,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_millis(5)),
         )
         .unwrap();
@@ -1056,6 +1499,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             WatchConfig {
                 poll_base: Duration::from_millis(30),
                 poll_cap: Duration::from_millis(120),
@@ -1093,6 +1537,7 @@ mod tests {
             &locks(&root),
             &[],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1106,6 +1551,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1133,6 +1579,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1147,7 +1594,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 2);
+        assert_eq!(ls, 3);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -1159,7 +1606,7 @@ mod tests {
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
             .unwrap();
         let backend = FakeBackend::new(
             facts("7", 100),
@@ -1176,6 +1623,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1189,9 +1637,12 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            2,
-            "the first marker poll must not emit; the second confirms"
+            3,
+            "the first marker poll must not emit; the second confirms and the delivery re-checks the initiator"
         );
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("QOL_BRIDGE_DONE_round"));
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
     }
@@ -1219,6 +1670,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1247,12 +1699,14 @@ mod tests {
         let thread_out = Arc::clone(&out);
         let handle = std::thread::spawn(move || {
             let thread_locks = SpawnLocks::with_dir(root.path().join("spawn-locks"));
+            let thread_trace = root.path().to_path_buf();
             watch(
                 &thread_terminals,
                 &thread_pending,
                 &thread_locks,
                 &["v1:fake:7:100".to_owned()],
                 &mut *thread_out.lock().unwrap(),
+                &thread_trace,
                 WatchConfig {
                     poll_base: Duration::from_millis(50),
                     poll_cap: Duration::from_millis(50),
@@ -1315,6 +1769,7 @@ mod tests {
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
@@ -1342,6 +1797,7 @@ mod tests {
             &locks,
             &[],
             &mut Vec::new(),
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap_err()
@@ -1379,6 +1835,7 @@ mod tests {
             &locks,
             &[],
             &mut FailingWriter,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap_err()
@@ -1404,6 +1861,7 @@ mod tests {
             &locks,
             &[],
             &mut out,
+            root.path(),
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();

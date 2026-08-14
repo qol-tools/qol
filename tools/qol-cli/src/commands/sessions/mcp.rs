@@ -34,14 +34,17 @@ pub(crate) struct McpSessionServer {
     spawn_surface: Option<SpawnSurface>,
     spawn_cap: Option<super::spawn::SpawnCapConfig>,
     round_timeout: Duration,
+    watcher: super::watch_owner::ClientWatcher,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
 
 impl McpSessionServer {
     pub(crate) fn system() -> Result<Self> {
+        let terminals = Arc::new(TerminalSessionService::system());
+        let watcher = super::watch_owner::ClientWatcher::for_terminal(&terminals);
         Ok(Self {
-            terminals: Arc::new(TerminalSessionService::system()),
+            terminals: Arc::clone(&terminals),
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
@@ -49,6 +52,7 @@ impl McpSessionServer {
             spawn_surface: super::spawn::config_surface()?,
             spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
+            watcher,
             #[cfg(test)]
             _pending_root: None,
         })
@@ -67,6 +71,10 @@ impl McpSessionServer {
             spawn_surface: None,
             spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
+            watcher: super::watch_owner::ClientWatcher::with_dir(
+                root.path().join("watch-state"),
+                "test-owner".to_owned(),
+            ),
             _pending_root: Some(root),
         }
     }
@@ -86,6 +94,10 @@ impl McpSessionServer {
             spawn_surface: None,
             spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
+            watcher: super::watch_owner::ClientWatcher::with_dir(
+                dir.join("watch-state"),
+                "test-owner".to_owned(),
+            ),
             _pending_root: None,
         }
     }
@@ -281,6 +293,9 @@ impl McpSessionServer {
             &self.pending,
         )
         .map_err(|error| error.to_string())?;
+        if outcome.task_submitted == Some(true) {
+            self.watcher.record_token(&outcome.session, &self.pending);
+        }
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
@@ -410,6 +425,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
         bail!("usage: {}", help_text().trim_end());
     }
     let server = McpSessionServer::system()?;
+    server.watcher.start(&server.pending);
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut output = BufWriter::new(stdout.lock());
@@ -421,6 +437,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
             output.flush()?;
         }
     }
+    server.watcher.stop();
     Ok(())
 }
 

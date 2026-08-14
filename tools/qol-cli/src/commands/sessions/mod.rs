@@ -18,6 +18,7 @@ mod last_send;
 mod mcp;
 mod spawn;
 mod watch;
+mod watch_owner;
 
 pub(crate) struct SessionSubcommand {
     pub(crate) name: &'static str,
@@ -200,9 +201,16 @@ Details:
   watch is long-running infrastructure for event-driven lane wakeup: it
   polls each watched round's screen for its completion marker, prints one
   JSON line per event (completed, gone, stalled), and exits 0 when no
-  watched rounds remain pending. With no tokens it watches every pending
-  round in the checkpoint store and takes a spawn lock so two watchers do
-  not double-poll; explicit tokens need no lock. It is not an agent tool.
+  watched rounds remain pending. Each event is delivered into the round's
+  initiator terminal (the checkpoint driver) as a submitted wake message
+  before the line is printed; an autoclose round closes its lane tab only
+  after that delivery is confirmed, and an undeliverable wake leaves a
+  wake-failed-<session>.json trace plus delivered=false on the event line.
+  A lane whose window closed right after showing the marker completes with
+  its last screen instead of going gone, so the report survives. With no
+  tokens it watches every pending round in the checkpoint store and takes a
+  spawn lock so two watchers do not double-poll; explicit tokens need no
+  lock. It is not an agent tool.
   The MCP and generated agent surfaces expose sessions_list, session_spawn,
   session_bridge, session_loop_close, and session_close. The remaining
   commands are human diagnostics.
@@ -573,6 +581,14 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+fn wake_failed(session: &str) -> bool {
+    let Some(dir) = qol_config::data_subdir("sessions") else {
+        return false;
+    };
+    let key = session.replace([':', '.'], "_");
+    dir.join(format!("wake-failed-{key}.json")).exists()
+}
+
 fn next_rows(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -612,6 +628,11 @@ fn next_rows(
             continue;
         }
         if round.completed {
+            let wake_note = if wake_failed(round.session.as_str()) {
+                " The completion wake could not be delivered to the initiator terminal (see wake-failed-*.json in the sessions data dir); the lane stayed open as the report surface."
+            } else {
+                ""
+            };
             rows.push(serde_json::json!({
                 "phase": "review",
                 "session": round.session,
@@ -620,7 +641,7 @@ fn next_rows(
                     "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
                     round.session, round.completion_marker
                 ),
-                "instruction": "The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.",
+                "instruction": format!("The round is complete. Personally review the implementation against the acceptance criteria first. Then either run the command with the next bounded correction task, or, when the entire feature is accepted, call session_loop_close with this session and completion_marker.{wake_note}"),
             }));
             continue;
         }

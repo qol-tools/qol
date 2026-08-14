@@ -194,23 +194,6 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
     } catch {}
   }
 
-  function reportSnippet(screen) {
-    if (typeof screen !== "string" || screen.length === 0) return "";
-    const max = 8 * 1024;
-    const truncated = screen.length > max;
-    let start = truncated ? screen.length - max : 0;
-    while (start > 0 && start < screen.length) {
-      const code = screen.charCodeAt(start);
-      if (code >= 0xdc00 && code <= 0xdfff) {
-        start -= 1;
-      } else {
-        break;
-      }
-    }
-    const snippet = screen.slice(start);
-    return truncated ? `(report tail; full screen via session_bridge)\n${snippet}` : snippet;
-  }
-
   let watcherChild: ReturnType<typeof spawn> | null = null;
   let stdoutBuffer = "";
 
@@ -241,7 +224,7 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
             event = JSON.parse(trimmed);
           } catch {}
           if (typeof event?.event !== "string" || typeof event?.session !== "string") continue;
-          wakeDebugLog(sessionId, `event=${event.event} session=${event.session} screen=${typeof event.screen === "string" ? event.screen.length : 0}`);
+          wakeDebugLog(sessionId, `event=${event.event} session=${event.session} delivered=${event.delivered === true}${typeof event.wake_error === "string" ? ` error=${event.wake_error}` : ""} screen=${typeof event.screen === "string" ? event.screen.length : 0}`);
           const remaining = dropWatchedToken(sessionId, event.session);
           if (remaining === null) {
             wakeDebugLog(sessionId, `delivery skip session=${event.session} reason=already_delivered`);
@@ -255,25 +238,8 @@ const WATCH_GLUE: &str = r#"  function sessionsDir() {
           if (remaining.length > 0) {
             await startWatcher(ctx);
           }
-          const action =
-            event.event === "gone"
-              ? "The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
-              : event.event === "stalled"
-                ? "The lane produced no output for 15 minutes; nudge it with qol sessions resume --kickstart, or collect with session_bridge."
-                : "Collect with session_bridge.";
-          const message =
-            event.event === "completed"
-              ? `qol sessions: lane ${event.session} completed.\n\n${reportSnippet(event.screen)}\n\nReview it, then close the loop with session_loop_close.` + (event.autoclose === true ? "\n\n(lane auto-closed)" : "")
-              : `qol sessions: lane ${event.session} ${event.event}. ${action}`;
-          wakeDebugLog(sessionId, `send message_bytes=${message.length}`);
-          try {
-            const sent = pi.sendUserMessage(message, { deliverAs: "followUp", triggerTurn: true });
-            wakeDebugLog(sessionId, `send returned ${typeof sent}`);
-            if (sent && typeof sent.then === "function") {
-              sent.then(() => wakeDebugLog(sessionId, "send ok")).catch((error) => wakeDebugLog(sessionId, `send failed: ${error?.message ?? error}`));
-            }
-          } catch (error) {
-            wakeDebugLog(sessionId, `send threw: ${error?.message ?? error}`);
+          if (event.delivered === false) {
+            wakeDebugLog(sessionId, `wake undeliverable session=${event.session} event=${event.event} error=${typeof event.wake_error === "string" ? event.wake_error : "unknown"}`);
           }
         }
       });
@@ -537,16 +503,6 @@ mod tests {
 
     #[test]
     fn pi_adapter_prunes_delivered_tokens_and_respawns_the_watcher() {
-        let drop_at = WATCH_GLUE
-            .find("dropWatchedToken(sessionId, event.session)")
-            .expect("delivery prunes the token");
-        let send_at = WATCH_GLUE
-            .find("pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })")
-            .expect("wake send");
-        assert!(
-            drop_at < send_at,
-            "the token must be dropped before the wake is sent"
-        );
         assert!(WATCH_GLUE.contains("function dropWatchedToken(sessionId, token)"));
         assert!(WATCH_GLUE.contains("fs.readFileSync(watchStateFile(sessionId), \"utf8\")"));
         assert!(WATCH_GLUE
@@ -560,13 +516,16 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_spawns_the_watcher_and_wakes_the_initiator_per_event() {
+    fn pi_adapter_spawns_the_watcher_and_lets_it_deliver_into_the_initiator_terminal() {
         let source = pi_extension().expect("render");
         assert!(source.contains("pi.on(\"session_start\""));
         assert!(source.contains("await startWatcher(ctx)"));
-        assert!(source.contains("qol sessions: lane ${event.session} ${event.event}."));
-        assert!(source.contains("deliverAs: \"followUp\", triggerTurn: true"));
-        assert!(source.contains("collect with session_bridge"));
+        assert!(
+            !WATCH_GLUE.contains("sendUserMessage"),
+            "the pi glue must not send wakes itself; the watcher owns delivery"
+        );
+        assert!(source.contains("delivered=${event.delivered === true}"));
+        assert!(source.contains("event.wake_error"));
         assert!(source.contains("pi.on(\"session_shutdown\""));
         assert!(WATCH_GLUE.contains("watcherChild.kill(\"SIGTERM\")"));
         assert!(WATCH_GLUE.contains("detached: true"));
@@ -584,9 +543,10 @@ mod tests {
         assert!(WATCH_GLUE.contains("const trimmed = line.trim();"));
         assert!(WATCH_GLUE.contains("JSON.parse(trimmed)"));
         assert!(WATCH_GLUE.contains("typeof event?.event !== \"string\""));
-        assert!(WATCH_GLUE.contains(
-            "pi.sendUserMessage(message, { deliverAs: \"followUp\", triggerTurn: true })"
-        ));
+        assert!(
+            !WATCH_GLUE.contains("sendUserMessage"),
+            "delivery moved into the watcher; the glue only prunes tokens"
+        );
     }
 
     #[test]
@@ -600,11 +560,9 @@ mod tests {
         assert!(WATCH_GLUE.contains("watch child error: ${error?.message ?? error}"));
         assert!(WATCH_GLUE.contains("watch child exit code=${code} signal=${signal}"));
         assert!(WATCH_GLUE.contains("chunk bytes=${chunk.length} buffer=${stdoutBuffer.length}"));
-        assert!(WATCH_GLUE.contains("event=${event.event} session=${event.session} screen="));
-        assert!(WATCH_GLUE.contains("send message_bytes=${message.length}"));
-        assert!(WATCH_GLUE.contains("send returned ${typeof sent}"));
-        assert!(WATCH_GLUE.contains("send threw: ${error?.message ?? error}"));
-        assert!(WATCH_GLUE.contains("if (sent && typeof sent.then === \"function\")"));
+        assert!(WATCH_GLUE.contains("event=${event.event} session=${event.session} delivered="));
+        assert!(WATCH_GLUE.contains("event.wake_error"));
+        assert!(WATCH_GLUE.contains("wake undeliverable session=${event.session}"));
         assert!(source.contains("import * as fs from \"node:fs\";"));
         assert!(source.contains("import * as fsp from \"node:fs/promises\";"));
     }
@@ -627,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_passes_autoclose_through_and_announces_the_closed_lane() {
+    fn pi_adapter_passes_autoclose_through_and_lets_the_watcher_announce_the_closed_lane() {
         assert!(
             EXECUTE_SPAWN.contains("if (params.autoclose === true) args.push(\"--auto-close\")")
         );
@@ -635,9 +593,9 @@ mod tests {
             EXECUTE_SPAWN.contains("if (params.background === true) args.push(\"--background\")")
         );
         assert!(
-            WATCH_GLUE.contains("event.autoclose === true ? \"\\n\\n(lane auto-closed)\" : \"\"")
+            !WATCH_GLUE.contains("lane auto-closed"),
+            "the closed-lane note now lives in the watcher's wake message"
         );
-        assert!(WATCH_GLUE.contains("Review it, then close the loop with session_loop_close."));
     }
 
     #[test]
@@ -660,20 +618,20 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_embeds_the_report_snippet_in_the_completed_wake() {
-        assert!(WATCH_GLUE.contains("function reportSnippet(screen)"));
-        assert!(WATCH_GLUE.contains("const max = 8 * 1024"));
-        assert!(WATCH_GLUE.contains("(report tail; full screen via session_bridge)"));
-        assert!(WATCH_GLUE.contains("Review it, then close the loop with session_loop_close."));
-        assert!(WATCH_GLUE.contains(
-            "`qol sessions: lane ${event.session} completed.\\n\\n${reportSnippet(event.screen)}\\n\\nReview it, then close the loop with session_loop_close.`"
-        ));
-        assert!(WATCH_GLUE.contains("start a fresh lane if the work still matters."));
-        assert!(WATCH_GLUE.contains(
-            "nudge it with qol sessions resume --kickstart, or collect with session_bridge."
-        ));
-        assert!(WATCH_GLUE.contains("deliverAs: \"followUp\", triggerTurn: true"));
-        assert!(WATCH_GLUE.contains("Collect with session_bridge."));
+    fn pi_adapter_keeps_the_wake_composition_in_the_watcher() {
+        assert!(
+            !WATCH_GLUE.contains("function reportSnippet(screen)"),
+            "the report snippet now lives in the watcher (watch.rs report_snippet)"
+        );
+        assert!(!WATCH_GLUE.contains("Collect with session_bridge."));
+        assert!(
+            !WATCH_GLUE.contains("start a fresh lane if the work still matters."),
+            "wake copy moved into the watcher's wake_message"
+        );
+        assert!(
+            !WATCH_GLUE.contains("nudge it with qol sessions resume --kickstart"),
+            "wake copy moved into the watcher's wake_message"
+        );
     }
 
     #[test]
