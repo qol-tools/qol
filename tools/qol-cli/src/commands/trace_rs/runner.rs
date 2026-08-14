@@ -2065,6 +2065,32 @@ mod tests {
         assert!(output.contains("is on Mon 0 (expected Mon 1)"));
     }
 
+    #[test]
+    fn unmap_hide_records_opacity_zero_so_raced_map_is_not_a_divergence() {
+        let args = Args::parse(&["--details".into()]).unwrap();
+        let mut runner = runner_with_pid(args, "10", "host");
+        runner
+            .pid_names
+            .insert("77".to_string(), "alt-tab".to_string());
+        runner.push_monitor((0, 0, 100, 100));
+        let output = replay_fixture(
+            &mut runner,
+            &[
+                "1000 pid=10 HIDE_WIN title=qol-alt-tab-picker@0,0,100x100 wid=5 path=unmap opacity=0 compositor=true opacity_ok=true passthrough=true unmapped=true attempts=1 flush=true reason=boot",
+                "1010 pid=10 GHOSTDUMP begin",
+                "1011 pid=10 GHOSTWIN title=qol-alt-tab-picker@0,0,100x100 owner_pid=77 wid=5 pos=(0,0) size=100x100 opacity=0 map=viewable role=invisible",
+                "1020 pid=10 GHOSTDUMP end",
+            ],
+        );
+        let output = strip_ansi(&output);
+        assert!(
+            output.contains("qol-alt-tab-picker@Mon 0 -> 0.0"),
+            "{output}"
+        );
+        assert!(!output.contains("DIVERGENCE"), "{output}");
+        assert!(output.contains("OK"), "{output}");
+    }
+
     fn runner_with_pid(args: Args, pid: &str, process_name: &str) -> TraceRunner {
         let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
         runner

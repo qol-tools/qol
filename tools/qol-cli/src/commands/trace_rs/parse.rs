@@ -371,6 +371,36 @@ mod tests {
     }
 
     #[test]
+    fn hide_opacity_parses_unmap_probe_but_not_miss_probe() {
+        assert_eq!(
+            hide_opacity(
+                "title=qol-alt-tab-picker@0,0,100x100 wid=5 path=unmap opacity=0 compositor=true opacity_ok=true passthrough=true unmapped=true attempts=1 flush=true reason=boot"
+            ),
+            Some((0.0, Some("unmap")))
+        );
+        assert_eq!(
+            hide_opacity("title=qol-alt-tab-picker@0,0,100x100 wid=NONE attempts=6 reason=boot"),
+            None
+        );
+    }
+
+    #[test]
+    fn show_opacity_parses_cleared_field_immediately_after_wid() {
+        assert_eq!(
+            show_opacity(
+                "title=qol-launcher@0,0,100x100 wid=5 cleared_opacity->1 presentation=Overlay state=true source=2 reason=show"
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            show_opacity(
+                "title=qol-launcher@0,0,100x100 wid=5 presentation=Overlay cleared_opacity->1 state=true reason=show"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn parses_monitor_bounds_from_debug_shape() {
         assert_eq!(
             parse_monitor_bounds_debug(

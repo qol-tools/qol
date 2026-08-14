@@ -396,6 +396,9 @@ pub fn hide_for_capture(title: &str, _window: &mut gpui::Window) -> bool {
     hide_invisible(title)
 }
 
+const HIDE_RESOLVE_ATTEMPTS: u32 = 6;
+const HIDE_RESOLVE_RETRY_MS: u64 = 5;
+
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
@@ -406,9 +409,20 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     else {
         return false;
     };
-    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        qol_runtime::probe!("HIDE_WIN", "title={title} wid=NONE reason={reason}");
-        return false;
+    let mut attempts = 0;
+    let wid = loop {
+        attempts += 1;
+        if let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) {
+            break wid;
+        }
+        if attempts >= HIDE_RESOLVE_ATTEMPTS {
+            qol_runtime::probe!(
+                "HIDE_WIN",
+                "title={title} wid=NONE attempts={attempts} reason={reason}"
+            );
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(HIDE_RESOLVE_RETRY_MS));
     };
     release_input_focus(&conn, root, wid);
     if opacity > 0.0 || !unmap_hide_enabled() {
@@ -428,14 +442,21 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
             return true;
         }
     }
-    let _ = conn.unmap_window(wid);
-    let _ = conn.flush();
-    store_card(title, wid, None);
+    let compositor = compositor_running(&conn, screen_num);
+    let passthrough_ok = set_input_passthrough(&conn, wid, true);
+    let opacity_ok = compositor && set_window_opacity(&conn, wid, 0.0);
+    let unmapped = conn
+        .unmap_window(wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let flushed = conn.flush().is_ok();
+    store_card(title, wid, opacity_ok.then_some(0));
     qol_runtime::probe!(
         "HIDE_WIN",
-        "title={title} wid={wid} path=unmap reason={reason}"
+        "title={title} wid={wid} path=unmap opacity=0 compositor={compositor} opacity_ok={opacity_ok} passthrough={passthrough_ok} unmapped={unmapped} attempts={attempts} flush={flushed} reason={reason}",
     );
-    true
+    unmapped
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
@@ -532,7 +553,8 @@ fn show_window_by_title_with_focus(
     );
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} wid={wid} presentation={presentation:?} cleared_opacity={clear_ok} state={state_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
+        "title={title} wid={wid} cleared_opacity->{} presentation={presentation:?} state={state_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
+        u8::from(clear_ok),
     );
     true
 }
