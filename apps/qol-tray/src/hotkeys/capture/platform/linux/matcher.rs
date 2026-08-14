@@ -1,4 +1,5 @@
 use super::super::super::binding::{Binding, CaptureEvent, Phase};
+use super::evdev_backend::keycode_name;
 use qol_hotkeys::evdev;
 use qol_hotkeys::grammar::Modifier;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -32,8 +33,11 @@ impl CaptureDecision {
 pub(super) struct BindingMatcher {
     bindings: Vec<(LinuxCombo, Binding)>,
     state: evdev::ModifierState,
+    #[cfg(debug_assertions)]
+    traced_modifiers: std::collections::BTreeSet<Modifier>,
     active_continuous: HashMap<u16, (LinuxCombo, Binding, Instant)>,
     suppressed_keys: HashSet<u16>,
+    held: HashSet<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,14 +57,63 @@ impl BindingMatcher {
 
     pub(super) fn observe(&mut self, code: u16, value: i32) -> CaptureDecision {
         if self.state.handle(code, value) {
-            return self.modifier_decision();
+            let decision = if value == 1 && !self.held.insert(code) {
+                CaptureDecision::suppress(Vec::new())
+            } else {
+                if value == 0 {
+                    self.held.remove(&code);
+                }
+                self.modifier_decision()
+            };
+            #[cfg(debug_assertions)]
+            {
+                let mods = self.state.pressed_modifiers();
+                if mods != self.traced_modifiers {
+                    self.traced_modifiers = mods.clone();
+                    qol_runtime::probe!(
+                        "HOTKEY_CAPTURE",
+                        "event=mods code={} value={} mods={}",
+                        keycode_name(code),
+                        value,
+                        mods.iter()
+                            .map(|m| format!("{m:?}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                }
+            }
+            return decision;
         }
         match value {
-            0 => self.release_key(code),
-            1 => self.press_key(code),
+            0 => {
+                self.held.remove(&code);
+                self.release_key(code)
+            }
+            1 => {
+                if !self.held.insert(code) {
+                    return CaptureDecision::suppress(Vec::new());
+                }
+                self.press_key(code)
+            }
             2 if self.suppressed_keys.contains(&code) => self.repeat_key(code),
             _ => CaptureDecision::forward(),
         }
+    }
+
+    pub(super) fn seed_held(&mut self, codes: impl IntoIterator<Item = u16>) {
+        for code in codes {
+            self.held.insert(code);
+            self.state.handle(code, 1);
+        }
+    }
+
+    pub(super) fn reconcile(&mut self, code: u16, value: i32) {
+        if value == 0 {
+            self.held.remove(&code);
+        } else {
+            self.held.insert(code);
+        }
+        self.state.handle(code, value);
     }
 
     pub(super) fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
@@ -282,5 +335,113 @@ mod matcher_tests {
             matcher.state.pressed_modifiers(),
             BTreeSet::from([Modifier::Super])
         );
+    }
+
+    #[test]
+    fn duplicate_press_of_bound_key_never_dispatches_twice() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.observe(keycodes::KEY_LEFTMETA, 1);
+
+        let first = matcher.observe(keycodes::KEY_DOWN, 1);
+        let duplicate = matcher.observe(keycodes::KEY_DOWN, 1);
+        let release = matcher.observe(keycodes::KEY_DOWN, 0);
+
+        assert!(!first.forward);
+        assert_eq!(first.events.len(), 1);
+        assert_eq!(first.events[0].phase, Phase::START);
+        assert!(!duplicate.forward);
+        assert!(duplicate.events.is_empty(), "duplicate press re-dispatched");
+        assert!(!release.forward);
+        assert!(release.events.is_empty());
+    }
+
+    #[test]
+    fn duplicate_press_of_plain_key_is_not_forwarded_twice() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        let first = matcher.observe(keycodes::KEY_ENTER, 1);
+        let duplicate = matcher.observe(keycodes::KEY_ENTER, 1);
+        let release = matcher.observe(keycodes::KEY_ENTER, 0);
+
+        assert!(first.forward);
+        assert!(!duplicate.forward);
+        assert!(duplicate.events.is_empty());
+        assert!(release.forward);
+    }
+
+    #[test]
+    fn duplicate_modifier_press_is_not_forwarded_twice() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        let first = matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        let duplicate = matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        let release = matcher.observe(keycodes::KEY_LEFTMETA, 0);
+
+        assert!(first.forward);
+        assert!(!duplicate.forward);
+        assert!(release.forward);
+    }
+
+    #[test]
+    fn seeded_modifier_dispatches_fresh_combo_press_without_its_press_event() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.seed_held([keycodes::KEY_LEFTMETA]);
+
+        let press = matcher.observe(keycodes::KEY_DOWN, 1);
+        let release = matcher.observe(keycodes::KEY_DOWN, 0);
+        let super_release = matcher.observe(keycodes::KEY_LEFTMETA, 0);
+
+        assert!(!press.forward);
+        assert_eq!(press.events[0].phase, Phase::START);
+        assert!(!release.forward);
+        assert!(super_release.forward);
+    }
+
+    #[test]
+    fn seeded_held_bound_key_duplicate_press_is_suppressed_and_release_forwarded() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.seed_held([keycodes::KEY_DOWN]);
+
+        let duplicate = matcher.observe(keycodes::KEY_DOWN, 1);
+        let release = matcher.observe(keycodes::KEY_DOWN, 0);
+
+        assert!(!duplicate.forward);
+        assert!(duplicate.events.is_empty());
+        assert!(release.forward);
+    }
+
+    #[test]
+    fn reconcile_replay_press_is_state_not_dispatch_and_enables_fresh_combo() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.reconcile(keycodes::KEY_LEFTMETA, 1);
+
+        let replay = matcher.observe(keycodes::KEY_DOWN, 1);
+        assert!(!replay.forward);
+        assert_eq!(
+            replay.events.len(),
+            1,
+            "replayed key must dispatch as a fresh combo"
+        );
+
+        let fresh = matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        assert!(
+            !fresh.forward,
+            "replayed duplicate modifier press must not forward"
+        );
+        let replayed = matcher.observe(keycodes::KEY_DOWN, 1);
+        assert!(!replayed.forward);
+        assert!(
+            replayed.events.is_empty(),
+            "duplicate combo press re-dispatched"
+        );
+    }
+
+    #[test]
+    fn reconcile_release_clears_seeded_modifier() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.reconcile(keycodes::KEY_LEFTMETA, 1);
+        matcher.reconcile(keycodes::KEY_LEFTMETA, 0);
+
+        let press = matcher.observe(keycodes::KEY_DOWN, 1);
+        assert!(press.forward);
+        assert!(press.events.is_empty());
     }
 }

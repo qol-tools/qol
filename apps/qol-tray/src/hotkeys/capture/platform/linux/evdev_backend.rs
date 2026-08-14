@@ -3,13 +3,157 @@ use super::super::super::{OnFire, RebuildBindings};
 use super::matcher::BindingMatcher;
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
+use evdev::raw_stream::RawDevice;
 use evdev::{
-    uinput::VirtualDevice, AttributeSet, AttributeSetRef, Device, EventSummary, InputEvent, KeyCode,
+    uinput::VirtualDevice, AttributeSet, AttributeSetRef, Device, EventSummary, EventType,
+    InputEvent, KeyCode, SynchronizationCode,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const VIRTUAL_KEYBOARD_NAME: &str = "qol-tray-virtual-keyboard";
+
+pub(super) fn keycode_name(code: u16) -> &'static str {
+    const ESC: u16 = KeyCode::KEY_ESC.0;
+    const ENTER: u16 = KeyCode::KEY_ENTER.0;
+    const SPACE: u16 = KeyCode::KEY_SPACE.0;
+    const TAB: u16 = KeyCode::KEY_TAB.0;
+    const UP: u16 = KeyCode::KEY_UP.0;
+    const DOWN: u16 = KeyCode::KEY_DOWN.0;
+    const LEFT: u16 = KeyCode::KEY_LEFT.0;
+    const RIGHT: u16 = KeyCode::KEY_RIGHT.0;
+    const LEFTCTRL: u16 = KeyCode::KEY_LEFTCTRL.0;
+    const RIGHTCTRL: u16 = KeyCode::KEY_RIGHTCTRL.0;
+    const LEFTALT: u16 = KeyCode::KEY_LEFTALT.0;
+    const RIGHTALT: u16 = KeyCode::KEY_RIGHTALT.0;
+    const LEFTSHIFT: u16 = KeyCode::KEY_LEFTSHIFT.0;
+    const RIGHTSHIFT: u16 = KeyCode::KEY_RIGHTSHIFT.0;
+    const LEFTMETA: u16 = KeyCode::KEY_LEFTMETA.0;
+    const RIGHTMETA: u16 = KeyCode::KEY_RIGHTMETA.0;
+    const A: u16 = KeyCode::KEY_A.0;
+    const Z: u16 = KeyCode::KEY_Z.0;
+    match code {
+        ESC => "esc",
+        ENTER => "enter",
+        SPACE => "space",
+        TAB => "tab",
+        UP => "up",
+        DOWN => "down",
+        LEFT => "left",
+        RIGHT => "right",
+        LEFTCTRL => "ctrl",
+        RIGHTCTRL => "rctrl",
+        LEFTALT => "alt",
+        RIGHTALT => "ralt",
+        LEFTSHIFT => "shift",
+        RIGHTSHIFT => "rshift",
+        LEFTMETA => "super",
+        RIGHTMETA => "rsuper",
+        _ => {
+            if (A..=Z).contains(&code) {
+                static LETTERS: [&str; 26] = [
+                    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p",
+                    "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                ];
+                LETTERS[(code - A) as usize]
+            } else {
+                "key"
+            }
+        }
+    }
+}
+
+fn key_list(keys: &AttributeSet<KeyCode>) -> String {
+    keys.iter()
+        .map(|key| keycode_name(key.0))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn event_before(event: &InputEvent, grab_time: SystemTime) -> bool {
+    match event.timestamp().duration_since(UNIX_EPOCH) {
+        Ok(event_since_epoch) => timestamp_before_ms(
+            event_since_epoch.as_millis(),
+            grab_time
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(u128::MAX),
+        ),
+        Err(_) => false,
+    }
+}
+
+fn timestamp_before_ms(event_ms: u128, grab_ms: u128) -> bool {
+    event_ms < grab_ms.saturating_sub(1)
+}
+
+#[cfg(debug_assertions)]
+fn trace_capture_key(device: &str, keycode: u16, value: i32) {
+    qol_runtime::probe!(
+        "HOTKEY_CAPTURE",
+        "event=key dev={} code={} value={}",
+        device,
+        keycode_name(keycode),
+        value
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_capture_key(_device: &str, _keycode: u16, _value: i32) {}
+
+#[cfg(debug_assertions)]
+fn trace_capture_emit(keycode: u16, value: i32) {
+    qol_runtime::probe!(
+        "HOTKEY_CAPTURE",
+        "event=emit code={} value={}",
+        keycode_name(keycode),
+        value
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_capture_emit(_keycode: u16, _value: i32) {}
+
+#[cfg(debug_assertions)]
+fn trace_capture_batch(device: &str, count: usize) {
+    if count == 0 {
+        qol_runtime::probe!("HOTKEY_CAPTURE", "event=syn_dropped dev={}", device);
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_capture_batch(_device: &str, _count: usize) {}
+
+#[cfg(debug_assertions)]
+fn trace_capture_drop(device: &str, keycode: u16, value: i32, reason: &str) {
+    qol_runtime::probe!(
+        "HOTKEY_CAPTURE",
+        "event=drop dev={} code={} value={} reason={}",
+        device,
+        keycode_name(keycode),
+        value,
+        reason
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_capture_drop(_device: &str, _keycode: u16, _value: i32, _reason: &str) {}
+
+#[cfg(debug_assertions)]
+fn trace_capture_replay(device: &str, keycode: u16, value: i32) {
+    qol_runtime::probe!(
+        "HOTKEY_CAPTURE",
+        "event=state_replay dev={} code={} value={}",
+        device,
+        keycode_name(keycode),
+        value
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_capture_replay(_device: &str, _keycode: u16, _value: i32) {}
 
 /// Install a process-wide panic hook that aborts after logging. This ensures a
 /// panic in any thread terminates the process, closes every grabbed-device fd,
@@ -45,13 +189,31 @@ pub(super) fn install(
     }
     let keyboard_count = keyboards.len();
     let mut grabbed_keyboards = Vec::new();
+    let mut held_at_grab: Vec<u16> = Vec::new();
     for (path, mut device) in keyboards {
+        let grab_time = SystemTime::now();
         if let Err(error) = device.grab() {
             log::warn!("evdev: failed to grab {}: {error}", path.display());
             continue;
         }
         log::info!("evdev: grabbed {}", path.display());
-        grabbed_keyboards.push((path, device));
+        let held = device.get_key_state().unwrap_or_default();
+        #[cfg(debug_assertions)]
+        {
+            let device_name = device.name().unwrap_or("unknown").to_owned();
+            if held.iter().next().is_some() {
+                qol_runtime::probe!(
+                    "HOTKEY_CAPTURE",
+                    "event=held_at_grab dev={} keys={}",
+                    device_name,
+                    key_list(&held)
+                );
+            }
+        }
+        for code in held.iter() {
+            held_at_grab.push(code.0);
+        }
+        grabbed_keyboards.push((path, device, grab_time, held));
     }
 
     if grabbed_keyboards.is_empty() {
@@ -60,22 +222,59 @@ pub(super) fn install(
         );
     }
 
+    {
+        let Ok(mut guard) = matcher.lock() else {
+            anyhow::bail!("evdev: matcher lock poisoned during startup seeding");
+        };
+        guard.seed_held(held_at_grab);
+    }
+
     let key_caps = merged_key_capabilities(
         grabbed_keyboards
             .iter()
-            .filter_map(|(_, device)| device.supported_keys()),
+            .filter_map(|(_, device, _, _)| device.supported_keys()),
     );
     let virtual_device = Arc::new(Mutex::new(build_virtual_device(&key_caps)?));
     let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
 
-    for (path, device) in grabbed_keyboards {
+    for (path, device, grab_time, held) in grabbed_keyboards {
         let matcher = matcher.clone();
         let virtual_device = virtual_device.clone();
         let on_fire = on_fire.clone();
 
         std::thread::spawn(move || {
-            run_reader(path, device, matcher, virtual_device, on_fire);
+            run_reader(
+                path,
+                device,
+                grab_time,
+                held,
+                matcher,
+                virtual_device,
+                on_fire,
+            );
         });
+    }
+    #[cfg(debug_assertions)]
+    {
+        let names: Vec<String> = open_keyboards()
+            .map(|keyboards| {
+                keyboards
+                    .into_iter()
+                    .map(|(path, device)| {
+                        format!(
+                            "{}={}",
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            device.name().unwrap_or("unknown")
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        qol_runtime::probe!(
+            "HOTKEY_CAPTURE",
+            "event=install devices={}",
+            names.join(",")
+        );
     }
 
     spawn_reload_thread(matcher, reload_rx, rebuild, on_fire);
@@ -130,11 +329,15 @@ fn spawn_reload_thread(
 
 fn run_reader(
     path: PathBuf,
-    mut device: Device,
+    mut device: RawDevice,
+    grab_time: SystemTime,
+    initial_held: AttributeSet<KeyCode>,
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<VirtualDevice>>,
     on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
 ) {
+    let device_name = device.name().unwrap_or("unknown").to_owned();
+    let mut known_held: HashSet<u16> = initial_held.iter().map(|key| key.0).collect();
     loop {
         let events = match device.fetch_events() {
             Ok(events) => events,
@@ -143,12 +346,62 @@ fn run_reader(
                 break;
             }
         };
-        for event in events {
-            process_event(event, &matcher, &virtual_device, on_fire.as_ref());
+        let batch: Vec<InputEvent> = events.collect();
+        trace_capture_batch(&device_name, batch.len());
+        for event in batch {
+            let EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _) =
+                event.destructure()
+            else {
+                process_event(
+                    event,
+                    &matcher,
+                    &virtual_device,
+                    on_fire.as_ref(),
+                    &device_name,
+                    grab_time,
+                    &mut known_held,
+                );
+                continue;
+            };
+            match device.get_key_state() {
+                Ok(state) => {
+                    let current: HashSet<u16> = state.iter().map(|key| key.0).collect();
+                    for code in current.difference(&known_held).copied() {
+                        replay_state(&virtual_device, &matcher, &device_name, code, 1);
+                    }
+                    for code in known_held.difference(&current).copied() {
+                        replay_state(&virtual_device, &matcher, &device_name, code, 0);
+                    }
+                    known_held = current;
+                }
+                Err(error) => {
+                    log::warn!("evdev: state resync failed on {}: {error}", path.display());
+                }
+            }
         }
     }
     if let Err(error) = device.ungrab() {
         log::warn!("evdev: ungrab on reader exit failed: {error}");
+    }
+}
+
+fn replay_state(
+    virtual_device: &Mutex<VirtualDevice>,
+    matcher: &Mutex<BindingMatcher>,
+    device: &str,
+    code: u16,
+    value: i32,
+) {
+    trace_capture_replay(device, code, value);
+    if let Ok(mut guard) = matcher.lock() {
+        guard.reconcile(code, value);
+    }
+    let key_event = InputEvent::new(EventType::KEY.0, code, value);
+    let sync_event = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
+    if let Ok(mut vd) = virtual_device.lock() {
+        if let Err(error) = vd.emit(&[key_event, sync_event]) {
+            log::warn!("evdev: virtual emit failed: {error}");
+        }
     }
 }
 
@@ -157,11 +410,24 @@ fn process_event(
     matcher: &Mutex<BindingMatcher>,
     virtual_device: &Mutex<VirtualDevice>,
     on_fire: &dyn Fn(&CaptureEvent),
+    device: &str,
+    grab_time: SystemTime,
+    known_held: &mut HashSet<u16>,
 ) {
     let EventSummary::Key(_, key_code, value) = event.destructure() else {
         forward(event, virtual_device);
         return;
     };
+    if event_before(&event, grab_time) {
+        trace_capture_drop(device, key_code.0, value, "pre_grab");
+        return;
+    }
+    trace_capture_key(device, key_code.0, value);
+    if value == 0 {
+        known_held.remove(&key_code.0);
+    } else if value == 1 {
+        known_held.insert(key_code.0);
+    }
     let decision = match matcher.lock() {
         Ok(mut m) => m.observe(key_code.0, value),
         Err(_) => {
@@ -171,6 +437,7 @@ fn process_event(
     };
     if decision.forward {
         forward(event, virtual_device);
+        trace_capture_emit(key_code.0, value);
     }
     for capture_event in decision.events {
         log::info!(
@@ -192,12 +459,13 @@ fn forward(event: InputEvent, virtual_device: &Mutex<VirtualDevice>) {
     }
 }
 
-fn open_keyboards() -> Result<Vec<(PathBuf, Device)>> {
+fn open_keyboards() -> Result<Vec<(PathBuf, RawDevice)>> {
     let mut keyboards = Vec::new();
     for (path, device) in evdev::enumerate() {
         if !is_keyboard(&device) {
             continue;
         }
+        let device = RawDevice::open(&path)?;
         keyboards.push((path, device));
     }
     Ok(keyboards)
@@ -270,5 +538,15 @@ mod tests {
         ] {
             assert!(keys.contains(key), "missing virtual keyboard key {key:?}");
         }
+    }
+
+    #[test]
+    fn timestamp_before_drops_clearly_older_events_and_keeps_recent_and_newer() {
+        assert!(timestamp_before_ms(1000, 2000));
+        assert!(!timestamp_before_ms(1999, 2000));
+        assert!(!timestamp_before_ms(2000, 2000));
+        assert!(!timestamp_before_ms(2500, 2000));
+        assert!(!timestamp_before_ms(0, 0));
+        assert!(!timestamp_before_ms(0, 1));
     }
 }
