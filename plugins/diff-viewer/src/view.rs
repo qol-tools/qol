@@ -1089,11 +1089,10 @@ impl DiffView {
     fn field_scene(
         &self,
         window: &Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
         rows: Vec<AnyElement>,
     ) -> AnyElement {
         let age = self.heat_age();
-        let selected = self.scrubber_view.read(cx).state().selected();
         let phase = age
             .map(|age| age.as_secs_f32())
             .unwrap_or_else(|| self.field_epoch.elapsed().as_secs_f32());
@@ -1125,7 +1124,6 @@ impl DiffView {
         field::scene(
             rows,
             &self.scrub_commits,
-            selected,
             SceneState {
                 pane_height,
                 phase_seconds: phase,

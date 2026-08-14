@@ -5,10 +5,10 @@ use gpui::{canvas, point, px, rgba, Bounds, Canvas, Path, PathBuilder, Pixels};
 use qol_diff::constructs::ConstructKind;
 use qol_diff::HeatLevel;
 
-use crate::field::{AURORA_COLD, AURORA_EMBER, STAR_HOT};
+use crate::field::{RIBBON_MARGIN_FRACTION, RIBBON_WIDTH_FRACTION, STAR_HOT};
 
 pub const TERRAIN_HEIGHT_FRACTION: f32 = 0.20;
-const TERRAIN_STROKE: f32 = 1.5;
+const TERRAIN_STROKE: f32 = 2.5;
 const DEPTH_STEP_PX: f32 = 8.0;
 const MAX_DEPTH_SHIFT_PX: f32 = 28.0;
 const DEPTH_DIM: f32 = 0.10;
@@ -149,9 +149,9 @@ fn mark_layers(
     };
     let (x0, x1) = min_span(x0, x1, width);
     let color = if birth {
-        mix_hex(STAR_HOT, heat_color(mark.heat), progress)
+        mix_hex(STAR_HOT, kind_color(mark.kind), progress)
     } else {
-        heat_color(mark.heat)
+        kind_color(mark.kind)
     };
     let alpha = if birth {
         mix_u8(BIRTH_ALPHA_PEAK, heat_alpha(mark.heat), progress)
@@ -214,7 +214,7 @@ fn death_layers(
         death.kind,
         &geo,
         geo.count,
-        heat_color(death.heat),
+        kind_color(death.kind),
         alpha,
         alpha,
     )
@@ -414,14 +414,18 @@ fn count_for(kind: ConstructKind, arms: usize, span_lines: usize) -> usize {
 fn band_span(start: usize, end: usize, rows: usize, width: f32) -> (f32, f32) {
     let rows = rows.max(1) as f32;
     min_span(
-        start as f32 / rows * width,
-        (end + 1) as f32 / rows * width,
+        ribbon_x(start as f32 / rows, width),
+        ribbon_x((end + 1) as f32 / rows, width),
         width,
     )
 }
 
 fn band_x(line: usize, rows: usize, width: f32) -> f32 {
-    (line as f32 / rows.max(1) as f32 * width).clamp(0.0, width)
+    ribbon_x(line as f32 / rows.max(1) as f32, width)
+}
+
+fn ribbon_x(line_fraction: f32, width: f32) -> f32 {
+    (RIBBON_MARGIN_FRACTION + line_fraction * RIBBON_WIDTH_FRACTION) * width
 }
 
 fn min_span(x0: f32, x1: f32, width: f32) -> (f32, f32) {
@@ -474,11 +478,23 @@ fn lerp(from: f32, to: f32, amount: f32) -> f32 {
     from + (to - from) * amount
 }
 
-fn heat_color(heat: HeatLevel) -> u32 {
-    match heat {
-        HeatLevel::Cool => AURORA_COLD,
-        HeatLevel::Warm => AURORA_EMBER,
-        HeatLevel::Hot => STAR_HOT,
+pub fn kind_color(kind: ConstructKind) -> u32 {
+    match kind {
+        ConstructKind::Arc => 0xff8c42,
+        ConstructKind::Coil => 0x56d6e8,
+        ConstructKind::Fork => 0xb48cff,
+        ConstructKind::Lattice => 0x7ee0a0,
+        ConstructKind::Tick => 0x9aa4bd,
+    }
+}
+
+pub fn kind_label(kind: ConstructKind) -> &'static str {
+    match kind {
+        ConstructKind::Arc => "function",
+        ConstructKind::Coil => "loop",
+        ConstructKind::Fork => "branch",
+        ConstructKind::Lattice => "struct",
+        ConstructKind::Tick => "statement",
     }
 }
 
@@ -606,12 +622,31 @@ mod tests {
     }
 
     #[test]
-    fn heat_ramp_walks_cool_to_ember_to_white_hot() {
-        assert_eq!(heat_color(HeatLevel::Cool), AURORA_COLD);
-        assert_eq!(heat_color(HeatLevel::Warm), AURORA_EMBER);
-        assert_eq!(heat_color(HeatLevel::Hot), STAR_HOT);
+    fn kind_color_assigns_each_construct_a_fixed_hue() {
+        assert_eq!(kind_color(ConstructKind::Arc), 0xff8c42);
+        assert_eq!(kind_color(ConstructKind::Coil), 0x56d6e8);
+        assert_eq!(kind_color(ConstructKind::Fork), 0xb48cff);
+        assert_eq!(kind_color(ConstructKind::Lattice), 0x7ee0a0);
+        assert_eq!(kind_color(ConstructKind::Tick), 0x9aa4bd);
+        assert_ne!(
+            kind_color(ConstructKind::Arc),
+            kind_color(ConstructKind::Coil)
+        );
+        assert_ne!(
+            kind_color(ConstructKind::Coil),
+            kind_color(ConstructKind::Fork)
+        );
         assert!(heat_alpha(HeatLevel::Cool) < heat_alpha(HeatLevel::Warm));
         assert!(heat_alpha(HeatLevel::Warm) < heat_alpha(HeatLevel::Hot));
+    }
+
+    #[test]
+    fn kind_labels_use_the_canonical_vocabulary() {
+        assert_eq!(kind_label(ConstructKind::Arc), "function");
+        assert_eq!(kind_label(ConstructKind::Coil), "loop");
+        assert_eq!(kind_label(ConstructKind::Fork), "branch");
+        assert_eq!(kind_label(ConstructKind::Lattice), "struct");
+        assert_eq!(kind_label(ConstructKind::Tick), "statement");
     }
 
     #[test]
@@ -636,36 +671,46 @@ mod tests {
         assert!(depth_dim(5) < depth_dim(1));
     }
 
-    #[test]
-    fn band_span_maps_lines_to_the_full_width() {
-        let (x0, x1) = band_span(0, 9, 10, 500.0);
-        assert_eq!(x0, 0.0);
-        assert_eq!(x1, 500.0, "the first and last lines span the pane");
-        let (x0, x1) = band_span(4, 6, 10, 500.0);
-        assert_eq!(x0, 200.0);
-        assert_eq!(x1, 350.0);
-        let (x0, x1) = band_span(0, 0, 1, 500.0);
-        assert_eq!((x0, x1), (0.0, 500.0), "a single line fills the pane");
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
     }
 
     #[test]
-    fn tiny_bands_grow_to_the_minimum_span() {
+    fn band_span_maps_lines_to_the_ribbon_column() {
+        let margin = RIBBON_MARGIN_FRACTION * 500.0;
+        let ribbon = RIBBON_WIDTH_FRACTION * 500.0;
+        let (x0, x1) = band_span(0, 9, 10, 500.0);
+        assert!(close(x0, margin));
+        assert!(
+            close(x1, margin + ribbon),
+            "the first and last lines span the ribbon column"
+        );
+        let (x0, x1) = band_span(4, 6, 10, 500.0);
+        assert!(close(x0, margin + 0.4 * ribbon));
+        assert!(close(x1, margin + 0.7 * ribbon));
+        let (x0, x1) = band_span(0, 0, 1, 500.0);
+        assert!(close(x0, margin));
+        assert!(close(x1, margin + ribbon), "a single line fills the column");
+    }
+
+    #[test]
+    fn tiny_bands_grow_to_the_minimum_span_inside_the_ribbon() {
         let (x0, x1) = band_span(4, 4, 10, 500.0);
         assert!(x1 - x0 >= MIN_SPAN_PX, "a one-line band stays visible");
         let (x0, x1) = band_span(9, 9, 1000, 500.0);
         assert!(x1 - x0 >= MIN_SPAN_PX);
         let (x0, x1) = band_span(0, 0, 1000, 500.0);
-        assert_eq!(
-            (x0, x1),
-            (0.0, MIN_SPAN_PX),
-            "pinned to the left edge, the band grows right"
+        assert!(
+            close(x0, 67.18),
+            "a band at the column's left edge grows right"
         );
+        assert!(close(x1, 73.18));
         let (x0, x1) = band_span(999, 999, 1000, 500.0);
-        assert_eq!(
-            (x0, x1),
-            (500.0 - MIN_SPAN_PX, 500.0),
-            "pinned to the right edge, the band grows left"
+        assert!(
+            close(x0, 426.82),
+            "a band at the column's right edge grows left"
         );
+        assert!(close(x1, 432.82));
     }
 
     #[test]
@@ -740,7 +785,11 @@ mod tests {
             height,
         );
         assert_eq!(arc.len(), 1, "an arc is a single hill cap");
-        assert_eq!(arc[0].1 >> 8, STAR_HOT, "a hot cap paints white-hot");
+        assert_eq!(
+            arc[0].1 >> 8,
+            kind_color(ConstructKind::Arc),
+            "a cap paints its kind hue"
+        );
         let coil = paint_layers(
             &spec(
                 10,
@@ -804,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn birth_draws_in_white_hot_and_cools_to_the_heat_ramp() {
+    fn birth_ignites_white_hot_and_cools_to_the_kind_hue() {
         let spec = spec(
             10,
             vec![mark(ConstructKind::Arc, 2, 7, 0, 0, HeatLevel::Cool, None)],
@@ -822,8 +871,8 @@ mod tests {
         let settled = paint_layers(&spec, 1.0, 500.0, 115.0);
         assert_eq!(
             settled[0].1 >> 8,
-            AURORA_COLD,
-            "the birth cools onto the heat ramp"
+            kind_color(ConstructKind::Arc),
+            "the birth cools onto the kind hue"
         );
         assert!(
             settled[0].1 & 0xff < BIRTH_ALPHA_PEAK,

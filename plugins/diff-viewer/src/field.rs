@@ -15,13 +15,11 @@ pub const FIELD_BOTTOM: u32 = 0x12162b;
 pub const AURORA_COLD: u32 = 0x2a3a6e;
 pub const AURORA_EMBER: u32 = 0xff8c42;
 pub const AURORA_WARM: u32 = 0xffd9a0;
-pub const STAR_OLDEST: u32 = 0x3a435c;
 pub const STAR_HOT: u32 = 0xfff2e0;
 pub const ASH_START: u32 = AURORA_EMBER;
 pub const ASH_END: u32 = 0x2a2430;
 
 const CHROME_RESERVED_PX: f32 = 62.0;
-const STAR_GROUND_GAP_PX: f32 = 6.0;
 const AURORA_PERIOD_S: f32 = 2.5;
 const AURORA_BASE_PX: f32 = 56.0;
 const AURORA_SWING_MIN_PX: f32 = 18.0;
@@ -34,21 +32,13 @@ const RECENT_COMMITS: usize = 8;
 const MAGNITUDE_CLAMP: u64 = 5_000;
 const RIBBON_TOP_FRACTION: f32 = 0.10;
 const RIBBON_HEIGHT_FRACTION: f32 = 0.50;
-const RIBBON_WIDTH_FRACTION: f32 = 0.72;
-const RIBBON_MARGIN_FRACTION: f32 = (1.0 - RIBBON_WIDTH_FRACTION) / 2.0;
+pub const RIBBON_WIDTH_FRACTION: f32 = 0.72;
+pub const RIBBON_MARGIN_FRACTION: f32 = (1.0 - RIBBON_WIDTH_FRACTION) / 2.0;
 const RIBBON_CORNER_PX: f32 = 10.0;
 const RIBBON_BLOOM_ALPHA: u32 = 0x1a;
-const STAR_SLOT_PX: f32 = 18.0;
-const STAR_MIN_PX: f32 = 4.0;
-const STAR_RANGE_PX: f32 = 8.0;
 const STAR_EDGE_FRACTION: f32 = 0.03;
-const STAR_BRIGHTEN: f32 = 0.30;
-const CORONA_WIDE_PX: f32 = 46.0;
-const CORONA_TIGHT_PX: f32 = 26.0;
-const CORONA_WIDE_ALPHA: f32 = 0.16;
-const CORONA_TIGHT_ALPHA: f32 = 0.38;
-const CORONA_BREATHE: f32 = 0.35;
-const CORONA_MIN_ALPHA: f32 = 0.35;
+const LEGEND_TEXT: u32 = 0x8b93a8;
+const LEGEND_ALPHA: f32 = 0.65;
 const ASH_MIN: usize = 12;
 const ASH_SPAN: usize = 9;
 const ASH_SIZE_MIN_PX: f32 = 2.0;
@@ -100,12 +90,7 @@ pub fn bloom_alpha(rank: u8) -> u32 {
     RIBBON_BLOOM_ALPHA * rank as u32 / 2
 }
 
-pub fn scene(
-    rows: Vec<AnyElement>,
-    commits: &[Commit],
-    selected: usize,
-    state: SceneState,
-) -> AnyElement {
+pub fn scene(rows: Vec<AnyElement>, commits: &[Commit], state: SceneState) -> AnyElement {
     let phase = state.phase_seconds * std::f32::consts::TAU / AURORA_PERIOD_S;
     let breath = 0.5 + 0.5 * phase.sin();
     let scale = magnitude_scale(commits);
@@ -115,9 +100,6 @@ pub fn scene(
     let ground = state.pane_height * terrain::TERRAIN_HEIGHT_FRACTION;
     let mut scene = div().relative().size_full();
     scene = scene.child(aurora(aurora_height, aurora_opacity, ground));
-    for index in 0..commits.len() {
-        scene = scene.child(star(commits, index, selected, phase, ground));
-    }
     if let Some(spec) = state.terrain {
         scene = scene.child(terrain_layer(spec, state.pane_height, state.phase_seconds));
     }
@@ -162,57 +144,6 @@ fn aurora(height: f32, opacity: f32, ground: f32) -> Div {
         )
 }
 
-fn star(commits: &[Commit], index: usize, selected: usize, phase: f32, ground: f32) -> Div {
-    let commit = &commits[index];
-    let t = heat_t(index, commits.len());
-    let brightness = magnitude_curve(commit.magnitude as f32);
-    let hue = heat_hue(t);
-    let color = mix_hex(hue, STAR_HOT, brightness * STAR_BRIGHTEN);
-    let size = STAR_MIN_PX + STAR_RANGE_PX * brightness;
-    let mut slot = div()
-        .absolute()
-        .left(fraction(star_x(index, commits.len())))
-        .bottom(px(ground + STAR_GROUND_GAP_PX))
-        .w(px(STAR_SLOT_PX))
-        .h(px(STAR_SLOT_PX))
-        .flex()
-        .items_center()
-        .justify_center();
-    if index == selected {
-        let glow = CORONA_WIDE_ALPHA
-            * (CORONA_MIN_ALPHA + (1.0 - CORONA_MIN_ALPHA) * brightness)
-            * (1.0 - CORONA_BREATHE + CORONA_BREATHE * phase.sin().abs());
-        let core = CORONA_TIGHT_ALPHA
-            * (CORONA_MIN_ALPHA + (1.0 - CORONA_MIN_ALPHA) * brightness)
-            * (1.0 - CORONA_BREATHE + CORONA_BREATHE * phase.sin().abs());
-        slot = slot
-            .child(corona_ring(
-                (CORONA_WIDE_PX - STAR_SLOT_PX) / 2.0,
-                CORONA_WIDE_PX,
-                AURORA_EMBER,
-                glow,
-            ))
-            .child(corona_ring(
-                (CORONA_TIGHT_PX - STAR_SLOT_PX) / 2.0,
-                CORONA_TIGHT_PX,
-                STAR_HOT,
-                core,
-            ));
-    }
-    slot.child(div().w(px(size)).h(px(size)).rounded_full().bg(rgb(color)))
-}
-
-fn corona_ring(offset: f32, size: f32, color: u32, alpha: f32) -> Div {
-    div()
-        .absolute()
-        .left(px(-offset))
-        .top(px(-offset))
-        .w(px(size))
-        .h(px(size))
-        .rounded_full()
-        .bg(rgba((color << 8) | alpha_byte(alpha)))
-}
-
 fn ribbon(rows: Vec<AnyElement>, bloom_alpha: u32) -> Div {
     let row_count = rows.len();
     let content = div()
@@ -252,25 +183,73 @@ fn terrain_band_height(pane_height: f32) -> f32 {
 fn terrain_layer(spec: Rc<TerrainSpec>, pane_height: f32, phase: f32) -> AnyElement {
     let element = terrain::terrain_element(Rc::clone(&spec), 1.0, phase);
     let element = if spec.morphing {
+        let anim_spec = Rc::clone(&spec);
         element
             .with_animation(
                 ElementId::named_usize(format!("dw-terrain-{}", spec.seq), 0),
                 Animation::new(TRANSITION_MS).with_easing(ease_out_quint()),
-                move |_, delta| terrain::terrain_element(Rc::clone(&spec), delta, phase),
+                move |_, delta| terrain::terrain_element(Rc::clone(&anim_spec), delta, phase),
             )
             .into_any_element()
     } else {
         element.into_any_element()
     };
-    div()
+    let mut layer = div()
         .absolute()
         .left(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
         .h(px(terrain_band_height(pane_height)))
         .overflow_hidden()
-        .child(element)
-        .into_any_element()
+        .child(element);
+    if !spec.marks.is_empty() || !spec.deaths.is_empty() {
+        layer = layer.child(terrain_legend(&spec));
+    }
+    layer.into_any_element()
+}
+
+fn terrain_legend(spec: &TerrainSpec) -> Div {
+    let mut kinds = Vec::new();
+    for kind in spec
+        .marks
+        .iter()
+        .map(|mark| mark.kind)
+        .chain(spec.deaths.iter().map(|death| death.kind))
+    {
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    let mut legend = div()
+        .absolute()
+        .top(px(6.0))
+        .left(px(10.0))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .opacity(LEGEND_ALPHA);
+    for kind in kinds {
+        legend = legend.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(
+                    div()
+                        .w(px(8.0))
+                        .h(px(8.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(terrain::kind_color(kind))),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(rgb(LEGEND_TEXT))
+                        .child(terrain::kind_label(kind)),
+                ),
+        );
+    }
+    legend
 }
 
 fn ash_layer(spec: &AshSpec, pane_height: f32) -> Div {
@@ -381,15 +360,6 @@ fn star_x(index: usize, len: usize) -> f32 {
     }
 }
 
-fn heat_hue(t: f32) -> u32 {
-    let t = t.clamp(0.0, 1.0);
-    if t < 0.5 {
-        mix_hex(STAR_OLDEST, AURORA_EMBER, t * 2.0)
-    } else {
-        mix_hex(AURORA_EMBER, STAR_HOT, (t - 0.5) * 2.0)
-    }
-}
-
 fn magnitude_scale(commits: &[Commit]) -> f32 {
     let count = commits.len().min(RECENT_COMMITS);
     if count == 0 {
@@ -466,20 +436,6 @@ mod tests {
         assert_eq!(star_x(0, 1), 0.5);
         assert!(star_x(0, 5) > star_x(1, 5));
         assert!(star_x(1, 5) > star_x(2, 5));
-    }
-
-    #[test]
-    fn star_hue_walks_blue_to_ember_to_white_hot() {
-        assert_eq!(heat_hue(1.0), STAR_HOT, "the newest commit is white-hot");
-        assert_eq!(heat_hue(0.0), STAR_OLDEST, "the oldest commit is cold blue");
-        assert_eq!(heat_hue(0.5), AURORA_EMBER);
-        let cool = heat_hue(0.25);
-        assert!(
-            (cool >> 16) & 0xff < (AURORA_EMBER >> 16) & 0xff,
-            "the cool half stays below ember red"
-        );
-        let hot = heat_hue(0.75);
-        assert!(hot >= AURORA_EMBER, "the hot half burns at or past ember");
     }
 
     #[test]
@@ -599,7 +555,6 @@ mod tests {
         let _empty = scene(
             Vec::new(),
             &[],
-            0,
             SceneState {
                 pane_height: 578.0,
                 phase_seconds: 0.0,
@@ -612,7 +567,6 @@ mod tests {
         let _full = scene(
             Vec::new(),
             &commits(&[1, 2, 3]),
-            1,
             SceneState {
                 pane_height: 578.0,
                 phase_seconds: 3.7,
@@ -638,7 +592,6 @@ mod tests {
         let _both = scene(
             Vec::new(),
             &commits(&[1, 2, 3]),
-            1,
             SceneState {
                 pane_height: 578.0,
                 phase_seconds: 3.7,
