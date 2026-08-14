@@ -32,6 +32,7 @@ pub(crate) struct McpSessionServer {
     locks: super::spawn::SpawnLocks,
     spawn_model: Option<String>,
     spawn_surface: Option<SpawnSurface>,
+    spawn_cap: Option<super::spawn::SpawnCapConfig>,
     round_timeout: Duration,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
@@ -46,6 +47,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::system()?,
             spawn_model: super::spawn::config_spawn_model()?,
             spawn_surface: super::spawn::config_surface()?,
+            spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             #[cfg(test)]
             _pending_root: None,
@@ -63,6 +65,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
             spawn_model: None,
             spawn_surface: None,
+            spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
         }
@@ -81,6 +84,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
             spawn_model: None,
             spawn_surface: None,
+            spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
         }
@@ -269,6 +273,7 @@ impl McpSessionServer {
             model.as_deref(),
             title.as_deref(),
             self.spawn_surface,
+            self.spawn_cap.as_ref(),
             &self.locks,
             background,
             autoclose,
