@@ -209,12 +209,16 @@ pub(crate) fn arrow_delta(key: &str) -> isize {
     }
 }
 
+fn time_index(slot: usize, len: usize) -> usize {
+    len - 1 - slot
+}
+
 fn drag_target(anchor_index: usize, anchor_x: f32, x: f32, len: usize) -> Option<usize> {
     if len == 0 {
         return None;
     }
     let delta = ((x - anchor_x) / SLOT_PX).round() as isize;
-    let target = anchor_index as isize + delta;
+    let target = anchor_index as isize - delta;
     Some(target.clamp(0, len as isize - 1) as usize)
 }
 
@@ -425,7 +429,7 @@ impl Render for ScrubberView {
             );
         } else {
             let dots: Vec<Div> = (0..self.state.len())
-                .map(|index| self.dot(index, cx))
+                .map(|slot| self.dot(time_index(slot, self.state.len()), cx))
                 .collect();
             strip = strip.children(dots);
         }
@@ -693,18 +697,42 @@ mod tests {
     }
 
     #[test]
+    fn time_index_mirrors_slots_across_the_strip() {
+        assert_eq!(
+            time_index(0, 3),
+            2,
+            "leftmost slot renders the oldest commit"
+        );
+        assert_eq!(
+            time_index(2, 3),
+            0,
+            "rightmost slot renders the newest commit"
+        );
+        assert_eq!(time_index(1, 3), 1);
+        assert_eq!(time_index(0, 1), 0, "a single commit fills the strip");
+    }
+
+    #[test]
     fn drag_target_follows_the_pointer_by_slots() {
-        assert_eq!(drag_target(1, 100.0, 100.0 + SLOT_PX, 3), Some(2));
-        assert_eq!(drag_target(1, 100.0, 100.0 - SLOT_PX, 3), Some(0));
+        assert_eq!(
+            drag_target(1, 100.0, 100.0 + SLOT_PX, 3),
+            Some(0),
+            "dragging right selects a newer commit"
+        );
+        assert_eq!(
+            drag_target(1, 100.0, 100.0 - SLOT_PX, 3),
+            Some(2),
+            "dragging left selects an older commit"
+        );
         assert_eq!(
             drag_target(1, 100.0, 100.0 - 3.0 * SLOT_PX, 3),
-            Some(0),
-            "clamps at the newest end"
+            Some(2),
+            "clamps at the oldest end"
         );
         assert_eq!(
             drag_target(1, 100.0, 100.0 + 50.0 * SLOT_PX, 3),
-            Some(2),
-            "clamps at the oldest end"
+            Some(0),
+            "clamps at the newest end"
         );
         assert_eq!(
             drag_target(0, 0.0, 0.0 + SLOT_PX / 3.0, 3),
