@@ -119,7 +119,7 @@ pub fn scene(
         scene = scene.child(star(commits, index, selected, phase, ground));
     }
     if let Some(spec) = state.terrain {
-        scene = scene.child(terrain_layer(spec, state.phase_seconds));
+        scene = scene.child(terrain_layer(spec, state.pane_height, state.phase_seconds));
     }
     if !rows.is_empty() {
         scene = scene.child(ribbon(rows, bloom_alpha(state.bloom_rank)));
@@ -245,7 +245,11 @@ fn ribbon(rows: Vec<AnyElement>, bloom_alpha: u32) -> Div {
     ribbon.child(content)
 }
 
-fn terrain_layer(spec: Rc<TerrainSpec>, phase: f32) -> AnyElement {
+fn terrain_band_height(pane_height: f32) -> f32 {
+    pane_height * terrain::TERRAIN_HEIGHT_FRACTION
+}
+
+fn terrain_layer(spec: Rc<TerrainSpec>, pane_height: f32, phase: f32) -> AnyElement {
     let element = terrain::terrain_element(Rc::clone(&spec), 1.0, phase);
     let element = if spec.morphing {
         element
@@ -263,7 +267,7 @@ fn terrain_layer(spec: Rc<TerrainSpec>, phase: f32) -> AnyElement {
         .left(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
-        .h(fraction(terrain::TERRAIN_HEIGHT_FRACTION))
+        .h(px(terrain_band_height(pane_height)))
         .overflow_hidden()
         .child(element)
         .into_any_element()
@@ -556,6 +560,13 @@ mod tests {
             "the cone reaches the new star"
         );
         assert!(span(0.5) > 0.0);
+    }
+
+    #[test]
+    fn terrain_band_height_pins_the_fraction_math() {
+        assert_eq!(terrain_band_height(578.0), 115.6);
+        assert_eq!(terrain_band_height(0.0), 0.0);
+        assert!(terrain_band_height(800.0) > terrain_band_height(400.0));
     }
 
     #[test]
