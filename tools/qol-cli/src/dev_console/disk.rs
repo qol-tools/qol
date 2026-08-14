@@ -74,9 +74,7 @@ impl DiskReport {
     fn cleanable_total(&self) -> u64 {
         self.rows
             .iter()
-            .filter(|row| {
-                row.label.starts_with(WORKTREE_LABEL_PREFIX) || row.label == PRUNABLE_LABEL
-            })
+            .filter(|row| row.cleanable)
             .filter_map(|row| row.bytes)
             .sum()
     }
@@ -87,6 +85,7 @@ pub(super) struct DiskRow {
     pub(super) label: String,
     pub(super) detail: String,
     pub(super) bytes: Option<u64>,
+    pub(super) cleanable: bool,
 }
 
 const TARGET_TOTAL_LABEL: &str = "target";
@@ -106,25 +105,26 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
     if dash.disk.scan.is_some() {
         return;
     }
-    dash.disk.scan = Some(spawn_disk_scan());
+    let running = dash.running_worktree.clone();
+    dash.disk.scan = Some(spawn_disk_worker("scanning", move |progress| {
+        scan_disk_usage(&running, progress)
+    }));
 }
 
 pub(super) fn start_disk_cleanup(dash: &mut Dash) {
     if let Some(scan) = &dash.disk.scan {
-        dash.notice = Some((
-            Instant::now(),
-            format!("disk {} · re-arm once it finishes", scan.phase),
-        ));
-        return;
+        if scan.phase == "cleaning" {
+            dash.notice = Some((
+                Instant::now(),
+                format!("disk {} · re-arm once it finishes", scan.phase),
+            ));
+            return;
+        }
     }
-    let keep = dash.running_worktree.clone();
+    let running = dash.running_worktree.clone();
     dash.disk.scan = Some(spawn_disk_worker("cleaning", move |progress| {
-        cleanup_disk_usage(progress, &keep)
+        cleanup_disk_usage(&running, progress)
     }));
-}
-
-fn spawn_disk_scan() -> DiskScan {
-    spawn_disk_worker("scanning", scan_disk_usage)
 }
 
 fn spawn_disk_worker(
@@ -162,9 +162,8 @@ fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
     }
 }
 
-fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> {
-    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
-    let target = root.join("target");
+fn scan_disk_usage(running: &Path, progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> {
+    let target = running.join("target");
     let mut rows = Vec::new();
     set_progress(progress, "target roots");
     rows.extend(target_root_rows(&target));
@@ -176,12 +175,16 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
             format_bytes(SWEPT_CACHE_CEILING)
         ),
         bytes: Some(prunable_target_bytes(&target)),
+        cleanable: true,
     });
-    for worktree in qol_dev_build::tray::list_worktrees(&root) {
+    for worktree in qol_dev_build::tray::list_worktrees(running) {
         set_progress(progress, &format!("worktree {}", worktree.branch));
+        let live = worktree.path == running;
         rows.push(measured_row(
             format!("{WORKTREE_LABEL_PREFIX}{}", worktree.branch),
             &worktree.path.join("target"),
+            !live,
+            if live { " · live target" } else { "" },
         ));
     }
     set_progress(progress, "sccache");
@@ -191,12 +194,11 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     Ok(DiskReport { rows })
 }
 
-fn cleanup_disk_usage(progress: &Arc<Mutex<String>>, keep: &Path) -> Result<DiskReport, String> {
-    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+fn cleanup_disk_usage(running: &Path, progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> {
     let mut freed = 0;
-    let mut failed = 0;
-    for worktree in qol_dev_build::tray::list_worktrees(&root) {
-        if worktree.path.starts_with(keep) || keep.starts_with(&worktree.path) {
+    let mut failures = Vec::new();
+    for worktree in qol_dev_build::tray::list_worktrees(running) {
+        if worktree.path == running {
             continue;
         }
         let target = worktree.path.join("target");
@@ -207,30 +209,43 @@ fn cleanup_disk_usage(progress: &Arc<Mutex<String>>, keep: &Path) -> Result<Disk
         let bytes = path_bytes(&target);
         match std::fs::remove_dir_all(&target) {
             Ok(()) => freed += bytes,
-            Err(_) => failed += 1,
+            Err(error) => {
+                failures.push(format!(
+                    "worktree {}: {} ({error})",
+                    worktree.branch,
+                    target.display()
+                ));
+                freed += bytes.saturating_sub(path_bytes(&target));
+            }
         }
     }
     set_progress(progress, "stale caches");
-    let target = root.join("target");
-    let prunable = prunable_target_bytes(&target);
-    match prune_cargo_target_dir(&target) {
-        Ok(()) => freed += prunable,
-        Err(_) => failed += 1,
+    let target = running.join("target");
+    if target.exists() {
+        let prunable = prunable_target_bytes(&target);
+        match prune_cargo_target_dir(&target) {
+            Ok(()) => freed += prunable,
+            Err(error) => {
+                failures.push(format!("stale caches: {error}"));
+                freed += prunable.saturating_sub(prunable_target_bytes(&target));
+            }
+        }
     }
-    let mut report = scan_disk_usage(progress)?;
-    report.rows.insert(0, cleanup_row(freed, failed));
+    let mut report = scan_disk_usage(running, progress)?;
+    report.rows.insert(0, cleanup_row(freed, &failures));
     Ok(report)
 }
 
-fn cleanup_row(freed: u64, failed: usize) -> DiskRow {
+fn cleanup_row(freed: u64, failures: &[String]) -> DiskRow {
     let mut detail = "worktree targets removed · stale caches pruned".to_string();
-    if failed > 0 {
-        detail.push_str(&format!(" · {failed} could not be removed"));
+    if !failures.is_empty() {
+        detail.push_str(&format!(" · could not remove: {}", failures.join("; ")));
     }
     DiskRow {
         label: "cleanup · freed".to_string(),
         detail,
         bytes: Some(freed),
+        cleanable: false,
     }
 }
 
@@ -245,11 +260,13 @@ pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
             label: TARGET_TOTAL_LABEL.to_string(),
             detail: target.display().to_string(),
             bytes: None,
+            cleanable: false,
         }];
         rows.extend(buckets.iter().map(|(name, detail)| DiskRow {
             label: format!("target · {name}"),
             detail: detail.to_string(),
             bytes: None,
+            cleanable: false,
         }));
         return rows;
     }
@@ -276,6 +293,7 @@ pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
                 label: format!("target · {name}"),
                 detail: detail.to_string(),
                 bytes: Some(bytes),
+                cleanable: false,
             }
         })
         .collect();
@@ -283,6 +301,7 @@ pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
         label: "target · other".to_string(),
         detail: "secondary build roots".to_string(),
         bytes: Some(other),
+        cleanable: false,
     });
     rows.insert(
         0,
@@ -290,17 +309,19 @@ pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
             label: TARGET_TOTAL_LABEL.to_string(),
             detail: target.display().to_string(),
             bytes: Some(total),
+            cleanable: false,
         },
     );
     rows
 }
 
-fn measured_row(label: String, path: &Path) -> DiskRow {
+fn measured_row(label: String, path: &Path, cleanable: bool, suffix: &str) -> DiskRow {
     let bytes = path.exists().then(|| path_bytes(path));
     DiskRow {
         label,
-        detail: path.display().to_string(),
+        detail: format!("{}{}", path.display(), suffix),
         bytes,
+        cleanable,
     }
 }
 
@@ -310,9 +331,10 @@ fn optional_dir_row(label: &str, path: Option<PathBuf>) -> DiskRow {
             label: label.to_string(),
             detail: "location unknown".to_string(),
             bytes: None,
+            cleanable: false,
         };
     };
-    measured_row(label.to_string(), &path)
+    measured_row(label.to_string(), &path, false, "")
 }
 
 fn sccache_dir() -> Option<PathBuf> {
@@ -418,6 +440,7 @@ mod tests {
             label: label.to_string(),
             detail: "detail".to_string(),
             bytes,
+            cleanable: label.starts_with(WORKTREE_LABEL_PREFIX) || label == PRUNABLE_LABEL,
         }
     }
 
@@ -465,26 +488,113 @@ mod tests {
         }
     }
 
-    fn never_finishing_scan() -> DiskScan {
+    fn scan_with_phase(phase: &'static str) -> DiskScan {
         let (tx, rx) = channel();
         std::mem::forget(tx);
         DiskScan {
             rx,
             progress: Arc::new(Mutex::new(String::new())),
             started_at_ms: 0,
-            phase: "scanning",
+            phase,
         }
     }
 
+    fn never_finishing_scan() -> DiskScan {
+        scan_with_phase("scanning")
+    }
+
+    fn progress() -> Arc<Mutex<String>> {
+        Arc::new(Mutex::new(String::new()))
+    }
+
+    fn write_tree(dir: &Path, bytes: usize) {
+        std::fs::create_dir_all(dir).expect("dirs");
+        std::fs::write(dir.join("payload.bin"), vec![0; bytes]).expect("file");
+    }
+
+    fn git_worktree(root: &Path, branch: &str) -> PathBuf {
+        let dir = root.join("worktrees").join("main").join(branch);
+        std::fs::create_dir_all(&dir).expect("worktree dir");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q", "-b", branch])
+            .current_dir(&dir)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init for {branch}");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"probe\"\n").expect("manifest");
+        let status = std::process::Command::new("git")
+            .args(["add", "Cargo.toml"])
+            .current_dir(&dir)
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add for {branch}");
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@test.local",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ])
+            .current_dir(&dir)
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "git commit for {branch}");
+        dir
+    }
+
+    fn row_for<'a>(report: &'a DiskReport, branch: &str) -> &'a DiskRow {
+        let label = format!("{WORKTREE_LABEL_PREFIX}{branch}");
+        report
+            .rows
+            .iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| panic!("missing worktree row for {branch}"))
+    }
+
     #[test]
-    fn cleanup_row_reports_freed_bytes_and_failures() {
-        let clean = cleanup_row(2 * 1024 * 1024, 0);
+    fn cleanup_row_reports_freed_bytes_and_failure_reasons() {
+        let clean = cleanup_row(2 * 1024 * 1024, &[]);
         assert_eq!(clean.label, "cleanup · freed");
         assert_eq!(clean.bytes, Some(2 * 1024 * 1024));
-        assert!(!clean.detail.contains("could not be removed"));
+        assert!(!clean.detail.contains("could not remove"));
 
-        let partial = cleanup_row(0, 2);
-        assert!(partial.detail.contains("2 could not be removed"));
+        let reasons = vec![
+            "worktree feat-x: /t/worktrees/main/feat-x/target (Permission denied)".to_string(),
+        ];
+        let partial = cleanup_row(0, &reasons);
+        assert!(
+            partial.detail.contains("Permission denied"),
+            "failure reasons must be visible: {}",
+            partial.detail
+        );
+        assert!(
+            !partial.detail.contains("could not be removed"),
+            "the bare failure count is replaced by reasons"
+        );
+    }
+
+    #[test]
+    fn armed_enter_replaces_an_in_flight_scan_instead_of_dropping_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.disk.scan = Some(never_finishing_scan());
+
+        start_disk_cleanup(&mut dash);
+
+        let scan = dash.disk.scan.as_ref().expect("cleanup worker spawned");
+        assert_eq!(
+            scan.phase, "cleaning",
+            "armed enter must start cleanup, not wait on the scan"
+        );
+        assert!(
+            dash.notice.is_none(),
+            "replacing the scan must not show the deferral notice"
+        );
     }
 
     #[test]
@@ -640,5 +750,122 @@ mod tests {
         let lines = disk_view_lines(&scanned);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].to_string().contains("target"));
+    }
+
+    #[test]
+    fn armed_enter_while_cleaning_waits_with_a_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.disk.scan = Some(scan_with_phase("cleaning"));
+
+        start_disk_cleanup(&mut dash);
+
+        assert_eq!(
+            dash.disk.scan.as_ref().expect("scan").phase,
+            "cleaning",
+            "a second cleanup is not stacked onto the running one"
+        );
+        let notice = dash.notice.as_ref().map(|(_, message)| message.as_str());
+        assert!(
+            notice.is_some_and(|message| message.contains("re-arm once it finishes")),
+            "notice: {notice:?}"
+        );
+    }
+
+    #[test]
+    fn scan_marks_the_running_worktree_target_as_not_cleanable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let running = git_worktree(root, "feat-running");
+        let idle = git_worktree(root, "feat-idle");
+        write_tree(&running.join("target"), 4);
+        write_tree(&idle.join("target"), 8);
+
+        let report = scan_disk_usage(&running, &progress()).expect("scan");
+
+        let running_row = row_for(&report, "feat-running");
+        assert!(
+            !running_row.cleanable,
+            "the live worktree target must not advertise as cleanable"
+        );
+        assert!(running_row.detail.contains("live target"));
+        let idle_row = row_for(&report, "feat-idle");
+        assert!(idle_row.cleanable, "idle worktree targets stay cleanable");
+        assert_eq!(
+            report.cleanable_total(),
+            12,
+            "cleanable counts idle worktrees plus the live target's prunable roots"
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_idle_worktree_targets_prunes_the_main_target_and_rescans() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let running = git_worktree(root, "feat-running");
+        let idle = git_worktree(root, "feat-idle");
+        write_tree(&running.join("target"), 4);
+        write_tree(&idle.join("target"), 8);
+
+        let report = cleanup_disk_usage(&running, &progress()).expect("cleanup");
+
+        assert!(
+            running.join("target").exists(),
+            "the running worktree target must survive the cleanup"
+        );
+        assert!(
+            !idle.join("target").exists(),
+            "idle worktree targets are removed"
+        );
+        assert!(
+            !running.join("target").join("payload.bin").exists(),
+            "prunable main-target roots are removed"
+        );
+        assert_eq!(
+            report.cleanable_total(),
+            0,
+            "the post-clean rescan must show a reduced cleanable figure"
+        );
+        let freed = report.rows[0]
+            .bytes
+            .expect("cleanup row reports freed bytes");
+        assert_eq!(freed, 12, "freed counts idle targets plus pruned roots");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_reports_prune_failure_reasons_and_partial_freed_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let running = git_worktree(root, "feat-running");
+        let release = running.join("target").join("release");
+        write_tree(&release, 16);
+        std::fs::write(release.join("held.rlib"), b"x").expect("held file");
+        std::fs::set_permissions(&release, std::fs::Permissions::from_mode(0o555))
+            .expect("lock perms");
+        write_tree(&running.join("target").join("sandbox"), 8);
+
+        let report = cleanup_disk_usage(&running, &progress()).expect("cleanup");
+
+        std::fs::set_permissions(&release, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock perms");
+        assert!(
+            !running.join("target").join("sandbox").exists(),
+            "unlocked entries still prune past the locked one"
+        );
+        let row = &report.rows[0];
+        assert!(
+            row.detail.contains("release") && row.detail.contains("Permission denied"),
+            "the failure reason must be visible: {}",
+            row.detail
+        );
+        assert_eq!(
+            row.bytes,
+            Some(8),
+            "freed counts only what was actually removed"
+        );
     }
 }

@@ -1497,4 +1497,32 @@ mod tests {
             "endpoints copy must read the endpoints container, not the log ring"
         );
     }
+
+    #[test]
+    fn armed_enter_on_the_disk_row_starts_cleanup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.cursor = ROWS
+            .iter()
+            .position(|row| matches!(row, Row::Disk))
+            .expect("disk row");
+
+        handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(dash.armed, "space arms in the dashboard");
+
+        handle_key(&mut dash, KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(!dash.armed, "enter consumes the armed state");
+        assert_eq!(
+            dash.disk
+                .scan
+                .as_ref()
+                .expect("cleanup worker")
+                .activity(0)
+                .phase,
+            "cleaning",
+            "armed enter on the disk row must start cleanup"
+        );
+    }
 }
