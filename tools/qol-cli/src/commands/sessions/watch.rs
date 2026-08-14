@@ -343,7 +343,11 @@ fn watch_loop(
     config: WatchConfig,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<()> {
+    let explicit = !tokens.is_empty();
     let tokens = prune_stale_tokens(terminals, pending, tokens)?;
+    if explicit && tokens.is_empty() {
+        return Ok(());
+    }
     let mut watched = load_rounds(pending, &tokens)?
         .into_iter()
         .map(WatchedRound::new)
@@ -918,6 +922,45 @@ mod tests {
         );
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["session"], "v1:fake:8:200");
+    }
+
+    #[test]
+    fn pruning_everything_stays_in_explicit_mode_and_ignores_foreign_rounds() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let stale_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let foreign_binding: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        pending
+            .start(
+                &foreign_binding,
+                "QOL_BRIDGE_DONE_foreign",
+                "v1:fake:9:900",
+                false,
+            )
+            .unwrap();
+        let backend = FakeBackend::new(facts("9", 900), Vec::new());
+        backend.mark_gone();
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &pending,
+            &locks(&root),
+            &[stale_binding.token().to_owned()],
+            &mut out,
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        assert!(
+            out.is_empty(),
+            "a pruned explicit watch must not flip to all-rounds: {out:?}"
+        );
+        let round = pending.pending_round(&foreign_binding).unwrap().unwrap();
+        assert!(
+            !round.completed,
+            "the foreign round must stay untouched by an explicit watch"
+        );
     }
 
     #[test]
