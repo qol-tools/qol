@@ -109,8 +109,9 @@ ask.mjs (single choke point)
   │    (aliased term drops out, expansion terms take its place)
   ├─ qtokens  = expandTokens(tokens(query) minus stopwords)      (ask.mjs:113)
   │    used by every coverage/verdict signal unchanged
-  ├─ units ranking: bm25Ranks(expandTokens(tokens(query)).join(" "), ...)
-  │    (ask.mjs:125, 131 - preserves today's raw-query ranking semantics)
+  ├─ units ranking: bm25Ranks(expandTokensKeep(tokens(query)).join(" "), ...)
+  │    (ask.mjs:125, 131 - raw term kept alongside expansions; the units
+  │    layer stays reachable for the literal aliased term, empty map = today)
   ├─ notes ranking: bm25Ranks(expandTokens(qtokens0).join(" "), ...)
   │    (ask.mjs:138 - the notes layer's existing filtered join)
   └─ verdict chain, gates, retrieval event: untouched logic
@@ -489,9 +490,13 @@ runs into tmpdir exactly like verdict-eval.mjs.
   the filtered list; every coverage and verdict consumer below uses the
   expanded qtokens unchanged).
 - ask.mjs:125, 131 (units-layer rankings: bm25Ranks(query, ...) ->
-  bm25Ranks(expandTokens(tokens(query)).join(" "), ...); bm25Ranks
-  re-tokenizes, retrieval.js:36-38, so the raw-query semantics are
-  preserved exactly when the map is empty).
+  bm25Ranks(expandTokensKeep(tokens(query)).join(" "), ...); keep-original
+  semantics: the raw term stays AND the expansion joins it, so an aliased
+  query term stays reachable on the units layer (m4a1 units never drop
+  out). bm25Ranks re-tokenizes, retrieval.js:36-38, so the raw-query
+  semantics are preserved exactly when the map is empty. REPLACE stays on
+  the notes layer, where it is the measured shape that flips
+  d01/d02/d03).
 - ask.mjs:138 (notes-layer ranking: bm25Ranks(qtokens.join(" "), ...) ->
   bm25Ranks(expandTokens(qtokens0).join(" "), ...)).
 - ask.mjs:31 (manifest gains "concept_aliases":
@@ -527,11 +532,16 @@ aliases, no changes to frozen shared code, no event-schema change.
   apply to heldout seeds by construction; the human review is the guard.
   If real log data never repeats these phrasings, the d03 aliases should
   prune (dead-alias rule) and d03 returns to abstention.
-- Replace semantics drop the aliased term from the ranking. For a future
-  alias whose term is a genuine true positive (present in the gold note
-  AND absent from tag noise), append would be protective; v1 picks replace
-  because it is the only measured shape that passes. Revisit with more
-  data.
+- Replace semantics drop the aliased term from the ranking. RESOLVED
+  2026-08-14 (measured on the pinned frozen store, test-units-replace.mjs):
+  the units layer now keeps the original term alongside its expansions
+  (expandTokensKeep). The bare "m4a1" query under aliases had dropped
+  m4a1-containing units from the units-layer top-5 (2/5 vs 5/5 raw) - a
+  units-layer regression - which the fix restores (5/5) with the verdict
+  gate byte-identical (25/25/0/5, ablated 22/22/0/8, traps 8/8, row diff
+  still exactly d01/d02/d03). The notes layer keeps REPLACE: it is the
+  only measured shape that flips d01/d02/d03 with zero cross-damage, and
+  the alias terms live in the note vocabulary, not the unit vocabulary.
 - CAP=4 for the m4a1 entry vs the generic cap-2 intuition: keep CAP as one
   constant (4), or make it per-alias configurable? v1: one constant, with
   the m4a1 entry documented as the calibration point.

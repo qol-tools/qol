@@ -6,6 +6,7 @@ import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { qolMemoryStore } from "./lib/store-path.js";
+import { redact } from "./lib/redact.js";
 
 const args = process.argv.slice(2);
 const pick = (flag, def) => {
@@ -125,17 +126,6 @@ function textOf(content) {
     .filter((b) => b && b.type === "text" && typeof b.text === "string")
     .map((b) => b.text)
     .join("\n");
-}
-
-function redact(text) {
-  if (typeof text !== "string" || !text) return text;
-  return text
-    .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, "[REDACTED]")
-    .replace(/(?:Bearer|Token|api[_-]?key|password|passwd|secret|private[_-]?key)\s*[:=]\s*[\S]+/gi, "$1=[REDACTED]")
-    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED-KEY]")
-    .replace(/-----BEGIN[\s\S]*?END [A-Z ]*-----/g, "[REDACTED-PEM]")
-    .replace(/([\w.+-]+@[\w.-]+\.\w{2,})/g, "[EMAIL]")
-    .replace(/\.env[\s\S]*/g, ".env [REDACTED]");
 }
 
 function thinkingOf(content) {

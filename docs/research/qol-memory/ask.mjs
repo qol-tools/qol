@@ -7,7 +7,7 @@ import { bm25Ranks, snippet, tokens, buildIndex } from "./lib/retrieval.js";
 import { buildOrLoad } from "./lib/indexcache.js";
 import { trySealedText, parseUnitsText } from "./lib/seal.js";
 import { appendRetrieval } from "./lib/retrieval-log.js";
-import { loadAliases, expandTokens } from "./lib/concept-aliases.js";
+import { loadAliases, expandTokens, expandTokensKeep } from "./lib/concept-aliases.js";
 import { walkSkills, buildMetaDoc, probeFresh, serveSection, poolTokens, bestSection } from "./lib/skills-pool.js";
 
 const ASK_BASE = dirname(fileURLToPath(import.meta.url));
@@ -126,13 +126,14 @@ function distinctScore(qt, text) {
 const EXCLUDE_SESSION = pick("--exclude-session", "");
 const answerPool = userUnits.filter((u) => !isBoilerplateUnit(u) && (!EXCLUDE_SESSION || u.session !== EXCLUDE_SESSION));
 const answerIdx = buildOrLoad(STORE_ROOT, EXCLUDE_SESSION ? `pool-x-${EXCLUDE_SESSION.slice(0, 8)}` : "pool", answerPool, unitsPath);
-const answerRanked = bm25Ranks(expandTokens(tokens(query), ALIASES).join(" "), answerIdx, null, K).map(({ key, score }) => {
+const unitsQuery = expandTokensKeep(tokens(query), ALIASES).join(" ");
+const answerRanked = bm25Ranks(unitsQuery, answerIdx, null, K).map(({ key, score }) => {
   const u = answerPool.find((x) => x.key === key);
   return { key, score, kind: u.kind, source: u.source, session: u.session, cwd: u.cwd, ts: u.ts, text: u.text };
 });
 
 const allIdx = buildOrLoad(STORE_ROOT, "user", userUnits, unitsPath);
-const rankedAll = bm25Ranks(expandTokens(tokens(query), ALIASES).join(" "), allIdx, null, K).map(({ key, score }) => {
+const rankedAll = bm25Ranks(unitsQuery, allIdx, null, K).map(({ key, score }) => {
   const u = userUnits.find((x) => x.key === key);
   return { key, score, kind: u.kind, text: u.text, source: u.source, session: u.session, cwd: u.cwd, ts: u.ts };
 });

@@ -39,6 +39,17 @@ export function expandTokens(list, map) {
   return out;
 }
 
+export function expandTokensKeep(list, map) {
+  const out = [];
+  for (const t of list) {
+    out.push(t);
+    const ex = map.get(t);
+    if (!ex) continue;
+    for (const e of ex) out.push(e);
+  }
+  return out;
+}
+
 export function validate(path) {
   const errors = [];
   let raw;

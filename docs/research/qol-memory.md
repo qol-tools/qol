@@ -1506,3 +1506,48 @@ Every later tier plugs into this without redesign.
     vocabulary. Twice-seen rule and pruning await real
     retrievals.jsonl data (the log starts collecting on the next
     tool/CLI retrieval).
+  - 2026-08-14 tier-2 continuation (monorepo feea1a8d0 state, worktree
+    qol-memory-tier2, squash commit 74ec26ab6): the deferred round-4
+    fix-first finding measured and closed. Regression confirmed on the
+    pinned frozen store (snapshot 2026-08-12T18-46-58-129Z + notes
+    2026-08-13T16:31:40.844Z) with the new before/after harness
+    test-units-replace.mjs: REPLACE alias expansion replaced "m4a1"
+    (df 227 in user units, top score 3.33) with note-vocabulary terms
+    (bspace df 0, clip 381, caf 86, dba 102) in the UNITS-layer query
+    too, so the aliases-on units top-5 for "m4a1" held only 2/5 m4a1
+    units and the 101 m4a1-only units became unreachable. Fix: units
+    layer ranks expandTokensKeep(tokens(query)) (raw term kept
+    alongside expansions) via a new lib/concept-aliases.js export;
+    the notes layer keeps REPLACE (the calibrated d01/d02/d03 shape).
+    Post-fix: aliases-on units top-5 back to 5/5 m4a1 units on all
+    four m4a1 queries, verdict gate byte-identical (aliases-on
+    25/25/0/5, ablated 22/22/0/8, traps 8/8, per-row diff still
+    exactly d01/d02/d03), t04 trap stays candidates. The harness
+    fails on the pre-fix code (3/5) and passes post-fix (5/5), locking
+    the regression. Risk-register redaction gap closed: redact()
+    extracted from snapshot.mjs into lib/redact.js (byte-identical
+    behavior, 0/48 compaction texts and 0/205 decision notes change)
+    and decision-note text now routes through it at emission.
+    decisions.mjs audit vs the RESOLVED tier-2 decisions: env
+    contract QOL_MEMORY_MODEL/PROVIDER/THINKING/MODEL_DISABLE, pi -p
+    --no-session one-shot, decision-deter fallback, cls "decision" in
+    the shared notes pool, whole-corpus backfill - all present; the
+    frozen backfill run added 52 notes with 4 LLM calls + 12
+    deterministic (205 decision notes total; the full backfill
+    history is ~10 one-shot LLM calls across runs, under the ~20
+    estimate). m4a1-class heldout d01-d04 (drafted before units
+    reading per arch protocol) answer via decision notes with
+    provenance (source_key/source_ts/session) and the 7-member
+    supersedes chain on each gold note. Frozen eval table unchanged
+    (units 11/20, notes 7/10 hit@5 mrr 0.633, combined 18/30,
+    coverage 30/30, heldout 23/30 with the same 7 documented misses;
+    the scope doc's pre-decision notes 10/10 + 21/30 + 12/16
+    reproduce on the 2026-08-11T16:25:39.517Z run and moved to the
+    current numbers when decisions joined the pool, journal
+    2026-08-13). calibrate.mjs live-store baseline: 25/30 answered,
+    92% precision (23/25), c01/c05 wrong on the live notes pool
+    (frozen gate unaffected); noteScore 4-7 grid sweep lands the
+    same operating point. ask latency warm 356-365ms on the frozen
+    store, 437ms live (the documented ~310ms grew with the corpus;
+    the diff adds no measurable latency). Zero new deps, 8 suites +
+    test-alias ALL PASS. Pending candidate ea68bfe6d9258010 untouched.

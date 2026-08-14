@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { qolMemoryStore } from "./lib/store-path.js";
 import { trySealedText, parseUnitsText } from "./lib/seal.js";
 import { acquireDistillLock } from "./lib/distill-lock.js";
+import { redact } from "./lib/redact.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
 const ARGS = process.argv.slice(2);
@@ -334,7 +335,7 @@ try {
   for (const p of results) {
     const { session, sorted, newest, tags, useLlm, baseNotes, olderNotes } = p;
     const pushNoteLocal = (text, sourceKind) => {
-      const body = text.slice(0, 240);
+      const body = redact(text).slice(0, 240);
       const k = noteKey("decision", normalize(body));
       if (existingKeys.has(k)) return;
       existingKeys.add(k);
