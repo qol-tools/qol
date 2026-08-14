@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "note": "Recall aliases for the skills pool. Versioned with qol-memory code, NOT with qol-skills. Doc-side only: appended to buildMetaDoc before indexing. Drift rules: redundant (description caught up) -> prune; sole-carrier (alias terms absent from description AND all section leads) -> human verify; dangling id -> remove; no eval flip -> dead, prune. Budget: <=30% of pool needs aliases, <=5 phrases per skill.",
+  "aliases": {
+    "qol-workflow/commit": ["formatted", "commit message formatting"],
+    "qol-workflow/git-trees": ["where new work should be done", "feature branch workflow"],
+    "qol-workflow/qol-monorepo-rules": ["about", "delivery rules builds tests"],
+    "qol-project/qol-arch-code": ["architecture built how built how", "plugin architecture layout"]
+  }
+}

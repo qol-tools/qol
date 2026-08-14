@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "note": "Query-side token expansion bridging term-disjoint questions to settled note vocabulary, spec concept-aliases-scope.md section D. Seeds admitted from the heldout abstentions d01/d02/d03 on the pinned frozen store, verified 2026-08-14 by the architect's repro: 25/25/0/5, traps 8/8, row diff exactly d01/d02/d03, each answered-correct with its gold note key (79046028d14b1cec / d857979480b72faa / 7570839245601dcc). m4a1 -> [bspace, clip, caf, dba] is the CAP=4 calibration point: cap-2 subsets fail the instrument, and the union is the only measured shape that flips both d01 and d02 with zero cross-damage (spec D). july/lane/kept bridge d03 and are semantically strained; the dead-alias rule prunes them if real retrieval-log data never repeats those phrasings (spec D, open questions).",
+  "aliases": {
+    "m4a1": ["bspace", "clip", "caf", "dba"],
+    "july": ["idle"],
+    "lane": ["per"],
+    "kept": ["keeps"]
+  }
+}

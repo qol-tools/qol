@@ -1,0 +1,226 @@
+{
+  "run_pin": "2026-08-10T21-38-02-273Z",
+  "note": "Drafted from memory of the work per arch-5 protocol, before reading snapshot units. target_key and covered are filled during ground-truth annotation, never during drafting.",
+  "questions": [
+    {
+      "id": "q01",
+      "category": "decision",
+      "query": "do I really dislike dependencies in the memory system",
+      "target_key": "33210cd6cb79c92f",
+      "covered": true
+    },
+    {
+      "id": "q02",
+      "category": "decision",
+      "query": "is sqlite-vec acceptable as a dependency",
+      "target_key": "33210cd6cb79c92f",
+      "covered": true
+    },
+    {
+      "id": "q03",
+      "category": "decision",
+      "query": "should we use ollama for embeddings",
+      "target_key": "44193bb97d0f0414",
+      "covered": true
+    },
+    {
+      "id": "q04",
+      "category": "decision",
+      "query": "what architecture do I want the memory system to converge towards",
+      "target_key": "f068ad0b50c11a65",
+      "covered": true
+    },
+    {
+      "id": "q05",
+      "category": "decision",
+      "query": "do I want the qol memory MVP to be small",
+      "target_key": "b491a0b8b01baa1c",
+      "covered": true
+    },
+    {
+      "id": "q06",
+      "category": "decision",
+      "query": "was I worried about cache misses in my usage",
+      "target_key": "e8855fb006cacc61",
+      "covered": true
+    },
+    {
+      "id": "q07",
+      "category": "decision",
+      "query": "what were the three memory layers I described",
+      "target_key": "fe57384113d16bfa",
+      "covered": true
+    },
+    {
+      "id": "q08",
+      "category": "decision",
+      "query": "did I ask for an adversarial review pass with multiple agents",
+      "target_key": "5745d8adc897a75d",
+      "covered": true
+    },
+    {
+      "id": "q09",
+      "category": "decision",
+      "query": "where does feature work happen in qol repos",
+      "target_key": "67d8f2b20faaaeba",
+      "covered": true
+    },
+    {
+      "id": "q10",
+      "category": "decision",
+      "query": "what should happen to agent terminals after I spawn them",
+      "target_key": "442a7f6939048edf",
+      "covered": true
+    },
+    {
+      "id": "q11",
+      "category": "decision",
+      "query": "how did I want answers formatted given my adhd",
+      "target_key": "a17abdcd6d3a55db",
+      "covered": true
+    },
+    {
+      "id": "q12",
+      "category": "decision",
+      "query": "did I want ideas written down iteratively to distill them",
+      "target_key": "0bfbd10dadf8b5c9",
+      "covered": true
+    },
+    {
+      "id": "q13",
+      "category": "decision",
+      "query": "am I aiming to create breakthroughs myself",
+      "target_key": "f068ad0b50c11a65",
+      "covered": true
+    },
+    {
+      "id": "q14",
+      "category": "decision",
+      "query": "do I want to learn theory via daily practice",
+      "target_key": "f068ad0b50c11a65",
+      "covered": true
+    },
+    {
+      "id": "q15",
+      "category": "decision",
+      "query": "what was the low rank adaptation idea during context retrieval",
+      "target_key": "6cce8feae2defe21",
+      "covered": true
+    },
+    {
+      "id": "q16",
+      "category": "context",
+      "query": "what was happening in parallel to this chat",
+      "target_key": "fe57384113d16bfa",
+      "covered": true
+    },
+    {
+      "id": "q17",
+      "category": "context",
+      "query": "which paper did I recall with insane results",
+      "target_key": "6cce8feae2defe21",
+      "covered": true
+    },
+    {
+      "id": "q18",
+      "category": "context",
+      "query": "what did I want the agents to do with the work so far",
+      "target_key": "5745d8adc897a75d",
+      "covered": true
+    },
+    {
+      "id": "q19",
+      "category": "context",
+      "query": "what did the user run that failed with the workspace member error",
+      "target_key": "d0e56514c14d6b46",
+      "covered": true
+    },
+    {
+      "id": "q20",
+      "category": "context",
+      "query": "what did the build warn about source identity",
+      "target_key": "a9d361b103451b7f",
+      "covered": true
+    },
+    {
+      "id": "q21",
+      "category": "file",
+      "query": "where does the qol memory research doc live",
+      "target_key": "b5eb796af9246d56",
+      "covered": true,
+      "note_key": "9dfaac109c78dcd2"
+    },
+    {
+      "id": "q22",
+      "category": "file",
+      "query": "what command runs the snapshot node",
+      "target_key": null,
+      "covered": true,
+      "note_key": "5df848ba119e2c66"
+    },
+    {
+      "id": "q23",
+      "category": "file",
+      "query": "what format are pi sessions stored in",
+      "target_key": "486e6af7b26ae064",
+      "covered": true,
+      "note_key": "a16772e4654971d4"
+    },
+    {
+      "id": "q24",
+      "category": "file",
+      "query": "which embedding model is the default candidate",
+      "target_key": "c00c5292f1a1091c",
+      "covered": true,
+      "note_key": "74852126837ff273"
+    },
+    {
+      "id": "q25",
+      "category": "file",
+      "query": "how many compaction units exist in the corpus",
+      "target_key": "ec5062520a6da81e",
+      "covered": true,
+      "note_key": "1ed3d538c7184f36"
+    },
+    {
+      "id": "q26",
+      "category": "file",
+      "query": "what is the snapshot report schema version",
+      "target_key": "c03da334d8b8d731",
+      "covered": true,
+      "note_key": "6a0cef90f25536fd"
+    },
+    {
+      "id": "q27",
+      "category": "file",
+      "query": "which flag controls snapshot run retention",
+      "target_key": "b7ea110a06784855",
+      "covered": true,
+      "note_key": "06426817cac95e9c"
+    },
+    {
+      "id": "q28",
+      "category": "file",
+      "query": "what status does the snapshot report when a source is missing",
+      "target_key": "f3476ca629be29d2",
+      "covered": true,
+      "note_key": "e07d3fb012338e3d"
+    },
+    {
+      "id": "q29",
+      "category": "file",
+      "query": "what is the unit key made of",
+      "target_key": "8f5b25aee9e2b03e",
+      "covered": true,
+      "note_key": "b98458087643b7ab"
+    },
+    {
+      "id": "q30",
+      "category": "file",
+      "query": "which directory do snapshot reports get written to",
+      "target_key": "5d4aa501a3456963",
+      "covered": true,
+      "note_key": "9a9cfc5a604cc464"
+    }
+  ]
+}

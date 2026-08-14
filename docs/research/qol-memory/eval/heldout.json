@@ -1,0 +1,209 @@
+{
+  "name": "held-out file-fact suite (adversarial review des-2, must-fix eval-1)",
+  "note": "Facts derived from the code and pinned report, none among the frozen 30. Scored with eval.mjs --heldout: hit@5 = any note containing the fact substring ranks in the top-5 of the notes index. No note_key annotation exists or will be added.",
+  "questions": [
+    {
+      "id": "h01",
+      "query": "how many sessions does the snapshot sample per source",
+      "fact": "maxSamples 500"
+    },
+    {
+      "id": "h02",
+      "query": "how deep does the snapshot walk the session tree",
+      "fact": "MAX_DEPTH 8"
+    },
+    {
+      "id": "h03",
+      "query": "where do pi sessions live on disk",
+      "fact": "~/.pi/agent/sessions"
+    },
+    {
+      "id": "h04",
+      "query": "where do claude sessions live on disk",
+      "fact": "~/.claude/projects"
+    },
+    {
+      "id": "h05",
+      "query": "what is the default retention for snapshot runs",
+      "fact": "keep: 5"
+    },
+    {
+      "id": "h06",
+      "query": "what key does the snapshot dedupe on",
+      "fact": "normalized full text"
+    },
+    {
+      "id": "h07",
+      "query": "what is the default RRF k in the eval",
+      "fact": "rrf k 200"
+    },
+    {
+      "id": "h08",
+      "query": "what statuses can the snapshot report emit",
+      "fact": "pass/degraded/fail"
+    },
+    {
+      "id": "h09",
+      "query": "how long does one dense embedding take",
+      "fact": "184 ms"
+    },
+    {
+      "id": "h10",
+      "query": "how many trigger classes does notes.mjs have",
+      "fact": "9 trigger",
+      "note": " (gold corrected: notes.mjs has 9 trigger classes path/flag/version/model/count/status/command/format/policy; verified from TRIGGERS in notes.mjs)"
+    },
+    {
+      "id": "h11",
+      "query": "what are the bge-small embedding dimensions",
+      "fact": "384"
+    },
+    {
+      "id": "h12",
+      "query": "how many units are sampled for the language check",
+      "fact": "500 sampled"
+    },
+    {
+      "id": "h13",
+      "query": "which flag adds assistant messages to the snapshot",
+      "fact": "--with-assistant"
+    },
+    {
+      "id": "p01",
+      "query": "where should new feature work be done in qol repos",
+      "fact": "work in a worktree"
+    },
+    {
+      "id": "p02",
+      "query": "how should the qol memory MVP start",
+      "fact": "start small"
+    },
+    {
+      "id": "p03",
+      "query": "what did the user forbid putting on the main clone",
+      "fact": "never directly on the main clone"
+    },
+    {
+   "id": "d01",
+   "query": "how did we fix the m4a1 rifle anchoring",
+   "fact": "full-body 243 controllers"
+  },
+  {
+   "id": "d02",
+   "query": "what was the root cause of the m4a1 arms collapsing",
+   "fact": "centimeters"
+  },
+  {
+   "id": "d03",
+   "query": "was the july reanchor ccd lane kept or reverted",
+   "fact": "CCD-solved to the handguard"
+  },
+  {
+   "id": "d04",
+   "query": "what is the m4a1 weapon anchor studio",
+   "fact": "anchor state in bpy.app"
+  },
+  {
+   "id": "c01",
+   "query": "what was the UNIT_MARGIN gate recalibrated to and why",
+   "fact": "UNIT_MARGIN 2.0 to 1.5",
+   "note": "lives in note 53b347117db02b9d (gate recalibration landed 55066d75, 79% live precision ceiling)"
+  },
+  {
+   "id": "c02",
+   "query": "how was the d01 data-loss bug fixed",
+   "fact": "token-containment dedupe",
+   "note": "lives in note d9ea9e295b991b0f (append-only carry replaced threshold-0.25 token-containment dedupe)"
+  },
+  {
+   "id": "c03",
+   "query": "how many snapshot runs did pruning keep after the off-by-one fix",
+   "fact": "17 runs pruned to 3 kept",
+   "note": "lives in note 6b2c150f7c3cd87e (pin-skip + prune off-by-one fix)"
+  },
+  {
+   "id": "c04",
+   "query": "why was a verdict-mode eval built",
+   "fact": "trap queries",
+   "note": "lives in note 36dc4d2c701b7405 (verdict-eval harness with 8/8 traps safe)"
+  },
+  {
+   "id": "c05",
+   "query": "what shipped in qol-skills v0.8.16 for live capture",
+   "fact": "exclude-session",
+   "note": "lives in note cd5e55f9cedf3bde (live capture v1, message_end + session_compact)"
+  },
+  {
+   "id": "c06",
+   "query": "which tokenizer did the rejected FTS5 approach use",
+   "fact": "unicode61",
+   "note": "lives in note 2a7f5561ffdb447c (FTS5 rejection, 0/29 frozen targets)"
+  },
+  {
+   "id": "c07",
+   "query": "what filter is insufficient to exclude a session's own units",
+   "fact": "kind-not-equal-user is insufficient",
+   "note": "lives in note 1728b7be225b8ce5 (self-echo root cause, session filter fix)"
+  },
+  {
+   "id": "c08",
+   "query": "what hit at 5 did dense embeddings achieve on the frozen eval",
+   "fact": "hit@5 80% vs 55%",
+   "note": "lives in note d15b40999c8e211d (dense embeddings tier-1 recall)"
+  },
+  {
+   "id": "c09",
+   "query": "how many of the 400 hook firings were self echo",
+   "fact": "146/400",
+   "note": "lives in note e7c6353755343c4d (three-surface verdict, hook delete)"
+  },
+  {
+   "id": "c10",
+   "query": "how did the persisted index cut ask time with parity exact",
+   "fact": "~800ms to ~310ms",
+   "note": "lives in note 39858c06c8c30f6f (persisted exact BM25 index, ask.mjs latency)"
+  }
+ ],
+ "traps": [
+  {
+   "id": "t01",
+   "query": "what is the airspeed velocity of an unladen swallow",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t02",
+   "query": "was snapshot dedupe enabled on the pinned run",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t03",
+   "query": "is the eval mrr above 0.4",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t04",
+   "query": "what does the m4a1 weapon cost",
+   "expected": "candidates"
+  },
+  {
+   "id": "t05",
+   "query": "should the memory system store notes in postgres",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t06",
+   "query": "what was the weather when the 2026-08-10 snapshot ran",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t07",
+   "query": "which session said keep the eval pin at 200",
+   "expected": "no-memory"
+  },
+  {
+   "id": "t08",
+   "query": "which embedding model produced the 184 ms timings",
+   "expected": "no-memory"
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "skills recall suite (drafted before reading skill bodies, annotated after)",
+  "note": "hit@1/3/5 by skill id against the metadata pool; anchor_hit = served live section contains the answer substring. Separate from the frozen transcript eval.",
+  "questions": [
+    { "id": "s01", "query": "how should commit messages be formatted", "target": "qol-workflow/commit", "answer_substr": "imperative" },
+    { "id": "s02", "query": "where should new feature work be done", "target": "qol-workflow/git-trees", "answer_substr": "worktree" },
+    { "id": "s03", "query": "how do we prevent cross platform build breakage in CI", "target": "qol-project/qol-arch-cicd", "answer_substr": "matrix" },
+    { "id": "s04", "query": "what is the rule about comments in code", "target": "qol-workflow/coding-general", "answer_substr": "comment" },
+    { "id": "s05", "query": "how should rust code be written in this workspace", "target": "qol-langs/rust-conventions", "answer_substr": "error" },
+    { "id": "s06", "query": "what is the qol mission about the resident host", "target": "qol-project/qol-mission", "answer_substr": "resident" },
+    { "id": "s07", "query": "how do we test qol apps", "target": "qol-tray/qol-apps-testing", "answer_substr": "property" },
+    { "id": "s08", "query": "what should a plugin doctor command report", "target": "qol-project/qol-arch-code", "answer_substr": "doctor" },
+    { "id": "s09", "query": "how do we debug whether a change reached the running process", "target": "qol-tray/qol-tray-dev-recompile", "answer_substr": "recompile" },
+    { "id": "s10", "query": "how do we decide when to push a repo", "target": "qol-workflow/git-push", "answer_substr": "rebase" },
+    { "id": "s11", "query": "what is the delivery rule about builds and tests", "target": "qol-workflow/qol-monorepo-rules", "answer_substr": "build" },
+    { "id": "s12", "query": "when should i use a workflow node", "target": "qol-workflow-nodes/qol-workflow-nodes", "answer_substr": "workflow" },
+    { "id": "s13", "query": "how is the qol architecture built", "target": "qol-project/qol-arch-code", "answer_substr": "trait" }
+  ]
+}
