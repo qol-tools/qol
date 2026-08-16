@@ -28,6 +28,8 @@ pub(super) trait SurfacePlatform {
         expected: Size<Pixels>,
         tolerance: f64,
     ) -> bool;
+
+    fn reveal_fail_open() -> bool;
 }
 
 pub(super) fn dimensions_match(

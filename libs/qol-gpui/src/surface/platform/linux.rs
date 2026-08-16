@@ -26,4 +26,8 @@ impl SurfacePlatform for Platform {
     ) -> bool {
         current >= required && dimensions_match(observed, expected, tolerance)
     }
+
+    fn reveal_fail_open() -> bool {
+        false
+    }
 }

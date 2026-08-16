@@ -50,11 +50,67 @@ pub fn adjust_ghost_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<g
 }
 
 pub fn should_poll_focus() -> bool {
-    false
+    true
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ProcessSerialNumber {
+    high: u32,
+    low: u32,
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn GetFrontProcess(psn: *mut ProcessSerialNumber) -> i32;
+    fn GetProcessPID(psn: *const ProcessSerialNumber, pid: *mut i32) -> i32;
+}
+
+fn frontmost_pid() -> Option<i32> {
+    unsafe {
+        #[allow(deprecated)]
+        {
+            let mut psn = ProcessSerialNumber { high: 0, low: 0 };
+            if GetFrontProcess(&mut psn) != 0 {
+                return None;
+            }
+            let mut pid = 0;
+            if GetProcessPID(&psn, &mut pid) != 0 {
+                return None;
+            }
+            Some(pid)
+        }
+    }
 }
 
 pub fn has_process_focus() -> bool {
-    true
+    frontmost_pid() == Some(std::process::id() as i32)
+}
+
+use std::ffi::c_void;
+
+type DispatchFunction = unsafe extern "C" fn(*mut c_void);
+
+#[link(name = "System", kind = "framework")]
+extern "C" {
+    fn dispatch_get_main_queue() -> *const c_void;
+    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, function: DispatchFunction);
+}
+
+unsafe extern "C" fn run_task_on_main(context: *mut c_void) {
+    let task = Box::from_raw(context as *mut Box<dyn FnOnce() + Send>);
+    task();
+}
+
+pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
+    unsafe {
+        let queue = dispatch_get_main_queue();
+        if queue.is_null() {
+            return;
+        }
+        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(task);
+        dispatch_async_f(queue, Box::into_raw(boxed) as *mut c_void, run_task_on_main);
+    }
 }
 
 pub fn start_window_move(window: &mut gpui::Window) {

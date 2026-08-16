@@ -33,8 +33,11 @@ const PANEL_OBJECT_ROW_HEIGHT: f32 = 30.0;
 const PANEL_QR_CODE_HEIGHT: f32 = 180.0;
 const PANEL_QR_URL_HEIGHT: f32 = 20.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
-const PANEL_SECTION_MENU_ITEM_HEIGHT: f32 = 64.0;
-const PANEL_CHROME_HEIGHT: f32 = 88.0;
+const PANEL_COLUMN_GAP: f32 = 4.0;
+const PANEL_SECTION_MENU_ITEM_PADDING_Y: f32 = 8.0;
+const PANEL_SECTION_MENU_LABEL_LINE_HEIGHT: f32 = 23.0;
+const PANEL_SECTION_MENU_DESCRIPTION_LINE_HEIGHT: f32 = 19.0;
+const PANEL_CHROME_HEIGHT: f32 = 62.0;
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 
 #[derive(Clone)]
@@ -460,18 +463,34 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
     }
 }
 
+fn section_menu_item_height(description: Option<&str>) -> f32 {
+    let base = 2.0 * PANEL_SECTION_MENU_ITEM_PADDING_Y + PANEL_SECTION_MENU_LABEL_LINE_HEIGHT;
+    if description.is_some() {
+        base + PANEL_COLUMN_GAP + PANEL_SECTION_MENU_DESCRIPTION_LINE_HEIGHT
+    } else {
+        base
+    }
+}
+
 fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
     if sections.len() > 1 {
-        return PANEL_CHROME_HEIGHT + sections.len() as f32 * PANEL_SECTION_MENU_ITEM_HEIGHT;
+        let items = sections
+            .iter()
+            .map(|section| section_menu_item_height(section.description.as_deref()))
+            .sum::<f32>();
+        let gaps = (sections.len() - 1) as f32 * PANEL_COLUMN_GAP;
+        return PANEL_CHROME_HEIGHT + items + gaps;
     }
     let section_content = sections
         .iter()
         .map(|section| {
-            section
+            let rows_height = section
                 .rows
                 .iter()
                 .map(|index| view::row_height(&rows[*index]))
-                .sum::<f32>()
+                .sum::<f32>();
+            let gaps = (section.rows.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
+            rows_height + gaps
         })
         .fold(0.0, f32::max);
     PANEL_CHROME_HEIGHT + section_content
@@ -490,8 +509,9 @@ fn panel_width(rows: &[Row]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, panel_height, panel_width, ActivationDecision, Row, RowSection,
-        PANEL_CHROME_HEIGHT, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_SECTION_MENU_ITEM_HEIGHT,
+        activation_decision, panel_height, panel_width, section_menu_item_height,
+        ActivationDecision, Row, RowSection, PANEL_CHROME_HEIGHT, PANEL_GAMEPAD_WIDTH,
+        PANEL_ROW_HEIGHT,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::rows::RowControl;
@@ -542,29 +562,36 @@ mod tests {
     }
 
     #[test]
+    fn section_menu_items_grow_for_descriptions() {
+        assert_eq!(section_menu_item_height(None), 39.0);
+        assert_eq!(section_menu_item_height(Some("desc")), 62.0);
+    }
+
+    #[test]
     fn sectioned_panels_size_for_the_section_menu() {
         let rows = vec![
             row(RowControl::Toggle(false)),
             row(RowControl::Toggle(false)),
             row(RowControl::Toggle(false)),
         ];
+        let plain = |label: &str, rows: Vec<usize>| RowSection {
+            label: label.into(),
+            description: None,
+            rows,
+        };
         let sections = vec![
+            plain("One", vec![0]),
+            plain("Two", vec![1]),
             RowSection {
-                label: "One".into(),
-                description: None,
-                rows: vec![0],
-            },
-            RowSection {
-                label: "Two".into(),
-                description: None,
-                rows: vec![1, 2],
+                label: "Three".into(),
+                description: Some("described".into()),
+                rows: vec![2],
             },
         ];
-        let menu_height = 2.0 * PANEL_SECTION_MENU_ITEM_HEIGHT;
 
         assert_eq!(
             panel_height(&rows, &sections),
-            PANEL_CHROME_HEIGHT + menu_height
+            PANEL_CHROME_HEIGHT + 39.0 + 39.0 + 62.0 + 2.0 * 4.0
         );
     }
 

@@ -52,6 +52,11 @@ pub fn process_focus_truth() -> Option<bool> {
     should_poll_focus().then(has_process_focus)
 }
 
+#[cfg(target_os = "macos")]
+pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
+    imp::run_on_main(task)
+}
+
 pub fn start_window_move(window: &mut gpui::Window) {
     imp::start_window_move(window);
 }

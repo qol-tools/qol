@@ -26,4 +26,8 @@ impl SurfacePlatform for Platform {
     ) -> bool {
         true
     }
+
+    fn reveal_fail_open() -> bool {
+        false
+    }
 }

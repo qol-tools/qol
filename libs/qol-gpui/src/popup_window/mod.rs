@@ -71,6 +71,9 @@ pub use platform::{
     window_holds_input_focus, window_position_by_title, WindowGeometrySession,
 };
 
+#[cfg(target_os = "macos")]
+pub(crate) use platform::reassert_focus_on_main;
+
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
 const ENV_GHOST_COLOR: &str = "QOL_TRAY_GHOST_COLOR";
 
@@ -135,6 +138,16 @@ fn reassert_focus_until_held_with(
             let shown = show(&assert_title);
             #[cfg(not(debug_assertions))]
             let _ = shown;
+            #[cfg(target_os = "macos")]
+            {
+                let title = assert_title.clone();
+                crate::platform::run_on_main(Box::new(move || {
+                    if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
+                        return;
+                    }
+                    crate::popup_window::reassert_focus_on_main(&title);
+                }));
+            }
             qol_runtime::probe!(
                 "FOCUS_REASSERT",
                 "title={assert_title} step=reassert shown={shown}"

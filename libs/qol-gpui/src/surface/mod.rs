@@ -288,6 +288,7 @@ impl Surface {
         self.open(tracker, cx, |dismisser, window, cx| {
             let view = build(dismisser, window, cx);
             window.focus(&view.focus_handle(cx));
+            window.activate_window();
             view
         })
     }
@@ -301,6 +302,7 @@ impl Surface {
         self.open_on(monitor, cx, |dismisser, window, cx| {
             let view = build(dismisser, window, cx);
             window.focus(&view.focus_handle(cx));
+            window.activate_window();
             view
         })
     }
@@ -617,6 +619,23 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         );
         if !readiness.ready() {
             reveal_pending.set(false);
+            if Platform::reveal_fail_open() {
+                let shown = {
+                    let _reason = crate::popup_window::reason_scope("surface-reveal-timeout");
+                    crate::popup_window::show_normal_window_by_title(&title)
+                };
+                visible.set(shown);
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} reason=frame-not-ready fallback=fail-open",
+                    readiness.moved,
+                    readiness.layout_confirmed,
+                    readiness.viewport_ready,
+                    readiness.fresh_frame,
+                    readiness.content_rendered
+                );
+                return;
+            }
             let _ = cx.update(|cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             });
@@ -1094,6 +1113,21 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         );
         if !readiness.ready() {
             reveal_pending.set(false);
+            if Platform::reveal_fail_open() {
+                let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
+                let shown = crate::popup_window::show_normal_window_by_title(&title);
+                visible.set(shown);
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} reused=true reason=frame-not-ready fallback=fail-open",
+                    readiness.moved,
+                    readiness.layout_confirmed,
+                    readiness.viewport_ready,
+                    readiness.fresh_frame,
+                    readiness.content_rendered
+                );
+                return;
+            }
             let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
             let _ = crate::popup_window::hide_invisible(&title);
             qol_runtime::probe!(
