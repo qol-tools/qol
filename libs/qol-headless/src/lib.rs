@@ -1,8 +1,8 @@
 mod doctor;
 
 pub use doctor::{
-    DoctorAggregateReport, DoctorCheck, DoctorCheckResult, DoctorReport, DoctorStatus,
-    PluginDoctorReport, PreservedDoctorReport,
+    device_permission_check, DoctorAggregateReport, DoctorCheck, DoctorCheckResult, DoctorReport,
+    DoctorStatus, PluginDoctorReport, PreservedDoctorReport,
 };
 
 use anyhow::Result;
