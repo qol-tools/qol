@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 use qol_host_fixes::policy::cli::{parse_args, ParsedCommand, ResidentCommand};
 
+mod restore;
+pub use restore::{restore_all, RestoreEntry, RestoreReport};
+
 pub use qol_host_fixes::policy::nvidia::{fragment_path, NVIDIA_POLICY_ID};
 
 trait PhaseRecorder {
