@@ -17,6 +17,8 @@ const POLL_CAP: Duration = Duration::from_secs(30);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
+const WAKE_COMPOSER_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const WAKE_COMPOSER_MAX_ATTEMPTS: usize = 100;
 const WATCH_ALL_KEY: &str = "watch-all";
 
 #[derive(Clone, Copy)]
@@ -155,6 +157,7 @@ fn poll_round(
     out: &mut dyn Write,
     trace_dir: &std::path::Path,
     config: WatchConfig,
+    sleep: &mut dyn FnMut(Duration),
 ) -> Result<RoundPoll> {
     round.reads += 1;
     let screen = if round.reads.is_multiple_of(10) {
@@ -182,6 +185,7 @@ fn poll_round(
                         &round.driver,
                         "completed",
                         &wake_message(&round.session, "completed", tail, false),
+                        sleep,
                     )?;
                     pending.observe(&round.binding, &round.marker, true)?;
                     pending.store_screen(&round.binding, &round.marker, tail)?;
@@ -219,6 +223,7 @@ fn poll_round(
                     &round.driver,
                     "gone",
                     &wake_message(&round.session, "gone", "", false),
+                    sleep,
                 )?;
                 emit_gone(out, &round.session, &delivery)?;
                 pending.discard(&round.binding)?;
@@ -285,6 +290,7 @@ fn poll_round(
                         &round.driver,
                         "completed",
                         &wake_message(&round.session, "completed", tail, round.autoclose),
+                        sleep,
                     )?;
                     if round.autoclose && delivery.delivered {
                         close_lane_terminal(terminals, &round.binding);
@@ -342,6 +348,7 @@ fn poll_round(
                 &round.driver,
                 "stalled",
                 &wake_message(&round.session, "stalled", "", false),
+                sleep,
             )?;
             emit_stalled(out, &round.session, &delivery)?;
             qol_runtime::probe!(
@@ -494,6 +501,7 @@ fn watch_loop(
                 out,
                 trace_dir,
                 config,
+                sleep,
             )?;
             changed |= outcome.changed;
             if outcome.keep {
@@ -576,17 +584,39 @@ fn wake_message(session: &str, event: &str, screen: &str, autoclose: bool) -> St
     }
 }
 
-fn report_snippet(screen: &str) -> String {
-    if screen.len() <= WAKE_SNIPPET_MAX_BYTES {
-        return screen.to_owned();
+fn clean_screen(text: &str) -> String {
+    let mut cleaned = Vec::new();
+    let mut blank_run = 0usize;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank_run += 1;
+            if blank_run == 1 && !cleaned.is_empty() {
+                cleaned.push(String::new());
+            }
+        } else {
+            blank_run = 0;
+            cleaned.push(line.to_owned());
+        }
     }
-    let mut start = screen.len() - WAKE_SNIPPET_MAX_BYTES;
-    while !screen.is_char_boundary(start) {
+    while cleaned.last().is_some_and(|line| line.is_empty()) {
+        cleaned.pop();
+    }
+    cleaned.join("\n")
+}
+
+fn report_snippet(screen: &str) -> String {
+    let cleaned = clean_screen(screen);
+    if cleaned.len() <= WAKE_SNIPPET_MAX_BYTES {
+        return cleaned;
+    }
+    let mut start = cleaned.len() - WAKE_SNIPPET_MAX_BYTES;
+    while !cleaned.is_char_boundary(start) {
         start += 1;
     }
     format!(
         "(report tail; full screen via session_bridge)\n{}",
-        &screen[start..]
+        &cleaned[start..]
     )
 }
 
@@ -617,6 +647,21 @@ fn record_wake_failure(
     );
 }
 
+fn composer_busy(screen: &str) -> bool {
+    let mut composer = None;
+    for line in screen.lines() {
+        let line = line.trim();
+        if let Some(rest) = line
+            .strip_prefix("> ")
+            .or_else(|| line.strip_prefix("❯ "))
+            .or_else(|| (line == ">" || line == "❯").then_some(""))
+        {
+            composer = Some(rest);
+        }
+    }
+    composer.is_some_and(|rest| rest.chars().any(|character| !character.is_whitespace()))
+}
+
 fn deliver_wake(
     terminals: &TerminalSessionService,
     trace_dir: &std::path::Path,
@@ -624,6 +669,7 @@ fn deliver_wake(
     driver: &str,
     event: &str,
     message: &str,
+    sleep: &mut dyn FnMut(Duration),
 ) -> Result<WakeDelivery> {
     let outcome = if driver.is_empty() {
         WakeDelivery {
@@ -641,6 +687,25 @@ fn deliver_wake(
                         error: Some("the initiator terminal is no longer live".to_owned()),
                     }
                 } else {
+                    let mut deferrals = 0usize;
+                    if let Ok(mut screen) = terminals.read_screen_relaxed(&binding) {
+                        while composer_busy(&screen) && deferrals < WAKE_COMPOSER_MAX_ATTEMPTS {
+                            sleep(WAKE_COMPOSER_POLL_INTERVAL);
+                            deferrals += 1;
+                            match terminals.read_screen_relaxed(&binding) {
+                                Ok(next) => screen = next,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    if deferrals > 0 {
+                        qol_runtime::probe!(
+                            "CLI_SESSION_WATCH",
+                            "event=wake_deferred_composer_busy driver={} waited_s={}",
+                            driver,
+                            (deferrals as u64) * WAKE_COMPOSER_POLL_INTERVAL.as_secs()
+                        );
+                    }
                     match terminals.send_text(&binding, message, DeliveryMode::Submit) {
                         Ok(()) => WakeDelivery {
                             delivered: true,
@@ -1052,7 +1117,7 @@ mod tests {
             .unwrap();
         let auto_backend = FakeBackend::new(
             facts("7", 100),
-            vec!["done\nQOL_BRIDGE_DONE_auto".to_owned(); 2],
+            vec!["done   \n\n\nQOL_BRIDGE_DONE_auto  ".to_owned(); 2],
         );
         let (terminals, auto_backend) = harness(auto_backend);
         let mut out = Vec::new();
@@ -1074,6 +1139,10 @@ mod tests {
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["autoclose"], true);
         assert_eq!(events[0]["delivered"], true);
+        assert_eq!(
+            events[0]["screen"], "done   \n\n\nQOL_BRIDGE_DONE_auto  ",
+            "the event screen must stay raw"
+        );
         let sent = auto_backend.sent.lock().unwrap();
         assert_eq!(
             sent.len(),
@@ -1086,6 +1155,17 @@ mod tests {
         assert!(text.contains("qol sessions: lane"));
         assert!(text.contains("QOL_BRIDGE_DONE_auto"));
         assert!(text.contains("(lane auto-closed)"));
+        assert!(
+            text.lines().all(|line| line == line.trim_end()),
+            "the wake text must not carry trailing padding: {text:?}"
+        );
+        let text_lines = text.lines().collect::<Vec<_>>();
+        assert!(
+            !text_lines
+                .windows(2)
+                .any(|pair| pair[0].trim().is_empty() && pair[1].trim().is_empty()),
+            "the wake text must not contain consecutive blank lines: {text:?}"
+        );
         drop(sent);
         let closed = auto_backend.closed.lock().unwrap();
         assert_eq!(
@@ -1311,6 +1391,42 @@ mod tests {
         assert_eq!(stored, screen_tail(&final_screen));
         assert_eq!(stored.len(), 64 * 1024);
         assert!(stored.ends_with("QOL_BRIDGE_DONE_round"));
+    }
+
+    #[test]
+    fn clean_screen_strips_padding_and_collapses_blank_runs() {
+        assert_eq!(
+            clean_screen("\n\n   line one   \n\n\n\n   line two  \n\n   \n\n"),
+            "   line one\n\n   line two"
+        );
+        assert_eq!(clean_screen("no padding"), "no padding");
+        assert_eq!(clean_screen("a\n\n\n\nb"), "a\n\nb");
+        assert_eq!(clean_screen(""), "");
+        assert_eq!(clean_screen("   \n\n"), "");
+    }
+
+    #[test]
+    fn composer_busy_detects_an_in_progress_prompt_and_ignores_bare_prompts() {
+        let cases: &[(&str, bool)] = &[
+            ("> fixing the parser", true),
+            ("> fixing the parser\nidle output", true),
+            ("> draft\nstatus: running", true),
+            ("❯ fixing the parser", true),
+            ("   > fixing the parser", true),
+            ("> old message\n> ", false),
+            ("> old message\n> draft", true),
+            ("❯ old message\n❯ ", false),
+            (">", false),
+            ("> ", false),
+            (">  ", false),
+            ("❯", false),
+            ("❯ ", false),
+            ("just output, no prompt", false),
+            ("", false),
+        ];
+        for (screen, expected) in cases {
+            assert_eq!(composer_busy(screen), *expected, "screen: {screen:?}");
+        }
     }
 
     #[test]
@@ -1751,14 +1867,121 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            4,
-            "the first marker poll must not emit; the second confirms, then the external-id capture and the delivery re-check each add a discovery"
+            5,
+            "the first marker poll must not emit; the second confirms, then the external-id capture and the delivery re-check each add a discovery, and the composer poll adds a read"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert!(sent[0].1.contains("QOL_BRIDGE_DONE_round"));
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
+    }
+
+    #[test]
+    fn wake_waits_while_the_driver_composer_is_busy() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec![
+                "done\nQOL_BRIDGE_DONE_round".to_owned(),
+                "done\nQOL_BRIDGE_DONE_round".to_owned(),
+                "> fixing the parser".to_owned(),
+                "> fixing the parser".to_owned(),
+                "idle".to_owned(),
+            ],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        let mut sleeps = Vec::new();
+        watch_loop(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &[binding.token().to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+            &mut |duration| sleeps.push(duration),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["delivered"], true);
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1, "the wake must be sent exactly once");
+        assert!(
+            sent[0].1.contains("QOL_BRIDGE_DONE_round"),
+            "the wake must carry the report tail"
+        );
+        drop(sent);
+        let deferrals = sleeps
+            .iter()
+            .filter(|duration| **duration == WAKE_COMPOSER_POLL_INTERVAL)
+            .count();
+        assert_eq!(
+            deferrals, 2,
+            "two busy reads must defer the wake twice: {sleeps:?}"
+        );
+    }
+
+    #[test]
+    fn wake_is_delivered_once_even_when_the_driver_stays_busy() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        let mut screens = vec![
+            "done\nQOL_BRIDGE_DONE_round".to_owned(),
+            "done\nQOL_BRIDGE_DONE_round".to_owned(),
+        ];
+        screens.extend((0..=WAKE_COMPOSER_MAX_ATTEMPTS).map(|_| "> still typing".to_owned()));
+        let backend = FakeBackend::new(facts("7", 100), screens);
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        let mut sleeps = Vec::new();
+        watch_loop(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &[binding.token().to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+            &mut |duration| sleeps.push(duration),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["delivered"], true);
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            1,
+            "the wake must be sent once even when the composer never clears"
+        );
+        drop(sent);
+        let deferrals = sleeps
+            .iter()
+            .filter(|duration| **duration == WAKE_COMPOSER_POLL_INTERVAL)
+            .count();
+        assert_eq!(
+            deferrals, WAKE_COMPOSER_MAX_ATTEMPTS,
+            "the wait must exhaust the attempt budget"
+        );
     }
 
     #[test]
