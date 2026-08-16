@@ -5,7 +5,7 @@
 //! `ProfileScopeStore` and `qol sync` both route their decisions through
 //! this module so the allowlist cannot drift between entry points.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 pub const CORE_SUBDIR: &str = "core";
 pub const OS_SUBDIR: &str = "os";
@@ -44,6 +44,10 @@ pub fn is_sync_allowlisted(rel: &Path) -> bool {
         [_, top, sub, _, ..] if *top == SYNC_SUBDIR && *sub == BACKUPS_SUBDIR => true,
         _ => false,
     }
+}
+
+pub fn device_local_dir(profile: &str, namespace: &str) -> PathBuf {
+    Path::new(profile).join(DEVICE_SUBDIR).join(namespace)
 }
 
 /// Files that participate in field-level merging: allowlisted JSON outside
@@ -97,6 +101,43 @@ mod tests {
             assert!(
                 !is_sync_allowlisted(Path::new(raw)),
                 "must not allowlist: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_dir_is_never_sync_allowlisted() {
+        let namespaces = ["shortcuts", "window-actions", "a/b/nested"];
+        for ns in namespaces {
+            let dir = device_local_dir("default", ns);
+            assert!(!is_sync_allowlisted(&dir), "must reject dir: {dir:?}");
+            assert!(
+                !is_sync_allowlisted(&dir.join("layout.json")),
+                "must reject file: {:?}",
+                dir.join("layout.json")
+            );
+            assert!(
+                !is_sync_allowlisted(&dir.join("deep").join("state.json")),
+                "must reject nested file: {:?}",
+                dir.join("deep").join("state.json")
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_dir_round_trips_through_components_and_strings() {
+        for (profile, ns) in [("default", "shortcuts"), ("work", "window-actions")] {
+            let dir = device_local_dir(profile, ns);
+            assert_eq!(dir, Path::new(profile).join("device").join(ns));
+            let s = dir.to_string_lossy().into_owned();
+            let reparsed = Path::new(&s);
+            assert_eq!(reparsed, dir, "string form must re-parse to the same path");
+            assert!(reparsed
+                .components()
+                .all(|c| matches!(c, Component::Normal(_))));
+            assert_eq!(
+                dir.join("layout.json").to_string_lossy(),
+                format!("{profile}/device/{ns}/layout.json")
             );
         }
     }
