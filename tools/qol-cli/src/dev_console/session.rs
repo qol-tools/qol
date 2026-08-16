@@ -1,11 +1,17 @@
+use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::layout::Alignment;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::DefaultTerminal;
 
 use crate::dev_server::{probe_endpoints, toggle_dev_link, website_url, LinkToggle};
@@ -65,6 +71,13 @@ pub(crate) fn run_session(
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines, boot);
     }
+    let resuming = crate::self_exec::resume_tray_pid().is_some();
+    if resuming {
+        drain_pending_input();
+        crate::self_exec::apply_prior_termios();
+    } else {
+        crate::self_exec::capture_prior_termios();
+    }
     let mut probes = Probes::spawn(running_worktree.clone());
     let mut dash = Dash::new_for_startup(plugins, worktree_branch, running_worktree);
     dash.base_label = resolve_base_label();
@@ -73,10 +86,26 @@ pub(crate) fn run_session(
     dash.boot_rx = boot;
     start_trace(&mut dash);
     start_disk_scan(&mut dash);
-    let mut terminal = ratatui::init();
+    let mut terminal = if resuming {
+        ratatui::try_init_with_options(ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fullscreen,
+        })?
+    } else {
+        ratatui::init()
+    };
     let mut lines = lines;
-    let result = tui_session(&mut terminal, child, &mut lines, &mut probes, &mut dash);
-    ratatui::restore();
+    let session_started = std::time::SystemTime::now();
+    let result = tui_session(
+        &mut terminal,
+        child,
+        &mut lines,
+        &mut probes,
+        &mut dash,
+        session_started,
+    );
+    if should_restore(&result) {
+        ratatui::restore();
+    }
     if let Ok(SessionEnd::ChildExited(status)) = &result {
         if !status.success() {
             print_crash_tail(&dash.logs.ring);
@@ -192,6 +221,7 @@ pub(super) fn tui_session(
     lines: &mut Receiver<String>,
     probes: &mut Probes,
     dash: &mut Dash,
+    session_started: SystemTime,
 ) -> Result<SessionEnd> {
     let mut last_state = String::new();
     loop {
@@ -279,14 +309,19 @@ pub(super) fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            match restart_child_from_prebuilt(child, lines, dash) {
-                Ok(()) => {
+            let check = should_self_restart(session_started);
+            let handoff = restart_child_from_prebuilt(child, lines, dash);
+            match post_handoff(&check, &handoff) {
+                PostHandoff::ExecCli => {
+                    persist_if_dirty(dash);
+                    draw_restart_splash(terminal)?;
                     stop_session_children(dash);
                     return Ok(SessionEnd::SelfRestart {
                         tray_pid: child.id(),
                     });
                 }
-                Err(error) => {
+                PostHandoff::ContinueInProcess { line } => dash.push_log(line),
+                PostHandoff::HandoffFailed { error } => {
                     dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
                     dash.notice = Some((Instant::now(), "handoff failed".to_string()));
                     dash.plugin_health = None;
@@ -321,6 +356,100 @@ pub(super) fn tui_session(
 pub(super) fn stop_session_children(dash: &mut Dash) {
     stop_trace(dash);
     stop_emu_runs(dash);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SelfRestartDecision {
+    Adopt,
+    Skip { reason: &'static str },
+}
+
+fn should_restore(result: &Result<SessionEnd>) -> bool {
+    !matches!(result, Ok(SessionEnd::SelfRestart { .. }))
+}
+
+fn drain_pending_input() {
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum PostHandoff<'a> {
+    ExecCli,
+    ContinueInProcess { line: String },
+    HandoffFailed { error: &'a anyhow::Error },
+}
+
+pub(super) fn post_handoff<'a>(
+    decision: &Result<SelfRestartDecision>,
+    handoff: &'a Result<()>,
+) -> PostHandoff<'a> {
+    if let Err(error) = handoff {
+        return PostHandoff::HandoffFailed { error };
+    }
+    match decision {
+        Ok(SelfRestartDecision::Adopt) => PostHandoff::ExecCli,
+        Ok(SelfRestartDecision::Skip { reason }) => PostHandoff::ContinueInProcess {
+            line: format!("[qol dev] {reason}; successor generation active, cli restart skipped"),
+        },
+        Err(error) => PostHandoff::ContinueInProcess {
+            line: format!(
+                "[qol dev] restart check failed: {error:#}; successor generation active, \
+                 cli restart skipped"
+            ),
+        },
+    }
+}
+
+fn should_self_restart(session_started: SystemTime) -> Result<SelfRestartDecision> {
+    let rebuilt = rebuilt_cli_path()?;
+    let modified = fs::metadata(&rebuilt)
+        .ok()
+        .and_then(|meta| meta.modified().ok());
+    Ok(self_restart_decision(modified, session_started))
+}
+
+fn rebuilt_cli_path() -> Result<PathBuf> {
+    let root = crate::workspace::repo_root()?;
+    Ok(root
+        .join("target")
+        .join("debug")
+        .join(crate::host_facade::exe_name("qol")))
+}
+
+pub(super) fn self_restart_decision(
+    rebuilt_modified: Option<SystemTime>,
+    session_started: SystemTime,
+) -> SelfRestartDecision {
+    match rebuilt_modified {
+        Some(modified) if modified > session_started => SelfRestartDecision::Adopt,
+        Some(_) => SelfRestartDecision::Skip {
+            reason: "qol cli binary is unchanged",
+        },
+        None => SelfRestartDecision::Skip {
+            reason: "rebuilt qol cli binary is missing or unreadable",
+        },
+    }
+}
+
+pub(super) fn draw_restart_splash<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+) -> std::result::Result<(), B::Error> {
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let block = Block::bordered();
+        let text = Line::from(vec![Span::styled(
+            "[qol dev] restarting...",
+            Style::new().add_modifier(Modifier::BOLD),
+        )]);
+        frame.render_widget(block.clone(), area);
+        frame.render_widget(
+            Paragraph::new(text).alignment(Alignment::Center),
+            block.inner(area),
+        );
+    })?;
+    Ok(())
 }
 
 pub(super) fn persist_if_dirty(dash: &mut Dash) {
@@ -1523,6 +1652,206 @@ mod tests {
                 .phase,
             "cleaning",
             "armed enter on the disk row must start cleanup"
+        );
+    }
+
+    #[test]
+    fn self_restart_decision_skips_unchanged_or_missing_rebuilt_and_adopts_fresh_builds() {
+        use std::time::{Duration, SystemTime};
+
+        let started = SystemTime::now();
+        let before = started - Duration::from_secs(60);
+        let after = started + Duration::from_secs(60);
+        let cases = [
+            (
+                "missing binary",
+                None,
+                started,
+                SelfRestartDecision::Skip {
+                    reason: "rebuilt qol cli binary is missing or unreadable",
+                },
+            ),
+            (
+                "built before the session",
+                Some(before),
+                started,
+                SelfRestartDecision::Skip {
+                    reason: "qol cli binary is unchanged",
+                },
+            ),
+            (
+                "built at the session start",
+                Some(started),
+                started,
+                SelfRestartDecision::Skip {
+                    reason: "qol cli binary is unchanged",
+                },
+            ),
+            (
+                "rebuilt during the session",
+                Some(after),
+                started,
+                SelfRestartDecision::Adopt,
+            ),
+        ];
+        for (label, modified, session_started, expected) in cases {
+            assert_eq!(
+                self_restart_decision(modified, session_started),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn self_restart_decision_reads_the_rebuilt_mtime_from_disk() {
+        use std::fs::File;
+        use std::fs::FileTimes;
+        use std::time::{Duration, SystemTime};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rebuilt = tmp.path().join("qol");
+        let started = SystemTime::now();
+        fs::write(&rebuilt, b"cli").unwrap();
+
+        let file = File::open(&rebuilt).unwrap();
+        file.set_times(FileTimes::new().set_modified(started - Duration::from_secs(60)))
+            .unwrap();
+        drop(file);
+        let modified = fs::metadata(&rebuilt).unwrap().modified().unwrap();
+        assert_eq!(
+            self_restart_decision(Some(modified), started),
+            SelfRestartDecision::Skip {
+                reason: "qol cli binary is unchanged"
+            },
+            "a binary built before the session stays in-process"
+        );
+
+        let file = File::open(&rebuilt).unwrap();
+        file.set_times(FileTimes::new().set_modified(started + Duration::from_secs(60)))
+            .unwrap();
+        drop(file);
+        let modified = fs::metadata(&rebuilt).unwrap().modified().unwrap();
+        assert_eq!(
+            self_restart_decision(Some(modified), started),
+            SelfRestartDecision::Adopt,
+            "a binary rewritten during the session restarts onto it"
+        );
+    }
+
+    #[test]
+    fn restore_is_skipped_only_on_self_restart() {
+        let cases = [
+            ("user quit", Ok(SessionEnd::UserQuit), true),
+            (
+                "child exited",
+                Ok(SessionEnd::ChildExited(ExitStatus::default())),
+                true,
+            ),
+            (
+                "self restart",
+                Ok(SessionEnd::SelfRestart { tray_pid: 42 }),
+                false,
+            ),
+            ("error", Err(anyhow::anyhow!("boom")), true),
+        ];
+        for (label, result, expected) in cases {
+            assert_eq!(should_restore(&result), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn post_handoff_swaps_the_tray_for_every_ready_handoff_and_execs_only_on_adopt() {
+        let handoff_ok = Ok(());
+        let handoff_failed = Err(anyhow::anyhow!("promotion timeout"));
+        let adopt = Ok(SelfRestartDecision::Adopt);
+        let skip = Ok(SelfRestartDecision::Skip {
+            reason: "qol cli binary is unchanged",
+        });
+        let check_failed = Err(anyhow::anyhow!("no workspace"));
+        let cases = [
+            (&adopt, &handoff_ok, "adopt + ok handoff execs the cli"),
+            (&skip, &handoff_ok, "skip + ok handoff stays in process"),
+            (
+                &check_failed,
+                &handoff_ok,
+                "check error + ok handoff stays in process",
+            ),
+            (
+                &adopt,
+                &handoff_failed,
+                "adopt + failed handoff surfaces the handoff error",
+            ),
+            (
+                &skip,
+                &handoff_failed,
+                "skip + failed handoff surfaces the handoff error",
+            ),
+            (
+                &check_failed,
+                &handoff_failed,
+                "check error + failed handoff surfaces the handoff error",
+            ),
+        ];
+        for (decision, handoff, label) in cases {
+            let outcome = post_handoff(decision, handoff);
+            if handoff.is_err() {
+                assert!(
+                    matches!(outcome, PostHandoff::HandoffFailed { .. }),
+                    "{label}"
+                );
+            } else if matches!(decision, Ok(SelfRestartDecision::Adopt)) {
+                assert!(matches!(outcome, PostHandoff::ExecCli), "{label}");
+            } else {
+                let PostHandoff::ContinueInProcess { line } = &outcome else {
+                    panic!("{label}: expected continue-in-process, got {outcome:?}");
+                };
+                assert!(
+                    line.contains("successor generation active"),
+                    "{label}: {line}"
+                );
+                assert!(line.contains("cli restart skipped"), "{label}: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn drain_pending_input_never_blocks_without_a_terminal() {
+        drain_pending_input();
+    }
+
+    #[test]
+    fn restart_splash_frames_the_full_screen_with_centered_text() {
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap();
+
+        draw_restart_splash(&mut terminal).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let frame: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(frame.contains("[qol dev] restarting..."));
+        let first: String = buffer
+            .content()
+            .iter()
+            .take(40)
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            first.starts_with('┌') && first.ends_with('┐'),
+            "the splash is a full-screen border frame, got: {first:?}"
+        );
+        let inner: String = buffer
+            .content()
+            .iter()
+            .skip(41)
+            .take(38)
+            .map(|cell| cell.symbol())
+            .collect();
+        assert_eq!(
+            inner.trim(),
+            "[qol dev] restarting...",
+            "the message sits centered inside the frame"
         );
     }
 }

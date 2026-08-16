@@ -39,6 +39,17 @@ pub(crate) struct TrayTarget {
 }
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
+    let resuming = crate::self_exec::resume_tray_pid().is_some();
+    if let Err(error) = run_inner(args, verbose, skip_plugins) {
+        if resuming {
+            crate::self_exec::restore_resumed_tty();
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     if let Some(root) = std::env::var_os(ARTIFACT_ROOT_ENV) {
         return run_artifact(args, verbose, PathBuf::from(root));
     }
@@ -182,14 +193,14 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
 fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<()> {
     let root = repo_root()?;
     let (target, note) = marker_tray_target(&root, branch);
-    if let Some(note) = note {
-        eprintln!("{note}");
-    }
     let worktree = dev_run_root(&target.root);
     let mut child = dev_console::TrayHandle::Attached(tray_pid);
     wait_for_health_or_exit(&mut child, None)
         .context("dev server did not become healthy on reattach")?;
     let (tx, lines) = std::sync::mpsc::channel();
+    if let Some(note) = note {
+        let _ = tx.send(note);
+    }
     let _ = tx.send(format!(
         "[qol dev] reattached to existing qol-tray (pid {tray_pid}) - live tray console \
          unavailable until the next full restart"
@@ -219,7 +230,13 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
                 .join("target")
                 .join("debug")
                 .join(host_facade::exe_name("qol"));
-            crate::self_exec::replace_with(&binary, tray_pid)
+            match crate::self_exec::replace_with(&binary, tray_pid) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    ratatui::restore();
+                    Err(error)
+                }
+            }
         }
     }
 }
