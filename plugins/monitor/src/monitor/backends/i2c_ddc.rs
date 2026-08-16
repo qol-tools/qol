@@ -362,14 +362,16 @@ pub(crate) fn parse_get_vcp_reply(
     feature: u8,
     frame: &[u8; REPLY_LEN],
 ) -> Result<(u16, u16), I2cError> {
-    if xor_checksum(REPLY_VIRTUAL_HOST, &frame[1..10]) != frame[10] {
-        return Err(I2cError::Protocol {
-            detail: "reply checksum mismatch".into(),
-        });
-    }
-    if frame[0] != MONITOR_ADDRESS || frame[1] != LENGTH_REPLY {
+    if frame[0] != MONITOR_ADDRESS {
         return Err(I2cError::Protocol {
             detail: "reply carries the wrong source or destination address".into(),
+        });
+    }
+    let mut checksummed = *frame;
+    checksummed[1] = LENGTH_REPLY;
+    if xor_checksum(REPLY_VIRTUAL_HOST, &checksummed[..10]) != frame[10] {
+        return Err(I2cError::Protocol {
+            detail: "reply checksum mismatch".into(),
         });
     }
     if frame[2] != OP_GET_VCP_REPLY {
@@ -666,7 +668,7 @@ mod tests {
                     reply[7] = monitor.max as u8;
                     reply[8] = (monitor.current >> 8) as u8;
                     reply[9] = monitor.current as u8;
-                    reply[10] = xor_checksum(REPLY_VIRTUAL_HOST, &reply[1..10]);
+                    reply[10] = xor_checksum(REPLY_VIRTUAL_HOST, &reply[..10]);
                     monitor.pending_reply = Some(reply.to_vec());
                 }
                 _ => {
@@ -753,10 +755,18 @@ mod tests {
         frame[7] = 0xe8;
         frame[8] = 0x01;
         frame[9] = 0xf4;
-        frame[10] = xor_checksum(REPLY_VIRTUAL_HOST, &frame[1..10]);
+        frame[10] = xor_checksum(REPLY_VIRTUAL_HOST, &frame[..10]);
         assert_eq!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &frame).unwrap(),
             (500, 1000)
+        );
+
+        let mut mangled_length_quirk = frame;
+        mangled_length_quirk[1] = 0xbe;
+        assert_eq!(
+            parse_get_vcp_reply(FEATURE_BRIGHTNESS, &mangled_length_quirk).unwrap(),
+            (500, 1000),
+            "a mangled length byte is ignored; the monitor checksums as if it sent 0x88"
         );
 
         let mut bad_checksum = frame;
@@ -768,7 +778,7 @@ mod tests {
 
         let mut wrong_length = frame;
         wrong_length[1] = LENGTH_GET;
-        wrong_length[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_length[1..10]);
+        wrong_length[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_length[..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &wrong_length),
             Err(I2cError::Protocol { .. })
@@ -776,7 +786,7 @@ mod tests {
 
         let mut wrong_feature = frame;
         wrong_feature[4] = 0x12;
-        wrong_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_feature[1..10]);
+        wrong_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_feature[..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &wrong_feature),
             Err(I2cError::Protocol { .. })
@@ -784,7 +794,7 @@ mod tests {
 
         let mut unsupported_feature = frame;
         unsupported_feature[3] = 0x01;
-        unsupported_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &unsupported_feature[1..10]);
+        unsupported_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &unsupported_feature[..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &unsupported_feature),
             Err(I2cError::Protocol { .. })

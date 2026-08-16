@@ -721,7 +721,7 @@ mod tests {
                     reply[7] = monitor.max as u8;
                     reply[8] = (monitor.current >> 8) as u8;
                     reply[9] = monitor.current as u8;
-                    reply[10] = xor_checksum(REPLY_VIRTUAL_HOST, &reply[1..10]);
+                    reply[10] = xor_checksum(REPLY_VIRTUAL_HOST, &reply[..10]);
                     monitor.pending_reply = Some(reply.to_vec());
                 }
                 _ => {
