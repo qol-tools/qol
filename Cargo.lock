@@ -5883,6 +5883,7 @@ dependencies = [
  "qol-apps",
  "qol-conventions",
  "qol-headless",
+ "qol-host-fixes",
  "qol-plugin-api",
  "qol-windowing",
  "serde_json",

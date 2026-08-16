@@ -1,5 +1,9 @@
 use std::fmt;
 
+pub mod grant;
+
+pub use grant::{GrantBackend, GrantError, I2cGrantState, RevokeOutcome, UdevGrantBackend};
+
 use qol_windowing::display::{DisplayError, DisplayHandle};
 use qol_windowing::DisplayEnumerator;
 

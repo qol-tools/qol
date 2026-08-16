@@ -8,6 +8,7 @@ anyhow = "1"
 qol-apps.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true
+qol-host-fixes.workspace = true
 qol-windowing.workspace = true
 
 [build-dependencies]

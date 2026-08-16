@@ -8,7 +8,8 @@ use qol_headless::{
 use qol_windowing::display::DisplayHandle;
 
 use crate::monitor::{
-    BrightnessState, DisplayControl, MonitorError, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
+    BrightnessState, DisplayControl, GrantBackend, I2cGrantState, MonitorError, RevokeOutcome,
+    BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
@@ -19,14 +20,19 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 }
 
 fn app() -> HeadlessApp {
-    app_with_control(crate::monitor::StubControl)
+    app_with(
+        crate::monitor::StubControl,
+        crate::monitor::UdevGrantBackend,
+    )
 }
 
-fn app_with_control<C>(control: C) -> HeadlessApp
+fn app_with<C, G>(control: C, grant: G) -> HeadlessApp
 where
     C: DisplayControl + Send + Sync + 'static,
+    G: GrantBackend + Send + Sync + 'static,
 {
     let control: Arc<dyn DisplayControl> = Arc::new(control);
+    let grant: Arc<dyn GrantBackend> = Arc::new(grant);
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
         .about("Inspect and control display brightness, gamma, and modes.")
         .default_command(["list"])
@@ -36,8 +42,10 @@ where
         .command(set_command(Arc::clone(&control)))
         .command(up_command(Arc::clone(&control)))
         .command(down_command(Arc::clone(&control)))
+        .command(grant_command(Arc::clone(&grant)))
+        .command(revoke_command(Arc::clone(&grant)))
         .command(settings_command())
-        .doctor_checks(doctor_checks())
+        .doctor_checks(doctor_checks(Arc::clone(&control), Arc::clone(&grant)))
 }
 
 fn list_command(control: Arc<dyn DisplayControl>) -> Command {
@@ -163,12 +171,65 @@ fn settings_command() -> Command {
         })
 }
 
-fn doctor_checks() -> Vec<DoctorCheck> {
+fn grant_command(grant: Arc<dyn GrantBackend>) -> Command {
+    Command::new("grant")
+        .about("Grant the current user i2c access via the qol uaccess udev rule.")
+        .usage(format!("{BINARY_NAME} grant"))
+        .output("Prints `i2c uaccess grant active` on success.")
+        .exit_behavior(
+            "Exits non-zero when the grant is busy, conflicts with an operator rule, or is \
+             unsupported.",
+        )
+        .run_plain_text(move |_| {
+            grant.grant().map_err(anyhow::Error::from)?;
+            Ok(PlainTextOutput::text("i2c uaccess grant active"))
+        })
+}
+
+fn revoke_command(grant: Arc<dyn GrantBackend>) -> Command {
+    Command::new("revoke")
+        .about("Revoke the i2c uaccess grant and restore the rule directory.")
+        .usage(format!("{BINARY_NAME} revoke"))
+        .output("Prints `i2c uaccess grant revoked` or `no i2c uaccess grant is active`.")
+        .exit_behavior(
+            "Exits non-zero when the grant is mid-release, the caller is not an owner, or the \
+             restore is refused.",
+        )
+        .run_plain_text(
+            move |_| match grant.revoke().map_err(anyhow::Error::from)? {
+                RevokeOutcome::Restored => Ok(PlainTextOutput::text("i2c uaccess grant revoked")),
+                RevokeOutcome::NothingToRestore => {
+                    Ok(PlainTextOutput::text("no i2c uaccess grant is active"))
+                }
+            },
+        )
+}
+
+fn doctor_checks(
+    control: Arc<dyn DisplayControl>,
+    grant: Arc<dyn GrantBackend>,
+) -> Vec<DoctorCheck> {
     vec![
         DoctorCheck::new(
             "platform_supported",
             "Verify the current platform is declared by the plugin.",
             platform_supported_check,
+        ),
+        qol_headless::device_permission_check(),
+        DoctorCheck::new(
+            "i2c_grant",
+            "Verify the i2c uaccess grant state.",
+            move || Ok(grant_state_result(grant.state())),
+        ),
+        DoctorCheck::new(
+            "display_identity",
+            "Verify EDID-derived display identities are stable for config binding.",
+            move || {
+                let handles = control
+                    .enumerate()
+                    .context("failed to enumerate displays")?;
+                Ok(display_identity_result(&handles))
+            },
         ),
         DoctorCheck::new(
             "config_readable",
@@ -181,6 +242,63 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             },
         ),
     ]
+}
+
+fn grant_state_result(state: I2cGrantState) -> DoctorCheckResult {
+    match state {
+        I2cGrantState::Active { owner } => DoctorCheckResult::ok(
+            "i2c_grant",
+            format!("i2c uaccess grant is active for {owner}"),
+        ),
+        I2cGrantState::Preparing => DoctorCheckResult::warn(
+            "i2c_grant",
+            "i2c uaccess grant is mid-apply; run `plugin-monitor grant` to resume it",
+        ),
+        I2cGrantState::Releasing => DoctorCheckResult::warn(
+            "i2c_grant",
+            "i2c uaccess grant is mid-release; run `plugin-monitor revoke` to resume it",
+        ),
+        I2cGrantState::ReleaseFailed => DoctorCheckResult::fail(
+            "i2c_grant",
+            "i2c uaccess grant release failed; run `plugin-monitor revoke` to retry",
+        ),
+        I2cGrantState::Unreadable { message } => DoctorCheckResult::fail(
+            "i2c_grant",
+            format!("i2c uaccess grant journal is unreadable: {message}"),
+        ),
+        I2cGrantState::None => DoctorCheckResult::ok(
+            "i2c_grant",
+            "no i2c uaccess grant is active; run `plugin-monitor grant` to enable DDC access",
+        ),
+        I2cGrantState::Unsupported => {
+            DoctorCheckResult::ok("i2c_grant", "skipped: i2c uaccess grants require Linux")
+        }
+    }
+}
+
+fn display_identity_result(handles: &[DisplayHandle]) -> DoctorCheckResult {
+    if handles.is_empty() {
+        return DoctorCheckResult::ok("display_identity", "no displays connected");
+    }
+    let unstable = handles
+        .iter()
+        .filter(|handle| handle.identity_unstable())
+        .collect::<Vec<_>>();
+    if unstable.is_empty() {
+        return DoctorCheckResult::ok(
+            "display_identity",
+            "every connected display has a stable EDID identity",
+        );
+    }
+    let connectors = unstable
+        .iter()
+        .map(|handle| handle.connector())
+        .collect::<Vec<_>>()
+        .join(", ");
+    DoctorCheckResult::warn(
+        "display_identity",
+        format!("config binding refused for displays with unstable identity: {connectors}"),
+    )
 }
 
 fn platform_supported_check() -> Result<DoctorCheckResult> {
@@ -271,10 +389,10 @@ fn yes_no(value: bool) -> &'static str {
 mod tests {
     use std::sync::Mutex;
 
-    use qol_headless::{DoctorReport, DoctorStatus, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{DoctorReport, DoctorStatus, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
 
     use super::*;
-    use crate::monitor::{BrightnessSource, DisplayCapabilities, GammaState, HdrState};
+    use crate::monitor::{BrightnessSource, DisplayCapabilities, GammaState, GrantError, HdrState};
 
     #[derive(Clone)]
     struct FakeControl {
@@ -350,8 +468,71 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeGrantBackend {
+        state: I2cGrantState,
+        grant_error: Option<GrantError>,
+        revoke_error: Option<GrantError>,
+    }
+
+    impl FakeGrantBackend {
+        fn new() -> Self {
+            Self {
+                state: I2cGrantState::None,
+                grant_error: None,
+                revoke_error: None,
+            }
+        }
+
+        fn with_state(state: I2cGrantState) -> Self {
+            Self {
+                state,
+                grant_error: None,
+                revoke_error: None,
+            }
+        }
+
+        fn with_grant_error(error: GrantError) -> Self {
+            Self {
+                state: I2cGrantState::None,
+                grant_error: Some(error),
+                revoke_error: None,
+            }
+        }
+    }
+
+    impl GrantBackend for FakeGrantBackend {
+        fn grant(&self) -> Result<(), GrantError> {
+            match &self.grant_error {
+                Some(error) => Err(error.clone()),
+                None => Ok(()),
+            }
+        }
+
+        fn revoke(&self) -> Result<RevokeOutcome, GrantError> {
+            if let Some(error) = &self.revoke_error {
+                return Err(error.clone());
+            }
+            match self.state {
+                I2cGrantState::Active { .. }
+                | I2cGrantState::Preparing
+                | I2cGrantState::Releasing
+                | I2cGrantState::ReleaseFailed => Ok(RevokeOutcome::Restored),
+                _ => Ok(RevokeOutcome::NothingToRestore),
+            }
+        }
+
+        fn state(&self) -> I2cGrantState {
+            self.state.clone()
+        }
+    }
+
     fn fake_app() -> HeadlessApp {
-        app_with_control(FakeControl::new())
+        app_with(FakeControl::new(), FakeGrantBackend::new())
+    }
+
+    fn fake_app_with(control: FakeControl, grant: FakeGrantBackend) -> HeadlessApp {
+        app_with(control, grant)
     }
 
     #[test]
@@ -471,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_json_is_stable_in_both_global_flag_positions() {
+    fn doctor_json_registers_probe_grant_and_identity_checks() {
         let before = fake_app().execute(["--json".to_string(), "doctor".to_string()]);
         let after = fake_app().execute(["doctor".to_string(), "--json".to_string()]);
         assert_eq!(before.exit_code, EXIT_SUCCESS);
@@ -479,7 +660,21 @@ mod tests {
         let report: DoctorReport =
             serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 2);
+        assert_eq!(report.checks.len(), 5);
+        let ids = report
+            .checks
+            .iter()
+            .map(|check| check.id.as_str())
+            .collect::<Vec<_>>();
+        for expected in [
+            "platform_supported",
+            "device_permissions",
+            "i2c_grant",
+            "display_identity",
+            "config_readable",
+        ] {
+            assert!(ids.contains(&expected), "missing check: {expected}");
+        }
         assert!(report
             .checks
             .iter()
@@ -496,14 +691,21 @@ mod tests {
     }
 
     #[test]
-    fn doctor_help_names_both_skeleton_checks() {
+    fn doctor_help_names_all_checks() {
         let first = fake_app().execute(["help".to_string(), "doctor".to_string()]);
         let final_token = fake_app().execute(["doctor".to_string(), "help".to_string()]);
         assert_eq!(first.exit_code, EXIT_SUCCESS);
         assert_eq!(first.stdout, final_token.stdout);
         assert!(first.stdout.contains("Run read-only health checks."));
-        assert!(first.stdout.contains("platform_supported"));
-        assert!(first.stdout.contains("config_readable"));
+        for id in [
+            "platform_supported",
+            "device_permissions",
+            "i2c_grant",
+            "display_identity",
+            "config_readable",
+        ] {
+            assert!(first.stdout.contains(id), "help must name {id}");
+        }
     }
 
     #[test]
@@ -547,5 +749,166 @@ mod tests {
             );
             assert_eq!(result.fix.as_deref(), fix, "platform: {name}");
         }
+    }
+
+    #[test]
+    fn grant_reports_active_on_success() {
+        let app = fake_app_with(FakeControl::new(), FakeGrantBackend::new());
+        let execution = app.execute(["grant".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "i2c uaccess grant active\n");
+    }
+
+    #[test]
+    fn grant_surfaces_busy_and_rule_conflict_errors() {
+        let busy = fake_app_with(
+            FakeControl::new(),
+            FakeGrantBackend::with_grant_error(GrantError::Busy {
+                detail: "the uaccess grant is already active; revoke it first".into(),
+            }),
+        );
+        let execution = busy.execute(["grant".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(execution.stdout.is_empty());
+        assert!(execution.stderr.contains("busy"), "{}", execution.stderr);
+        assert!(execution.stderr.contains("revoke it first"));
+
+        let conflict = fake_app_with(
+            FakeControl::new(),
+            FakeGrantBackend::with_grant_error(GrantError::RuleConflict {
+                path: "/etc/udev/rules.d/90-qol-i2c-uaccess.rules".into(),
+                expected_sha256: "a".repeat(64),
+                actual_sha256: "b".repeat(64),
+            }),
+        );
+        let execution = conflict.execute(["grant".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(
+            execution.stderr.contains("expected sha256"),
+            "{}",
+            execution.stderr
+        );
+        assert!(
+            execution.stderr.contains("actual sha256"),
+            "{}",
+            execution.stderr
+        );
+        assert!(execution.stderr.contains("90-qol-i2c-uaccess.rules"));
+    }
+
+    #[test]
+    fn grant_unsupported_is_a_runtime_error() {
+        let app = fake_app_with(
+            FakeControl::new(),
+            FakeGrantBackend::with_grant_error(GrantError::unsupported(
+                "i2c uaccess grants require Linux",
+            )),
+        );
+        let execution = app.execute(["grant".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(execution.stderr.contains("require Linux"));
+    }
+
+    #[test]
+    fn revoke_reports_restored_and_nothing_to_restore() {
+        let granted = fake_app_with(
+            FakeControl::new(),
+            FakeGrantBackend::with_state(I2cGrantState::Active {
+                owner: "plugin-monitor".into(),
+            }),
+        );
+        let execution = granted.execute(["revoke".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "i2c uaccess grant revoked\n");
+
+        let empty = fake_app_with(FakeControl::new(), FakeGrantBackend::new());
+        let execution = empty.execute(["revoke".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "no i2c uaccess grant is active\n");
+    }
+
+    #[test]
+    fn doctor_grant_state_maps_every_state() {
+        let cases = [
+            (
+                I2cGrantState::Active {
+                    owner: "plugin-monitor".into(),
+                },
+                DoctorStatus::Ok,
+                "active for plugin-monitor",
+            ),
+            (I2cGrantState::Preparing, DoctorStatus::Warn, "mid-apply"),
+            (I2cGrantState::Releasing, DoctorStatus::Warn, "mid-release"),
+            (
+                I2cGrantState::ReleaseFailed,
+                DoctorStatus::Fail,
+                "release failed",
+            ),
+            (
+                I2cGrantState::Unreadable {
+                    message: "tampered".into(),
+                },
+                DoctorStatus::Fail,
+                "tampered",
+            ),
+            (
+                I2cGrantState::None,
+                DoctorStatus::Ok,
+                "no i2c uaccess grant",
+            ),
+            (
+                I2cGrantState::Unsupported,
+                DoctorStatus::Ok,
+                "require Linux",
+            ),
+        ];
+        for (state, status, needle) in cases {
+            let result = grant_state_result(state);
+            assert_eq!(result.id, "i2c_grant");
+            assert_eq!(result.status, status, "state: {needle}");
+            assert!(result.message.contains(needle), "{}", result.message);
+        }
+    }
+
+    #[test]
+    fn doctor_identity_warns_only_for_unstable_displays() {
+        let stable = display_identity_result(&[
+            DisplayHandle::new("id-a".into(), "card0-DP-1".into(), Some([1; 32]), false),
+            DisplayHandle::new("id-b".into(), "card0-HDMI-A-1".into(), Some([2; 32]), false),
+        ]);
+        assert_eq!(stable.status, DoctorStatus::Ok);
+        assert!(stable.message.contains("stable"));
+
+        let unstable = display_identity_result(&[
+            DisplayHandle::new("id-a".into(), "card0-DP-1".into(), Some([1; 32]), false),
+            DisplayHandle::new("id-c".into(), "card1-DP-2".into(), None, true),
+        ]);
+        assert_eq!(unstable.status, DoctorStatus::Warn);
+        assert!(
+            unstable.message.contains("config binding refused"),
+            "{}",
+            unstable.message
+        );
+        assert!(unstable.message.contains("card1-DP-2"));
+
+        let none = display_identity_result(&[]);
+        assert_eq!(none.status, DoctorStatus::Ok);
+        assert!(none.message.contains("no displays"));
+    }
+
+    #[test]
+    fn doctor_identity_check_enumerates_through_the_control() {
+        let app = fake_app();
+        let execution = app.execute(["--json".to_string(), "doctor".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        let report: DoctorReport =
+            serde_json::from_str(&execution.stdout).expect("doctor output must be valid JSON");
+        let identity = report
+            .checks
+            .iter()
+            .find(|check| check.id == "display_identity")
+            .expect("identity check must exist");
+        assert_eq!(identity.status, DoctorStatus::Ok);
+        assert!(identity.message.contains("stable EDID identity"));
     }
 }
