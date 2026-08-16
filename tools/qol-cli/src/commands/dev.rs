@@ -51,7 +51,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     }
 
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    let mut phases = PhaseTimer::start(verbose);
     crate::setup::run_setup(&root, verbose)?;
+    phases.mark("setup");
     if verbose {
         print_title("qol dev");
     }
@@ -67,12 +69,16 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         reload,
         target.branch.as_deref(),
     )?;
+    phases.mark("plugins");
     let run_root = dev_run_root(&target.root);
     let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose)?;
+    phases.mark("tray build");
     let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(anyhow::Error::msg)?;
+    phases.mark("stage");
     apply_marker_update(&plan.marker_update)?;
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
+    phases.mark("stop");
     let shutdown_detail = match shutdown_method {
         ShutdownMethod::Graceful => "previous tray stopped gracefully",
         ShutdownMethod::Forced => "previous tray required fallback cleanup",
@@ -101,6 +107,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let lines = dev_console::spawn_forwarders(&mut child);
     let mut child = dev_console::TrayHandle::Owned(child);
 
+    phases.mark("spawn");
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
     if let Err(error) = finish_boot(
         &mut child,
@@ -113,6 +120,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         let _ = child.wait();
         return Err(error);
     }
+    phases.mark("boot");
     let end = dev_console::run_session(
         &mut child,
         verbose,
@@ -815,6 +823,32 @@ fn run_dev_step(
 ) -> Result<()> {
     dev_step_label(verb, kind, target, verbose);
     run_status(command, verbose)
+}
+
+struct PhaseTimer {
+    last: Instant,
+    verbose: bool,
+}
+
+impl PhaseTimer {
+    fn start(verbose: bool) -> Self {
+        Self {
+            last: Instant::now(),
+            verbose,
+        }
+    }
+
+    fn mark(&mut self, phase: &str) {
+        let elapsed = self.last.elapsed();
+        self.last = Instant::now();
+        if self.verbose {
+            step_label(
+                "timing",
+                StepKind::Info,
+                &format!("{phase} {}ms", elapsed.as_millis()),
+            );
+        }
+    }
 }
 
 fn dev_step_label(verb: &str, kind: StepKind, target: &str, verbose: bool) {
