@@ -28,7 +28,6 @@ struct State {
     flow: ShotFlowGate,
     recording_action: recording_action::RecordingActionController,
     capture_status: crate::ui::capture_status::CaptureStatusUi,
-    saved_toast: qol_gpui::toast::ToastHost,
 }
 
 #[derive(Clone)]
@@ -88,7 +87,6 @@ pub fn run() {
             flow: ShotFlowGate::new(),
             recording_action: recording_action::RecordingActionController::default(),
             capture_status: crate::ui::capture_status::CaptureStatusUi::new(tracker.clone()),
-            saved_toast: qol_gpui::toast::ToastHost::new(tracker),
         };
         spawn_active_monitor_cache(cx);
         crate::ui::preview::pre_create(&state.windows, &state.tracker, cx);
@@ -261,9 +259,8 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
         file_start.start();
     }
     let status = state.capture_status.clone();
-    let saved_toast = state.saved_toast.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        complete_screenshot(file_ready, completion, presented, status, saved_toast, cx).await;
+        complete_screenshot(file_ready, completion, presented, status, cx).await;
     })
     .detach();
 }
@@ -273,7 +270,6 @@ async fn complete_screenshot(
     completion: Option<crate::capture::completion::PreviewCompletion>,
     presented: bool,
     status: crate::ui::capture_status::CaptureStatusUi,
-    saved_toast: qol_gpui::toast::ToastHost,
     cx: &mut AsyncApp,
 ) {
     let result = cx.background_spawn(async move { file_ready.wait() }).await;
@@ -283,7 +279,7 @@ async fn complete_screenshot(
         return;
     }
     if let Some(completion) = completion {
-        announce_saved_feedback(&completion, &saved_toast, cx);
+        announce_saved_feedback(&completion);
         if !presented {
             completion.finish(crate::capture::completion::PreviewExit::Unavailable);
         }
@@ -294,52 +290,8 @@ async fn complete_screenshot(
     );
 }
 
-fn announce_saved_feedback(
-    completion: &crate::capture::completion::PreviewCompletion,
-    toast_host: &qol_gpui::toast::ToastHost,
-    cx: &mut AsyncApp,
-) {
-    if crate::config::load().capture.saved_feedback == crate::config::SavedFeedback::Notification {
-        completion.announce_saved();
-        return;
-    }
-    let Some(announcement) = completion.announce() else {
-        return;
-    };
-    let toast_announcement = announcement.clone();
-    let toast_host = toast_host.clone();
-    let shown = cx
-        .update(move |cx| {
-            let target = toast_announcement.target.clone();
-            let toast = qol_gpui::toast::Toast::new(
-                toast_announcement.title,
-                toast_announcement.message.clone(),
-                qol_gpui::toast::ToastLayout::Status,
-            )
-            .on_activate(move |_cx| {
-                if let Err(error) = target.open("toast") {
-                    eprintln!("[qol-shot] toast reveal failed: {error:#}");
-                }
-            });
-            toast_host.show(toast, cx)
-        })
-        .unwrap_or_else(|error| Err(anyhow::anyhow!("app unavailable: {error}")));
-    match shown {
-        Ok(()) => qol_runtime::probe!("SHOT_SAVED_TOAST", "result=shown"),
-        Err(error) => {
-            qol_runtime::probe!("SHOT_SAVED_TOAST", "result=fallback error={error:#}");
-            eprintln!("[qol-shot] saved toast failed, falling back to notification: {error:#}");
-            crate::platform::show_saved_notification(
-                announcement.title,
-                &announcement.message,
-                8_000,
-                announcement.target.clone(),
-            );
-        }
-    }
-    if announcement.open_automatically {
-        announcement.reveal_automatically();
-    }
+fn announce_saved_feedback(completion: &crate::capture::completion::PreviewCompletion) {
+    completion.announce_saved();
 }
 
 fn show_screenshot_failure(

@@ -84,11 +84,24 @@ fn device_boot() -> DeviceBoot {
 }
 
 #[derive(Serialize)]
+struct NotificationsBoot {
+    #[serde(rename = "useSystemNotifications")]
+    use_system_notifications: bool,
+}
+
+fn notifications_boot() -> NotificationsBoot {
+    NotificationsBoot {
+        use_system_notifications: crate::features::notifications::use_system_notifications(),
+    }
+}
+
+#[derive(Serialize)]
 struct BootState {
     dev: bool,
     accent: AccentBoot,
     theme: ThemeBoot,
     device: DeviceBoot,
+    notifications: NotificationsBoot,
 }
 
 pub(super) fn boot_json(dev: bool) -> String {
@@ -101,6 +114,7 @@ pub(super) fn boot_json(dev: bool) -> String {
         },
         theme: theme_boot(),
         device: device_boot(),
+        notifications: notifications_boot(),
     };
     serde_json::to_string(&state).unwrap_or_else(|_| "null".to_string())
 }
@@ -234,6 +248,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
         assert_eq!(v["theme"]["defaultKey"], qol_theme::DEFAULT_TRAY_THEME_KEY);
         assert_eq!(v["theme"]["selectedKey"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn boot_json_carries_system_notification_choice() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert_eq!(v["notifications"]["useSystemNotifications"], false);
+
+        crate::features::notifications::set_use_system_notifications(true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert_eq!(v["notifications"]["useSystemNotifications"], true);
     }
 
     #[test]

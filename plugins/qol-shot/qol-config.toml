@@ -128,19 +128,6 @@ description = "Open the containing folder after you finish a saved capture previ
 section = "capture"
 default = false
 
-[field.capture_saved_feedback]
-type = "select"
-config_key = "capture.saved_feedback"
-label = "Saved Feedback"
-description = "How the saved confirmation appears after a screenshot. Toast shows a clickable QoL popup instead of a system notification."
-section = "capture"
-default = "notification"
-options = ["notification", "toast"]
-
-[field.capture_saved_feedback.option_labels]
-notification = "System Notification"
-toast = "QoL Toast"
-
 [section.shortcuts]
 label = "Preview"
 description = "Action ordering in screenshot thumbnail previews."

@@ -3,6 +3,7 @@ mod http_json;
 mod media_apps_handlers;
 mod media_cover_handlers;
 mod media_icon_handlers;
+mod notifications_handlers;
 mod plugin_config_handlers;
 mod shortcut_handlers;
 mod theme_handlers;
@@ -57,6 +58,14 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/theme", get(theme_handlers::get_theme))
         .route("/theme", axum::routing::put(theme_handlers::set_theme))
+        .route(
+            "/notifications",
+            get(notifications_handlers::get_notifications),
+        )
+        .route(
+            "/notifications",
+            axum::routing::put(notifications_handlers::set_notifications),
+        )
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(
