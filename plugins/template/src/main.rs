@@ -1,10 +1,7 @@
-mod cli;
-mod platform;
-
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    cli::exit_code(std::env::args().skip(1))
+    plugin_template::cli::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]
