@@ -12,7 +12,43 @@ use crate::policy::{
     validate_owner_id, validate_policy_id, PolicyError, ResidencyOwnerId, JOURNAL_SCHEMA_VERSION,
 };
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::fmt;
+
+pub fn new_session_id() -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("failed to draw entropy: {error}"))
+        .context("failed to draw entropy for the journal session id")?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let mut out = String::with_capacity(36);
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            out.push('-');
+        }
+        write!(out, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    Ok(out)
+}
+
+fn is_valid_session_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        match index {
+            8 | 13 | 18 | 23 if *byte == b'-' => {}
+            8 | 13 | 18 | 23 => return false,
+            _ if byte.is_ascii_hexdigit() => {}
+            _ => return false,
+        }
+    }
+    true
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JournalFileIdentity {
@@ -78,6 +114,10 @@ pub struct JournalRecord<T> {
     pub owners: Vec<ResidencyOwnerId>,
     pub state: JournalState,
     pub created_unix_ms: u64,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub content_sha256: String,
     pub payload: T,
     pub failure: Option<ReleaseFailure>,
     pub journal_file_identity: Option<JournalFileIdentity>,
@@ -92,6 +132,66 @@ pub trait JournalPayload:
     fn has_active_fingerprint(&self) -> bool;
     fn rendered_hash(&self) -> Result<String>;
     fn validate_payload(&self, policy: &str) -> Result<()>;
+    fn recorded_mutations(&self) -> usize;
+    fn restore(&self, policy: &str) -> Result<()>;
+}
+
+pub fn content_checksum<T: JournalPayload>(journal: &JournalRecord<T>) -> Result<String> {
+    let bytes = serde_json::to_vec(&journal.payload)
+        .context("failed to serialize the journal payload for checksumming")?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub(crate) fn verify_content_checksum<T: JournalPayload>(
+    journal: &JournalRecord<T>,
+    policy: &str,
+    context: &str,
+) -> Result<()> {
+    let computed = content_checksum(journal)?;
+    if journal.content_sha256 == computed {
+        return Ok(());
+    }
+    Err(PolicyError::JournalInvalid {
+        policy: policy.to_string(),
+        reason: format!(
+            "{context} content checksum mismatch (recorded {}, computed {computed}); it was preserved",
+            journal.content_sha256
+        ),
+    }
+    .into())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    NothingToRestore,
+    Restored,
+    DeletedZeroMutation,
+}
+
+pub(crate) fn restore<T: JournalPayload>(policy: &str) -> Result<RestoreOutcome> {
+    #[cfg(target_os = "linux")]
+    recover_stage_typed::<T>(policy)?;
+    let Some(journal) = read::<T>(policy)? else {
+        return Ok(RestoreOutcome::NothingToRestore);
+    };
+    if journal.payload.recorded_mutations() == 0 {
+        #[cfg(target_os = "linux")]
+        remove_durable::<T>(policy)?;
+        #[cfg(not(target_os = "linux"))]
+        remove_durable(policy)?;
+        return Ok(RestoreOutcome::DeletedZeroMutation);
+    }
+    journal
+        .payload
+        .restore(policy)
+        .with_context(|| format!("failed to restore the `{policy}` residency snapshot"))?;
+    #[cfg(target_os = "linux")]
+    remove_durable::<T>(policy)?;
+    #[cfg(not(target_os = "linux"))]
+    remove_durable(policy)?;
+    Ok(RestoreOutcome::Restored)
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -113,6 +213,13 @@ pub fn validate_journal_invariants<T: JournalPayload>(journal: &JournalRecord<T>
         .into());
     }
     validate_policy_id(&journal.policy)?;
+    if !is_valid_session_id(&journal.session_id) {
+        return Err(PolicyError::JournalInvalid {
+            policy: journal.policy.clone(),
+            reason: "session_id must be a canonical hyphenated uuid".to_string(),
+        }
+        .into());
+    }
     if journal.created_unix_ms == 0 {
         return Err(PolicyError::JournalInvalid {
             policy: journal.policy.clone(),
@@ -319,4 +426,41 @@ fn validate_failure<T: JournalPayload>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_session_id_generates_distinct_canonical_uuids() {
+        let first = new_session_id().unwrap();
+        let second = new_session_id().unwrap();
+        assert_eq!(first.len(), 36);
+        assert!(is_valid_session_id(&first));
+        assert!(is_valid_session_id(&second));
+        assert_ne!(first, second);
+        assert_eq!(first.as_bytes()[8], b'-');
+        assert_eq!(first.as_bytes()[13], b'-');
+        assert_eq!(first.as_bytes()[18], b'-');
+        assert_eq!(first.as_bytes()[23], b'-');
+        assert_eq!(first.as_bytes()[14], b'4', "the version nibble must be 4");
+    }
+
+    #[test]
+    fn session_id_validation_rejects_malformed_values() {
+        assert!(is_valid_session_id(&new_session_id().unwrap()));
+        for bad in [
+            "",
+            "not-a-uuid",
+            "12345678-1234-1234-1234-12345678901",
+            "12345678-1234-1234-1234-1234567890123",
+            "12345678-1234-1234-1234-12345678901z",
+            "123456781234-1234-1234-123456789012",
+            "12345678-1234-1234-1234.123456789012",
+            "12345678-1234-1234-1234-12345678901 2",
+        ] {
+            assert!(!is_valid_session_id(bad), "{bad}");
+        }
+    }
 }

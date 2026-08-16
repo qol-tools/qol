@@ -1,5 +1,5 @@
-use crate::policy::{PolicyError, PolicyPayload, ResidencyOwnerId, ResidentPolicy};
-use anyhow::Result;
+use crate::policy::{JournalPayload, PolicyError, PolicyPayload, ResidencyOwnerId, ResidentPolicy};
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 pub const NVIDIA_POLICY_ID: &str = "nvidia-driver-version-pin";
@@ -143,6 +143,7 @@ pub(crate) fn rendered_hash_of(payload: &PolicyPayload) -> Result<String> {
             &payload.entries,
             &payload.resource_identity,
         ))),
+        PolicyPayload::UdevUaccess(payload) => payload.rendered_hash(),
     }
 }
 
@@ -166,6 +167,30 @@ pub fn new_resource_identity() -> Result<String> {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     Ok(format!("{NVIDIA_POLICY_ID}:{nonce}"))
+}
+
+pub fn restore_snapshot(payload: &NvidiaPayload, policy: &str) -> Result<()> {
+    let rendered = render_fragment(&payload.entries, &payload.resource_identity);
+    let target = fragment_path();
+    match std::fs::read(&target) {
+        Ok(current) if current == rendered.as_bytes() => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read the pin fragment {} for policy `{policy}`",
+                    target.display()
+                )
+            })
+        }
+    }
+    qol_fs::atomic_write_durable_mode(&target, rendered.as_bytes(), 0o644).with_context(|| {
+        format!(
+            "failed to restore the pin fragment {} for policy `{policy}`",
+            target.display()
+        )
+    })
 }
 
 pub fn validate_payload(payload: &NvidiaPayload) -> Result<()> {

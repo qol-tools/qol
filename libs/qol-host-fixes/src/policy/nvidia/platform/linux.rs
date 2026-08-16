@@ -16,6 +16,9 @@ use std::process::Command;
 fn payload_of(journal_payload: &PolicyPayload) -> Result<&NvidiaPayload> {
     match journal_payload {
         PolicyPayload::Nvidia(payload) => Ok(payload),
+        PolicyPayload::UdevUaccess(_) => {
+            bail!("the nvidia backend refuses a non-nvidia journal payload")
+        }
     }
 }
 
@@ -1415,6 +1418,9 @@ fn record_staged_identity(
         crate::policy::PolicyPayload::Nvidia(payload) => {
             payload.staged_identity = Some(identity);
         }
+        crate::policy::PolicyPayload::UdevUaccess(_) => {
+            bail!("the nvidia backend refuses a non-nvidia journal payload")
+        }
     }
     crate::policy::write_journal_durable(&journal)
 }
@@ -1460,6 +1466,9 @@ fn capture_active_fingerprint(
                 ctime_sec: *ctime_sec,
                 ctime_nsec: *ctime_nsec,
             });
+        }
+        crate::policy::PolicyPayload::UdevUaccess(_) => {
+            bail!("the nvidia backend refuses a non-nvidia journal payload")
         }
     }
     crate::policy::write_journal_durable(&journal)?;
@@ -1538,6 +1547,8 @@ fn adopt(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
         owners: vec![owner.clone()],
         state: JournalState::Preparing,
         created_unix_ms: unix_millis()?,
+        session_id: crate::policy::journal::new_session_id()?,
+        content_sha256: String::new(),
         payload: crate::policy::PolicyPayload::Nvidia(payload),
         failure: None,
         journal_file_identity: None,
@@ -1815,6 +1826,9 @@ fn finalize_active(policy: &ResidentPolicy) -> Result<()> {
         crate::policy::PolicyPayload::Nvidia(payload) => {
             payload.staged_path = None;
             payload.staged_identity = None;
+        }
+        crate::policy::PolicyPayload::UdevUaccess(_) => {
+            bail!("the nvidia backend refuses a non-nvidia journal payload")
         }
     }
     crate::policy::write_journal_durable(&journal)

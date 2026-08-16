@@ -8,8 +8,8 @@ mod lock;
 pub mod trace;
 
 pub use journal::{
-    validate_journal_invariants, JournalFileIdentity, JournalPayload, JournalRecord, JournalState,
-    ReleaseFailure, ReleaseStage,
+    new_session_id, validate_journal_invariants, JournalFileIdentity, JournalPayload,
+    JournalRecord, JournalState, ReleaseFailure, ReleaseStage, RestoreOutcome,
 };
 
 use anyhow::{bail, Context, Result};
@@ -177,6 +177,8 @@ impl PolicyState {
 #[serde(tag = "policy_kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PolicyPayload {
     Nvidia(nvidia::NvidiaPayload),
+    #[serde(rename = "udev-uaccess")]
+    UdevUaccess(crate::udev::UdevUaccessPayload),
 }
 
 pub type PolicyJournal = journal::JournalRecord<PolicyPayload>;
@@ -185,33 +187,57 @@ impl journal::JournalPayload for PolicyPayload {
     fn policy_id(&self) -> &'static str {
         match self {
             Self::Nvidia(_) => nvidia::NVIDIA_POLICY_ID,
+            Self::UdevUaccess(_) => crate::udev::UDEV_UACCESS_POLICY_ID,
         }
     }
 
     fn has_staged_path(&self) -> bool {
         match self {
             Self::Nvidia(payload) => payload.staged_path.is_some(),
+            Self::UdevUaccess(payload) => payload.has_staged_path(),
         }
     }
 
     fn has_staged_identity(&self) -> bool {
         match self {
             Self::Nvidia(payload) => payload.staged_identity.is_some(),
+            Self::UdevUaccess(payload) => payload.has_staged_identity(),
         }
     }
 
     fn has_active_fingerprint(&self) -> bool {
         match self {
             Self::Nvidia(payload) => payload.active_fingerprint.is_some(),
+            Self::UdevUaccess(payload) => payload.has_active_fingerprint(),
         }
     }
 
     fn rendered_hash(&self) -> Result<String> {
-        nvidia::rendered_hash_of(self)
+        match self {
+            Self::Nvidia(_) => nvidia::rendered_hash_of(self),
+            Self::UdevUaccess(payload) => payload.rendered_hash(),
+        }
     }
 
     fn validate_payload(&self, policy: &str) -> Result<()> {
         validate_payload(self, policy)
+    }
+
+    fn recorded_mutations(&self) -> usize {
+        match self {
+            Self::Nvidia(payload) => {
+                usize::from(payload.staged_identity.is_some())
+                    + usize::from(payload.active_fingerprint.is_some())
+            }
+            Self::UdevUaccess(payload) => payload.recorded_mutations(),
+        }
+    }
+
+    fn restore(&self, policy: &str) -> Result<()> {
+        match self {
+            Self::Nvidia(payload) => nvidia::restore_snapshot(payload, policy),
+            Self::UdevUaccess(payload) => payload.restore(policy),
+        }
     }
 }
 
@@ -312,11 +338,20 @@ pub fn read_journal(policy: &str) -> Result<Option<PolicyJournal>> {
     journal::read(policy)
 }
 
+pub fn restore_journal(policy: &str) -> Result<RestoreOutcome> {
+    journal::restore::<PolicyPayload>(policy)
+}
+
 fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {
     match payload {
         PolicyPayload::Nvidia(nvidia_payload) => {
             nvidia::validate_payload(nvidia_payload)
                 .with_context(|| format!("invalid nvidia payload in the `{policy}` journal"))?;
+        }
+        PolicyPayload::UdevUaccess(udev_payload) => {
+            crate::udev::validate_payload(policy, udev_payload).with_context(|| {
+                format!("invalid udev-uaccess payload in the `{policy}` journal")
+            })?;
         }
     }
     Ok(())
@@ -496,6 +531,8 @@ pub(crate) mod test_support {
                 .collect(),
             state: crate::policy::JournalState::Active,
             created_unix_ms: 1,
+            session_id: crate::policy::journal::new_session_id().unwrap(),
+            content_sha256: String::new(),
             payload: crate::policy::PolicyPayload::Nvidia(payload),
             failure: None,
             journal_file_identity: None,
@@ -1623,6 +1660,126 @@ mod tests {
         assert_eq!(
             ResidentPolicy::from_id("nvidia-driver-version-pin").unwrap(),
             ResidentPolicy::nvidia()
+        );
+    }
+
+    #[test]
+    fn a_written_journal_carries_a_verifiable_payload_checksum() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let saved = journal("nvidia-driver-version-pin", &["owner-a"]);
+        write_journal_durable(&saved).unwrap();
+        let read = read_journal("nvidia-driver-version-pin").unwrap().unwrap();
+        assert_eq!(read.content_sha256.len(), 64);
+        assert!(
+            read.content_sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "the checksum must be lowercase hex"
+        );
+        assert_eq!(
+            read.content_sha256,
+            crate::policy::journal::content_checksum(&read).unwrap(),
+            "the recorded checksum must match the payload recomputation"
+        );
+    }
+
+    #[test]
+    fn read_rejects_a_journal_whose_payload_was_tampered_in_place() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let saved = journal("nvidia-driver-version-pin", &["owner-a"]);
+        write_journal_durable(&saved).unwrap();
+        let path = canonical_path();
+        let mut record: PolicyJournal =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        match &mut record.payload {
+            crate::policy::PolicyPayload::Nvidia(payload) => {
+                payload.active_fingerprint.as_mut().unwrap().ctime_sec += 1;
+            }
+            crate::policy::PolicyPayload::UdevUaccess(_) => {
+                unreachable!("the tamper test journal carries an nvidia payload")
+            }
+        }
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let error = read_journal("nvidia-driver-version-pin").unwrap_err();
+        assert!(format!("{error:#}").contains("checksum"), "{error:#}");
+        assert!(
+            path.exists(),
+            "the tampered journal must be preserved, never removed"
+        );
+    }
+
+    #[test]
+    fn restore_reapplies_the_pinned_fragment_and_is_idempotent() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let dir = tempfile::tempdir().unwrap();
+        let fragment = dir.path().join("90qol-nvidia-driver.pref");
+        std::fs::write(&fragment, b"operator drifted the pin").unwrap();
+        std::env::set_var("QOL_RESIDENT_FRAGMENT_PATH", &fragment);
+        let saved = journal("nvidia-driver-version-pin", &["owner-a"]);
+        let rendered = match &saved.payload {
+            crate::policy::PolicyPayload::Nvidia(payload) => {
+                nvidia::render_fragment(&payload.entries, &payload.resource_identity)
+            }
+            crate::policy::PolicyPayload::UdevUaccess(_) => {
+                unreachable!("the restore test journal carries an nvidia payload")
+            }
+        };
+        write_journal_durable(&saved).unwrap();
+        let outcome = restore_journal("nvidia-driver-version-pin").unwrap();
+        assert_eq!(outcome, RestoreOutcome::Restored);
+        assert_eq!(
+            std::fs::read(&fragment).unwrap(),
+            rendered.as_bytes(),
+            "the restore must re-assert the exact pinned fragment"
+        );
+        assert!(
+            read_journal("nvidia-driver-version-pin").unwrap().is_none(),
+            "a consumed snapshot must be removed"
+        );
+        std::env::remove_var("QOL_RESIDENT_FRAGMENT_PATH");
+        assert_eq!(
+            restore_journal("nvidia-driver-version-pin").unwrap(),
+            RestoreOutcome::NothingToRestore,
+            "the shared restore path must be idempotent"
+        );
+    }
+
+    #[test]
+    fn restore_deletes_a_zero_mutation_snapshot_instead_of_restoring_it() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let mut zero = journal("nvidia-driver-version-pin", &["owner-a"]);
+        zero.state = JournalState::Preparing;
+        match &mut zero.payload {
+            crate::policy::PolicyPayload::Nvidia(payload) => {
+                let nonce = payload
+                    .resource_identity
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                payload.staged_path = Some(crate::policy::nvidia::staged_path_for(
+                    &crate::policy::nvidia::fragment_path(),
+                    &nonce,
+                ));
+                payload.staged_identity = None;
+                payload.active_fingerprint = None;
+            }
+            crate::policy::PolicyPayload::UdevUaccess(_) => {
+                unreachable!("the zero-mutation test journal carries an nvidia payload")
+            }
+        }
+        write_journal_durable(&zero).unwrap();
+        let outcome = restore_journal("nvidia-driver-version-pin").unwrap();
+        assert_eq!(outcome, RestoreOutcome::DeletedZeroMutation);
+        assert!(
+            !canonical_path().exists(),
+            "a zero-mutation snapshot must be deleted, never restored"
+        );
+        assert_eq!(
+            restore_journal("nvidia-driver-version-pin").unwrap(),
+            RestoreOutcome::NothingToRestore
         );
     }
 }

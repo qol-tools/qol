@@ -2,6 +2,7 @@ pub mod elevation;
 pub mod policy;
 pub mod privilege;
 pub mod takeover;
+pub mod udev;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixState {

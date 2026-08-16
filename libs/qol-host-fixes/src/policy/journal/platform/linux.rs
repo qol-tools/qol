@@ -1,4 +1,7 @@
-use crate::policy::journal::{validate_journal_invariants, JournalPayload, JournalRecord};
+use crate::policy::journal::{
+    content_checksum, validate_journal_invariants, verify_content_checksum, JournalPayload,
+    JournalRecord,
+};
 use crate::policy::{
     expected_policy_file_owner, fail_next, journal_path, journal_stage_path,
     sync_directory_fd_strict, JournalFileIdentity, PolicyError, JOURNAL_FILE_MODE,
@@ -273,6 +276,7 @@ fn validated_journal_at<T: JournalPayload>(
         .into());
     }
     validate_journal_invariants(&journal)?;
+    verify_content_checksum(&journal, policy, &format!("journal entry {name:?}"))?;
     let file_identity = journal.journal_file_identity;
     validate_on_disk_journal(&stats, &journal, policy, &format!("journal entry {name:?}"))?;
     Ok(Some((journal, file_identity)))
@@ -432,6 +436,12 @@ fn journal_stage_state<T: JournalPayload>(
         return Ok(JournalStage::Unrecoverable);
     }
     if validate_journal_invariants(&journal).is_err()
+        || verify_content_checksum(
+            &journal,
+            policy,
+            &format!("journal recovery stage {stage_name:?}"),
+        )
+        .is_err()
         || validate_on_disk_journal(
             &stats,
             &journal,
@@ -517,6 +527,7 @@ fn write_stage_linked<T: JournalPayload>(
     };
     let mut journal = journal.clone();
     journal.journal_file_identity = Some(identity);
+    journal.content_sha256 = content_checksum(&journal)?;
     let content = serde_json::to_vec(&journal).context("failed to serialize the journal")?;
     file.write_all(&content)
         .with_context(|| "failed to write the journal temp")?;
@@ -658,6 +669,11 @@ fn validated_canonical_identity<T: JournalPayload>(
         bail!("the canonical journal names a different policy; refusing to replace it");
     }
     validate_journal_invariants(&journal)?;
+    verify_content_checksum(
+        &journal,
+        policy,
+        &format!("the canonical journal {canonical_name:?}"),
+    )?;
     validate_on_disk_journal(
         &stats,
         &journal,
