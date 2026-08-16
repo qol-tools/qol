@@ -315,6 +315,7 @@ fn announce_saved_feedback(
                 toast_announcement.title,
                 toast_announcement.message.clone(),
             )
+            .layout(qol_gpui::toast::ToastLayout::Status)
             .on_activate(move |_cx| {
                 if let Err(error) = target.open("toast") {
                     eprintln!("[qol-shot] toast reveal failed: {error:#}");
