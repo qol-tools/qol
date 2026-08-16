@@ -1128,18 +1128,18 @@ pub(super) fn capture_lane_external_id(
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
     binding: &SessionBinding,
-) {
+) -> bool {
     let Ok(facts) = terminals.discover() else {
-        return;
+        return false;
     };
     let Some(facts) = facts
         .into_iter()
         .find(|facts| facts.id == *binding.session_id())
     else {
-        return;
+        return false;
     };
     let Some(identity) = facts.spawn_identity.as_ref() else {
-        return;
+        return false;
     };
     let Some(external_id) = interpreter
         .describe(&facts)
@@ -1152,7 +1152,7 @@ pub(super) fn capture_lane_external_id(
             identity.key,
             identity.tool
         );
-        return;
+        return false;
     };
     let Ok(_guard) = locks.acquire(&identity.key) else {
         qol_runtime::probe!(
@@ -1160,7 +1160,7 @@ pub(super) fn capture_lane_external_id(
             "event=external_id_capture_skipped key={} reason=spawn_in_flight",
             identity.key
         );
-        return;
+        return false;
     };
     match ledger.record(
         &identity.key,
@@ -1178,6 +1178,7 @@ pub(super) fn capture_lane_external_id(
                 identity.tool,
                 external_id
             );
+            true
         }
         Err(error) => {
             qol_runtime::probe!(
@@ -1186,6 +1187,7 @@ pub(super) fn capture_lane_external_id(
                 identity.key,
                 error
             );
+            false
         }
     }
 }
@@ -1908,7 +1910,7 @@ mod tests {
             applied,
             ResumeDecision::Apply {
                 external_id: "01a00a6b".to_owned(),
-                args: vec!["--session-id".to_owned(), "01a00a6b".to_owned()],
+                args: vec!["--session".to_owned(), "01a00a6b".to_owned()],
             }
         );
         assert_eq!(
@@ -2321,7 +2323,7 @@ mod tests {
                 "IOWeight=40".to_owned(),
                 "--".to_owned(),
                 "pi".to_owned(),
-                "--session-id".to_owned(),
+                "--session".to_owned(),
                 "01a00a6b".to_owned(),
                 "--model".to_owned(),
                 "flash-x".to_owned(),

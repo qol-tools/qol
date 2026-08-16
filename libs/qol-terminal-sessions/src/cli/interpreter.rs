@@ -278,7 +278,7 @@ mod tests {
         let interpreter = CliSessionInterpreter::system();
 
         let cases = [
-            ("pi", vec!["--session-id".to_owned(), "abc".to_owned()]),
+            ("pi", vec!["--session".to_owned(), "abc".to_owned()]),
             ("codex", vec!["resume".to_owned(), "abc".to_owned()]),
             ("claude", vec!["--resume".to_owned(), "abc".to_owned()]),
         ];

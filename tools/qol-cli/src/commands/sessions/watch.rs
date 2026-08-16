@@ -49,6 +49,7 @@ struct WatchedRound {
     last_change: Instant,
     stalled_reported: bool,
     marker_seen: bool,
+    external_id_captured: bool,
     autoclose: bool,
 }
 
@@ -68,6 +69,7 @@ impl WatchedRound {
             last_change: Instant::now(),
             stalled_reported: false,
             marker_seen: false,
+            external_id_captured: false,
             autoclose: round.autoclose,
         })
     }
@@ -246,6 +248,15 @@ fn poll_round(
             });
         }
     };
+    if !round.external_id_captured {
+        round.external_id_captured = super::spawn::capture_lane_external_id(
+            terminals,
+            interpreter,
+            ledger,
+            locks,
+            &round.binding,
+        );
+    }
     if screen.contains(&round.marker) {
         match pending.pending_round(&round.binding)? {
             None => {
@@ -276,13 +287,15 @@ fn poll_round(
                             changed: false,
                         });
                     }
-                    super::spawn::capture_lane_external_id(
-                        terminals,
-                        interpreter,
-                        ledger,
-                        locks,
-                        &round.binding,
-                    );
+                    if !round.external_id_captured {
+                        round.external_id_captured = super::spawn::capture_lane_external_id(
+                            terminals,
+                            interpreter,
+                            ledger,
+                            locks,
+                            &round.binding,
+                        );
+                    }
                     let tail = screen_tail(&screen);
                     let delivery = deliver_wake(
                         terminals,
@@ -853,14 +866,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
+    use qol_terminal_sessions::cli::CliToolId;
     use qol_terminal_sessions::{
         BackendId, DeliveryMode, SessionCapabilities, SessionFacts, SessionFocus, SessionId,
-        TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+        SpawnIdentity, SpawnKey, SpawnSurface, TerminalBackend, TerminalError, TerminalSnapshot,
+        TextInput,
     };
     use sha2::{Digest, Sha256};
 
     use super::super::bridge::PendingBridgeStore;
-    use super::super::spawn::{SpawnLedger, SpawnLocks};
+    use super::super::spawn::{SpawnLedger, SpawnLocks, SpawnRecord};
     use super::*;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1162,6 +1177,71 @@ mod tests {
         assert!(
             !ledger_dir.exists() || std::fs::read_dir(&ledger_dir).unwrap().next().is_none(),
             "a completed lane without a spawn identity must not write a spawn record"
+        );
+    }
+
+    #[test]
+    fn lane_gone_before_completion_still_records_the_external_id() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let ledger = ledger(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
+            .unwrap();
+        let mut facts = facts("7", 100);
+        facts.spawn_identity = Some(SpawnIdentity {
+            key: SpawnKey::new("lane-gone-early").unwrap(),
+            tool: CliToolId::new("pi").unwrap(),
+            surface: SpawnSurface::Tab,
+        });
+        facts.foreground_basenames = vec!["pi".to_owned()];
+        facts.foreground_pids = vec![424242];
+        let backend =
+            FakeBackend::new(facts, vec!["idle".to_owned(), "idle".to_owned()]).die_after_reads(2);
+        let (terminals, _) = harness(backend);
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        std::fs::write(
+            encoded_dir.join("2026-08-16T10-00-00-000Z_0000cafe-cafe-cafe-cafe-cafecafecafe.jsonl"),
+            "",
+        )
+        .unwrap();
+        let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
+        std::env::set_var("PI_CODING_AGENT_SESSION_DIR", session_dir.path());
+        let mut out = Vec::new();
+        let result = watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        );
+        match previous {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
+        }
+        result.unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], "gone");
+        let record_dir = root.path().join("spawn-records");
+        let record_paths = std::fs::read_dir(&record_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(record_paths.len(), 1);
+        let record: SpawnRecord =
+            serde_json::from_str(&std::fs::read_to_string(&record_paths[0]).unwrap()).unwrap();
+        assert_eq!(
+            record.external_id.as_deref(),
+            Some("0000cafe-cafe-cafe-cafe-cafecafecafe")
         );
     }
 
@@ -1890,7 +1970,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 4);
+        assert_eq!(ls, 31);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -1935,8 +2015,8 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            5,
-            "the first marker poll must not emit; the second confirms, then the external-id capture and the delivery re-check each add a discovery, and the composer poll adds a read"
+            7,
+            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the completion capture and the delivery re-check each add a discovery"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
