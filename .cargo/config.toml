@@ -6,3 +6,13 @@ setup = "install --path tools/qol-cli --locked --force --debug"
 # Links are never cached by sccache, so this pays off on every rebuild.
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# macOS: libgit2-sys's openssl_init() (cfg unix+https) genuinely calls
+# openssl_sys::init() -> OPENSSL_init_ssl, so the probed system openssl gets
+# linked into the final binary. OPENSSL_STATIC embeds brew's libssl.a and
+# libcrypto.a instead: no brew dylib load commands, and the binary runs on
+# Macs without brew. This also keeps the vendored openssl-src compile off.
+# macOS source builds still probe a system openssl at build time only; the
+# shipped binary stays self-contained.
+[env]
+OPENSSL_STATIC = "1"

@@ -90,9 +90,6 @@ tower-http = { version = "0.6", default-features = false, features = ["set-heade
 # HTTP client for GitHub API
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
-# Git sync (libgit2 bindings; vendored so the host needs no system git)
-git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
-
 # Global hotkeys
 global-hotkey = "0.7"
 
@@ -132,6 +129,10 @@ x11rb = { workspace = true, features = ["allow-unsafe-code"] }
 evdev = { version = "0.13", optional = true }
 qol-gpui.workspace = true
 gpui.workspace = true
+# Git sync (libgit2 bindings; vendored so the host needs no system git)
+# vendored-openssl is Linux-only: on macOS libgit2 uses SecureTransport for HTTPS,
+# so vendored OpenSSL there would compile for nothing.
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
@@ -142,6 +143,8 @@ core-foundation = "0.10"
 core-graphics = "0.25"
 qol-gpui.workspace = true
 gpui.workspace = true
+# Git sync: HTTPS runs on libgit2's SecureTransport backend here, no vendored OpenSSL
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

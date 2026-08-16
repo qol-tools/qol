@@ -8,7 +8,6 @@ description = "Shared profile sync engine for qol-tray and the qol CLI"
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 qol-fs.workspace = true
 qol-migrations.workspace = true
 qol-plugin-api.workspace = true
@@ -16,6 +15,16 @@ qol-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Git sync (libgit2 bindings; vendored so the host needs no system git)
+# vendored-openssl is Linux-only: on macOS libgit2 uses SecureTransport for HTTPS,
+# so vendored OpenSSL there would compile for nothing.
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Git sync: HTTPS runs on libgit2's SecureTransport backend here, no vendored OpenSSL
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
 
 [dev-dependencies]
 tempfile = "3.8"
