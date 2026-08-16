@@ -56,6 +56,14 @@ fn stage_file(
             runtime_root.display()
         )
     })?;
+    if let Some(existing) = reusable_generation(&runtime_root, source, &validate) {
+        log::info!(
+            "[dev-runtime] reusing generation {} at {}",
+            existing.id,
+            existing.executable.display()
+        );
+        return Ok(existing);
+    }
     let mut staging = tempfile::Builder::new()
         .prefix(".qol-tray-runtime-")
         .tempfile_in(&runtime_root)
@@ -121,6 +129,24 @@ pub fn prune_runtime_generations(root: &Path, protected: &[&Path]) -> Result<(),
             .map_err(|error| format!("failed to prune {}: {error}", path.display()))?;
     }
     Ok(())
+}
+
+fn reusable_generation(
+    runtime_root: &Path,
+    source: &Path,
+    validate: impl Fn(&Path) -> Result<(), String>,
+) -> Option<StagedRuntimeGeneration> {
+    let digest = digest_file(source).ok()?;
+    let executable = runtime_root.join(&digest).join(source.file_name()?);
+    let staged = fs::metadata(&executable).ok()?;
+    if staged.len() != fs::metadata(source).ok()?.len() {
+        return None;
+    }
+    validate(&executable).ok()?;
+    Some(StagedRuntimeGeneration {
+        id: digest,
+        executable,
+    })
 }
 
 fn runtime_root(root: &Path) -> PathBuf {
@@ -245,6 +271,41 @@ mod tests {
             "a source binary inside a worktree must not move the generation root"
         );
         assert!(!staged.executable().starts_with(&worktree));
+    }
+
+    #[test]
+    fn staging_identical_bytes_reuses_the_published_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("qol-tray");
+        fs::write(&source, b"same runtime").unwrap();
+
+        let first = stage_bytes(root.path(), &source).unwrap();
+        let published = fs::metadata(first.executable()).unwrap();
+        let second = stage_bytes(root.path(), &source).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(
+            published.modified().unwrap(),
+            fs::metadata(second.executable())
+                .unwrap()
+                .modified()
+                .unwrap(),
+            "an unchanged source must not rewrite the staged generation"
+        );
+    }
+
+    #[test]
+    fn staging_a_changed_source_replaces_the_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("qol-tray");
+        fs::write(&source, b"first runtime").unwrap();
+        let first = stage_bytes(root.path(), &source).unwrap();
+
+        fs::write(&source, b"other runtime").unwrap();
+        let second = stage_bytes(root.path(), &source).unwrap();
+
+        assert_ne!(first.id(), second.id());
+        assert_eq!(fs::read(second.executable()).unwrap(), b"other runtime");
     }
 
     #[test]
