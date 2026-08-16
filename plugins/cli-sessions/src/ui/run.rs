@@ -24,7 +24,7 @@ use crate::session::registry::Registry;
 use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
-use crate::ui::placement::{corner_bounds, Corner, CORNER_MARGIN};
+use crate::ui::placement::{Corner, CORNER_MARGIN};
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
@@ -155,7 +155,8 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
 fn panel_bounds(corner: Corner, cx: &mut gpui::App) -> Bounds<Pixels> {
     let win_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
     match MonitorTracker::start(cx).snapshot_monitor() {
-        Some(monitor) => corner_bounds(monitor.bounds(), win_size, corner, CORNER_MARGIN),
+        Some(monitor) => qol_gpui::placement::MonitorPlacement::corner(corner, CORNER_MARGIN)
+            .bounds(monitor.bounds(), win_size),
         None => Bounds::centered(None, win_size, cx),
     }
 }

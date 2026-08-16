@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::storage::paths::PLUGIN_ID;
-use crate::ui::placement::Corner;
+use crate::ui::placement::{parse_corner, Corner};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<CliSessionsConfig>;
@@ -19,7 +19,7 @@ pub struct CliSessionsConfig {
 
 impl CliSessionsConfig {
     pub fn corner(&self) -> Corner {
-        Corner::parse(self.corner.as_deref().unwrap_or_default())
+        parse_corner(self.corner.as_deref().unwrap_or_default())
     }
 }
 

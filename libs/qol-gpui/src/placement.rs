@@ -65,6 +65,25 @@ impl MonitorPlacement {
     }
 }
 
+pub fn clamp_origin_to_monitor(
+    monitor: Bounds<Pixels>,
+    bounds: Bounds<Pixels>,
+    margin: f32,
+) -> Bounds<Pixels> {
+    let margin = px(margin);
+    let min_x = monitor.origin.x + margin;
+    let min_y = monitor.origin.y + margin;
+    let max_x = monitor.origin.x + monitor.size.width - bounds.size.width - margin;
+    let max_y = monitor.origin.y + monitor.size.height - bounds.size.height - margin;
+    Bounds::new(
+        point(
+            bounds.origin.x.min(max_x).max(min_x),
+            bounds.origin.y.min(max_y).max(min_y),
+        ),
+        bounds.size,
+    )
+}
+
 pub fn monitor_at_point(
     monitors: &[Bounds<Pixels>],
     point: Point<Pixels>,
@@ -199,8 +218,46 @@ mod tests {
     use gpui::{point, px, size, Bounds};
 
     use super::{
-        intersect_bounds, monitor_at_point, project_bounds, Anchor, Corner, MonitorPlacement,
+        clamp_origin_to_monitor, intersect_bounds, monitor_at_point, project_bounds, Anchor,
+        Corner, MonitorPlacement,
     };
+
+    #[test]
+    fn clamping_leaves_an_on_screen_window_untouched() {
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let window = Bounds::new(point(px(100.0), px(80.0)), size(px(360.0), px(400.0)));
+        assert_eq!(clamp_origin_to_monitor(monitor, window, 12.0), window);
+    }
+
+    #[test]
+    fn clamping_pulls_an_off_screen_window_back_inside_the_margin() {
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let below = Bounds::new(point(px(100.0), px(1100.0)), size(px(360.0), px(400.0)));
+        assert_eq!(
+            clamp_origin_to_monitor(monitor, below, 12.0)
+                .origin
+                .y
+                .to_f64(),
+            1080.0 - 400.0 - 12.0
+        );
+        let off_left = Bounds::new(point(px(-300.0), px(80.0)), size(px(360.0), px(400.0)));
+        assert_eq!(
+            clamp_origin_to_monitor(monitor, off_left, 12.0)
+                .origin
+                .x
+                .to_f64(),
+            12.0
+        );
+    }
+
+    #[test]
+    fn clamping_pins_an_oversized_window_to_the_top_left_margin() {
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(400.0), px(300.0)));
+        let oversized = Bounds::new(point(px(900.0), px(900.0)), size(px(2000.0), px(1500.0)));
+        let clamped = clamp_origin_to_monitor(monitor, oversized, 8.0);
+        assert_eq!(clamped.origin.x.to_f64(), 8.0);
+        assert_eq!(clamped.origin.y.to_f64(), 8.0);
+    }
 
     #[test]
     fn placements_share_monitor_relative_geometry() {
