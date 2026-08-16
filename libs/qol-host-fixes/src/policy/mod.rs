@@ -7,6 +7,11 @@ mod journal;
 mod lock;
 pub mod trace;
 
+pub use journal::{
+    validate_journal_invariants, JournalFileIdentity, JournalPayload, JournalRecord, JournalState,
+    ReleaseFailure, ReleaseStage,
+};
+
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -17,12 +22,6 @@ pub const JOURNAL_CANONICAL_DIR: &str = "/var/lib";
 pub const JOURNAL_STAGE_SUFFIX: &str = ".stage";
 pub const JOURNAL_SCHEMA_VERSION: u32 = 9;
 pub const JOURNAL_FILE_MODE: u32 = 0o644;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct JournalFileIdentity {
-    pub dev: u64,
-    pub ino: u64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
@@ -147,26 +146,6 @@ impl TryFrom<String> for ResidencyOwnerId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum JournalState {
-    Preparing,
-    Active,
-    Releasing,
-    ReleaseFailed,
-}
-
-impl JournalState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Preparing => "preparing",
-            Self::Active => "active",
-            Self::Releasing => "releasing",
-            Self::ReleaseFailed => "release-failed",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicyState {
     Absent,
@@ -194,53 +173,46 @@ impl PolicyState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReleaseStage {
-    FragmentVerify,
-    FragmentRemove,
-    FragmentPublish,
-    StagedCleanup,
-    JournalRemove,
-}
-
-impl ReleaseStage {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FragmentVerify => "fragment-verify",
-            Self::FragmentRemove => "fragment-remove",
-            Self::FragmentPublish => "fragment-publish",
-            Self::StagedCleanup => "staged-cleanup",
-            Self::JournalRemove => "journal-remove",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReleaseFailure {
-    pub stage: ReleaseStage,
-    pub expected_sha256: String,
-    pub actual_sha256: Option<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "policy_kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PolicyPayload {
     Nvidia(nvidia::NvidiaPayload),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyJournal {
-    pub schema_version: u32,
-    pub policy: String,
-    pub owners: Vec<ResidencyOwnerId>,
-    pub state: JournalState,
-    pub created_unix_ms: u64,
-    pub payload: PolicyPayload,
-    pub failure: Option<ReleaseFailure>,
-    pub journal_file_identity: Option<JournalFileIdentity>,
+pub type PolicyJournal = journal::JournalRecord<PolicyPayload>;
+
+impl journal::JournalPayload for PolicyPayload {
+    fn policy_id(&self) -> &'static str {
+        match self {
+            Self::Nvidia(_) => nvidia::NVIDIA_POLICY_ID,
+        }
+    }
+
+    fn has_staged_path(&self) -> bool {
+        match self {
+            Self::Nvidia(payload) => payload.staged_path.is_some(),
+        }
+    }
+
+    fn has_staged_identity(&self) -> bool {
+        match self {
+            Self::Nvidia(payload) => payload.staged_identity.is_some(),
+        }
+    }
+
+    fn has_active_fingerprint(&self) -> bool {
+        match self {
+            Self::Nvidia(payload) => payload.active_fingerprint.is_some(),
+        }
+    }
+
+    fn rendered_hash(&self) -> Result<String> {
+        nvidia::rendered_hash_of(self)
+    }
+
+    fn validate_payload(&self, policy: &str) -> Result<()> {
+        validate_payload(self, policy)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,232 +312,6 @@ pub fn read_journal(policy: &str) -> Result<Option<PolicyJournal>> {
     journal::read(policy)
 }
 
-fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-pub fn validate_journal_invariants(journal: &PolicyJournal) -> Result<()> {
-    if journal.schema_version != JOURNAL_SCHEMA_VERSION {
-        return Err(PolicyError::JournalInvalid {
-            policy: journal.policy.clone(),
-            reason: format!(
-                "unsupported journal schema {}; expected {JOURNAL_SCHEMA_VERSION}",
-                journal.schema_version
-            ),
-        }
-        .into());
-    }
-    validate_policy_id(&journal.policy)?;
-    if journal.created_unix_ms == 0 {
-        return Err(PolicyError::JournalInvalid {
-            policy: journal.policy.clone(),
-            reason: "created_unix_ms must be nonzero".to_string(),
-        }
-        .into());
-    }
-    match &journal.payload {
-        PolicyPayload::Nvidia(_) if journal.policy != nvidia::NVIDIA_POLICY_ID => {
-            return Err(PolicyError::JournalInvalid {
-                policy: journal.policy.clone(),
-                reason: "the embedded policy does not match the tagged payload".to_string(),
-            }
-            .into());
-        }
-        _ => {}
-    }
-    if journal.owners.is_empty() {
-        return Err(PolicyError::JournalInvalid {
-            policy: journal.policy.clone(),
-            reason: "the owner set must not be empty".to_string(),
-        }
-        .into());
-    }
-    for owner in &journal.owners {
-        validate_owner_id(owner.as_str())
-            .with_context(|| format!("invalid owner in the `{}` journal", journal.policy))?;
-    }
-    let mut seen_owners = std::collections::HashSet::new();
-    for owner in &journal.owners {
-        if !seen_owners.insert(owner.as_str()) {
-            return Err(PolicyError::JournalInvalid {
-                policy: journal.policy.clone(),
-                reason: "the owner set contains duplicates".to_string(),
-            }
-            .into());
-        }
-    }
-    if matches!(
-        journal.state,
-        JournalState::Releasing | JournalState::ReleaseFailed
-    ) && journal.owners.len() != 1
-    {
-        return Err(PolicyError::JournalInvalid {
-            policy: journal.policy.clone(),
-            reason: format!(
-                "state {} requires exactly one terminal owner",
-                journal.state.as_str()
-            ),
-        }
-        .into());
-    }
-    let PolicyPayload::Nvidia(payload) = &journal.payload;
-    let preparing_lineage = payload.staged_path.is_some() || payload.staged_identity.is_some();
-    match journal.state {
-        JournalState::Preparing => {
-            if journal.owners.len() != 1 {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: "preparing requires exactly one owner".to_string(),
-                }
-                .into());
-            }
-            if payload.staged_path.is_none() {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: "preparing requires the exact staged plan".to_string(),
-                }
-                .into());
-            }
-            if payload.active_fingerprint.is_some() && payload.staged_identity.is_none() {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: "preparing may record an active fingerprint only once the staged identity exists".to_string(),
-                }
-                .into());
-            }
-        }
-        JournalState::Active | JournalState::Releasing => {
-            if preparing_lineage {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: format!(
-                        "state {} must not carry staged state",
-                        journal.state.as_str()
-                    ),
-                }
-                .into());
-            }
-            if payload.active_fingerprint.is_none() {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: format!(
-                        "state {} requires the active fingerprint",
-                        journal.state.as_str()
-                    ),
-                }
-                .into());
-            }
-        }
-        JournalState::ReleaseFailed => {
-            if payload.staged_path.is_none() && payload.active_fingerprint.is_none() {
-                return Err(PolicyError::JournalInvalid {
-                    policy: journal.policy.clone(),
-                    reason: "release-failed active lineage requires the active fingerprint"
-                        .to_string(),
-                }
-                .into());
-            }
-            if let Some(failure) = &journal.failure {
-                let stage_mismatch = match failure.stage {
-                    ReleaseStage::JournalRemove if preparing_lineage => Some(
-                        "journal-remove evidence requires the active lineage".to_string(),
-                    ),
-                    ReleaseStage::StagedCleanup | ReleaseStage::FragmentPublish
-                        if !preparing_lineage =>
-                    {
-                        Some(
-                            "staged-cleanup and fragment-publish evidence require the preparing lineage"
-                                .to_string(),
-                        )
-                    }
-                    _ => None,
-                };
-                if let Some(reason) = stage_mismatch {
-                    return Err(PolicyError::JournalInvalid {
-                        policy: journal.policy.clone(),
-                        reason,
-                    }
-                    .into());
-                }
-            }
-        }
-    }
-    match &journal.failure {
-        Some(_) if journal.state != JournalState::ReleaseFailed => {
-            return Err(PolicyError::JournalInvalid {
-                policy: journal.policy.clone(),
-                reason: "failure evidence exists outside release-failed state".to_string(),
-            }
-            .into());
-        }
-        None if journal.state == JournalState::ReleaseFailed => {
-            return Err(PolicyError::JournalInvalid {
-                policy: journal.policy.clone(),
-                reason: "release-failed state requires drift evidence".to_string(),
-            }
-            .into());
-        }
-        Some(failure) => {
-            validate_failure(failure, &journal.payload, &journal.policy)?;
-        }
-        None => {}
-    }
-    validate_payload(&journal.payload, &journal.policy)?;
-    Ok(())
-}
-
-fn validate_failure(failure: &ReleaseFailure, payload: &PolicyPayload, policy: &str) -> Result<()> {
-    let expected = nvidia::rendered_hash_of(payload)?;
-    if failure.expected_sha256 != expected {
-        return Err(PolicyError::JournalInvalid {
-            policy: policy.to_string(),
-            reason: "failure evidence expected hash disagrees with the payload".to_string(),
-        }
-        .into());
-    }
-    let hash_required = matches!(
-        failure.stage,
-        ReleaseStage::FragmentRemove | ReleaseStage::FragmentPublish
-    );
-    match &failure.actual_sha256 {
-        Some(actual) => {
-            if !is_sha256_hex(actual) {
-                return Err(PolicyError::JournalInvalid {
-                    policy: policy.to_string(),
-                    reason: "failure evidence carries an invalid actual hash".to_string(),
-                }
-                .into());
-            }
-            if failure.stage == ReleaseStage::JournalRemove {
-                return Err(PolicyError::JournalInvalid {
-                    policy: policy.to_string(),
-                    reason: "journal-remove evidence must not carry a file hash".to_string(),
-                }
-                .into());
-            }
-        }
-        None => {
-            if failure.stage == ReleaseStage::JournalRemove {
-                return Ok(());
-            }
-            if hash_required {
-                return Err(PolicyError::JournalInvalid {
-                    policy: policy.to_string(),
-                    reason: format!(
-                        "{} evidence requires the observed file hash",
-                        failure.stage.as_str()
-                    ),
-                }
-                .into());
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {
     match payload {
         PolicyPayload::Nvidia(nvidia_payload) => {
@@ -577,7 +323,14 @@ fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {
 }
 
 pub fn remove_journal_durable(policy: &str) -> Result<()> {
-    journal::remove_durable(policy)
+    #[cfg(target_os = "linux")]
+    {
+        journal::remove_durable::<PolicyPayload>(policy)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        journal::remove_durable(policy)
+    }
 }
 
 #[cfg(test)]

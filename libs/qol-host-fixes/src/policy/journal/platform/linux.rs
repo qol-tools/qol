@@ -1,7 +1,7 @@
+use crate::policy::journal::{validate_journal_invariants, JournalPayload, JournalRecord};
 use crate::policy::{
     expected_policy_file_owner, fail_next, journal_path, journal_stage_path,
-    sync_directory_fd_strict, validate_journal_invariants, JournalFileIdentity, PolicyError,
-    PolicyJournal, JOURNAL_FILE_MODE,
+    sync_directory_fd_strict, JournalFileIdentity, PolicyError, JOURNAL_FILE_MODE,
 };
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -19,7 +19,7 @@ fn journal_crash_point(_point: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read(policy: &str) -> Result<Option<PolicyJournal>> {
+pub(crate) fn read<T: JournalPayload>(policy: &str) -> Result<Option<JournalRecord<T>>> {
     let canonical = journal_path(policy)?;
     let stage = journal_stage_path(policy)?;
     let parent = canonical
@@ -60,7 +60,7 @@ pub(crate) fn read(policy: &str) -> Result<Option<PolicyJournal>> {
     }
 }
 
-pub(crate) fn write_durable(journal: &PolicyJournal) -> Result<()> {
+pub(crate) fn write_durable<T: JournalPayload>(journal: &JournalRecord<T>) -> Result<()> {
     let policy = journal.policy.clone();
     let canonical = journal_path(&policy)?;
     let stage = journal_stage_path(&policy)?;
@@ -76,10 +76,10 @@ pub(crate) fn write_durable(journal: &PolicyJournal) -> Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
-    recover_stage_with_fd(&parent_fd, &policy)?;
+    recover_stage_with_fd::<T>(&parent_fd, &policy)?;
     fail_next("journal-write")?;
     let stage_identity = write_stage_linked(&parent_fd, &stage_name, journal)?;
-    if let Err(error) = commit_stage(&parent_fd, &canonical_name, &stage_name, &policy) {
+    if let Err(error) = commit_stage::<T>(&parent_fd, &canonical_name, &stage_name, &policy) {
         let mut cleanup = Vec::new();
         match entry_identity(&parent_fd, &stage_name) {
             Ok(Some(live)) if live == stage_identity => {
@@ -108,7 +108,7 @@ pub(crate) fn write_durable(journal: &PolicyJournal) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn remove_durable(policy: &str) -> Result<()> {
+pub(crate) fn remove_durable<T: JournalPayload>(policy: &str) -> Result<()> {
     let canonical = journal_path(policy)?;
     let parent = canonical
         .parent()
@@ -118,8 +118,8 @@ pub(crate) fn remove_durable(policy: &str) -> Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
-    recover_stage_with_fd(&parent_fd, policy)?;
-    let Some((_, file_identity)) = validated_journal_at(&parent_fd, &canonical_name, policy)?
+    recover_stage_with_fd::<T>(&parent_fd, policy)?;
+    let Some((_, file_identity)) = validated_journal_at::<T>(&parent_fd, &canonical_name, policy)?
     else {
         if entry_identity(&parent_fd, &canonical_name)?.is_some() {
             return Err(PolicyError::JournalInvalid {
@@ -160,13 +160,13 @@ pub(crate) fn remove_durable(policy: &str) -> Result<()> {
     sync_directory_fd_strict(&parent_fd)
 }
 
-pub(crate) fn recover_stage(policy: &str) -> Result<()> {
+pub(crate) fn recover_stage<T: JournalPayload>(policy: &str) -> Result<()> {
     let canonical = journal_path(policy)?;
     let parent = canonical
         .parent()
         .context("journal path has no parent directory")?;
     let parent_fd = open_dir_pinned(parent)?;
-    recover_stage_with_fd(&parent_fd, policy)
+    recover_stage_with_fd::<T>(&parent_fd, policy)
 }
 
 fn open_dir_pinned(path: &Path) -> Result<std::fs::File> {
@@ -249,18 +249,18 @@ fn unlinkat_ignore_missing(fd: &std::fs::File, name: &str) -> Result<()> {
     Err(error).with_context(|| format!("failed to remove journal temp {name:?}"))
 }
 
-fn validated_journal_at(
+fn validated_journal_at<T: JournalPayload>(
     dir_fd: &std::fs::File,
     name: &str,
     policy: &str,
-) -> Result<Option<(PolicyJournal, Option<JournalFileIdentity>)>> {
+) -> Result<Option<(JournalRecord<T>, Option<JournalFileIdentity>)>> {
     if name != format!("qol-resident-policy-{policy}.json") {
         return Ok(None);
     }
     let Some((content, stats)) = read_regular_at_identity(dir_fd, name)? else {
         return Ok(None);
     };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
+    let journal: JournalRecord<T> = serde_json::from_slice(&content)
         .with_context(|| format!("failed to parse journal entry {name:?}"))?;
     if journal.policy != policy {
         return Err(PolicyError::JournalInvalid {
@@ -362,9 +362,9 @@ fn read_regular_at_identity(
     )))
 }
 
-fn validate_on_disk_journal(
+fn validate_on_disk_journal<T>(
     stats: &JournalFileStats,
-    journal: &PolicyJournal,
+    journal: &JournalRecord<T>,
     policy: &str,
     context: &str,
 ) -> Result<()> {
@@ -415,7 +415,7 @@ enum JournalStage {
     Unrecoverable,
 }
 
-fn journal_stage_state(
+fn journal_stage_state<T: JournalPayload>(
     parent_fd: &std::fs::File,
     stage_name: &str,
     policy: &str,
@@ -426,7 +426,7 @@ fn journal_stage_state(
     let Some((content, stats)) = read_regular_at_identity(parent_fd, stage_name)? else {
         return Ok(JournalStage::Unrecoverable);
     };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
+    let journal: JournalRecord<T> = serde_json::from_slice(&content)
         .with_context(|| format!("failed to parse the journal recovery stage {stage_name:?}"))?;
     if journal.policy != policy {
         return Ok(JournalStage::Unrecoverable);
@@ -445,13 +445,13 @@ fn journal_stage_state(
     Ok(JournalStage::Recoverable((stats.dev, stats.ino)))
 }
 
-fn recover_stage_with_fd(parent_fd: &std::fs::File, policy: &str) -> Result<()> {
+fn recover_stage_with_fd<T: JournalPayload>(parent_fd: &std::fs::File, policy: &str) -> Result<()> {
     let stage = journal_stage_path(policy)?;
     let stage_name = stage
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
-    match journal_stage_state(parent_fd, &stage_name, policy)? {
+    match journal_stage_state::<T>(parent_fd, &stage_name, policy)? {
         JournalStage::Absent => {}
         JournalStage::Recoverable((dev, ino)) => {
             fail_next("stage-recover-remove")?;
@@ -479,10 +479,10 @@ fn recover_stage_with_fd(parent_fd: &std::fs::File, policy: &str) -> Result<()> 
     Ok(())
 }
 
-fn write_stage_linked(
+fn write_stage_linked<T: JournalPayload>(
     parent_fd: &std::fs::File,
     stage_name: &str,
-    journal: &PolicyJournal,
+    journal: &JournalRecord<T>,
 ) -> Result<(u64, u64)> {
     use std::ffi::CString;
     use std::io::Write;
@@ -644,7 +644,7 @@ fn renameat_replace(dir_fd: &std::fs::File, from: &str, to: &str) -> Result<()> 
         .with_context(|| format!("failed to commit journal rename {from:?} -> {to:?}"))
 }
 
-fn validated_canonical_identity(
+fn validated_canonical_identity<T: JournalPayload>(
     parent_fd: &std::fs::File,
     canonical_name: &str,
     policy: &str,
@@ -652,7 +652,7 @@ fn validated_canonical_identity(
     let Some((content, stats)) = read_regular_at_identity(parent_fd, canonical_name)? else {
         bail!("the canonical journal is not a regular file; refusing to replace it");
     };
-    let journal: PolicyJournal = serde_json::from_slice(&content)
+    let journal: JournalRecord<T> = serde_json::from_slice(&content)
         .with_context(|| format!("failed to parse the canonical journal {canonical_name:?}"))?;
     if journal.policy != policy {
         bail!("the canonical journal names a different policy; refusing to replace it");
@@ -667,7 +667,7 @@ fn validated_canonical_identity(
     Ok((stats.dev, stats.ino))
 }
 
-fn commit_stage(
+fn commit_stage<T: JournalPayload>(
     parent_fd: &std::fs::File,
     canonical_name: &str,
     stage_name: &str,
@@ -679,7 +679,7 @@ fn commit_stage(
             renameat2_noreplace(parent_fd, stage_name, canonical_name)?;
         }
         Some(_) => {
-            let (dev, ino) = validated_canonical_identity(parent_fd, canonical_name, policy)?;
+            let (dev, ino) = validated_canonical_identity::<T>(parent_fd, canonical_name, policy)?;
             #[cfg(any(test, feature = "sandbox"))]
             if let Some(replacement) = std::env::var_os("QOL_JOURNAL_REVALIDATE_SWAP") {
                 let canonical = journal_path(policy)?;
