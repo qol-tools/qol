@@ -7,7 +7,17 @@ use std::time::{Duration, Instant};
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const LOCK_RETRY_WINDOW: Duration = Duration::from_secs(10);
 
-pub(crate) struct PolicyLockGuard {
+fn lock_retry_window() -> Duration {
+    #[cfg(any(test, feature = "sandbox"))]
+    if let Ok(ms) = std::env::var("QOL_POLICY_LOCK_RETRY_WINDOW_MS") {
+        if let Ok(ms) = ms.parse::<u64>() {
+            return Duration::from_millis(ms);
+        }
+    }
+    LOCK_RETRY_WINDOW
+}
+
+pub struct PolicyLockGuard {
     #[cfg(target_os = "linux")]
     _socket: OwnedFd,
 }
@@ -19,7 +29,7 @@ impl std::fmt::Debug for PolicyLockGuard {
 }
 
 pub(crate) fn acquire(policy: &ResidentPolicy) -> Result<PolicyLockGuard> {
-    let deadline = Instant::now() + LOCK_RETRY_WINDOW;
+    let deadline = Instant::now() + lock_retry_window();
     loop {
         match try_acquire(policy) {
             Ok(guard) => return Ok(guard),

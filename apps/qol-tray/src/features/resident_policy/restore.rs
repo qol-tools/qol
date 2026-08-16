@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use qol_host_fixes::policy::nvidia::NVIDIA_POLICY_ID;
-use qol_host_fixes::policy::{restore_journal, RestoreOutcome};
+use qol_host_fixes::policy::{
+    acquire_policy_lock, restore_journal, ResidentPolicy, RestoreOutcome,
+};
 use qol_host_fixes::udev::UDEV_UACCESS_POLICY_ID;
 
 pub(crate) const RESTORE_ORDER: [&str; 2] = [UDEV_UACCESS_POLICY_ID, NVIDIA_POLICY_ID];
@@ -39,6 +41,8 @@ pub fn restore_all() -> RestoreReport {
 }
 
 fn restore_one(policy: &'static str) -> Result<RestoreOutcome> {
+    let resident = ResidentPolicy::from_id(policy)?;
+    let _guard = acquire_policy_lock(&resident)?;
     restore_journal(policy).with_context(|| format!("residency restore failed for `{policy}`"))
 }
 
@@ -331,6 +335,22 @@ mod tests {
                 .join("qol-resident-policy-nvidia-driver-version-pin.json")
                 .exists(),
             "the nvidia journal must be removed after a successful restore"
+        );
+    }
+
+    #[cfg(all(feature = "sandbox", target_os = "linux"))]
+    #[test]
+    fn restore_one_refuses_while_the_policy_lock_is_held() {
+        use qol_host_fixes::policy::{acquire_policy_lock, ResidentPolicy};
+        let _serial = serialized_sandbox_tests();
+        std::env::set_var("QOL_POLICY_LOCK_RETRY_WINDOW_MS", "50");
+        let policy = ResidentPolicy::from_id(UDEV_UACCESS_POLICY_ID).unwrap();
+        let _held = acquire_policy_lock(&policy).unwrap();
+        let error = restore_one(UDEV_UACCESS_POLICY_ID).unwrap_err();
+        std::env::remove_var("QOL_POLICY_LOCK_RETRY_WINDOW_MS");
+        assert!(
+            format!("{error:#}").contains("another process holds"),
+            "the restore must take the policy lock like grant/revoke: {error:#}"
         );
     }
 

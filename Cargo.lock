@@ -5882,13 +5882,22 @@ dependencies = [
  "anyhow",
  "libc",
  "qol-apps",
+ "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-headless",
  "qol-host-fixes",
+ "qol-hotkeys",
  "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-profile-sync",
+ "qol-runtime",
  "qol-windowing",
+ "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
+ "x11rb",
 ]
 
 [[package]]

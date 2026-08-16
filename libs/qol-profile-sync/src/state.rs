@@ -1,3 +1,4 @@
+use super::scope::{current_os_bucket, OS_SUBDIR};
 use super::types::{
     default_true, ResolvableConflict, SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus,
     SyncTarget,
@@ -14,6 +15,7 @@ const SYNC_STATE_FILE: &str = "state.json";
 const SYNC_TOGGLES_FILE: &str = "toggles.json";
 const SYNC_CONFIG_FILE: &str = "sync.json";
 const LOCK_FILE: &str = "sync.lock";
+const HOTKEYS_FILE: &str = "hotkeys.json";
 
 /// Resolved paths for one machine's sync state, derived from the profile
 /// root (the git repository that holds the `default/`-style profile
@@ -51,6 +53,14 @@ impl SyncPaths {
     /// Per-device sync state dir: `<profile>/<name>/device/sync`.
     pub fn sync_dir(&self) -> PathBuf {
         self.active_dir().join("device").join("sync")
+    }
+
+    pub fn os_dir(&self) -> PathBuf {
+        self.active_dir().join(OS_SUBDIR).join(current_os_bucket())
+    }
+
+    pub fn hotkeys_path(&self) -> PathBuf {
+        self.os_dir().join(HOTKEYS_FILE)
     }
 
     pub fn state_path(&self) -> PathBuf {
@@ -335,6 +345,20 @@ mod tests {
         assert!(paths.state_path().ends_with("work/device/sync/state.json"));
         assert!(paths.backups_dir().ends_with("work/sync/backups"));
         assert!(paths.lock_path().ends_with("work/device/sync/sync.lock"));
+    }
+
+    #[test]
+    fn os_dir_and_hotkeys_path_are_os_scoped_in_the_active_profile() {
+        let tmp = TempDir::new().unwrap();
+        let paths = paths_in(&tmp);
+        std::fs::create_dir_all(paths.active_dir()).unwrap();
+        std::fs::write(paths.profile_root.join("active"), "work\n").unwrap();
+
+        let bucket = current_os_bucket();
+        assert!(paths.os_dir().ends_with(&format!("work/os/{bucket}")));
+        assert!(paths
+            .hotkeys_path()
+            .ends_with(&format!("work/os/{bucket}/hotkeys.json")));
     }
 
     #[test]

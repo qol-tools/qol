@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -16,20 +17,35 @@ const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const BINARY_NAME: &str = "plugin-monitor";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
+    let args: Vec<String> = args.into_iter().collect();
+    if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
+        return app().run(vec!["daemon".to_string()]);
+    }
     app().run(args)
 }
 
 fn app() -> HeadlessApp {
-    app_with(crate::platform::control(), crate::monitor::UdevGrantBackend)
+    app_with_config_root(
+        crate::platform::control(),
+        Arc::new(crate::monitor::UdevGrantBackend),
+        crate::config::config_root(),
+    )
 }
 
+#[cfg(test)]
 fn app_with<C, G>(control: C, grant: G) -> HeadlessApp
 where
     C: DisplayControl + Send + Sync + 'static,
     G: GrantBackend + Send + Sync + 'static,
 {
-    let control: Arc<dyn DisplayControl> = Arc::new(control);
-    let grant: Arc<dyn GrantBackend> = Arc::new(grant);
+    app_with_config_root(Arc::new(control), Arc::new(grant), None)
+}
+
+fn app_with_config_root(
+    control: Arc<dyn DisplayControl>,
+    grant: Arc<dyn GrantBackend>,
+    config_root: Option<PathBuf>,
+) -> HeadlessApp {
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
         .about("Inspect and control display brightness, gamma, and modes.")
         .default_command(["list"])
@@ -39,10 +55,15 @@ where
         .command(set_command(Arc::clone(&control)))
         .command(up_command(Arc::clone(&control)))
         .command(down_command(Arc::clone(&control)))
+        .command(daemon_command())
         .command(grant_command(Arc::clone(&grant)))
         .command(revoke_command(Arc::clone(&grant)))
         .command(settings_command())
-        .doctor_checks(doctor_checks(Arc::clone(&control), Arc::clone(&grant)))
+        .doctor_checks(doctor_checks(
+            Arc::clone(&control),
+            Arc::clone(&grant),
+            config_root,
+        ))
 }
 
 fn list_command(control: Arc<dyn DisplayControl>) -> Command {
@@ -155,6 +176,18 @@ fn down_command(control: Arc<dyn DisplayControl>) -> Command {
         })
 }
 
+fn daemon_command() -> Command {
+    Command::new("daemon")
+        .about("Run the resident daemon that owns brightness hotkeys and session restore.")
+        .usage(format!("{BINARY_NAME} daemon"))
+        .output("No stdout; runs until the host sends kill.")
+        .exit_behavior("Exits non-zero if the daemon listener cannot start.")
+        .run_plain_text(|_| {
+            crate::daemon::run().map_err(anyhow::Error::msg)?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the plugin settings.")
@@ -205,7 +238,12 @@ fn revoke_command(grant: Arc<dyn GrantBackend>) -> Command {
 fn doctor_checks(
     control: Arc<dyn DisplayControl>,
     grant: Arc<dyn GrantBackend>,
+    config_root: Option<PathBuf>,
 ) -> Vec<DoctorCheck> {
+    let control_for_identity = Arc::clone(&control);
+    let control_for_probe = Arc::clone(&control);
+    let config_root_for_config = config_root.clone();
+    let config_root_for_hotkeys = config_root;
     vec![
         DoctorCheck::new(
             "platform_supported",
@@ -222,23 +260,62 @@ fn doctor_checks(
             "display_identity",
             "Verify EDID-derived display identities are stable for config binding.",
             move || {
-                let handles = control
+                let handles = control_for_identity
                     .enumerate()
                     .context("failed to enumerate displays")?;
                 Ok(display_identity_result(&handles))
             },
         ),
         DoctorCheck::new(
+            "ddc_probe",
+            "Probe DDC capability per connected display.",
+            move || Ok(ddc_probe_result(control_for_probe.as_ref())),
+        ),
+        DoctorCheck::new(
+            "display_server",
+            "Report the session compositor and the gamma fallback runtime note.",
+            || Ok(display_server_result(crate::platform::display_server())),
+        ),
+        DoctorCheck::new(
             "config_readable",
-            "Verify the plugin can run without persistent config.",
-            || {
-                Ok(DoctorCheckResult::ok(
-                    "config_readable",
-                    "No persistent config is required.",
-                ))
+            "Verify the device-scope config is readable.",
+            move || Ok(config_readable_result(config_root_for_config.as_deref())),
+        ),
+        DoctorCheck::new(
+            "hotkey_bindings",
+            "Verify brightness hotkey bindings are registered without chord collisions.",
+            move || match config_root_for_hotkeys.as_deref() {
+                Some(root) => crate::hotkeys::hotkey_registration_result(root),
+                None => Ok(DoctorCheckResult::fail(
+                    "hotkey_bindings",
+                    "cannot locate the qol config directory",
+                )),
             },
         ),
     ]
+}
+
+fn config_readable_result(config_root: Option<&std::path::Path>) -> DoctorCheckResult {
+    let Some(root) = config_root else {
+        return DoctorCheckResult::fail(
+            "config_readable",
+            "cannot locate the qol config directory",
+        );
+    };
+    match crate::config::load(root) {
+        Ok(config) => DoctorCheckResult::ok(
+            "config_readable",
+            format!(
+                "device-scope config: {} preferred brightness, {} policy selections",
+                config.preferred_brightness.len(),
+                config.policy.len()
+            ),
+        ),
+        Err(error) => DoctorCheckResult::fail(
+            "config_readable",
+            format!("device-scope config is unreadable: {error:#}"),
+        ),
+    }
 }
 
 fn grant_state_result(state: I2cGrantState) -> DoctorCheckResult {
@@ -300,6 +377,132 @@ fn display_identity_result(handles: &[DisplayHandle]) -> DoctorCheckResult {
 
 fn platform_supported_check() -> Result<DoctorCheckResult> {
     Ok(platform_supported_result(crate::platform::current_support()))
+}
+
+fn ddc_probe_result(control: &dyn DisplayControl) -> DoctorCheckResult {
+    let handles = match control.enumerate() {
+        Ok(handles) => handles,
+        Err(error) => {
+            return DoctorCheckResult::fail(
+                "ddc_probe",
+                format!("display enumeration failed: {error}"),
+            );
+        }
+    };
+    if handles.is_empty() {
+        return DoctorCheckResult::ok("ddc_probe", "no displays connected");
+    }
+    let mut ddc_capable = 0usize;
+    let mut failures = Vec::new();
+    let mut entries = Vec::new();
+    for handle in &handles {
+        match control.probe(handle) {
+            Ok(capabilities) => {
+                if capabilities.brightness_ddc {
+                    ddc_capable += 1;
+                }
+                entries.push(serde_json::json!({
+                    "connector": handle.connector(),
+                    "id": handle.id(),
+                    "status": "ok",
+                    "brightness_ddc": capabilities.brightness_ddc,
+                    "brightness_gamma": capabilities.brightness_gamma,
+                }));
+            }
+            Err(error) => {
+                let taxonomy = ddc_probe_taxonomy(&error);
+                failures.push((handle.connector().to_string(), taxonomy.clone()));
+                entries.push(serde_json::json!({
+                    "connector": handle.connector(),
+                    "id": handle.id(),
+                    "status": "error",
+                    "error": taxonomy,
+                }));
+            }
+        }
+    }
+    let details = serde_json::json!({ "displays": entries });
+    if failures.is_empty() {
+        return DoctorCheckResult::ok(
+            "ddc_probe",
+            format!(
+                "DDC probe ok: {} of {} displays expose DDC brightness",
+                ddc_capable,
+                handles.len()
+            ),
+        )
+        .with_details(details);
+    }
+    let connectors = failures
+        .iter()
+        .map(|(connector, _)| connector.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let result = DoctorCheckResult::fail(
+        "ddc_probe",
+        format!(
+            "DDC probe failed on {} of {} displays: {connectors}",
+            failures.len(),
+            handles.len()
+        ),
+    )
+    .with_details(details);
+    if failures
+        .iter()
+        .any(|(_, taxonomy)| taxonomy.starts_with("permission"))
+    {
+        return result.with_fix(
+            "Run `plugin-monitor grant` to apply the i2c uaccess rule, then retry doctor.",
+        );
+    }
+    result
+}
+
+fn ddc_probe_taxonomy(error: &MonitorError) -> String {
+    match error {
+        MonitorError::Unsupported { reason, .. } => format!("unsupported: {reason}"),
+        MonitorError::Refused { reason, .. } => format!("refused: {reason}"),
+        MonitorError::I2c(crate::monitor::I2cError::Permission { node }) => {
+            format!("permission: no i2c access to {node}")
+        }
+        MonitorError::I2c(crate::monitor::I2cError::NoDevice { node }) => {
+            format!(
+                "no-device: nothing at {node}; the connector may be unplugged or i2c-dev unloaded"
+            )
+        }
+        MonitorError::I2c(crate::monitor::I2cError::Busy { node }) => {
+            format!("busy: {node} is held by another driver")
+        }
+        MonitorError::I2c(crate::monitor::I2cError::UnsupportedTransport { detail }) => {
+            format!("unsupported-transport: {detail}")
+        }
+        MonitorError::I2c(crate::monitor::I2cError::Protocol { detail }) => {
+            format!("protocol: {detail}")
+        }
+        MonitorError::I2c(crate::monitor::I2cError::Io(error)) => format!("io: {error}"),
+        MonitorError::Display(error) => format!("enumeration: {error}"),
+        MonitorError::DisplayNotFound(selector) => format!("not-found: {selector}"),
+    }
+}
+
+fn display_server_result(server: crate::platform::DisplayServer) -> DoctorCheckResult {
+    match server {
+        crate::platform::DisplayServer::X11 => DoctorCheckResult::ok(
+            "display_server",
+            "X11 session; gamma fallback runs through RandR with write-plus-read-back verification",
+        ),
+        crate::platform::DisplayServer::Wayland => DoctorCheckResult::warn(
+            "display_server",
+            "Wayland session; the gamma fallback is X11-RandR-only and is typed unsupported here, \
+             never assumed from protocol presence. DDC brightness is unaffected.",
+        )
+        .with_fix("Use DDC brightness, or run an X11 session for the gamma fallback."),
+        crate::platform::DisplayServer::None => DoctorCheckResult::warn(
+            "display_server",
+            "no X11 or Wayland display server detected in the terminal environment; the gamma \
+             fallback is unavailable",
+        ),
+    }
 }
 
 fn platform_supported_result(support: crate::platform::PlatformSupport) -> DoctorCheckResult {
@@ -395,6 +598,20 @@ mod tests {
     struct FakeControl {
         displays: Vec<DisplayHandle>,
         brightness: Arc<Mutex<BrightnessState>>,
+        probe_failure: Option<ProbeFailure>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProbeFailure {
+        Permission,
+    }
+
+    impl ProbeFailure {
+        fn monitor_error(self) -> MonitorError {
+            MonitorError::I2c(crate::monitor::I2cError::Permission {
+                node: "/dev/i2c-7".into(),
+            })
+        }
     }
 
     impl FakeControl {
@@ -408,6 +625,14 @@ mod tests {
                     value: 42,
                     source: BrightnessSource::Ddc,
                 })),
+                probe_failure: None,
+            }
+        }
+
+        fn with_probe_failure(failure: ProbeFailure) -> Self {
+            Self {
+                probe_failure: Some(failure),
+                ..Self::new()
             }
         }
     }
@@ -418,10 +643,13 @@ mod tests {
         }
 
         fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
-            Ok(DisplayCapabilities {
-                brightness_ddc: true,
-                ..DisplayCapabilities::none()
-            })
+            match self.probe_failure {
+                Some(failure) => Err(failure.monitor_error()),
+                None => Ok(DisplayCapabilities {
+                    brightness_ddc: true,
+                    ..DisplayCapabilities::none()
+                }),
+            }
         }
 
         fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
@@ -657,7 +885,7 @@ mod tests {
         let report: DoctorReport =
             serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 5);
+        assert_eq!(report.checks.len(), 8);
         let ids = report
             .checks
             .iter()
@@ -668,7 +896,10 @@ mod tests {
             "device_permissions",
             "i2c_grant",
             "display_identity",
+            "ddc_probe",
+            "display_server",
             "config_readable",
+            "hotkey_bindings",
         ] {
             assert!(ids.contains(&expected), "missing check: {expected}");
         }
@@ -683,8 +914,84 @@ mod tests {
                 .find(|check| check.id == "config_readable")
                 .expect("config check must exist")
                 .status,
-            DoctorStatus::Ok
+            DoctorStatus::Fail,
+            "without a config root the check must say it cannot locate the config directory"
         );
+    }
+
+    #[test]
+    fn doctor_with_a_config_root_reads_the_device_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("config").join("qol-tray");
+        let app = app_with_config_root(
+            Arc::new(FakeControl::new()),
+            Arc::new(FakeGrantBackend::new()),
+            Some(config_root.clone()),
+        );
+        let report: DoctorReport = serde_json::from_str(
+            &app.execute(["--json".to_string(), "doctor".to_string()])
+                .stdout,
+        )
+        .expect("doctor output must be valid JSON");
+        let config = report
+            .checks
+            .iter()
+            .find(|check| check.id == "config_readable")
+            .expect("config check must exist");
+        assert_eq!(config.status, DoctorStatus::Ok);
+        assert!(config.message.contains("device-scope config"));
+
+        let hotkeys = crate::config::hotkeys_path(&config_root).unwrap();
+        std::fs::create_dir_all(hotkeys.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hotkeys,
+            serde_json::json!({
+                "hotkeys": [
+                    {"id": "h1", "key": "ctrl+shift+b", "plugin_uid": "plugin-monitor", "action": "brightness-up", "enabled": true},
+                    {"id": "h2", "key": "ctrl+shift+b", "plugin_uid": "plugin-monitor", "action": "brightness-down", "enabled": true}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let report: DoctorReport = serde_json::from_str(
+            &app.execute(["--json".to_string(), "doctor".to_string()])
+                .stdout,
+        )
+        .expect("doctor output must be valid JSON");
+        let hotkeys_check = report
+            .checks
+            .iter()
+            .find(|check| check.id == "hotkey_bindings")
+            .expect("hotkey check must exist");
+        assert_eq!(
+            hotkeys_check.status,
+            DoctorStatus::Fail,
+            "a duplicated chord is a doctor failure"
+        );
+        assert!(hotkeys_check.message.contains("ctrl+shift+b"));
+    }
+
+    #[test]
+    fn doctor_without_a_config_root_fails_hotkey_and_config_checks() {
+        let app = app_with_config_root(
+            Arc::new(FakeControl::new()),
+            Arc::new(FakeGrantBackend::new()),
+            None,
+        );
+        let report: DoctorReport = serde_json::from_str(
+            &app.execute(["--json".to_string(), "doctor".to_string()])
+                .stdout,
+        )
+        .expect("doctor output must be valid JSON");
+        for id in ["config_readable", "hotkey_bindings"] {
+            let check = report
+                .checks
+                .iter()
+                .find(|check| check.id == id)
+                .expect("check must exist");
+            assert_eq!(check.status, DoctorStatus::Fail, "check: {id}");
+        }
     }
 
     #[test]
@@ -699,10 +1006,21 @@ mod tests {
             "device_permissions",
             "i2c_grant",
             "display_identity",
+            "ddc_probe",
+            "display_server",
             "config_readable",
+            "hotkey_bindings",
         ] {
             assert!(first.stdout.contains(id), "help must name {id}");
         }
+    }
+
+    #[test]
+    fn daemon_command_is_registered_and_helpful() {
+        let execution = fake_app().execute(["help".to_string(), "daemon".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert!(execution.stdout.contains("resident daemon"));
+        assert!(execution.stdout.contains("hotkeys"));
     }
 
     #[test]
@@ -907,5 +1225,140 @@ mod tests {
             .expect("identity check must exist");
         assert_eq!(identity.status, DoctorStatus::Ok);
         assert!(identity.message.contains("stable EDID identity"));
+    }
+
+    #[test]
+    fn ddc_probe_reports_every_display_with_capabilities() {
+        let app = fake_app();
+        let execution = app.execute(["--json".to_string(), "doctor".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        let report: DoctorReport =
+            serde_json::from_str(&execution.stdout).expect("doctor output must be valid JSON");
+        let probe = report
+            .checks
+            .iter()
+            .find(|check| check.id == "ddc_probe")
+            .expect("ddc_probe check must exist");
+        assert_eq!(probe.status, DoctorStatus::Ok);
+        assert!(
+            probe.message.contains("2 of 2 displays"),
+            "{}",
+            probe.message
+        );
+        let details = probe.details.as_ref().expect("details must be present");
+        let displays = details["displays"].as_array().expect("displays list");
+        assert_eq!(displays.len(), 2);
+        assert_eq!(displays[0]["connector"], "card0-DP-1");
+        assert_eq!(displays[0]["status"], "ok");
+        assert_eq!(displays[0]["brightness_ddc"], true);
+    }
+
+    #[test]
+    fn ddc_probe_surfaces_the_failure_taxonomy_per_display() {
+        let app = fake_app_with(
+            FakeControl::with_probe_failure(ProbeFailure::Permission),
+            FakeGrantBackend::new(),
+        );
+        let execution = app.execute(["--json".to_string(), "doctor".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        let report: DoctorReport =
+            serde_json::from_str(&execution.stdout).expect("doctor output must be valid JSON");
+        let probe = report
+            .checks
+            .iter()
+            .find(|check| check.id == "ddc_probe")
+            .expect("ddc_probe check must exist");
+        assert_eq!(probe.status, DoctorStatus::Fail);
+        assert!(
+            probe.message.contains("2 of 2 displays"),
+            "{}",
+            probe.message
+        );
+        assert!(probe.message.contains("card0-DP-1"));
+        assert!(
+            probe
+                .fix
+                .as_deref()
+                .unwrap_or_default()
+                .contains("plugin-monitor grant"),
+            "permission failures must suggest the grant: {:?}",
+            probe.fix
+        );
+        let details = probe.details.as_ref().expect("details must be present");
+        let displays = details["displays"].as_array().expect("displays list");
+        assert_eq!(displays.len(), 2);
+        for display in displays {
+            assert_eq!(display["status"], "error");
+            assert!(
+                display["error"]
+                    .as_str()
+                    .expect("error taxonomy")
+                    .starts_with("permission: no i2c access to /dev/i2c-7"),
+                "{}",
+                display["error"]
+            );
+        }
+    }
+
+    #[test]
+    fn ddc_probe_taxonomy_maps_busy_and_unsupported_errors() {
+        assert!(
+            ddc_probe_taxonomy(&MonitorError::I2c(crate::monitor::I2cError::Busy {
+                node: "/dev/i2c-7".into()
+            }))
+            .starts_with("busy")
+        );
+        assert!(
+            ddc_probe_taxonomy(&MonitorError::unsupported("brightness", "x"))
+                .starts_with("unsupported")
+        );
+        assert!(
+            ddc_probe_taxonomy(&MonitorError::refused("brightness", "y")).starts_with("refused")
+        );
+    }
+
+    #[test]
+    fn ddc_probe_with_no_displays_is_ok() {
+        let app = fake_app_with(
+            FakeControl {
+                displays: vec![],
+                ..FakeControl::new()
+            },
+            FakeGrantBackend::new(),
+        );
+        let execution = app.execute(["--json".to_string(), "doctor".to_string()]);
+        let report: DoctorReport =
+            serde_json::from_str(&execution.stdout).expect("doctor output must be valid JSON");
+        let probe = report
+            .checks
+            .iter()
+            .find(|check| check.id == "ddc_probe")
+            .expect("ddc_probe check must exist");
+        assert_eq!(probe.status, DoctorStatus::Ok);
+        assert!(probe.message.contains("no displays connected"));
+    }
+
+    #[test]
+    fn display_server_result_maps_every_session_kind() {
+        let x11 = display_server_result(crate::platform::DisplayServer::X11);
+        assert_eq!(x11.status, DoctorStatus::Ok);
+        assert!(x11.message.contains("RandR"));
+        assert!(x11.message.contains("write-plus-read-back"));
+
+        let wayland = display_server_result(crate::platform::DisplayServer::Wayland);
+        assert_eq!(wayland.status, DoctorStatus::Warn);
+        assert!(wayland.message.contains("X11-RandR-only"));
+        assert!(
+            wayland
+                .message
+                .contains("never assumed from protocol presence"),
+            "{}",
+            wayland.message
+        );
+        assert!(wayland.fix.is_some());
+
+        let none = display_server_result(crate::platform::DisplayServer::None);
+        assert_eq!(none.status, DoctorStatus::Warn);
+        assert!(none.message.contains("unavailable"));
     }
 }

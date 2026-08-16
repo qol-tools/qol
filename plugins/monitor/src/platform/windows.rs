@@ -1,4 +1,6 @@
-use super::PlatformSupport;
+use std::sync::Arc;
+
+use super::{Control, PlatformSupport};
 use crate::monitor::StubControl;
 
 pub(crate) fn current_support() -> PlatformSupport {
@@ -8,6 +10,6 @@ pub(crate) fn current_support() -> PlatformSupport {
     }
 }
 
-pub(crate) fn control() -> StubControl {
-    StubControl
+pub(crate) fn control() -> Control {
+    Arc::new(StubControl)
 }

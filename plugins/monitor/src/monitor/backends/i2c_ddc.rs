@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, HdrState, MonitorError, GAMMA_REASON, HDR_REASON, MODES_REASON,
@@ -20,11 +21,16 @@ const OP_GET_VCP: u8 = 0x01;
 const OP_GET_VCP_REPLY: u8 = 0x02;
 const OP_SET_VCP: u8 = 0x03;
 const FEATURE_BRIGHTNESS: u8 = 0x10;
-const REPLY_LEN: usize = 10;
+const LENGTH_GET: u8 = 0x82;
+const LENGTH_SET: u8 = 0x84;
+const LENGTH_REPLY: u8 = 0x88;
+const REPLY_VIRTUAL_HOST: u8 = 0x50;
+const REPLY_LEN: usize = 11;
 const WRITE_RETRIES: usize = 1;
 const READ_ATTEMPTS: usize = 20;
 const SETTLE_DELAY: Duration = Duration::from_millis(50);
 const READ_POLL_DELAY: Duration = Duration::from_millis(10);
+const RESPONSE_DELAY: Duration = Duration::from_millis(40);
 const ERRNO_EIO: i32 = 5;
 const ERRNO_ENXIO: i32 = 6;
 
@@ -79,6 +85,7 @@ pub struct I2cDdcBackend<T: I2cTransport> {
     sysfs_drm: PathBuf,
     settle: Duration,
     poll_delay: Duration,
+    response_delay: Duration,
     dropped_writes: Mutex<HashSet<String>>,
 }
 
@@ -89,6 +96,7 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
             PathBuf::from("/sys/class/drm"),
             SETTLE_DELAY,
             READ_POLL_DELAY,
+            RESPONSE_DELAY,
         )
     }
 
@@ -97,12 +105,14 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
         sysfs_drm: PathBuf,
         settle: Duration,
         poll_delay: Duration,
+        response_delay: Duration,
     ) -> Self {
         Self {
             transport,
             sysfs_drm,
             settle,
             poll_delay,
+            response_delay,
             dropped_writes: Mutex::new(HashSet::new()),
         }
     }
@@ -134,7 +144,11 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
                 ),
             });
         }
-        links.sort_by(|a, b| a.0.cmp(&b.0));
+        links.sort_by_key(|(name, _)| {
+            name.strip_prefix("i2c-")
+                .and_then(|index| index.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
         let selected = links
             .iter()
             .find(|(_, path)| self.adapter_is_ddc(path))
@@ -168,8 +182,8 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
         if self.writes_dropped(connector) {
             return Err(I2cError::UnsupportedTransport {
                 detail: format!(
-                    "DDC/CI writes were dropped on {connector}; the gamma fallback will engage \
-                     in a later phase"
+                    "DDC/CI writes were dropped on {connector}; set the display policy to gamma \
+                     to keep brightness control"
                 ),
             });
         }
@@ -212,6 +226,7 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
     }
 
     fn read_reply(&self, bus: &mut T::Bus) -> Result<[u8; REPLY_LEN], I2cError> {
+        thread::sleep(self.response_delay);
         let mut frame = [0u8; REPLY_LEN];
         let mut filled = 0usize;
         let mut attempts = 0usize;
@@ -315,28 +330,27 @@ fn is_retryable(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(ERRNO_EIO) | Some(ERRNO_ENXIO))
 }
 
-fn checksum(bytes: &[u8]) -> u8 {
-    let sum: u16 = bytes.iter().map(|byte| u16::from(*byte)).sum();
-    (0u16.wrapping_sub(sum % 256)) as u8
+fn xor_checksum(seed: u8, bytes: &[u8]) -> u8 {
+    bytes.iter().fold(seed, |acc, byte| acc ^ byte)
 }
 
 fn get_vcp_request(feature: u8) -> [u8; 5] {
-    let mut frame = [HOST_ADDRESS, MONITOR_ADDRESS, OP_GET_VCP, feature, 0];
-    frame[4] = checksum(&frame[..4]);
+    let mut frame = [HOST_ADDRESS, LENGTH_GET, OP_GET_VCP, feature, 0];
+    frame[4] = xor_checksum(MONITOR_ADDRESS, &frame[..4]);
     frame
 }
 
 fn set_vcp_request(feature: u8, value: u16) -> [u8; 7] {
     let mut frame = [
         HOST_ADDRESS,
-        MONITOR_ADDRESS,
+        LENGTH_SET,
         OP_SET_VCP,
         feature,
         (value >> 8) as u8,
         value as u8,
         0,
     ];
-    frame[6] = checksum(&frame[..6]);
+    frame[6] = xor_checksum(MONITOR_ADDRESS, &frame[..6]);
     frame
 }
 
@@ -345,12 +359,12 @@ fn write_set_vcp(bus: &mut impl I2cBus, raw: u16) -> Result<(), I2cError> {
 }
 
 fn parse_get_vcp_reply(feature: u8, frame: &[u8; REPLY_LEN]) -> Result<(u16, u16), I2cError> {
-    if checksum(frame) != 0 {
+    if xor_checksum(REPLY_VIRTUAL_HOST, &frame[1..10]) != frame[10] {
         return Err(I2cError::Protocol {
             detail: "reply checksum mismatch".into(),
         });
     }
-    if frame[0] != MONITOR_ADDRESS || frame[1] != HOST_ADDRESS {
+    if frame[0] != MONITOR_ADDRESS || frame[1] != LENGTH_REPLY {
         return Err(I2cError::Protocol {
             detail: "reply carries the wrong source or destination address".into(),
         });
@@ -360,15 +374,15 @@ fn parse_get_vcp_reply(feature: u8, frame: &[u8; REPLY_LEN]) -> Result<(u16, u16
             detail: "expected a get-vcp-feature reply".into(),
         });
     }
-    if frame[3] != feature {
+    if frame[4] != feature {
         return Err(I2cError::Protocol {
             detail: format!(
                 "reply carries feature 0x{:02x}, expected 0x{feature:02x}",
-                frame[3]
+                frame[4]
             ),
         });
     }
-    match frame[4] {
+    match frame[3] {
         0x00 => {}
         0x01 => {
             return Err(I2cError::Protocol {
@@ -382,8 +396,8 @@ fn parse_get_vcp_reply(feature: u8, frame: &[u8; REPLY_LEN]) -> Result<(u16, u16
         }
     }
     Ok((
-        u16::from_be_bytes([frame[5], frame[6]]),
-        u16::from_be_bytes([frame[7], frame[8]]),
+        u16::from_be_bytes([frame[8], frame[9]]),
+        u16::from_be_bytes([frame[6], frame[7]]),
     ))
 }
 
@@ -395,6 +409,12 @@ fn percent_from_raw(current: u16, max: u16) -> Result<u8, I2cError> {
     }
     let percent = u32::from(current) * 100 / u32::from(max);
     Ok(percent.min(100) as u8)
+}
+
+impl<T: I2cTransport> DdcStatus for I2cDdcBackend<T> {
+    fn writes_dropped(&self, connector: &str) -> bool {
+        self.writes_dropped(connector)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -616,7 +636,12 @@ mod tests {
                 return Err(failure.to_i2c_error());
             }
             monitor.frames_written.push(frame.to_vec());
-            if checksum(frame) != 0 {
+            if frame[1] != LENGTH_GET && frame[1] != LENGTH_SET {
+                return Err(I2cError::Protocol {
+                    detail: "request carries an unknown DDC/CI length byte".into(),
+                });
+            }
+            if xor_checksum(MONITOR_ADDRESS, &frame[..frame.len() - 1]) != frame[frame.len() - 1] {
                 return Err(I2cError::Protocol {
                     detail: "request checksum mismatch".into(),
                 });
@@ -631,14 +656,14 @@ mod tests {
                 OP_GET_VCP => {
                     let mut reply = [0u8; REPLY_LEN];
                     reply[0] = MONITOR_ADDRESS;
-                    reply[1] = HOST_ADDRESS;
+                    reply[1] = LENGTH_REPLY;
                     reply[2] = OP_GET_VCP_REPLY;
-                    reply[3] = frame[3];
-                    reply[5] = (monitor.current >> 8) as u8;
-                    reply[6] = monitor.current as u8;
-                    reply[7] = (monitor.max >> 8) as u8;
-                    reply[8] = monitor.max as u8;
-                    reply[9] = checksum(&reply[..9]);
+                    reply[4] = frame[3];
+                    reply[6] = (monitor.max >> 8) as u8;
+                    reply[7] = monitor.max as u8;
+                    reply[8] = (monitor.current >> 8) as u8;
+                    reply[9] = monitor.current as u8;
+                    reply[10] = xor_checksum(REPLY_VIRTUAL_HOST, &reply[1..10]);
                     monitor.pending_reply = Some(reply.to_vec());
                 }
                 _ => {
@@ -690,26 +715,27 @@ mod tests {
             sysfs,
             Duration::ZERO,
             Duration::ZERO,
+            Duration::ZERO,
         )
     }
 
     #[test]
-    fn get_vcp_request_carries_host_monitor_opcode_feature_and_checksum() {
+    fn get_vcp_request_matches_the_canonical_ddc_ci_bytes() {
         assert_eq!(
             get_vcp_request(FEATURE_BRIGHTNESS),
-            [0x51, 0x6e, 0x01, 0x10, 0x30]
+            [0x51, 0x82, 0x01, 0x10, 0xac]
         );
     }
 
     #[test]
-    fn set_vcp_request_carries_the_raw_value_and_checksum() {
+    fn set_vcp_request_matches_the_canonical_ddc_ci_bytes() {
         assert_eq!(
-            set_vcp_request(FEATURE_BRIGHTNESS, 50),
-            [0x51, 0x6e, 0x03, 0x10, 0x00, 0x32, 0xfc]
+            set_vcp_request(FEATURE_BRIGHTNESS, 0x0032),
+            [0x51, 0x84, 0x03, 0x10, 0x00, 0x32, 0x9a]
         );
         assert_eq!(
             set_vcp_request(FEATURE_BRIGHTNESS, 500),
-            [0x51, 0x6e, 0x03, 0x10, 0x01, 0xf4, 0x39]
+            [0x51, 0x84, 0x03, 0x10, 0x01, 0xf4, 0x5d]
         );
     }
 
@@ -717,37 +743,45 @@ mod tests {
     fn parse_get_vcp_reply_accepts_a_valid_frame_and_rejects_corruption() {
         let mut frame = [0u8; REPLY_LEN];
         frame[0] = MONITOR_ADDRESS;
-        frame[1] = HOST_ADDRESS;
+        frame[1] = LENGTH_REPLY;
         frame[2] = OP_GET_VCP_REPLY;
-        frame[3] = FEATURE_BRIGHTNESS;
-        frame[5] = 0x01;
-        frame[6] = 0xf4;
-        frame[7] = 0x03;
-        frame[8] = 0xe8;
-        frame[9] = checksum(&frame[..9]);
+        frame[4] = FEATURE_BRIGHTNESS;
+        frame[6] = 0x03;
+        frame[7] = 0xe8;
+        frame[8] = 0x01;
+        frame[9] = 0xf4;
+        frame[10] = xor_checksum(REPLY_VIRTUAL_HOST, &frame[1..10]);
         assert_eq!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &frame).unwrap(),
             (500, 1000)
         );
 
         let mut bad_checksum = frame;
-        bad_checksum[9] = bad_checksum[9].wrapping_add(1);
+        bad_checksum[10] = bad_checksum[10].wrapping_add(1);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &bad_checksum),
             Err(I2cError::Protocol { .. })
         ));
 
+        let mut wrong_length = frame;
+        wrong_length[1] = LENGTH_GET;
+        wrong_length[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_length[1..10]);
+        assert!(matches!(
+            parse_get_vcp_reply(FEATURE_BRIGHTNESS, &wrong_length),
+            Err(I2cError::Protocol { .. })
+        ));
+
         let mut wrong_feature = frame;
-        wrong_feature[3] = 0x12;
-        wrong_feature[9] = checksum(&wrong_feature[..9]);
+        wrong_feature[4] = 0x12;
+        wrong_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &wrong_feature[1..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &wrong_feature),
             Err(I2cError::Protocol { .. })
         ));
 
         let mut unsupported_feature = frame;
-        unsupported_feature[4] = 0x01;
-        unsupported_feature[9] = checksum(&unsupported_feature[..9]);
+        unsupported_feature[3] = 0x01;
+        unsupported_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &unsupported_feature[1..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &unsupported_feature),
             Err(I2cError::Protocol { .. })
@@ -815,7 +849,7 @@ mod tests {
         );
         assert_eq!(
             monitor.frames_written[1].as_slice(),
-            &[0x51, 0x6e, 0x03, 0x10, 0x01, 0xf4, 0x39]
+            &[0x51, 0x84, 0x03, 0x10, 0x01, 0xf4, 0x5d]
         );
     }
 
@@ -932,6 +966,7 @@ mod tests {
                 sysfs.path().to_path_buf(),
                 Duration::ZERO,
                 Duration::ZERO,
+                Duration::ZERO,
             );
             let error = backend.get_brightness(&handle()).unwrap_err();
             match error {
@@ -951,6 +986,7 @@ mod tests {
         let backend = I2cDdcBackend::with_timing(
             transport,
             sysfs.path().to_path_buf(),
+            Duration::ZERO,
             Duration::ZERO,
             Duration::ZERO,
         );
@@ -977,5 +1013,18 @@ mod tests {
         backend.get_brightness(&handle()).unwrap();
         let monitor = backend.transport.monitor.lock().unwrap();
         assert_eq!(monitor.opens, vec!["/dev/i2c-3".to_string()]);
+    }
+
+    #[test]
+    fn resolution_falls_back_to_the_lowest_numeric_adapter_number() {
+        let sysfs = sysfs_with_links(&[("i2c-9", "aux"), ("i2c-10", "aux"), ("i2c-3", "aux")]);
+        let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
+        backend.get_brightness(&handle()).unwrap();
+        let monitor = backend.transport.monitor.lock().unwrap();
+        assert_eq!(
+            monitor.opens,
+            vec!["/dev/i2c-3".to_string()],
+            "i2c-10 must not sort before i2c-3 lexicographically"
+        );
     }
 }

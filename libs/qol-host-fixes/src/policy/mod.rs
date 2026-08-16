@@ -7,6 +7,8 @@ pub(crate) mod lock;
 mod platform;
 pub mod trace;
 
+pub use lock::PolicyLockGuard;
+
 pub(crate) use journal::recover_stage;
 pub use journal::{
     new_session_id, validate_journal_invariants, JournalFileIdentity, JournalPayload,
@@ -349,6 +351,10 @@ pub fn read_journal(policy: &str) -> Result<Option<PolicyJournal>> {
 
 pub fn restore_journal(policy: &str) -> Result<RestoreOutcome> {
     journal::restore::<PolicyPayload>(policy)
+}
+
+pub fn acquire_policy_lock(policy: &ResidentPolicy) -> Result<PolicyLockGuard> {
+    lock::acquire(policy)
 }
 
 fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {

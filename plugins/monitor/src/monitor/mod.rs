@@ -2,9 +2,14 @@ use std::fmt;
 
 pub mod backends;
 pub mod grant;
+pub mod policy;
 
 pub use backends::i2c_ddc::I2cError;
+#[cfg(target_os = "linux")]
+pub use backends::x11_randr_gamma::X11GammaTransport;
+pub use backends::x11_randr_gamma::{GammaBackend, GammaError, GammaTable};
 pub use grant::{GrantBackend, GrantError, I2cGrantState, RevokeOutcome, UdevGrantBackend};
+pub use policy::{BrightnessPolicy, DdcStatus, PolicyControl};
 
 use qol_windowing::display::{DisplayError, DisplayHandle};
 use qol_windowing::DisplayEnumerator;
@@ -72,6 +77,10 @@ pub enum MonitorError {
         capability: &'static str,
         reason: String,
     },
+    Refused {
+        capability: &'static str,
+        reason: String,
+    },
     DisplayNotFound(String),
     Display(DisplayError),
     I2c(I2cError),
@@ -84,6 +93,13 @@ impl MonitorError {
             reason: reason.into(),
         }
     }
+
+    pub fn refused(capability: &'static str, reason: impl Into<String>) -> Self {
+        Self::Refused {
+            capability,
+            reason: reason.into(),
+        }
+    }
 }
 
 impl fmt::Display for MonitorError {
@@ -91,6 +107,9 @@ impl fmt::Display for MonitorError {
         match self {
             Self::Unsupported { capability, reason } => {
                 write!(f, "{capability} control is unsupported: {reason}")
+            }
+            Self::Refused { capability, reason } => {
+                write!(f, "{capability} control is refused: {reason}")
             }
             Self::DisplayNotFound(selector) => {
                 write!(f, "no display matches `{selector}`")
@@ -105,7 +124,10 @@ impl std::error::Error for MonitorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Display(error) => Some(error),
-            Self::Unsupported { .. } | Self::DisplayNotFound(_) | Self::I2c(_) => None,
+            Self::Unsupported { .. }
+            | Self::Refused { .. }
+            | Self::DisplayNotFound(_)
+            | Self::I2c(_) => None,
         }
     }
 }
@@ -138,6 +160,19 @@ pub trait DisplayControl: Send + Sync {
     fn set_hdr(&self, handle: &DisplayHandle, enabled: bool) -> Result<(), MonitorError>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    Restored,
+    NothingToRestore,
+    ForeignLutPreserved,
+}
+
+pub trait GammaStateControl: Send + Sync {
+    fn mismatch_count(&self, handle: &DisplayHandle) -> usize;
+    fn warned(&self, handle: &DisplayHandle) -> bool;
+    fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError>;
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StubControl;
 
@@ -150,7 +185,6 @@ impl DisplayControl for StubControl {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
         Ok(qol_windowing::Platform.enumerate()?)
     }
-
     fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
         Ok(DisplayCapabilities::none())
     }
@@ -185,6 +219,20 @@ impl DisplayControl for StubControl {
 
     fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
         Err(MonitorError::unsupported("hdr", HDR_REASON))
+    }
+}
+
+impl GammaStateControl for StubControl {
+    fn mismatch_count(&self, _handle: &DisplayHandle) -> usize {
+        0
+    }
+
+    fn warned(&self, _handle: &DisplayHandle) -> bool {
+        false
+    }
+
+    fn restore(&self, _handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
+        Ok(RestoreOutcome::NothingToRestore)
     }
 }
 
@@ -284,6 +332,15 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "modes control is unsupported: mode control lands in a later phase"
+        );
+    }
+
+    #[test]
+    fn refused_error_renders_the_capability_and_reason() {
+        let error = MonitorError::refused("brightness", "control is off for this display");
+        assert_eq!(
+            error.to_string(),
+            "brightness control is refused: control is off for this display"
         );
     }
 
