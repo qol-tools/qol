@@ -491,7 +491,8 @@ mod iokit {
     const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
     const K_CF_COMPARE_EQUAL: isize = 0;
-    const K_CF_NUMBER_SINT32: isize = 3;
+    const K_IOREGISTRY_ITERATE_RECURSIVELY: u32 = 1;
+    const K_CF_NUMBER_SINT64: isize = 4;
 
     type CreateWithServiceFn = unsafe extern "C" fn(u32, u32) -> *mut c_void;
     type WriteI2cFn = unsafe extern "C" fn(*mut c_void, u32, u32, *const u8, u32) -> i32;
@@ -503,12 +504,6 @@ mod iokit {
 
     #[link(name = "IOKit", kind = "framework")]
     extern "C" {
-        fn IOServiceMatching(name: *const c_char) -> *mut c_void;
-        fn IOServiceGetMatchingServices(
-            main_port: u32,
-            matching: *const c_void,
-            existing: *mut u32,
-        ) -> i32;
         fn IOIteratorNext(iterator: u32) -> u32;
         fn IORegistryEntryCreateCFProperty(
             entry: u32,
@@ -516,17 +511,19 @@ mod iokit {
             allocator: *const c_void,
             options: u32,
         ) -> *const c_void;
-        fn IORegistryEntryGetChildIterator(
-            entry: u32,
-            plane: *const c_char,
-            iterator: *mut u32,
-        ) -> i32;
         fn IORegistryEntryGetParentIterator(
             entry: u32,
             plane: *const c_char,
             iterator: *mut u32,
         ) -> i32;
         fn IORegistryEntryGetName(entry: u32, name: *mut c_char) -> i32;
+        fn IORegistryGetRootEntry(main_port: u32) -> u32;
+        fn IORegistryEntryCreateIterator(
+            entry: u32,
+            plane: *const c_char,
+            options: u32,
+            iterator: *mut u32,
+        ) -> i32;
         fn IOObjectRelease(object: u32) -> i32;
     }
 
@@ -547,6 +544,9 @@ mod iokit {
         fn CFDictionaryGetValue(the_dict: *const c_void, key: *const c_void) -> *const c_void;
         fn CFNumberGetValue(number: *const c_void, the_type: isize, value_ptr: *mut c_void) -> u8;
         fn CFRelease(value: *const c_void);
+        fn CFGetTypeID(value: *const c_void) -> usize;
+        fn CFStringGetTypeID() -> usize;
+        fn CFNumberGetTypeID() -> usize;
     }
 
     fn cf_string(text: *const c_char) -> *const c_void {
@@ -554,7 +554,7 @@ mod iokit {
     }
 
     fn cf_string_contents(value: *const c_void) -> Option<String> {
-        if value.is_null() {
+        if value.is_null() || unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
             return None;
         }
         let mut buffer = [0i8; 128];
@@ -611,52 +611,36 @@ mod iokit {
             return None;
         }
         let manufacturer = unsafe { CFDictionaryGetValue(product, manufacturer_key) };
-        let vendor = pnp_to_vendor_id(&cf_string_contents(manufacturer)?);
-        let product_id_value = unsafe { CFDictionaryGetValue(product, product_key) };
-        let mut product_id: i32 = 0;
-        if product_id_value.is_null()
-            || unsafe {
-                CFNumberGetValue(
-                    product_id_value,
-                    K_CF_NUMBER_SINT32,
-                    &mut product_id as *mut i32 as *mut c_void,
-                )
-            } == 0
-        {
-            unsafe { CFRelease(attributes) };
-            return None;
-        }
-        let serial_value = unsafe { CFDictionaryGetValue(product, serial_key) };
-        let serial = parse_serial(&cf_string_contents(serial_value)?)?;
+        let vendor = cf_string_contents(manufacturer).map(|pnp| pnp_to_vendor_id(&pnp));
+        let product_id = cf_u32_contents(unsafe { CFDictionaryGetValue(product, product_key) });
+        let serial = cf_u32_contents(unsafe { CFDictionaryGetValue(product, serial_key) });
         unsafe { CFRelease(attributes) };
         Some(DisplayIdentity {
-            vendor,
-            model: product_id as u32,
-            serial,
+            vendor: vendor?,
+            model: product_id?,
+            serial: serial?,
         })
     }
 
-    fn child_named(entry: u32, name: &str) -> Option<u32> {
-        let mut iterator = 0u32;
-        let result =
-            unsafe { IORegistryEntryGetChildIterator(entry, c"IOService".as_ptr(), &mut iterator) };
-        if result != 0 || iterator == 0 {
+    fn cf_u32_contents(value: *const c_void) -> Option<u32> {
+        if value.is_null() {
             return None;
         }
-        let mut found = None;
-        loop {
-            let child = unsafe { IOIteratorNext(iterator) };
-            if child == 0 {
-                break;
+        if unsafe { CFGetTypeID(value) } == unsafe { CFNumberGetTypeID() } {
+            let mut number: i64 = 0;
+            let ok = unsafe {
+                CFNumberGetValue(
+                    value,
+                    K_CF_NUMBER_SINT64,
+                    &mut number as *mut i64 as *mut c_void,
+                )
+            };
+            if ok == 0 {
+                return None;
             }
-            if entry_name(child).as_deref() == Some(name) {
-                found = Some(child);
-                break;
-            }
-            unsafe { IOObjectRelease(child) };
+            return u32::try_from(number).ok();
         }
-        unsafe { IOObjectRelease(iterator) };
-        found
+        parse_serial(&cf_string_contents(value)?)
     }
 
     fn transport_class(proxy: u32, epic_key: *const c_void) -> TransportClass {
@@ -748,56 +732,68 @@ mod iokit {
             let serial_key = cf_string(c"SerialNumber".as_ptr());
             let epic_key = cf_string(c"EPICProviderClass".as_ptr());
             let mut services = Vec::new();
-            for class in ["AppleCLCD2", "IOMobileFramebufferShim"] {
-                let c_class = std::ffi::CString::new(class).map_err(|_| AvError::Unsupported {
-                    detail: format!("{class} is not a valid registry class name"),
-                })?;
-                let matching = unsafe { IOServiceMatching(c_class.as_ptr()) };
-                if matching.is_null() {
-                    continue;
+            let root = unsafe { IORegistryGetRootEntry(0) };
+            let mut iterator = 0u32;
+            let result = unsafe {
+                IORegistryEntryCreateIterator(
+                    root,
+                    c"IOService".as_ptr(),
+                    K_IOREGISTRY_ITERATE_RECURSIVELY,
+                    &mut iterator,
+                )
+            };
+            if result != 0 || iterator == 0 {
+                unsafe { IOObjectRelease(root) };
+                return Err(AvError::Unsupported {
+                    detail: format!("io registry iteration failed with code {result}"),
+                });
+            }
+            let mut pending_identity: Option<DisplayIdentity> = None;
+            loop {
+                let entry = unsafe { IOIteratorNext(iterator) };
+                if entry == 0 {
+                    break;
                 }
-                let mut iterator = 0u32;
-                let result = unsafe { IOServiceGetMatchingServices(0, matching, &mut iterator) };
-                if result != 0 || iterator == 0 {
-                    continue;
-                }
-                loop {
-                    let entry = unsafe { IOIteratorNext(iterator) };
-                    if entry == 0 {
-                        break;
+                match entry_name(entry).as_deref() {
+                    Some("AppleCLCD2") | Some("IOMobileFramebufferShim") => {
+                        pending_identity = product_identity(
+                            entry,
+                            display_attributes_key,
+                            product_attributes_key,
+                            manufacturer_key,
+                            product_key,
+                            serial_key,
+                        );
                     }
-                    if let Some(identity) = product_identity(
-                        entry,
-                        display_attributes_key,
-                        product_attributes_key,
-                        manufacturer_key,
-                        product_key,
-                        serial_key,
-                    ) {
-                        if let Some(proxy) = child_named(entry, "DCPAVServiceProxy") {
-                            let location = registry_property(proxy, location_key);
-                            let is_external = location.is_some_and(|property| unsafe {
-                                CFStringCompare(property, external, 0) == K_CF_COMPARE_EQUAL
-                            });
-                            if let Some(property) = location {
-                                unsafe { CFRelease(property) };
-                            }
-                            if is_external {
-                                let service = unsafe { create_with_service(0, proxy) };
+                    Some("DCPAVServiceProxy") => {
+                        let location = registry_property(entry, location_key);
+                        let is_external = location.is_some_and(|property| unsafe {
+                            CFStringCompare(property, external, 0) == K_CF_COMPARE_EQUAL
+                        });
+                        if let Some(property) = location {
+                            unsafe { CFRelease(property) };
+                        }
+                        if is_external {
+                            if let Some(identity) = pending_identity {
+                                let service = unsafe { create_with_service(0, entry) };
                                 if !service.is_null() {
                                     services.push(AvServiceInfo {
                                         service: AvService::new(service),
                                         identity,
-                                        transport_class: transport_class(proxy, epic_key),
+                                        transport_class: transport_class(entry, epic_key),
                                     });
                                 }
                             }
-                            unsafe { IOObjectRelease(proxy) };
                         }
+                        pending_identity = None;
                     }
-                    unsafe { IOObjectRelease(entry) };
+                    _ => {}
                 }
-                unsafe { IOObjectRelease(iterator) };
+                unsafe { IOObjectRelease(entry) };
+            }
+            unsafe {
+                IOObjectRelease(iterator);
+                IOObjectRelease(root);
             }
             unsafe {
                 CFRelease(location_key);

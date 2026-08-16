@@ -300,6 +300,7 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    fn CGDisplayGammaTableCapacity(display: u32) -> u32;
     fn CGGetDisplayTransferByTable(
         display: u32,
         capacity: u32,
@@ -323,18 +324,8 @@ pub struct CoreGraphicsSeam;
 #[cfg(target_os = "macos")]
 impl CgGammaSeam for CoreGraphicsSeam {
     fn read_table(&self, display_id: u32) -> Option<GammaTable> {
-        let mut sample_count = 0u32;
-        let error = unsafe {
-            CGGetDisplayTransferByTable(
-                display_id,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut sample_count,
-            )
-        };
-        if error != 0 || sample_count == 0 {
+        let mut sample_count = unsafe { CGDisplayGammaTableCapacity(display_id) };
+        if sample_count == 0 {
             return None;
         }
         let mut red = vec![0f32; sample_count as usize];
