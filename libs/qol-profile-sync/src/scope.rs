@@ -46,8 +46,56 @@ pub fn is_sync_allowlisted(rel: &Path) -> bool {
     }
 }
 
-pub fn device_local_dir(profile: &str, namespace: &str) -> PathBuf {
-    Path::new(profile).join(DEVICE_SUBDIR).join(namespace)
+/// Error from [`device_local_dir`] when a profile name or namespace cannot
+/// be safely mapped under the profile root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceLocalDirError {
+    /// The profile or namespace was empty, or contained an empty component.
+    Empty,
+    /// The profile or namespace was absolute.
+    Absolute,
+    /// The profile or namespace escapes the profile root through `..`.
+    ParentDir,
+}
+
+impl std::fmt::Display for DeviceLocalDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceLocalDirError::Empty => write!(f, "profile or namespace is empty"),
+            DeviceLocalDirError::Absolute => {
+                write!(f, "profile or namespace must be relative")
+            }
+            DeviceLocalDirError::ParentDir => {
+                write!(f, "profile or namespace must stay under the profile root")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DeviceLocalDirError {}
+
+/// Directory under `<profile>/device/` for machine-local state that must
+/// never sync. The namespace is validated: it must be relative, contain no
+/// `..` component, and have no empty components, so the result always stays
+/// under the profile root.
+pub fn device_local_dir(profile: &str, namespace: &str) -> Result<PathBuf, DeviceLocalDirError> {
+    validate_path(profile)?;
+    validate_path(namespace)?;
+    Ok(Path::new(profile).join(DEVICE_SUBDIR).join(namespace))
+}
+
+fn validate_path(value: &str) -> Result<(), DeviceLocalDirError> {
+    if value.is_empty() || value.split(['/', '\\']).any(|p| p.is_empty()) {
+        return Err(DeviceLocalDirError::Empty);
+    }
+    for component in Path::new(value).components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => return Err(DeviceLocalDirError::ParentDir),
+            Component::RootDir | Component::Prefix(_) => return Err(DeviceLocalDirError::Absolute),
+        }
+    }
+    Ok(())
 }
 
 /// Files that participate in field-level merging: allowlisted JSON outside
@@ -109,7 +157,7 @@ mod tests {
     fn device_local_dir_is_never_sync_allowlisted() {
         let namespaces = ["shortcuts", "window-actions", "a/b/nested"];
         for ns in namespaces {
-            let dir = device_local_dir("default", ns);
+            let dir = device_local_dir("default", ns).unwrap();
             assert!(!is_sync_allowlisted(&dir), "must reject dir: {dir:?}");
             assert!(
                 !is_sync_allowlisted(&dir.join("layout.json")),
@@ -127,7 +175,7 @@ mod tests {
     #[test]
     fn device_local_dir_round_trips_through_components_and_strings() {
         for (profile, ns) in [("default", "shortcuts"), ("work", "window-actions")] {
-            let dir = device_local_dir(profile, ns);
+            let dir = device_local_dir(profile, ns).unwrap();
             assert_eq!(dir, Path::new(profile).join("device").join(ns));
             let s = dir.to_string_lossy().into_owned();
             let reparsed = Path::new(&s);
@@ -138,6 +186,39 @@ mod tests {
             assert_eq!(
                 dir.join("layout.json").to_string_lossy(),
                 format!("{profile}/device/{ns}/layout.json")
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_dir_rejects_unsafe_namespaces() {
+        let bad = ["", "..", "../up", "a/../b", "/abs", "a/", "a//b"];
+        for ns in bad {
+            assert!(
+                device_local_dir("default", ns).is_err(),
+                "must reject namespace: {ns:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_dir_rejects_unsafe_profiles() {
+        let bad = ["", "..", "../up", "/abs", "a/.."];
+        for profile in bad {
+            assert!(
+                device_local_dir(profile, "shortcuts").is_err(),
+                "must reject profile: {profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_dir_stays_under_profile_root() {
+        for (profile, ns) in [("default", "shortcuts"), ("work", "a/b/nested")] {
+            let dir = device_local_dir(profile, ns).unwrap();
+            assert!(
+                dir.starts_with(profile),
+                "must stay under profile root: {dir:?}"
             );
         }
     }

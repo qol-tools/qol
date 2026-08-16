@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use super::DisplayEnumerator;
 use crate::display::{DisplayError, DisplayHandle};
 
+const BASE_EDID_BYTES: usize = 128;
+
 pub struct Platform;
 
 impl DisplayEnumerator for Platform {
@@ -29,8 +31,13 @@ fn enumerate_from(root: &Path) -> Result<Vec<DisplayHandle>, DisplayError> {
         }
         let (id, edid_sha256, identity_unstable) = match std::fs::read(entry.path().join("edid")) {
             Ok(edid) => {
-                let digest: [u8; 32] = Sha256::digest(&edid).into();
-                (hex(&digest), Some(digest), false)
+                let base = &edid[..edid.len().min(BASE_EDID_BYTES)];
+                let digest: [u8; 32] = Sha256::digest(base).into();
+                let mut hasher = Sha256::new();
+                hasher.update(connector.as_bytes());
+                hasher.update(base);
+                let bound: [u8; 32] = hasher.finalize().into();
+                (hex(&bound), Some(digest), false)
             }
             Err(_) => (
                 hex(&Sha256::digest(connector.as_bytes()).into()),
@@ -54,7 +61,7 @@ fn connector_from_sys_name(name: &str) -> Option<String> {
     if !card.starts_with("card") {
         return None;
     }
-    (!connector.is_empty()).then(|| connector.to_string())
+    (!connector.is_empty()).then(|| name.to_string())
 }
 
 fn hex(bytes: &[u8; 32]) -> String {
@@ -68,18 +75,18 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn connector_from_sys_name_extracts_connector() {
+    fn connector_from_sys_name_keeps_card_prefix() {
         assert_eq!(
             connector_from_sys_name("card0-DP-1").as_deref(),
-            Some("DP-1")
+            Some("card0-DP-1")
         );
         assert_eq!(
             connector_from_sys_name("card1-HDMI-A-1").as_deref(),
-            Some("HDMI-A-1")
+            Some("card1-HDMI-A-1")
         );
         assert_eq!(
             connector_from_sys_name("card0-eDP-1").as_deref(),
-            Some("eDP-1")
+            Some("card0-eDP-1")
         );
         assert_eq!(connector_from_sys_name("card0"), None);
         assert_eq!(connector_from_sys_name("card0-"), None);
@@ -96,11 +103,64 @@ mod tests {
 
         let handles = enumerate_from(dir.path()).unwrap();
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].connector(), "DP-1");
+        assert_eq!(handles[0].connector(), "card0-DP-1");
         assert!(!handles[0].identity_unstable());
         let digest: [u8; 32] = Sha256::digest(&edid).into();
         assert_eq!(handles[0].edid_sha256(), Some(digest));
-        assert_eq!(handles[0].id(), hex(&digest));
+        let mut hasher = Sha256::new();
+        hasher.update(b"card0-DP-1");
+        hasher.update(&edid);
+        let bound: [u8; 32] = hasher.finalize().into();
+        assert_eq!(handles[0].id(), hex(&bound));
+    }
+
+    #[test]
+    fn identical_edids_on_different_connectors_diverge() {
+        let dir = tempdir().unwrap();
+        for name in ["card0-DP-1", "card0-DP-2"] {
+            let connector_dir = dir.path().join(name);
+            fs::create_dir(&connector_dir).unwrap();
+            fs::write(connector_dir.join("status"), "connected\n").unwrap();
+            fs::write(connector_dir.join("edid"), [0x42; 128]).unwrap();
+        }
+
+        let handles = enumerate_from(dir.path()).unwrap();
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handles[0].edid_sha256(), handles[1].edid_sha256());
+        assert_ne!(handles[0].id(), handles[1].id());
+    }
+
+    #[test]
+    fn identical_edids_on_different_cards_diverge() {
+        let dir = tempdir().unwrap();
+        for name in ["card0-DP-1", "card1-DP-1"] {
+            let connector_dir = dir.path().join(name);
+            fs::create_dir(&connector_dir).unwrap();
+            fs::write(connector_dir.join("status"), "connected\n").unwrap();
+            fs::write(connector_dir.join("edid"), [0x42; 128]).unwrap();
+        }
+
+        let handles = enumerate_from(dir.path()).unwrap();
+        assert_eq!(handles.len(), 2);
+        assert_eq!(handles[0].edid_sha256(), handles[1].edid_sha256());
+        assert_ne!(handles[0].id(), handles[1].id());
+    }
+
+    #[test]
+    fn identity_ignores_edid_extension_blocks() {
+        let dir = tempdir().unwrap();
+        let connector_dir = dir.path().join("card0-DP-1");
+        fs::create_dir(&connector_dir).unwrap();
+        fs::write(connector_dir.join("status"), "connected\n").unwrap();
+        fs::write(connector_dir.join("edid"), [0x42; 256]).unwrap();
+
+        let handles = enumerate_from(dir.path()).unwrap();
+        let digest: [u8; 32] = Sha256::digest([0x42; 128]).into();
+        assert_eq!(handles[0].edid_sha256(), Some(digest));
+        let mut hasher = Sha256::new();
+        hasher.update(b"card0-DP-1");
+        hasher.update([0x42; 128]);
+        assert_eq!(handles[0].id(), hex(&hasher.finalize().into()));
     }
 
     #[test]
@@ -112,10 +172,10 @@ mod tests {
 
         let handles = enumerate_from(dir.path()).unwrap();
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].connector(), "DP-1");
+        assert_eq!(handles[0].connector(), "card0-DP-1");
         assert!(handles[0].identity_unstable());
         assert_eq!(handles[0].edid_sha256(), None);
-        let digest: [u8; 32] = Sha256::digest(b"DP-1").into();
+        let digest: [u8; 32] = Sha256::digest(b"card0-DP-1").into();
         assert_eq!(handles[0].id(), hex(&digest));
     }
 
@@ -135,7 +195,7 @@ mod tests {
 
         let handles = enumerate_from(dir.path()).unwrap();
         assert_eq!(handles.len(), 1);
-        assert_eq!(handles[0].connector(), "HDMI-A-1");
+        assert_eq!(handles[0].connector(), "card0-HDMI-A-1");
     }
 
     #[test]

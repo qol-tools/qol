@@ -65,7 +65,9 @@ pub use merge::{
 pub use migrate::repair_profile_schema;
 pub use promote::{promote_allowlisted_clone, promote_clone_git_dir, PromotionScope};
 pub use reconcile::reconcile;
-pub use scope::{device_local_dir, is_sync_allowlisted, mergeable_path, GITIGNORE_CONTENTS};
+pub use scope::{
+    device_local_dir, is_sync_allowlisted, mergeable_path, DeviceLocalDirError, GITIGNORE_CONTENTS,
+};
 pub use state::{
     backup_file_path, build_status, clear_sync_target, ensure_sync_dirs, filename_string,
     list_backup_entries, load_state_file, load_sync_target, load_toggles, now_rfc3339,
