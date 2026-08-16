@@ -3,6 +3,7 @@ pub mod cargo_build;
 pub mod core;
 mod fingerprint;
 mod fingerprint_store;
+pub mod freshness;
 pub mod planning;
 mod platform;
 pub mod registry;
@@ -12,7 +13,9 @@ pub mod tray;
 mod types;
 
 pub use cargo_build::{CargoChild, CargoCommandPluginBuilder};
+pub use fingerprint::fingerprint_plugin;
 pub use fingerprint_store::{load_build_fingerprints, save_build_fingerprints};
+pub use freshness::plugin_binary_exists;
 pub use planning::plan_linked_plugin_builds;
 pub use registry::dev_linked_paths;
 pub use service::{

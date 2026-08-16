@@ -63,6 +63,57 @@ mod cases {
     }
 
     #[test]
+    fn matching_fingerprint_with_missing_binary_forces_rebuild() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+                Platform.name()
+            ),
+        )
+        .unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
+        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+        let plans = plan_linked_plugin_builds(&links, &known, None);
+
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].needs_rebuild);
+        assert_eq!(plans[0].reason, "Binary missing");
+    }
+
+    #[test]
+    fn matching_fingerprint_with_present_binary_stays_fresh() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+                Platform.name()
+            ),
+        )
+        .unwrap();
+        let binary = plugin_dir.join("target").join("debug").join("plugin-a");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, "binary").unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
+        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+        let plans = plan_linked_plugin_builds(&links, &known, None);
+
+        assert_eq!(plans.len(), 1);
+        assert!(!plans[0].needs_rebuild);
+        assert_eq!(plans[0].reason, "Up to date");
+    }
+
+    #[test]
     fn path_dep_change_triggers_rebuild() {
         let tmp = TempDir::new().unwrap();
         let dep_dir = tmp.path().join("my-lib");

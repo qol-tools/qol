@@ -46,11 +46,16 @@ impl PlanBasis {
     }
 
     fn fingerprinted(self, current_fingerprint: String) -> PluginBuildPlan {
+        let binary_missing = !crate::freshness::plugin_binary_exists(&self.selection.path);
         let needs_rebuild = build_needed(
             self.last_built_fingerprint.as_deref(),
             current_fingerprint.as_str(),
+        ) || binary_missing;
+        let reason = build_reason(
+            self.last_built_fingerprint.as_deref(),
+            needs_rebuild,
+            binary_missing,
         );
-        let reason = build_reason(self.last_built_fingerprint.as_deref(), needs_rebuild);
         self.build_plan(true, true, needs_rebuild, Some(current_fingerprint), reason)
     }
 
@@ -91,9 +96,16 @@ fn build_needed(last_built_fingerprint: Option<&str>, current_fingerprint: &str)
         .unwrap_or(true)
 }
 
-fn build_reason(last_built_fingerprint: Option<&str>, needs_rebuild: bool) -> String {
+fn build_reason(
+    last_built_fingerprint: Option<&str>,
+    needs_rebuild: bool,
+    binary_missing: bool,
+) -> String {
     if !needs_rebuild {
         return "Up to date".to_string();
+    }
+    if binary_missing {
+        return "Binary missing".to_string();
     }
     if last_built_fingerprint.is_some() {
         return "Source changed".to_string();

@@ -435,12 +435,12 @@ mod dev_reload_reconciles_via_config_changed_signal {
     use super::read_src;
 
     #[test]
-    fn dev_reload_emits_plugins_signal_and_keeps_plugins_changed() {
+    fn dev_reload_emits_plugins_signal_and_reloads_only_changed_plugins() {
         let src = read_src("features/plugin_store/server/dev_services/reload.rs");
         let expected_signals = [
-            "manager.reload_plugins()",
             "config_changed(ConfigKind::Plugins)",
             "send_plugins_changed()",
+            "manager.reload_plugin(",
         ];
         for signal in expected_signals {
             assert!(
@@ -449,6 +449,11 @@ mod dev_reload_reconciles_via_config_changed_signal {
                  same ConfigChanged{{Plugins}} bus as production plugin operations"
             );
         }
+        assert!(
+            !src.contains("manager.reload_plugins()"),
+            "dev reload must NOT full-reload the manager: up-to-date plugins must keep \
+             their daemons, only rebuilt plugins restart via the targeted reload_plugin path"
+        );
         assert!(
             !src.contains("trigger_full_sync_with_plugins"),
             "dev reload must NOT drive launcher sync directly anymore - the launcher \

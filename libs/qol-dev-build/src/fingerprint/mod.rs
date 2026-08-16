@@ -5,7 +5,7 @@ mod hash;
 mod inputs;
 mod path_deps;
 
-pub(crate) fn fingerprint_plugin(path: &Path) -> Result<String, String> {
+pub fn fingerprint_plugin(path: &Path) -> Result<String, String> {
     let mut cache = FingerprintCache::default();
     fingerprint_plugin_with_cache(path, &mut cache)
 }

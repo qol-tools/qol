@@ -122,17 +122,6 @@ pub(crate) fn run() -> Result<()> {
 
         owns_host_surface = true;
         log_binding_restore("startup", hotkeys::restore_desktop_bindings());
-
-        let startup_doctor = qol_tray::doctor::auto_fix_startup();
-        println!(
-            "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
-            startup_doctor.attempted,
-            startup_doctor.applied,
-            startup_doctor.failures.len(),
-            startup_doctor.after.count_ok(),
-            startup_doctor.after.count_warn(),
-            startup_doctor.after.count_error()
-        );
     }
 
     log::info!("Starting QoL Tray daemon...");
@@ -339,6 +328,11 @@ fn exec_shortcut(id: &str) -> i32 {
     0
 }
 
+fn run_startup_doctor() {
+    let report = qol_tray::doctor::auto_fix_startup();
+    println!("{}", qol_tray::doctor::startup_doctor_summary(&report));
+}
+
 /// Ask the running daemon to navigate an already-open UI tab to `route`.
 /// Returns true only when a tab was subscribed and the event was delivered;
 /// any connection error or `delivered:false` returns false so the caller
@@ -503,6 +497,9 @@ async fn async_init_inner(
         core_log_controls,
     )
     .await?;
+    if !shadow_generation && !rolling_restart {
+        run_startup_doctor();
+    }
     let generation_restart = shadow_generation || rolling_restart;
     let launch_pull_factory = if !shadow_generation && !rolling_restart {
         let sync_for_pull = Arc::clone(&sync_service);

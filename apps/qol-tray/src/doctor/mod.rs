@@ -124,6 +124,18 @@ pub fn auto_fix_startup() -> FixReport {
     report
 }
 
+pub fn startup_doctor_summary(report: &FixReport) -> String {
+    format!(
+        "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
+        report.attempted,
+        report.applied,
+        report.failures.len(),
+        report.after.count_ok(),
+        report.after.count_warn(),
+        report.after.count_error()
+    )
+}
+
 fn run_triggered_check(trigger: &trigger::Trigger) {
     if !is_known_check_id(&trigger.check_id) {
         log::warn!(
@@ -449,6 +461,57 @@ mod tests {
             summary.applied,
             summary.failures
         );
+    }
+
+    #[test]
+    fn startup_doctor_summary_reports_every_visible_counter() {
+        let cases = [
+            (0usize, 0usize, 0usize, 0usize, 0usize, 0usize),
+            (3, 2, 1, 12, 3, 1),
+            (1, 0, 1, 0, 0, 1),
+        ];
+        for (attempted, applied, failures, ok, warn, error) in cases {
+            let mut results = Vec::new();
+            for _ in 0..ok {
+                results.push(outcome_result(OutcomeStatus::Ok));
+            }
+            for _ in 0..warn {
+                results.push(outcome_result(OutcomeStatus::Warn));
+            }
+            for _ in 0..error {
+                results.push(outcome_result(OutcomeStatus::Error));
+            }
+            let report = FixReport {
+                attempted,
+                applied,
+                failures: vec![String::new(); failures],
+                after: report::report(results),
+                ..Default::default()
+            };
+            let summary = startup_doctor_summary(&report);
+            assert_eq!(
+                summary,
+                format!(
+                    "[doctor] startup summary: attempted={attempted}, applied={applied}, failures={failures}, ok={ok}, warn={warn}, error={error}"
+                ),
+                "attempted={attempted} applied={applied} failures={failures} ok={ok} warn={warn} error={error}"
+            );
+        }
+    }
+
+    fn outcome_result(status: OutcomeStatus) -> DoctorCheckResult {
+        DoctorCheckResult {
+            outcome: Outcome {
+                id: "stub".to_string(),
+                status,
+                message: "stub".to_string(),
+                fix_available: false,
+            },
+            issues: Vec::new(),
+            advice: Vec::new(),
+            fixes: Vec::new(),
+            duration: std::time::Duration::ZERO,
+        }
     }
 
     #[test]
