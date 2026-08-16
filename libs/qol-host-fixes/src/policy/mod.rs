@@ -26,12 +26,33 @@ pub const JOURNAL_FILE_MODE: u32 = 0o644;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
-    PlatformUnsupported { policy: String },
-    Busy { policy: String, detail: String },
-    LockFailure { policy: String, detail: String },
-    UnknownPolicy { policy: String },
-    JournalInvalid { policy: String, reason: String },
-    NotManaged { policy: String },
+    PlatformUnsupported {
+        policy: String,
+    },
+    Busy {
+        policy: String,
+        detail: String,
+    },
+    LockFailure {
+        policy: String,
+        detail: String,
+    },
+    UnknownPolicy {
+        policy: String,
+    },
+    JournalInvalid {
+        policy: String,
+        reason: String,
+    },
+    NotManaged {
+        policy: String,
+    },
+    RuleConflict {
+        policy: String,
+        path: String,
+        expected_sha256: String,
+        actual_sha256: String,
+    },
 }
 
 impl fmt::Display for PolicyError {
@@ -65,6 +86,17 @@ impl fmt::Display for PolicyError {
                 formatter,
                 "residency activation of `{policy}` requires a managed install; raw or portable \
                  artifacts cannot create resident state"
+            ),
+            Self::RuleConflict {
+                policy,
+                path,
+                expected_sha256,
+                actual_sha256,
+            } => write!(
+                formatter,
+                "residency policy `{policy}` conflicts with the rule at {path}: expected sha256 \
+                 {expected_sha256}, actual sha256 {actual_sha256}; remove or restore the file \
+                 manually, then retry"
             ),
         }
     }

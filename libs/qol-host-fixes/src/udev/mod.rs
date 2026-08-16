@@ -34,44 +34,93 @@ pub fn grant(owner: &ResidencyOwnerId) -> Result<()> {
     let policy = ResidentPolicy::from_id(UDEV_UACCESS_POLICY_ID)?;
     let _guard = crate::policy::lock::acquire(&policy)?;
     crate::policy::recover_stage::<crate::policy::PolicyPayload>(UDEV_UACCESS_POLICY_ID)?;
-    let session_id = match read_journal(UDEV_UACCESS_POLICY_ID)? {
+    match read_journal(UDEV_UACCESS_POLICY_ID)? {
         Some(journal) => match journal.state {
             JournalState::Active => {
-                return Err(PolicyError::Busy {
-                    policy: UDEV_UACCESS_POLICY_ID.to_string(),
-                    detail: "the uaccess grant is already active; revoke it first".to_string(),
+                let rule_content = plan_content(&journal.payload)?;
+                match rule_file_state(rule_content)? {
+                    RuleFileState::Canonical => Err(PolicyError::Busy {
+                        policy: UDEV_UACCESS_POLICY_ID.to_string(),
+                        detail: "the uaccess grant is already active; revoke it first".to_string(),
+                    }
+                    .into()),
+                    RuleFileState::Missing => {
+                        platform::grant(&rule_path(), rule_content).with_context(|| {
+                            format!("failed to apply the `{UDEV_UACCESS_POLICY_ID}` grant")
+                        })?;
+                        Ok(())
+                    }
+                    RuleFileState::Foreign { actual_sha256 } => {
+                        Err(rule_conflict_error(rule_content, &actual_sha256).into())
+                    }
                 }
-                .into());
             }
             JournalState::Preparing => {
                 let rule_content = plan_content(&journal.payload)?;
-                platform::grant(&rule_path(), rule_content).with_context(|| {
-                    format!("failed to apply the `{UDEV_UACCESS_POLICY_ID}` grant")
-                })?;
-                journal.session_id
+                ensure_rule_writable(rule_content)?;
+                apply_and_flip(rule_content, &journal.session_id)
             }
-            _ => {
-                return Err(PolicyError::Busy {
-                    policy: UDEV_UACCESS_POLICY_ID.to_string(),
-                    detail: "the uaccess grant is mid-release; revoke it first".to_string(),
-                }
-                .into());
+            _ => Err(PolicyError::Busy {
+                policy: UDEV_UACCESS_POLICY_ID.to_string(),
+                detail: "the uaccess grant is mid-release; revoke it first".to_string(),
             }
+            .into()),
         },
         None => {
+            ensure_rule_writable(RULE_CONTENT)?;
             let journal = preparing_journal(owner)?;
             write_journal_durable(&journal).with_context(|| {
                 format!("failed to record the `{UDEV_UACCESS_POLICY_ID}` grant")
             })?;
-            platform::grant(&rule_path(), RULE_CONTENT)
-                .with_context(|| format!("failed to apply the `{UDEV_UACCESS_POLICY_ID}` grant"))?;
-            journal.session_id
+            apply_and_flip(RULE_CONTENT, &journal.session_id)
         }
-    };
+    }
+}
+
+fn ensure_rule_writable(rule_content: &str) -> Result<()> {
+    match rule_file_state(rule_content)? {
+        RuleFileState::Foreign { actual_sha256 } => {
+            Err(rule_conflict_error(rule_content, &actual_sha256).into())
+        }
+        RuleFileState::Missing | RuleFileState::Canonical => Ok(()),
+    }
+}
+
+fn rule_conflict_error(expected: &str, actual_sha256: &str) -> PolicyError {
+    PolicyError::RuleConflict {
+        policy: UDEV_UACCESS_POLICY_ID.to_string(),
+        path: rule_path().display().to_string(),
+        expected_sha256: sha256_hex(expected),
+        actual_sha256: actual_sha256.to_string(),
+    }
+}
+
+fn apply_and_flip(rule_content: &str, session_id: &str) -> Result<()> {
+    platform::grant(&rule_path(), rule_content)
+        .with_context(|| format!("failed to apply the `{UDEV_UACCESS_POLICY_ID}` grant"))?;
     crash_point("udev-after-rule-apply")?;
-    flip_to_active(&session_id)?;
+    flip_to_active(session_id)?;
     crash_point("udev-after-flip-commit")?;
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuleFileState {
+    Missing,
+    Canonical,
+    Foreign { actual_sha256: String },
+}
+
+fn rule_file_state(expected: &str) -> Result<RuleFileState> {
+    match std::fs::read(rule_path()) {
+        Ok(bytes) if bytes == expected.as_bytes() => Ok(RuleFileState::Canonical),
+        Ok(bytes) => Ok(RuleFileState::Foreign {
+            actual_sha256: sha256_hex(&String::from_utf8_lossy(&bytes)),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(RuleFileState::Missing),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to read the uaccess rule {}", rule_path().display())),
+    }
 }
 
 pub fn revoke(owner: &ResidencyOwnerId) -> Result<RestoreOutcome> {
@@ -232,7 +281,7 @@ fn preparing_journal(owner: &ResidencyOwnerId) -> Result<PolicyJournal> {
     })
 }
 
-fn sha256_hex(content: &str) -> String {
+pub(crate) fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -1093,18 +1142,156 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn grant_refuses_to_resume_an_active_journal_whose_rule_vanished() {
-        let _env = TestEnv::new();
+    fn grant_resumes_an_active_journal_whose_rule_vanished() {
+        let env = TestEnv::new();
         grant(&owner()).unwrap();
         std::fs::remove_file(rule_path()).unwrap();
+        grant(&owner()).unwrap();
+        assert_eq!(
+            std::fs::read(rule_path()).unwrap(),
+            RULE_CONTENT.as_bytes(),
+            "the resumed grant must re-apply the exact rule"
+        );
+        let journal = read_journal(UDEV_UACCESS_POLICY_ID).unwrap().unwrap();
+        assert_eq!(journal.state, JournalState::Active);
+        let log = std::fs::read_to_string(&env.log_path).unwrap();
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            vec![
+                "control --reload",
+                "trigger --subsystem-match=i2c-dev",
+                "control --reload",
+                "trigger --subsystem-match=i2c-dev",
+            ],
+            "the resume must reload and trigger exactly once more"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn grant_refuses_an_active_journal_whose_rule_was_modified_and_preserves_it() {
+        let env = TestEnv::new();
+        grant(&owner()).unwrap();
+        std::fs::write(rule_path(), b"operator rule\n").unwrap();
         let error = grant(&owner()).unwrap_err();
-        assert!(format!("{error:#}").contains("already active"), "{error:#}");
+        let message = format!("{error:#}");
+        assert!(message.contains("expected sha256"), "{message}");
+        assert!(message.contains("actual sha256"), "{message}");
+        assert!(message.contains("remove or restore"), "{message}");
+        assert_eq!(
+            std::fs::read(rule_path()).unwrap(),
+            b"operator rule\n",
+            "the modified rule must survive the refused resume"
+        );
+        assert!(
+            read_journal(UDEV_UACCESS_POLICY_ID).unwrap().is_some(),
+            "the active journal must survive the refused resume"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&env.log_path)
+                .unwrap()
+                .lines()
+                .count(),
+            2,
+            "the refused resume must not re-run udevadm"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn grant_refuses_to_overwrite_a_modified_rule_and_preserves_it() {
+        let env = TestEnv::new();
+        std::fs::write(rule_path(), b"operator rule\n").unwrap();
+        let error = grant(&owner()).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("expected sha256"), "{message}");
+        assert!(message.contains("actual sha256"), "{message}");
+        assert!(message.contains("remove or restore"), "{message}");
+        assert!(
+            message.contains(rule_path().display().to_string().as_str()),
+            "{message}"
+        );
+        assert_eq!(
+            std::fs::read(rule_path()).unwrap(),
+            b"operator rule\n",
+            "the operator-modified rule must be preserved byte-for-byte"
+        );
+        assert!(
+            !env.log_path.exists(),
+            "no udevadm invocation may happen against a foreign rule"
+        );
+        assert!(
+            read_journal(UDEV_UACCESS_POLICY_ID).unwrap().is_none(),
+            "a refused fresh grant must not leave a journal behind"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn grant_over_an_identical_existing_rule_is_idempotent() {
+        let env = TestEnv::new();
+        std::fs::write(rule_path(), RULE_CONTENT.as_bytes()).unwrap();
+        grant(&owner()).unwrap();
+        assert_eq!(
+            std::fs::read(rule_path()).unwrap(),
+            RULE_CONTENT.as_bytes(),
+            "the idempotent grant must leave the exact rule in place"
+        );
+        let journal = read_journal(UDEV_UACCESS_POLICY_ID).unwrap().unwrap();
+        assert_eq!(journal.state, JournalState::Active);
+        let log = std::fs::read_to_string(&env.log_path).unwrap();
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            vec!["control --reload", "trigger --subsystem-match=i2c-dev"],
+            "the idempotent grant must still reload and trigger once"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restore_names_the_acl_package_when_getfacl_and_setfacl_are_missing() {
+        let env = TestEnv::new();
+        grant(&owner()).unwrap();
+        std::env::set_var("QOL_UDEV_SEAT_USER", "fakeuser");
+        let bin_dir = env.dir.path().join("bare-bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        for tool in ["sh", "rm", "cmp"] {
+            let resolved = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("command -v {tool}"))
+                .output()
+                .unwrap();
+            let target = String::from_utf8(resolved.stdout)
+                .unwrap()
+                .trim()
+                .to_string();
+            assert!(!target.is_empty(), "{tool} must exist on the host");
+            std::os::unix::fs::symlink(&target, bin_dir.join(tool)).unwrap();
+        }
+        let udevadm = bin_dir.join("udevadm");
+        std::fs::write(
+            &udevadm,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QOL_UDEVADM_LOG\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&udevadm).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&udevadm, permissions).unwrap();
+        let saved_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin_dir);
+        let error = restore_journal(UDEV_UACCESS_POLICY_ID).unwrap_err();
+        std::env::set_var("PATH", saved_path.unwrap_or_default());
+        let message = format!("{error:#}");
+        assert!(message.contains("getfacl"), "{message}");
+        assert!(message.contains("setfacl"), "{message}");
+        assert!(message.contains("acl package"), "{message}");
         assert!(
             !rule_path().exists(),
-            "the refused resume must not silently re-apply the rule"
+            "the rule is removed before the ACL sweep, so the retry is idempotent"
         );
-        let outcome = revoke(&owner()).unwrap();
-        assert_eq!(outcome, RestoreOutcome::Restored);
-        assert!(read_journal(UDEV_UACCESS_POLICY_ID).unwrap().is_none());
+        assert!(
+            read_journal(UDEV_UACCESS_POLICY_ID).unwrap().is_some(),
+            "the journal must survive the refused restore"
+        );
     }
 }

@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const GRANT_SCRIPT: &str = r#"set -eu
+if [ -e "$1" ] && ! printf '%s' "$2" | cmp -s - "$1"; then
+    echo "qol-udev: refusing to overwrite a modified rule at $1 (expected sha256 $3); remove or restore the file manually, then retry" >&2
+    exit 6
+fi
 tmp="$1.qol-$$"
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 printf '%s' "$2" > "$tmp"
@@ -31,8 +35,14 @@ fi
 
 acl_live=0
 if [ -n "$seat_users" ]; then
-    if ! command -v getfacl >/dev/null 2>&1; then
-        echo "qol-udev: refusing to revoke without getfacl to verify uaccess ACLs" >&2
+    missing_acl=
+    for tool in getfacl setfacl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_acl="${missing_acl:+$missing_acl }$tool"
+        fi
+    done
+    if [ -n "$missing_acl" ]; then
+        echo "qol-udev: refusing to revoke without $missing_acl (install the acl package); uaccess ACLs cannot be verified or dropped" >&2
         exit 5
     fi
     for node in "$i2c_dir"/i2c-*; do
@@ -64,7 +74,11 @@ pub(crate) fn rules_dir() -> PathBuf {
 }
 
 pub(crate) fn grant(rule_path: &Path, rule_content: &str) -> Result<()> {
-    let args = [rule_path.display().to_string(), rule_content.to_string()];
+    let args = [
+        rule_path.display().to_string(),
+        rule_content.to_string(),
+        super::super::sha256_hex(rule_content),
+    ];
     run_root("qol-udev-uaccess-grant", GRANT_SCRIPT, &args)
         .with_context(|| format!("failed to write the uaccess rule {}", rule_path.display()))
 }
