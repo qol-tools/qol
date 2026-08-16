@@ -202,7 +202,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "sandbox")]
+    #[cfg(all(feature = "sandbox", target_os = "linux"))]
     #[test]
     fn query_maps_a_real_status_error_to_unavailable() {
         let _serial = serialized_env_tests();
