@@ -20,10 +20,7 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 }
 
 fn app() -> HeadlessApp {
-    app_with(
-        crate::monitor::StubControl,
-        crate::monitor::UdevGrantBackend,
-    )
+    app_with(crate::platform::control(), crate::monitor::UdevGrantBackend)
 }
 
 fn app_with<C, G>(control: C, grant: G) -> HeadlessApp

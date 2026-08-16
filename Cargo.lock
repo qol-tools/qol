@@ -5880,6 +5880,7 @@ name = "plugin-monitor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "qol-apps",
  "qol-conventions",
  "qol-headless",
@@ -5887,6 +5888,7 @@ dependencies = [
  "qol-plugin-api",
  "qol-windowing",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

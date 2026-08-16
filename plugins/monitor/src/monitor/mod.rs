@@ -1,7 +1,9 @@
 use std::fmt;
 
+pub mod backends;
 pub mod grant;
 
+pub use backends::i2c_ddc::I2cError;
 pub use grant::{GrantBackend, GrantError, I2cGrantState, RevokeOutcome, UdevGrantBackend};
 
 use qol_windowing::display::{DisplayError, DisplayHandle};
@@ -68,15 +70,19 @@ pub struct HdrState {
 pub enum MonitorError {
     Unsupported {
         capability: &'static str,
-        reason: &'static str,
+        reason: String,
     },
     DisplayNotFound(String),
     Display(DisplayError),
+    I2c(I2cError),
 }
 
 impl MonitorError {
-    pub fn unsupported(capability: &'static str, reason: &'static str) -> Self {
-        Self::Unsupported { capability, reason }
+    pub fn unsupported(capability: &'static str, reason: impl Into<String>) -> Self {
+        Self::Unsupported {
+            capability,
+            reason: reason.into(),
+        }
     }
 }
 
@@ -84,12 +90,13 @@ impl fmt::Display for MonitorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported { capability, reason } => {
-                write!(f, "{capability} control is not implemented yet: {reason}")
+                write!(f, "{capability} control is unsupported: {reason}")
             }
             Self::DisplayNotFound(selector) => {
                 write!(f, "no display matches `{selector}`")
             }
             Self::Display(error) => write!(f, "display enumeration failed: {error}"),
+            Self::I2c(error) => write!(f, "{error}"),
         }
     }
 }
@@ -98,7 +105,7 @@ impl std::error::Error for MonitorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Display(error) => Some(error),
-            Self::Unsupported { .. } | Self::DisplayNotFound(_) => None,
+            Self::Unsupported { .. } | Self::DisplayNotFound(_) | Self::I2c(_) => None,
         }
     }
 }
@@ -106,6 +113,15 @@ impl std::error::Error for MonitorError {
 impl From<DisplayError> for MonitorError {
     fn from(error: DisplayError) -> Self {
         Self::Display(error)
+    }
+}
+
+impl From<I2cError> for MonitorError {
+    fn from(error: I2cError) -> Self {
+        match error {
+            I2cError::UnsupportedTransport { detail } => Self::unsupported("brightness", detail),
+            other => Self::I2c(other),
+        }
     }
 }
 
@@ -125,10 +141,10 @@ pub trait DisplayControl: Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StubControl;
 
-const BRIGHTNESS_REASON: &str = "the DDC and gamma backends land in later phases";
-const GAMMA_REASON: &str = "the gamma fallback lands in a later phase";
-const MODES_REASON: &str = "mode control lands in a later phase";
-const HDR_REASON: &str = "HDR control lands in a later phase";
+const BRIGHTNESS_REASON: &str = "the DDC and gamma backends are not implemented on this platform";
+pub(crate) const GAMMA_REASON: &str = "the gamma fallback lands in a later phase";
+pub(crate) const MODES_REASON: &str = "mode control lands in a later phase";
+pub(crate) const HDR_REASON: &str = "HDR control lands in a later phase";
 
 impl DisplayControl for StubControl {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
@@ -267,7 +283,7 @@ mod tests {
         let error = MonitorError::unsupported("modes", MODES_REASON);
         assert_eq!(
             error.to_string(),
-            "modes control is not implemented yet: mode control lands in a later phase"
+            "modes control is unsupported: mode control lands in a later phase"
         );
     }
 
