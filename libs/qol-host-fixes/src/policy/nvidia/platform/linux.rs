@@ -3,7 +3,7 @@ use super::super::{
     NvidiaPayload, PolicyStatusView,
 };
 use super::NvidiaPolicyBackend;
-use crate::policy::fail_next;
+use crate::policy::platform::fail_next;
 use crate::policy::{
     cli, journal, lock, managed, read_journal, JournalState, PolicyError, PolicyJournal,
     PolicyPayload, PolicyState, ReleaseFailure, ReleaseStage, ResidencyOwnerId, ResidentPolicy,
@@ -177,7 +177,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
             }
             .into());
         }
-        journal::recover_stage(policy.id())?;
+        journal::recover_stage::<crate::policy::PolicyPayload>(policy.id())?;
         adopt(policy, owner)
     }
 
@@ -189,7 +189,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
             }
             .into());
         }
-        journal::recover_stage(policy.id())?;
+        journal::recover_stage::<crate::policy::PolicyPayload>(policy.id())?;
         release(policy, owner)
     }
 
@@ -201,7 +201,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
             }
             .into());
         }
-        journal::recover_stage(policy.id())?;
+        journal::recover_stage::<crate::policy::PolicyPayload>(policy.id())?;
         let journal = read_journal(policy.id())?
             .with_context(|| format!("no active residency policy `{}` to join", policy.id()))?;
         if journal.state != JournalState::Active {
@@ -225,7 +225,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
             }
             .into());
         }
-        journal::recover_stage(policy.id())?;
+        journal::recover_stage::<crate::policy::PolicyPayload>(policy.id())?;
         let journal = read_journal(policy.id())?
             .with_context(|| format!("no active residency policy `{}` to transfer", policy.id()))?;
         if journal.state != JournalState::Active {
@@ -247,7 +247,17 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
     }
 
     fn expected_fingerprint_owner() -> Option<(u32, u32)> {
-        Some(crate::policy::expected_policy_file_owner())
+        Some(crate::policy::platform::expected_policy_file_owner())
+    }
+
+    fn remove_staged_for_zero_mutation(payload: &NvidiaPayload) -> Result<()> {
+        let dir = fragment_dir_fd()?;
+        match remove_owned_staged(&dir, payload)? {
+            StagedRemoval::Removed | StagedRemoval::Absent => Ok(()),
+            StagedRemoval::Collision => bail!(
+                "the staged resource path is not the exact recorded qol artifact; it was preserved"
+            ),
+        }
     }
 }
 
@@ -997,7 +1007,7 @@ fn planned_staged_matches(payload: &NvidiaPayload, entry: &AtEntry) -> bool {
     let Some(identity) = payload.staged_identity.as_ref() else {
         return false;
     };
-    let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
+    let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
     identity.dev != 0
         && identity.ino != 0
         && identity.dev == *dev
@@ -1104,7 +1114,7 @@ fn publish_no_replace(
             .with_context(|| format!("failed to publish the staged fragment to {target_name:?}"));
     }
     let sync_error = match fail_next("publish-fsync") {
-        Ok(()) => crate::policy::sync_directory_fd_strict(dir)
+        Ok(()) => crate::policy::platform::sync_directory_fd_strict(dir)
             .err()
             .map(std::io::Error::other),
         Err(injected) => Some(std::io::Error::other(injected.to_string())),
@@ -1116,12 +1126,12 @@ fn publish_no_replace(
 }
 
 fn sync_fragment_dir(dir: &std::fs::File) -> Result<()> {
-    crate::policy::sync_directory_fd_strict(dir)
+    crate::policy::platform::sync_directory_fd_strict(dir)
         .with_context(|| "failed to fsync the preferences parts directory")
 }
 
 fn fragment_sync_error(dir: &std::fs::File, seam: &str) -> Result<Option<anyhow::Error>> {
-    match crate::policy::sync_directory_fd_strict(dir) {
+    match crate::policy::platform::sync_directory_fd_strict(dir) {
         Ok(()) => match fail_next(seam) {
             Ok(()) => Ok(None),
             Err(injected) => Ok(Some(anyhow::anyhow!("{}", injected))),
@@ -1278,7 +1288,7 @@ fn stage_content(
         });
     }
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
+    let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
     let fchown_result = unsafe { libc::fchown(file.as_raw_fd(), expected_uid, expected_gid) };
     if fchown_result != 0 {
         return Err(std::io::Error::last_os_error())
@@ -3457,7 +3467,7 @@ mod tests {
         );
         std::env::remove_var("QOL_MANAGED_LINEAGE_RAW");
 
-        journal::recover_stage(NVIDIA_POLICY_ID).unwrap();
+        journal::recover_stage::<crate::policy::PolicyPayload>(NVIDIA_POLICY_ID).unwrap();
         assert!(
             !stage.exists(),
             "the locked recovery must remove the exact recoverable stage"
@@ -4886,7 +4896,7 @@ mod tests {
         let journal = read_journal(NVIDIA_POLICY_ID).unwrap().unwrap();
         let payload = payload_of(&journal.payload).unwrap();
         let expected_hash = payload.rendered_sha256.clone();
-        let (expected_uid, expected_gid) = crate::policy::expected_policy_file_owner();
+        let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
         let meta = std::fs::metadata(&staged).unwrap();
         assert_eq!(
             meta.mode() & 0o7777,

@@ -1,6 +1,5 @@
 use super::{PolicyError, ResidentPolicy};
 use anyhow::Result;
-use std::io;
 #[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
@@ -50,7 +49,7 @@ pub(crate) fn try_acquire(policy: &ResidentPolicy) -> Result<PolicyLockGuard> {
                 policy: policy.id().to_string(),
                 detail: format!(
                     "failed to create the policy lock socket: {}",
-                    io::Error::last_os_error()
+                    std::io::Error::last_os_error()
                 ),
             }
             .into());
@@ -76,7 +75,7 @@ pub(crate) fn try_acquire(policy: &ResidentPolicy) -> Result<PolicyLockGuard> {
             )
         };
         if bind_result != 0 {
-            let error = io::Error::last_os_error();
+            let error = std::io::Error::last_os_error();
             if error.raw_os_error() == Some(libc::EADDRINUSE) {
                 return Err(PolicyError::Busy {
                     policy: policy.id().to_string(),
@@ -94,6 +93,7 @@ pub(crate) fn try_acquire(policy: &ResidentPolicy) -> Result<PolicyLockGuard> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        lock_name(policy)?;
         Err(PolicyError::PlatformUnsupported {
             policy: policy.id().to_string(),
         }

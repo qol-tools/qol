@@ -1,12 +1,6 @@
 mod platform;
 
-#[cfg(target_os = "linux")]
-pub(crate) use platform::recover_stage as recover_stage_typed;
-#[cfg(target_os = "linux")]
-pub(crate) fn recover_stage(policy: &str) -> Result<()> {
-    recover_stage_typed::<crate::policy::PolicyPayload>(policy)
-}
-pub(crate) use platform::{read, remove_durable, write_durable};
+pub(crate) use platform::{read, recover_stage, remove_durable, write_durable};
 
 use crate::policy::{
     validate_owner_id, validate_policy_id, PolicyError, ResidencyOwnerId, JOURNAL_SCHEMA_VERSION,
@@ -14,6 +8,8 @@ use crate::policy::{
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fmt;
+
+pub(crate) const LEGACY_JOURNAL_SCHEMA_VERSION: u32 = 9;
 
 pub fn new_session_id() -> Result<String> {
     use std::fmt::Write as _;
@@ -34,7 +30,7 @@ pub fn new_session_id() -> Result<String> {
     Ok(out)
 }
 
-fn is_valid_session_id(value: &str) -> bool {
+pub(crate) fn is_valid_session_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 36 {
         return false;
@@ -134,9 +130,26 @@ pub trait JournalPayload:
     fn validate_payload(&self, policy: &str) -> Result<()>;
     fn recorded_mutations(&self) -> usize;
     fn restore(&self, policy: &str) -> Result<()>;
+    fn remove_staged_path(&self, policy: &str) -> Result<()> {
+        let _ = (self, policy);
+        Ok(())
+    }
 }
 
 pub fn content_checksum<T: JournalPayload>(journal: &JournalRecord<T>) -> Result<String> {
+    let mut record = journal.clone();
+    record.content_sha256 = String::new();
+    record.journal_file_identity = None;
+    let bytes = serde_json::to_vec(&record)
+        .context("failed to serialize the journal record for checksumming")?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub(crate) fn legacy_content_checksum<T: JournalPayload>(
+    journal: &JournalRecord<T>,
+) -> Result<String> {
     let bytes = serde_json::to_vec(&journal.payload)
         .context("failed to serialize the journal payload for checksumming")?;
     let mut hasher = Sha256::new();
@@ -148,10 +161,27 @@ pub(crate) fn verify_content_checksum<T: JournalPayload>(
     journal: &JournalRecord<T>,
     policy: &str,
     context: &str,
+    accept_legacy: bool,
 ) -> Result<()> {
+    if journal.content_sha256.is_empty() {
+        if accept_legacy {
+            return Ok(());
+        }
+        return Err(PolicyError::JournalInvalid {
+            policy: policy.to_string(),
+            reason: format!("{context} carries no content checksum; it was preserved"),
+        }
+        .into());
+    }
     let computed = content_checksum(journal)?;
     if journal.content_sha256 == computed {
         return Ok(());
+    }
+    if accept_legacy {
+        let legacy = legacy_content_checksum(journal)?;
+        if journal.content_sha256 == legacy {
+            return Ok(());
+        }
     }
     Err(PolicyError::JournalInvalid {
         policy: policy.to_string(),
@@ -163,6 +193,30 @@ pub(crate) fn verify_content_checksum<T: JournalPayload>(
     .into())
 }
 
+pub(crate) fn migrate_legacy_journal<T: JournalPayload>(
+    journal: &mut JournalRecord<T>,
+    context: &str,
+) -> Result<bool> {
+    if journal.schema_version == JOURNAL_SCHEMA_VERSION {
+        return Ok(false);
+    }
+    if journal.schema_version != LEGACY_JOURNAL_SCHEMA_VERSION {
+        return Err(PolicyError::JournalInvalid {
+            policy: journal.policy.clone(),
+            reason: format!(
+                "unsupported journal schema {} (expected {JOURNAL_SCHEMA_VERSION}); repair or remove the journal file at {context} to recover",
+                journal.schema_version
+            ),
+        }
+        .into());
+    }
+    if journal.session_id.is_empty() {
+        journal.session_id = new_session_id()?;
+    }
+    journal.schema_version = JOURNAL_SCHEMA_VERSION;
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestoreOutcome {
     NothingToRestore,
@@ -171,26 +225,22 @@ pub enum RestoreOutcome {
 }
 
 pub(crate) fn restore<T: JournalPayload>(policy: &str) -> Result<RestoreOutcome> {
-    #[cfg(target_os = "linux")]
-    recover_stage_typed::<T>(policy)?;
+    recover_stage::<T>(policy)?;
     let Some(journal) = read::<T>(policy)? else {
         return Ok(RestoreOutcome::NothingToRestore);
     };
     if journal.payload.recorded_mutations() == 0 {
-        #[cfg(target_os = "linux")]
+        if journal.payload.has_staged_path() {
+            journal.payload.remove_staged_path(policy)?;
+        }
         remove_durable::<T>(policy)?;
-        #[cfg(not(target_os = "linux"))]
-        remove_durable(policy)?;
         return Ok(RestoreOutcome::DeletedZeroMutation);
     }
     journal
         .payload
         .restore(policy)
         .with_context(|| format!("failed to restore the `{policy}` residency snapshot"))?;
-    #[cfg(target_os = "linux")]
     remove_durable::<T>(policy)?;
-    #[cfg(not(target_os = "linux"))]
-    remove_durable(policy)?;
     Ok(RestoreOutcome::Restored)
 }
 

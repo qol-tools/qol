@@ -3,10 +3,11 @@ pub mod managed;
 pub mod nvidia;
 
 mod journal;
-#[cfg(target_os = "linux")]
-mod lock;
+pub(crate) mod lock;
+mod platform;
 pub mod trace;
 
+pub(crate) use journal::recover_stage;
 pub use journal::{
     new_session_id, validate_journal_invariants, JournalFileIdentity, JournalPayload,
     JournalRecord, JournalState, ReleaseFailure, ReleaseStage, RestoreOutcome,
@@ -20,7 +21,7 @@ use std::path::PathBuf;
 
 pub const JOURNAL_CANONICAL_DIR: &str = "/var/lib";
 pub const JOURNAL_STAGE_SUFFIX: &str = ".stage";
-pub const JOURNAL_SCHEMA_VERSION: u32 = 9;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 10;
 pub const JOURNAL_FILE_MODE: u32 = 0o644;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,18 +71,6 @@ impl fmt::Display for PolicyError {
 }
 
 impl std::error::Error for PolicyError {}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn fail_next(point: &str) -> Result<()> {
-    #[cfg(any(test, feature = "sandbox"))]
-    if std::env::var("QOL_RESIDENT_FAIL_NEXT").as_deref() == Ok(point) {
-        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
-        return Err(std::io::Error::other(format!("injected {point} failure")).into());
-    }
-    #[cfg(not(any(test, feature = "sandbox")))]
-    let _ = point;
-    Ok(())
-}
 
 pub fn validate_policy_id(policy: &str) -> Result<()> {
     if policy.is_empty()
@@ -239,17 +228,26 @@ impl journal::JournalPayload for PolicyPayload {
             Self::UdevUaccess(payload) => payload.restore(policy),
         }
     }
+
+    fn remove_staged_path(&self, _policy: &str) -> Result<()> {
+        match self {
+            Self::Nvidia(payload) => nvidia::remove_staged_for_zero_mutation(payload),
+            Self::UdevUaccess(_) => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResidentPolicy {
     NvidiaDriverVersionPin,
+    UdevUaccess,
 }
 
 impl ResidentPolicy {
     pub fn from_id(id: &str) -> Result<Self> {
         match id {
             nvidia::NVIDIA_POLICY_ID => Ok(Self::NvidiaDriverVersionPin),
+            crate::udev::UDEV_UACCESS_POLICY_ID => Ok(Self::UdevUaccess),
             other => Err(PolicyError::UnknownPolicy {
                 policy: other.to_string(),
             }
@@ -264,6 +262,7 @@ impl ResidentPolicy {
     pub fn id(&self) -> &'static str {
         match self {
             Self::NvidiaDriverVersionPin => nvidia::NVIDIA_POLICY_ID,
+            Self::UdevUaccess => crate::udev::UDEV_UACCESS_POLICY_ID,
         }
     }
 
@@ -298,18 +297,6 @@ pub fn journal_path(policy: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(JOURNAL_CANONICAL_DIR).join(basename))
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn expected_policy_file_owner() -> (u32, u32) {
-    #[cfg(any(test, feature = "sandbox"))]
-    {
-        (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
-    }
-    #[cfg(not(any(test, feature = "sandbox")))]
-    {
-        (0, 0)
-    }
-}
-
 pub fn journal_stage_path(policy: &str) -> Result<PathBuf> {
     let canonical = journal_path(policy)?;
     let basename = canonical
@@ -317,16 +304,6 @@ pub fn journal_stage_path(policy: &str) -> Result<PathBuf> {
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
     Ok(canonical.with_file_name(format!(".{basename}{}", JOURNAL_STAGE_SUFFIX)))
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn sync_directory_fd_strict(dir_fd: &std::fs::File) -> Result<()> {
-    use std::os::unix::io::AsRawFd;
-    let result = unsafe { libc::fsync(dir_fd.as_raw_fd()) };
-    if result == 0 {
-        return Ok(());
-    }
-    Err(std::io::Error::last_os_error()).context("strict directory fsync failed")
 }
 
 pub fn write_journal_durable(journal: &PolicyJournal) -> Result<()> {
@@ -358,14 +335,7 @@ fn validate_payload(payload: &PolicyPayload, policy: &str) -> Result<()> {
 }
 
 pub fn remove_journal_durable(policy: &str) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        journal::remove_durable::<PolicyPayload>(policy)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        journal::remove_durable(policy)
-    }
+    journal::remove_durable::<PolicyPayload>(policy)
 }
 
 #[cfg(test)]
@@ -474,7 +444,7 @@ pub(crate) mod test_support {
     pub(crate) fn expected_policy_file_owner_for_tests() -> (u32, u32) {
         #[cfg(target_os = "linux")]
         {
-            crate::policy::expected_policy_file_owner()
+            crate::policy::platform::expected_policy_file_owner()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -583,6 +553,7 @@ mod tests {
         let read = read_journal("nvidia-driver-version-pin").unwrap().unwrap();
         let mut expected = saved;
         expected.journal_file_identity = read.journal_file_identity;
+        expected.content_sha256 = read.content_sha256.clone();
         assert_eq!(read, expected);
         assert!(
             read.journal_file_identity.is_some(),
@@ -908,7 +879,8 @@ mod tests {
                 stage_path().exists(),
                 "the crash must leave the linked update stage behind"
             );
-            journal::recover_stage("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage::<crate::policy::PolicyPayload>("nvidia-driver-version-pin")
+                .unwrap();
             assert!(
                 !stage_path().exists(),
                 "the locked recovery must remove the exact recoverable stage"
@@ -1079,7 +1051,9 @@ mod tests {
             "the crash must leave the linked update stage behind"
         );
         std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "stage-recover-remove");
-        let error = journal::recover_stage("nvidia-driver-version-pin").unwrap_err();
+        let error =
+            journal::recover_stage::<crate::policy::PolicyPayload>("nvidia-driver-version-pin")
+                .unwrap_err();
         std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
         assert!(
             format!("{error:#}").contains("injected stage-recover-remove failure"),
@@ -1316,7 +1290,8 @@ mod tests {
                 read_journal("nvidia-driver-version-pin").is_err(),
                 "the stage must be visible to read-only status, not Absent"
             );
-            journal::recover_stage("nvidia-driver-version-pin").unwrap();
+            journal::recover_stage::<crate::policy::PolicyPayload>("nvidia-driver-version-pin")
+                .unwrap();
             assert!(
                 !stage_path().exists(),
                 "recovery must remove the exact recoverable stage"
@@ -1638,6 +1613,186 @@ mod tests {
         let mut duplicate = payload_with_shape(true, false, false);
         duplicate.entries.push(duplicate.entries[0].clone());
         assert!(nvidia::validate_payload(&duplicate).is_err());
+    }
+
+    fn write_journal_as_file(journal: &PolicyJournal) {
+        let path = canonical_path();
+        std::fs::write(&path, b"placeholder").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
+            let mut journal = journal.clone();
+            journal.journal_file_identity = Some(JournalFileIdentity {
+                dev: metadata.dev(),
+                ino: metadata.ino(),
+            });
+            std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&path, serde_json::to_vec(journal).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_legacy_schema9_journal_without_session_or_checksum_upgrades_cleanly() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let mut legacy = journal("nvidia-driver-version-pin", &["owner-a"]);
+        legacy.schema_version = 9;
+        legacy.session_id = String::new();
+        legacy.content_sha256 = String::new();
+        write_journal_as_file(&legacy);
+        let read = read_journal("nvidia-driver-version-pin").unwrap().unwrap();
+        assert_eq!(
+            read.schema_version, JOURNAL_SCHEMA_VERSION,
+            "the legacy journal must be upgraded to the current schema"
+        );
+        assert!(crate::policy::journal::is_valid_session_id(
+            &read.session_id
+        ));
+        assert_ne!(
+            read.session_id, "",
+            "the upgrade must backfill a session id"
+        );
+        assert_eq!(read.owners, legacy.owners);
+        assert_eq!(read.payload, legacy.payload);
+        assert_eq!(
+            read.content_sha256,
+            crate::policy::journal::content_checksum(&read).unwrap(),
+            "the upgrade must rewrite the journal with the full-record checksum"
+        );
+        let persisted: PolicyJournal =
+            serde_json::from_slice(&std::fs::read(canonical_path()).unwrap()).unwrap();
+        assert_eq!(persisted.schema_version, JOURNAL_SCHEMA_VERSION);
+        assert_eq!(persisted.session_id, read.session_id);
+        #[cfg(target_os = "linux")]
+        assert!(persisted.journal_file_identity.is_some());
+        assert!(
+            !stage_path().exists(),
+            "a completed upgrade must leave no recovery stage behind"
+        );
+    }
+
+    #[test]
+    fn a_schema9_journal_with_the_legacy_payload_checksum_upgrades_cleanly() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let mut legacy = journal("nvidia-driver-version-pin", &["owner-a"]);
+        legacy.schema_version = 9;
+        legacy.session_id = crate::policy::journal::new_session_id().unwrap();
+        legacy.content_sha256 = crate::policy::journal::legacy_content_checksum(&legacy).unwrap();
+        write_journal_as_file(&legacy);
+        let read = read_journal("nvidia-driver-version-pin").unwrap().unwrap();
+        assert_eq!(read.schema_version, JOURNAL_SCHEMA_VERSION);
+        assert_eq!(read.session_id, legacy.session_id);
+        assert_eq!(
+            read.content_sha256,
+            crate::policy::journal::content_checksum(&read).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unknown_legacy_schema_names_the_file_and_the_remedy() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let mut legacy = journal("nvidia-driver-version-pin", &["owner-a"]);
+        legacy.schema_version = 8;
+        legacy.session_id = String::new();
+        legacy.content_sha256 = String::new();
+        write_journal_as_file(&legacy);
+        let error = read_journal("nvidia-driver-version-pin").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("schema 8"), "{message}");
+        assert!(message.contains("repair or remove"), "{message}");
+        assert!(
+            message.contains("qol-resident-policy-nvidia-driver-version-pin.json"),
+            "{message}"
+        );
+        assert!(
+            canonical_path().exists(),
+            "the unreadable legacy journal must be preserved"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_legacy_migration_cleans_its_stage_and_preserves_the_legacy_canonical() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let mut legacy = journal("nvidia-driver-version-pin", &["owner-a"]);
+        legacy.schema_version = 9;
+        legacy.session_id = String::new();
+        legacy.content_sha256 = String::new();
+        write_journal_as_file(&legacy);
+        std::env::set_var("QOL_RESIDENT_FAIL_NEXT", "journal-migration-write");
+        let error = read_journal("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FAIL_NEXT");
+        assert!(
+            format!("{error:#}").contains("injected journal-migration-write failure"),
+            "{error:#}"
+        );
+        assert!(
+            !stage_path().exists(),
+            "the failed migration must clean the exact stage it created"
+        );
+        let persisted: PolicyJournal =
+            serde_json::from_slice(&std::fs::read(canonical_path()).unwrap()).unwrap();
+        assert_eq!(
+            persisted.schema_version, 9,
+            "the legacy canonical must survive the refused migration"
+        );
+        let read = read_journal("nvidia-driver-version-pin").unwrap().unwrap();
+        assert_eq!(
+            read.schema_version, JOURNAL_SCHEMA_VERSION,
+            "the retry must complete the upgrade"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zero_mutation_restore_refuses_while_an_unowned_file_sits_at_the_staged_path() {
+        let _guard = serialized_journal_tests();
+        reset_journal_dir();
+        let dir = tempfile::tempdir().unwrap();
+        let fragment = dir.path().join("90qol-nvidia-driver.pref");
+        std::env::set_var("QOL_RESIDENT_FRAGMENT_PATH", &fragment);
+        let mut zero = journal("nvidia-driver-version-pin", &["owner-a"]);
+        zero.state = JournalState::Preparing;
+        let staged_path = match &mut zero.payload {
+            crate::policy::PolicyPayload::Nvidia(payload) => {
+                let nonce = payload
+                    .resource_identity
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let staged = crate::policy::nvidia::staged_path_for(&fragment, &nonce);
+                payload.staged_path = Some(staged.clone());
+                payload.staged_identity = None;
+                payload.active_fingerprint = None;
+                staged
+            }
+            crate::policy::PolicyPayload::UdevUaccess(_) => {
+                unreachable!("the zero-mutation test journal carries an nvidia payload")
+            }
+        };
+        write_journal_durable(&zero).unwrap();
+        std::fs::write(&staged_path, b"operator data").unwrap();
+        let error = restore_journal("nvidia-driver-version-pin").unwrap_err();
+        std::env::remove_var("QOL_RESIDENT_FRAGMENT_PATH");
+        assert!(format!("{error:#}").contains("preserved"), "{error:#}");
+        assert_eq!(
+            std::fs::read(&staged_path).unwrap(),
+            b"operator data",
+            "the unowned staged file must be preserved byte for byte"
+        );
+        assert!(
+            read_journal("nvidia-driver-version-pin").unwrap().is_some(),
+            "the journal must survive while an unaccounted staged file exists"
+        );
     }
 
     #[test]

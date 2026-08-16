@@ -1,7 +1,7 @@
 use crate::policy::{ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 
-use super::PolicyStatusView;
+use super::{NvidiaPayload, PolicyStatusView};
 
 pub trait NvidiaPolicyBackend {
     fn status(policy: &ResidentPolicy) -> Result<PolicyStatusView>;
@@ -12,6 +12,9 @@ pub trait NvidiaPolicyBackend {
     fn run_resident_policy_cli(args: &[String]) -> Result<i32>;
     fn crash_point(point: &str) -> Result<()>;
     fn expected_fingerprint_owner() -> Option<(u32, u32)>;
+    fn remove_staged_for_zero_mutation(_payload: &NvidiaPayload) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]

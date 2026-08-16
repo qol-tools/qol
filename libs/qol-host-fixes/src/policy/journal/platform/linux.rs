@@ -1,17 +1,27 @@
 use crate::policy::journal::{
-    content_checksum, validate_journal_invariants, verify_content_checksum, JournalPayload,
-    JournalRecord,
+    content_checksum, migrate_legacy_journal, validate_journal_invariants, verify_content_checksum,
+    JournalFileIdentity, JournalPayload, JournalRecord, LEGACY_JOURNAL_SCHEMA_VERSION,
 };
-use crate::policy::{
-    expected_policy_file_owner, fail_next, journal_path, journal_stage_path,
-    sync_directory_fd_strict, JournalFileIdentity, PolicyError, JOURNAL_FILE_MODE,
-};
+use crate::policy::platform::{expected_policy_file_owner, fail_next, sync_directory_fd_strict};
+use crate::policy::{journal_path, journal_stage_path, PolicyError, JOURNAL_FILE_MODE};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 #[cfg(any(test, feature = "sandbox"))]
 fn journal_crash_point(point: &str) -> Result<()> {
-    if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static HIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    let requested = std::env::var("QOL_RESIDENT_CRASH_POINT").unwrap_or_default();
+    let (name, occurrence) = match requested.split_once(':') {
+        Some((name, occurrence)) => (name.to_string(), occurrence.parse::<usize>().unwrap_or(1)),
+        None => (requested.clone(), 1),
+    };
+    if name != point || occurrence == 0 {
+        HIT_COUNT.store(0, Ordering::SeqCst);
+        return Ok(());
+    }
+    let hit = HIT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    if hit == occurrence {
         unsafe { libc::abort() };
     }
     Ok(())
@@ -82,30 +92,18 @@ pub(crate) fn write_durable<T: JournalPayload>(journal: &JournalRecord<T>) -> Re
     recover_stage_with_fd::<T>(&parent_fd, &policy)?;
     fail_next("journal-write")?;
     let stage_identity = write_stage_linked(&parent_fd, &stage_name, journal)?;
-    if let Err(error) = commit_stage::<T>(&parent_fd, &canonical_name, &stage_name, &policy) {
-        let mut cleanup = Vec::new();
-        match entry_identity(&parent_fd, &stage_name) {
-            Ok(Some(live)) if live == stage_identity => {
-                if let Err(unlink_error) = unlinkat_ignore_missing(&parent_fd, &stage_name) {
-                    cleanup.push(unlink_error);
-                }
-                if let Err(sync_error) = sync_directory_fd_strict(&parent_fd) {
-                    cleanup.push(sync_error);
-                }
-            }
-            Ok(_) => {}
-            Err(identity_error) => cleanup.push(identity_error),
-        }
-        if cleanup.is_empty() {
-            return Err(error);
-        }
-        let details = cleanup
-            .iter()
-            .map(|error| format!("{error:#}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(anyhow::anyhow!(
-            "{error:#}; additionally, stage cleanup failed: {details}"
+    if let Err(error) = commit_stage::<T>(
+        &parent_fd,
+        &canonical_name,
+        &stage_name,
+        &policy,
+        CanonicalGuard::Revalidate,
+    ) {
+        return Err(cleanup_failed_stage(
+            &parent_fd,
+            &stage_name,
+            stage_identity,
+            error,
         ));
     }
     Ok(())
@@ -263,7 +261,7 @@ fn validated_journal_at<T: JournalPayload>(
     let Some((content, stats)) = read_regular_at_identity(dir_fd, name)? else {
         return Ok(None);
     };
-    let journal: JournalRecord<T> = serde_json::from_slice(&content)
+    let mut journal: JournalRecord<T> = serde_json::from_slice(&content)
         .with_context(|| format!("failed to parse journal entry {name:?}"))?;
     if journal.policy != policy {
         return Err(PolicyError::JournalInvalid {
@@ -275,10 +273,21 @@ fn validated_journal_at<T: JournalPayload>(
         }
         .into());
     }
+    let context = format!("journal entry {name:?}");
+    let legacy = journal.schema_version == LEGACY_JOURNAL_SCHEMA_VERSION;
+    let migrated = migrate_legacy_journal(&mut journal, &context)?;
+    verify_content_checksum(&journal, policy, &context, legacy)?;
     validate_journal_invariants(&journal)?;
-    verify_content_checksum(&journal, policy, &format!("journal entry {name:?}"))?;
-    let file_identity = journal.journal_file_identity;
-    validate_on_disk_journal(&stats, &journal, policy, &format!("journal entry {name:?}"))?;
+    validate_on_disk_journal(&stats, &journal, policy, &context)?;
+    let file_identity = if migrated {
+        let (dev, ino) =
+            rewrite_migrated_journal::<T>(dir_fd, name, policy, &journal, (stats.dev, stats.ino))?;
+        journal.journal_file_identity = Some(JournalFileIdentity { dev, ino });
+        journal.content_sha256 = content_checksum(&journal)?;
+        journal.journal_file_identity
+    } else {
+        journal.journal_file_identity
+    };
     Ok(Some((journal, file_identity)))
 }
 
@@ -440,6 +449,7 @@ fn journal_stage_state<T: JournalPayload>(
             &journal,
             policy,
             &format!("journal recovery stage {stage_name:?}"),
+            false,
         )
         .is_err()
         || validate_on_disk_journal(
@@ -673,6 +683,7 @@ fn validated_canonical_identity<T: JournalPayload>(
         &journal,
         policy,
         &format!("the canonical journal {canonical_name:?}"),
+        false,
     )?;
     validate_on_disk_journal(
         &stats,
@@ -683,11 +694,47 @@ fn validated_canonical_identity<T: JournalPayload>(
     Ok((stats.dev, stats.ino))
 }
 
+fn cleanup_failed_stage(
+    parent_fd: &std::fs::File,
+    stage_name: &str,
+    stage_identity: (u64, u64),
+    primary: anyhow::Error,
+) -> anyhow::Error {
+    let mut cleanup = Vec::new();
+    match entry_identity(parent_fd, stage_name) {
+        Ok(Some(live)) if live == stage_identity => {
+            if let Err(unlink_error) = unlinkat_ignore_missing(parent_fd, stage_name) {
+                cleanup.push(unlink_error);
+            }
+            if let Err(sync_error) = sync_directory_fd_strict(parent_fd) {
+                cleanup.push(sync_error);
+            }
+        }
+        Ok(_) => {}
+        Err(identity_error) => cleanup.push(identity_error),
+    }
+    if cleanup.is_empty() {
+        return primary;
+    }
+    let details = cleanup
+        .iter()
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    anyhow::anyhow!("{primary:#}; additionally, stage cleanup failed: {details}")
+}
+
+enum CanonicalGuard {
+    Revalidate,
+    KnownIdentity((u64, u64)),
+}
+
 fn commit_stage<T: JournalPayload>(
     parent_fd: &std::fs::File,
     canonical_name: &str,
     stage_name: &str,
     policy: &str,
+    guard: CanonicalGuard,
 ) -> Result<()> {
     match entry_identity(parent_fd, canonical_name)? {
         None => {
@@ -695,7 +742,12 @@ fn commit_stage<T: JournalPayload>(
             renameat2_noreplace(parent_fd, stage_name, canonical_name)?;
         }
         Some(_) => {
-            let (dev, ino) = validated_canonical_identity::<T>(parent_fd, canonical_name, policy)?;
+            let (dev, ino) = match guard {
+                CanonicalGuard::Revalidate => {
+                    validated_canonical_identity::<T>(parent_fd, canonical_name, policy)?
+                }
+                CanonicalGuard::KnownIdentity(identity) => identity,
+            };
             #[cfg(any(test, feature = "sandbox"))]
             if let Some(replacement) = std::env::var_os("QOL_JOURNAL_REVALIDATE_SWAP") {
                 let canonical = journal_path(policy)?;
@@ -718,4 +770,35 @@ fn commit_stage<T: JournalPayload>(
     }
     fail_next("journal-dir-sync")?;
     sync_directory_fd_strict(parent_fd)
+}
+
+fn rewrite_migrated_journal<T: JournalPayload>(
+    parent_fd: &std::fs::File,
+    canonical_name: &str,
+    policy: &str,
+    journal: &JournalRecord<T>,
+    original_identity: (u64, u64),
+) -> Result<(u64, u64)> {
+    let stage = journal_stage_path(policy)?;
+    let stage_name = stage
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    fail_next("journal-migration-write")?;
+    let stage_identity = write_stage_linked(parent_fd, &stage_name, journal)?;
+    if let Err(error) = commit_stage::<T>(
+        parent_fd,
+        canonical_name,
+        &stage_name,
+        policy,
+        CanonicalGuard::KnownIdentity(original_identity),
+    ) {
+        return Err(cleanup_failed_stage(
+            parent_fd,
+            &stage_name,
+            stage_identity,
+            error,
+        ));
+    }
+    Ok(stage_identity)
 }

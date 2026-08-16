@@ -39,6 +39,10 @@ pub fn crash_point(point: &str) -> Result<()> {
     Backend::crash_point(point)
 }
 
+pub(crate) fn remove_staged_for_zero_mutation(payload: &NvidiaPayload) -> Result<()> {
+    Backend::remove_staged_for_zero_mutation(payload)
+}
+
 pub fn run_resident_policy_cli_traced(args: &[String]) -> Result<i32> {
     run_resident_policy_cli_traced_with(args, &mut crate::policy::trace::NoopEmissionRecorder)
 }
