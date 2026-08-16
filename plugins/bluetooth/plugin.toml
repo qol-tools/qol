@@ -5,7 +5,7 @@ name = "Bluetooth"
 description = "Reliably reconnect the Bluetooth devices you choose"
 version = "0.26.6"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "macos"]
 
 [runtime]
 command = "plugin-bluetooth"

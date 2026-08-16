@@ -17,6 +17,14 @@ qol-runtime.workspace = true
 [target.'cfg(unix)'.dependencies]
 qol-plugin-daemon.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-foundation.workspace = true
+objc2-io-bluetooth.workspace = true
+qol-gpui.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 futures = "0.3"

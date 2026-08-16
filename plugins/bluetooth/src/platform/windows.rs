@@ -1,8 +1,14 @@
 use anyhow::{bail, Result};
 use qol_headless::DoctorCheckResult;
 
-use crate::bluetooth::{AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection};
+use crate::bluetooth::{
+    AdapterHealth, BackendCapabilities, DeviceInfo, ReconnectReport, ReconnectSelection,
+};
 use crate::config::ReconnectConfig;
+
+pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
+    separate_trust_flag: false,
+};
 
 pub fn required_binaries_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(

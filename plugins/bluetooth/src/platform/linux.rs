@@ -26,12 +26,16 @@ use crate::bluetooth::{
     adapter_options, audio_profile_repairable, connection_ready, devices_payload, has_audio_class,
     is_audio_device, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
-    search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, DeviceActionState,
-    DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
+    search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, BackendCapabilities,
+    DeviceActionState, DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
     ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::BluetoothHostFixes;
+
+pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
+    separate_trust_flag: true,
+};
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -412,6 +416,7 @@ pub fn devices_snapshot() -> Result<serde_json::Value> {
         &crate::config::load().managed_devices,
         &discovery,
         action.as_ref(),
+        CAPABILITIES,
     );
     qol_runtime::probe!(
         "BLUETOOTH_SNAPSHOT",

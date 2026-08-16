@@ -38,6 +38,11 @@ pub struct DeviceOption {
     pub label: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackendCapabilities {
+    pub separate_trust_flag: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdapterInfo {
     pub name: String,
@@ -175,6 +180,7 @@ pub fn devices_payload(
     managed_devices: &[String],
     discovery: &DiscoveryState,
     action: Option<&DeviceActionState>,
+    capabilities: BackendCapabilities,
 ) -> serde_json::Value {
     let managed = managed_devices
         .iter()
@@ -265,8 +271,8 @@ pub fn devices_payload(
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
                 "can_remove": device.paired || device.trusted,
-                "can_trust": device.paired && !device.trusted,
-                "can_untrust": device.trusted,
+                "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
+                "can_untrust": capabilities.separate_trust_flag && device.trusted,
                 "connected": device.connected,
                 "detail": detail,
                 "managed": managed.contains(&device.address),
@@ -345,6 +351,13 @@ pub fn search_status_payload(discovery: &DiscoveryState) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    const TRUST_CAPABLE: BackendCapabilities = BackendCapabilities {
+        separate_trust_flag: true,
+    };
+    const TRUST_FREE: BackendCapabilities = BackendCapabilities {
+        separate_trust_flag: false,
+    };
+
     #[test]
     fn address_normalization_accepts_only_six_hex_octets() {
         let cases = [
@@ -381,6 +394,7 @@ mod tests {
             &["AA:BB:CC:DD:EE:01".into(), "not-an-address".into()],
             &discovery,
             None,
+            TRUST_CAPABLE,
         );
         assert_eq!(
             payload,
@@ -541,7 +555,7 @@ mod tests {
             status: "Connecting...".into(),
             pending: true,
         };
-        let payload = devices_payload(&devices, &[], &discovery, Some(&action));
+        let payload = devices_payload(&devices, &[], &discovery, Some(&action), TRUST_CAPABLE);
         let item = &payload["items"][0];
         assert_eq!(item["status"], "Connecting...");
         assert_eq!(item["action_pending"], true);
@@ -557,6 +571,7 @@ mod tests {
             &[],
             &DiscoveryState::default(),
             None,
+            TRUST_CAPABLE,
         );
         let item = &payload["items"][0];
         assert_eq!(item["can_connect"], false);
@@ -566,11 +581,37 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_without_a_trust_flag_offers_neither_trust_nor_untrust() {
+        let cases = [
+            (
+                "paired but untrusted",
+                device("01", "Alpha", true, false, false, None),
+            ),
+            (
+                "paired and trusted",
+                device("02", "Luna 2", true, true, false, None),
+            ),
+            (
+                "trusted but unpaired",
+                device("03", "Old Controller", false, true, false, None),
+            ),
+        ];
+        for (label, device) in cases {
+            let payload =
+                devices_payload(&[device], &[], &DiscoveryState::default(), None, TRUST_FREE);
+            let item = &payload["items"][0];
+            assert_eq!(item["can_trust"], false, "case: {label}");
+            assert_eq!(item["can_untrust"], false, "case: {label}");
+            assert_eq!(item["can_remove"], true, "case: {label}");
+        }
+    }
+
+    #[test]
     fn devices_payload_retains_a_discovered_snapshot_after_bluez_drops_the_object() {
         let luna = device("03", "Luna 2", false, false, false, Some(-42));
         let mut discovery = DiscoveryState::default();
         discovery.record_device(luna);
-        let payload = devices_payload(&[], &[], &discovery, None);
+        let payload = devices_payload(&[], &[], &discovery, None, TRUST_CAPABLE);
         assert_eq!(payload["count"], 1);
         assert_eq!(payload["items"][0]["name"], "Luna 2");
         assert_eq!(payload["items"][0]["status"], "Available");
@@ -676,7 +717,13 @@ mod tests {
     #[test]
     fn connected_audio_device_never_exposes_connect_again() {
         let device = audio_device(true, false, &[AUDIO_SINK_UUID]);
-        let payload = devices_payload(&[device], &[], &DiscoveryState::default(), None);
+        let payload = devices_payload(
+            &[device],
+            &[],
+            &DiscoveryState::default(),
+            None,
+            TRUST_CAPABLE,
+        );
         let item = &payload["items"][0];
         assert_eq!(item["status"], "Connected");
         assert_eq!(item["can_connect"], false);
