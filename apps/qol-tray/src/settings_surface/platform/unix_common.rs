@@ -321,7 +321,7 @@ fn show_toast_in_host(
     cx: &gpui::AsyncApp,
 ) {
     let result = cx.update(move |cx| {
-        let mut toast = Toast::new(title, body, ToastLayout::Status).tone(toast_tone(&level));
+        let mut toast = Toast::new(title, body, ToastLayout::status()).tone(toast_tone(&level));
         if let Some((_, payload)) = action {
             toast = toast.on_activate(move |_cx| {
                 if let Err(error) = crate::paths::open_url(&payload) {

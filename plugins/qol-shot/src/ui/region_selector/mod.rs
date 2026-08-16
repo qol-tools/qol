@@ -940,9 +940,9 @@ impl RegionSelector {
             .borrow()
             .active_bounds
             .unwrap_or(self.window_bounds);
-        ToastLayout::Status.placement().projected_bounds(
+        ToastLayout::status().placement().projected_bounds(
             monitor,
-            ToastLayout::Status.size(),
+            ToastLayout::status().size(),
             self.window_bounds,
         )
     }
@@ -1118,7 +1118,7 @@ impl Render for RegionSelector {
             let guide = Toast::new(
                 self.guide_title(),
                 self.guide_subtitle(),
-                ToastLayout::Status,
+                ToastLayout::status(),
             )
             .tone(ToastTone::Info);
             root = root.child(guide.positioned(bounds));
@@ -1618,9 +1618,9 @@ mod tests {
         let secondary = Bounds::new(point(px(2560.0), px(0.0)), size(px(1920.0), px(1080.0)));
 
         assert_eq!(
-            ToastLayout::Status.placement().projected_bounds(
+            ToastLayout::status().placement().projected_bounds(
                 secondary,
-                ToastLayout::Status.size(),
+                ToastLayout::status().size(),
                 viewport,
             ),
             Some(Bounds::new(

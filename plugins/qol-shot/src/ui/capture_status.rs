@@ -48,7 +48,7 @@ impl CaptureStatus {
     }
 
     fn into_toast(self) -> Toast {
-        let toast = Toast::new(self.title, self.subtitle, ToastLayout::Status).tone(self.tone);
+        let toast = Toast::new(self.title, self.subtitle, ToastLayout::status()).tone(self.tone);
         match self.timeout {
             Some(timeout) => toast.timeout(timeout),
             None => toast.persistent(),

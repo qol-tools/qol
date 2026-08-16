@@ -124,9 +124,52 @@ impl ToastHost {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToastLayout {
+pub enum ToastStyle {
     Compact,
     Status,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToastLayout {
+    placement: MonitorPlacement,
+    size: Size<Pixels>,
+    style: ToastStyle,
+}
+
+impl ToastLayout {
+    pub fn status() -> Self {
+        Self {
+            placement: MonitorPlacement::top_center(TOP_CENTER_MARGIN),
+            size: size(px(STATUS_WIDTH), px(STATUS_HEIGHT)),
+            style: ToastStyle::Status,
+        }
+    }
+
+    pub fn compact() -> Self {
+        Self {
+            placement: MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
+            size: size(px(COMPACT_WIDTH), px(COMPACT_HEIGHT)),
+            style: ToastStyle::Compact,
+        }
+    }
+
+    pub fn at(mut self, placement: MonitorPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    pub fn sized(mut self, size: Size<Pixels>) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn placement(self) -> MonitorPlacement {
+        self.placement
+    }
+
+    pub fn size(self) -> Size<Pixels> {
+        self.size
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -240,24 +283,10 @@ impl Render for ToastView {
 }
 
 impl ToastLayout {
-    pub fn placement(self) -> MonitorPlacement {
-        match self {
-            Self::Compact => MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
-            Self::Status => MonitorPlacement::top_center(TOP_CENTER_MARGIN),
-        }
-    }
-
-    pub fn size(self) -> Size<Pixels> {
-        match self {
-            Self::Compact => size(px(COMPACT_WIDTH), px(COMPACT_HEIGHT)),
-            Self::Status => size(px(STATUS_WIDTH), px(STATUS_HEIGHT)),
-        }
-    }
-
     fn render(self, toast: &Toast, palette: ToastPalette) -> Div {
-        match self {
-            Self::Compact => render_compact(toast, palette),
-            Self::Status => render_status(toast, palette),
+        match self.style {
+            ToastStyle::Compact => render_compact(toast, palette),
+            ToastStyle::Status => render_status(toast, palette),
         }
     }
 }
@@ -266,16 +295,21 @@ fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
     toast_root(toast, palette)
         .flex_col()
         .justify_center()
-        .gap_1()
+        .gap(px(2.0))
         .px_4()
+        .py_3()
         .child(
             div()
+                .w_full()
+                .truncate()
                 .text_sm()
                 .text_color(rgb(palette.text_primary))
                 .child(toast.title.clone()),
         )
         .child(
             div()
+                .w_full()
+                .truncate()
                 .text_xs()
                 .text_color(rgb(palette.text_secondary))
                 .child(toast.message.clone()),
@@ -287,18 +321,23 @@ fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_1()
-        .px_4()
+        .gap(px(2.0))
+        .px_6()
+        .py_3()
         .text_center()
         .child(
             div()
-                .text_size(px(22.0))
+                .w_full()
+                .truncate()
+                .text_size(px(20.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(palette.text_primary))
                 .child(toast.title.clone()),
         )
         .child(
             div()
+                .w_full()
+                .truncate()
                 .text_size(px(14.0))
                 .text_color(rgb(palette.text_secondary))
                 .child(toast.message.clone()),
@@ -309,6 +348,7 @@ fn toast_root(toast: &Toast, palette: ToastPalette) -> Div {
     div()
         .size_full()
         .flex()
+        .overflow_hidden()
         .rounded_xl()
         .border_1()
         .border_color(rgb(toast.tone.color(palette)))
@@ -335,15 +375,27 @@ mod tests {
     use super::{ToastLayout, ToastTone};
 
     #[test]
+    fn a_caller_overrides_the_preset_placement_and_size() {
+        let corner = MonitorPlacement::corner(Corner::TopLeft, CORNER_MARGIN);
+        let layout = ToastLayout::status()
+            .at(corner)
+            .sized(gpui::size(gpui::px(700.0), gpui::px(120.0)));
+        assert_eq!(layout.placement(), corner);
+        assert_eq!(layout.size().width.to_f64(), 700.0);
+        assert_eq!(layout.size().height.to_f64(), 120.0);
+        assert_eq!(ToastLayout::status().size().width.to_f64(), 520.0);
+    }
+
+    #[test]
     fn layouts_select_shared_placement_and_dimensions() {
         let cases = [
             (
-                ToastLayout::Compact,
+                ToastLayout::compact(),
                 MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
                 (340.0, 76.0),
             ),
             (
-                ToastLayout::Status,
+                ToastLayout::status(),
                 MonitorPlacement::top_center(TOP_CENTER_MARGIN),
                 (520.0, 78.0),
             ),
