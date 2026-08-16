@@ -251,7 +251,13 @@ fn open_ui_after_start() {
         100,
         std::time::Duration::from_millis(50),
     );
-    let url = format!("http://localhost:{}", qol_conventions::DEFAULT_PORT);
+    for _ in 0..20 {
+        if crate::features::plugin_store::server::security::current_token().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let url = crate::local_http::browser_url("", qol_conventions::DEFAULT_PORT);
     let _ = crate::paths::open_url(&url);
 }
 

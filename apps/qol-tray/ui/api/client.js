@@ -1,5 +1,9 @@
 import { toast } from '../lib/toast.js';
 import { isHostRestarting } from '../lib/host-restart.js';
+import { declareAuthLost, isAuthLost } from '../lib/http-auth.js';
+import { createDebug } from '../lib/debug.js';
+
+const log = createDebug('qol:auth');
 
 const originalFetch = window.fetch.bind(window);
 const inflightGets = new Map();
@@ -37,7 +41,11 @@ async function wrappedFetch(url, options) {
     fetchOptions = withAuthentication(url, fetchOptions);
     try {
         const response = await originalFetch(url, fetchOptions);
-        if (!response.ok && !suppressErrorToast && !isHostRestarting()) {
+        const authFailed = response.status === 401 && isDashboardApiRequest(url);
+        if (authFailed && declareAuthLost({ storage: sessionStorage, doc: document, win: window })) {
+            log('401 → token cleared, auth-lost event dispatched');
+        }
+        if (!response.ok && !suppressErrorToast && !isHostRestarting() && !(authFailed && isAuthLost())) {
             toast('error', `${response.status} — ${extractPath(url)}`);
         }
         return response;
@@ -52,16 +60,19 @@ async function wrappedFetch(url, options) {
 function withAuthentication(url, options) {
     const token = window.__QOL_HTTP_TOKEN__;
     if (!token) return options;
-    let target;
-    try {
-        target = new URL(typeof url === 'string' ? url : url.url, location.origin);
-    } catch {
-        return options;
-    }
-    if (target.origin !== location.origin || !target.pathname.startsWith('/api/')) return options;
+    if (!isDashboardApiRequest(url)) return options;
     const headers = new Headers(options?.headers);
     headers.set('X-Qol-Token', token);
     return { ...options, headers };
+}
+
+function isDashboardApiRequest(url) {
+    try {
+        const target = new URL(typeof url === 'string' ? url : url.url, location.origin);
+        return target.origin === location.origin && target.pathname.startsWith('/api/');
+    } catch {
+        return false;
+    }
 }
 
 function extractPath(url) {

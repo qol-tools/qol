@@ -916,6 +916,10 @@ mod lifecycle_tests {
             vec![qol_watch::WatchRoot::shallow(&dir)],
         );
         assert_eq!(running_watcher_count(), 1, "exactly one watcher must exist");
+        let probe_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while peak.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < probe_deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         stop_watch();
         assert_eq!(
             running_watcher_count(),

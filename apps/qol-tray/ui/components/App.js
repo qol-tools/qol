@@ -20,6 +20,7 @@ import { buildViewOrder, renderPageContent, renderWorldViews, CONTENT_SIZED_PAGE
 import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { BootHealedBanner } from './BootHealedBanner.js';
+import { AuthRecoveryOverlay } from './AuthRecoveryOverlay.js';
 import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
@@ -734,6 +735,7 @@ function AppShell() {
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${BootHealedBanner} />
+                    <${AuthRecoveryOverlay} />
                     <${GlobalToast} />
                 </div>
             <//>

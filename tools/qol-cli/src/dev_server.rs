@@ -25,7 +25,11 @@ fn local_api_url(port: u16, route: &str) -> String {
 }
 
 pub(crate) fn website_url() -> String {
-    format!("http://localhost:{}", qol_conventions::DEFAULT_PORT)
+    dashboard_url(http_auth_token().as_deref())
+}
+
+fn dashboard_url(token: Option<&str>) -> String {
+    qol_conventions::local_hash_url_with_token("", qol_conventions::DEFAULT_PORT, token)
 }
 fn web_health_url() -> String {
     api_url("/")
@@ -549,6 +553,22 @@ fn parse_http_status(response: &str) -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_url_carries_the_token_fragment_only_when_one_exists() {
+        let port = qol_conventions::DEFAULT_PORT;
+        let cases = [
+            (
+                Some("secret"),
+                format!("http://127.0.0.1:{port}/#?qol_token=secret"),
+            ),
+            (None, format!("http://127.0.0.1:{port}/#")),
+            (Some(""), format!("http://127.0.0.1:{port}/#")),
+        ];
+        for (token, expected) in cases {
+            assert_eq!(dashboard_url(token), expected, "token: {token:?}");
+        }
+    }
 
     #[test]
     fn reload_request_body_echoes_the_booted_branch() {

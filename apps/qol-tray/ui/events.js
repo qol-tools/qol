@@ -1,7 +1,13 @@
+import { AUTH_LOST_EVENT } from './lib/http-auth.js';
+import { createDebug } from './lib/debug.js';
+
+const log = createDebug('qol:auth');
+
 const listeners = new Set();
 const reconnectListeners = new Set();
 let eventSource = null;
 let connected = false;
+let stopped = false;
 
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 30000;
@@ -18,8 +24,24 @@ export function onReconnect(callback) {
     return () => reconnectListeners.delete(callback);
 }
 
+export function streamStatus() {
+    if (stopped) return 'stopped';
+    return connected ? 'connected' : 'reconnecting';
+}
+
+if (typeof window !== 'undefined') {
+    window.addEventListener(AUTH_LOST_EVENT, () => {
+        if (stopped) return;
+        log('auth-lost event → stream stopped (no token to reconnect with)');
+        stopped = true;
+        connected = false;
+        eventSource?.close();
+        eventSource = null;
+    });
+}
+
 function ensureConnected() {
-    if (eventSource) return;
+    if (eventSource || stopped) return;
 
     eventSource = new EventSource('/api/events');
     eventSource.onopen = () => {
