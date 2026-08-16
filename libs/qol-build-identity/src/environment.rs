@@ -6,6 +6,16 @@ use std::fmt;
 use std::path::Path;
 use std::process::{Command, Output};
 
+const BUILD_SCOPE_PATHS: [&str; 7] = [
+    "apps",
+    "libs",
+    "plugins",
+    "tools",
+    "vendor",
+    "Cargo.toml",
+    "Cargo.lock",
+];
+
 const GIT_ROUTING_ENVIRONMENT: [&str; 7] = [
     "GIT_INDEX_FILE",
     "GIT_DIR",
@@ -160,16 +170,16 @@ impl BuildIdentityEnvironment {
         intent: BuildIntent,
         require_clean: bool,
     ) -> Result<Self, BuildIdentityEnvironmentError> {
-        let status = git(
-            repo,
-            &[
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--untracked-files=all",
-                "--ignore-submodules=none",
-            ],
-        )?;
+        let mut status_args = vec![
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--",
+        ];
+        status_args.extend(BUILD_SCOPE_PATHS);
+        let status = git(repo, &status_args)?;
         let dirty = !status.stdout.is_empty();
         if require_clean && dirty {
             return Err(BuildIdentityEnvironmentError::DirtyProductionTree);
@@ -216,7 +226,9 @@ fn working_tree(repo: &Path) -> Result<String, BuildIdentityEnvironmentError> {
     let index_dir = tempfile::tempdir().map_err(BuildIdentityEnvironmentError::TemporaryIndex)?;
     let index = index_dir.path().join("index");
     git_with_index(repo, &index, &["read-tree", "HEAD"])?;
-    git_with_index(repo, &index, &["add", "-A", "--", "."])?;
+    let mut add_args = vec!["add", "-A", "--"];
+    add_args.extend(BUILD_SCOPE_PATHS);
+    git_with_index(repo, &index, &add_args)?;
     git_value_with_index(repo, &index, &["write-tree"], "working tree")
 }
 
@@ -321,8 +333,15 @@ mod tests {
             repo.path(),
             &["config", "user.email", "qol-tests@example.invalid"],
         );
-        std::fs::write(repo.path().join("tracked.txt"), "one\n").unwrap();
-        git(repo.path(), &["add", "tracked.txt"]);
+        std::fs::create_dir_all(repo.path().join("apps")).unwrap();
+        std::fs::create_dir_all(repo.path().join("libs")).unwrap();
+        std::fs::create_dir_all(repo.path().join("plugins")).unwrap();
+        std::fs::create_dir_all(repo.path().join("tools")).unwrap();
+        std::fs::create_dir_all(repo.path().join("vendor")).unwrap();
+        std::fs::write(repo.path().join("apps/tracked.txt"), "one\n").unwrap();
+        std::fs::write(repo.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(repo.path().join("Cargo.lock"), "").unwrap();
+        git(repo.path(), &["add", "-A"]);
         git(repo.path(), &["commit", "--quiet", "-m", "initial"]);
         repo
     }
@@ -344,6 +363,9 @@ mod tests {
         assert_eq!(head_tree, working_tree);
 
         std::fs::write(repo.path().join("untracked.txt"), "dirty\n").unwrap();
+        assert!(BuildIdentityEnvironment::production(repo.path()).is_ok());
+
+        std::fs::write(repo.path().join("apps/untracked.txt"), "dirty\n").unwrap();
         assert!(matches!(
             BuildIdentityEnvironment::production(repo.path()),
             Err(BuildIdentityEnvironmentError::DirtyProductionTree)
@@ -353,8 +375,8 @@ mod tests {
     #[test]
     fn development_identity_hashes_dirty_contents_without_touching_the_index() {
         let repo = repo();
-        std::fs::write(repo.path().join("tracked.txt"), "two\n").unwrap();
-        std::fs::write(repo.path().join("untracked.txt"), "three\n").unwrap();
+        std::fs::write(repo.path().join("apps/tracked.txt"), "two\n").unwrap();
+        std::fs::write(repo.path().join("apps/untracked.txt"), "three\n").unwrap();
 
         let identity = BuildIdentityEnvironment::development(repo.path()).unwrap();
         assert_eq!(identity.intent, BuildIntent::Development);
@@ -368,7 +390,7 @@ mod tests {
         };
         assert_ne!(head_tree, working_tree);
         let original_working_tree = working_tree.clone();
-        std::fs::write(repo.path().join("untracked.txt"), "different\n").unwrap();
+        std::fs::write(repo.path().join("apps/untracked.txt"), "different\n").unwrap();
         let changed = BuildIdentityEnvironment::development(repo.path()).unwrap();
         let SourceIdentity::Git { working_tree, .. } = changed.source() else {
             panic!("expected Git identity");
@@ -380,7 +402,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(staged.success());
-        assert!(repo.path().join("untracked.txt").is_file());
+        assert!(repo.path().join("apps/untracked.txt").is_file());
     }
 
     #[test]
@@ -411,12 +433,42 @@ mod tests {
     }
 
     #[test]
+    fn development_identity_ignores_out_of_scope_untracked_files() {
+        let repo = repo();
+        std::fs::write(repo.path().join("untracked.txt"), "noise\n").unwrap();
+        let baseline = BuildIdentityEnvironment::development(repo.path()).unwrap();
+        let SourceIdentity::Git {
+            working_tree: baseline_tree,
+            ..
+        } = baseline.source()
+        else {
+            panic!("expected Git identity");
+        };
+        let baseline_tree = baseline_tree.clone();
+
+        std::fs::write(repo.path().join("untracked.txt"), "still noise\n").unwrap();
+        std::fs::write(repo.path().join("junk.tmp"), "more noise\n").unwrap();
+        let unchanged = BuildIdentityEnvironment::development(repo.path()).unwrap();
+        let SourceIdentity::Git { working_tree, .. } = unchanged.source() else {
+            panic!("expected Git identity");
+        };
+        assert_eq!(working_tree, &baseline_tree);
+
+        std::fs::write(repo.path().join("apps/untracked.txt"), "asset\n").unwrap();
+        let changed = BuildIdentityEnvironment::development(repo.path()).unwrap();
+        let SourceIdentity::Git { working_tree, .. } = changed.source() else {
+            panic!("expected Git identity");
+        };
+        assert_ne!(working_tree, &baseline_tree);
+    }
+
+    #[test]
     fn unchanged_verification_detects_source_mutation() {
         let repo = repo();
         let identity = BuildIdentityEnvironment::development(repo.path()).unwrap();
         identity.verify_unchanged(repo.path()).unwrap();
 
-        std::fs::write(repo.path().join("tracked.txt"), "changed\n").unwrap();
+        std::fs::write(repo.path().join("apps/tracked.txt"), "changed\n").unwrap();
 
         assert!(matches!(
             identity.verify_unchanged(repo.path()),

@@ -114,6 +114,39 @@ fn development_target_dir(root: &Path) -> PathBuf {
         .join("build")
 }
 
+fn publish_protected_binary(source: &Path, destination: &Path) -> Result<(), String> {
+    let parent = destination.parent().ok_or_else(|| {
+        format!(
+            "invalid protected binary destination {}",
+            destination.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "failed to create protected binary directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let staging = tempfile::Builder::new()
+        .prefix(".qol-tray-build-")
+        .tempfile_in(parent)
+        .map_err(|error| format!("failed to create protected binary staging file: {error}"))?;
+    std::fs::copy(source, staging.path()).map_err(|error| {
+        format!(
+            "failed to copy verified executable {}: {error}",
+            source.display()
+        )
+    })?;
+    staging.persist(destination).map_err(|error| {
+        format!(
+            "failed to publish protected executable {}: {}",
+            destination.display(),
+            error.error
+        )
+    })?;
+    Ok(())
+}
+
 pub fn tray_manifest_path(root: &Path) -> PathBuf {
     resolve_tray_root(Some(root), root).join("Cargo.toml")
 }
@@ -322,10 +355,7 @@ fn spawn_build(
 
 fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Command {
     let mut command = Command::new("cargo");
-    command
-        .arg("build")
-        .arg("--target-dir")
-        .arg(development_target_dir(root));
+    command.arg("build");
     for bin in bins {
         command.arg("--bin").arg(bin);
     }
@@ -425,6 +455,19 @@ where
             return failed_build(format!(
                 "Cargo reported unverified executable {}: {error}",
                 executable.display()
+            ));
+        }
+        let protected = debug_binary_path(root, bin);
+        if let Err(error) = publish_protected_binary(&executable, &protected) {
+            return failed_build(format!(
+                "Failed to stage verified dev executable {}: {error}",
+                protected.display()
+            ));
+        }
+        if let Err(error) = qol_artifact::verify_path(&protected, &expectation) {
+            return failed_build(format!(
+                "Staged dev executable is unverified {}: {error}",
+                protected.display()
             ));
         }
     }
@@ -734,18 +777,15 @@ path = \"src/main.rs\"
     }
 
     #[test]
-    fn build_command_uses_isolated_target_requested_bins_dev_features_json_and_manifest_path() {
+    fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
         let root = Path::new("/repo/qol");
         let manifest = root.join("Cargo.toml");
-        let target = root.join("target").join("qol-dev").join("build");
         let features = Platform.tray_dev_features();
         let cases: [(&[&str], Vec<&str>); 2] = [
             (
                 &["qol-tray"],
                 vec![
                     "build",
-                    "--target-dir",
-                    target.to_str().unwrap(),
                     "--bin",
                     "qol-tray",
                     "--features",
@@ -759,8 +799,6 @@ path = \"src/main.rs\"
                 &["qol-tray", "qol-tray-doctor"],
                 vec![
                     "build",
-                    "--target-dir",
-                    target.to_str().unwrap(),
                     "--bin",
                     "qol-tray",
                     "--bin",
@@ -830,6 +868,58 @@ path = \"src/main.rs\"
         );
         set_active_worktree_marker(tmp.path(), None).unwrap();
         assert_eq!(read_active_worktree_marker(tmp.path()), None);
+    }
+
+    #[test]
+    fn publish_protected_binary_creates_parents_and_copies_bytes_and_permissions() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("qol-tray");
+        std::fs::write(&source, b"verified bytes").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let destination = tmp
+            .path()
+            .join("target")
+            .join("qol-dev")
+            .join("build")
+            .join("debug")
+            .join("qol-tray");
+
+        publish_protected_binary(&source, &destination).unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"verified bytes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&destination)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+    }
+
+    #[test]
+    fn publish_protected_binary_atomically_replaces_a_previous_copy() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("qol-tray");
+        std::fs::write(&source, b"newer verified bytes").unwrap();
+        let destination = tmp.path().join("protected").join("qol-tray");
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&destination, b"older verified bytes").unwrap();
+
+        publish_protected_binary(&source, &destination).unwrap();
+
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"newer verified bytes"
+        );
     }
 
     #[test]

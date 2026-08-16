@@ -582,6 +582,10 @@ fn plugin_batch_command(root: &Path, plugins: &[BuildablePlugin], features: &[St
 }
 
 fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
+    if !rust_changes_pending(root)? {
+        dev_step_label("fix", StepKind::Info, "rustfmt (no .rs changes)", verbose);
+        return Ok(());
+    }
     run_dev_step(
         "fix",
         StepKind::Pending,
@@ -591,6 +595,27 @@ fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
             .args(["fmt", "--all"]),
         verbose,
     )
+}
+
+fn rust_changes_pending(root: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            "*.rs",
+        ])
+        .output()
+        .context("failed to probe git status for .rs changes")?;
+    if !output.status.success() {
+        bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(!output.stdout.is_empty())
 }
 
 fn request_plugin_reload(verbose: bool, branch: Option<&str>) -> Result<()> {
@@ -743,6 +768,7 @@ fn dev_step_label(verb: &str, kind: StepKind, target: &str, verbose: bool) {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use tempfile::TempDir;
 
     #[test]
     fn dev_build_targets_tray_and_dev_doctor() {
@@ -813,6 +839,47 @@ mod tests {
             "the dev lane must build plugins with the features plugin.toml declares"
         );
         assert_eq!(args[6], OsStr::new("qol-voice/local-stt"));
+    }
+
+    #[test]
+    fn rust_changes_pending_detects_tracked_and_untracked_rs_anywhere_in_the_tree() {
+        let repo = TempDir::new().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {}", args.join(" "));
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.name", "QoL Tests"]);
+        git(&["config", "user.email", "qol-tests@example.invalid"]);
+        std::fs::create_dir_all(repo.path().join("apps/tray")).unwrap();
+        std::fs::write(repo.path().join("apps/tray/main.rs"), "fn main() {}\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "--quiet", "-m", "initial"]);
+
+        assert!(!rust_changes_pending(repo.path()).unwrap());
+
+        std::fs::write(
+            repo.path().join("apps/tray/main.rs"),
+            "fn main() {}\n// edit\n",
+        )
+        .unwrap();
+        assert!(rust_changes_pending(repo.path()).unwrap());
+        git(&["restore", "apps/tray/main.rs"]);
+
+        std::fs::write(
+            repo.path().join("apps/tray/untracked.rs"),
+            "fn helper() {}\n",
+        )
+        .unwrap();
+        assert!(rust_changes_pending(repo.path()).unwrap());
+        std::fs::remove_file(repo.path().join("apps/tray/untracked.rs")).unwrap();
+
+        std::fs::write(repo.path().join("notes.txt"), "not rust\n").unwrap();
+        assert!(!rust_changes_pending(repo.path()).unwrap());
     }
 
     #[test]
