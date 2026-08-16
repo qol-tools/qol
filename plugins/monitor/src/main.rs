@@ -20,6 +20,11 @@ mod tests {
             .expect("monitor runtime must be declared");
 
         assert_eq!(runtime.command, "plugin-monitor");
+        assert_eq!(
+            manifest.plugin.uid.as_ref().map(|uid| uid.as_str()),
+            Some(plugin_monitor::hotkeys::PLUGIN_UID),
+            "the doctor and the host hotkey config must agree on the tray-written uid"
+        );
         assert!(manifest.capabilities.doctor);
         assert!(manifest.capabilities.gpui);
         assert_eq!(

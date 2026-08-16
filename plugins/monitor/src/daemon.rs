@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -10,8 +10,7 @@ use qol_windowing::display::DisplayHandle;
 
 use crate::config::{self, DeviceConfig};
 use crate::monitor::{
-    BrightnessPolicy, DisplayControl, GammaStateControl, BRIGHTNESS_MAX, BRIGHTNESS_MIN,
-    BRIGHTNESS_STEP,
+    DisplayControl, GammaStateControl, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 use crate::platform::MonitorControl;
 use crate::session::{LutProvider, RestoreMode, Session, SessionStore};
@@ -284,12 +283,17 @@ fn is_heartbeat(command: &Command) -> bool {
     )
 }
 
-fn drain_trailing_heartbeats(rx: &Receiver<Command>) {
-    while let Ok(Command::Brightness {
-        phase: Phase::Heartbeat,
-        ..
-    }) = rx.try_recv()
-    {}
+fn drain_trailing_heartbeats(rx: &Receiver<Command>) -> Option<Command> {
+    loop {
+        match rx.try_recv() {
+            Ok(Command::Brightness {
+                phase: Phase::Heartbeat,
+                ..
+            }) => {}
+            Ok(other) => return Some(other),
+            Err(_) => return None,
+        }
+    }
 }
 
 fn run_loop<C: DisplayControl + GammaStateControl + ?Sized>(
@@ -298,9 +302,18 @@ fn run_loop<C: DisplayControl + GammaStateControl + ?Sized>(
 ) {
     while let Ok(Some(command)) = receive_commands(rx) {
         if is_heartbeat(&command) {
-            drain_trailing_heartbeats(rx);
-        }
-        if !runtime.handle(command) {
+            let carried = drain_trailing_heartbeats(rx);
+            if !runtime.handle(command) {
+                drain_all_queued(rx);
+                break;
+            }
+            if let Some(carried) = carried {
+                if !runtime.handle(carried) {
+                    drain_all_queued(rx);
+                    break;
+                }
+            }
+        } else if !runtime.handle(command) {
             drain_all_queued(rx);
             break;
         }
@@ -359,20 +372,7 @@ fn build_runtime(
     device: &DeviceConfig,
 ) -> Runtime<dyn MonitorControl> {
     let control = crate::platform::control();
-    let stable_ids: HashSet<String> = control
-        .enumerate()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|handle| !handle.identity_unstable())
-        .map(|handle| handle.id().to_string())
-        .collect();
-    for (display_id, label) in &device.policy {
-        if stable_ids.contains(display_id) {
-            if let Some(policy) = BrightnessPolicy::parse(label) {
-                control.select(display_id, policy);
-            }
-        }
-    }
+    crate::platform::apply_configured_policies(&control, device);
     let store = session_store_for(config_root.as_deref());
     let lut: Arc<dyn LutProvider> = control.gamma_backend();
     Runtime::new(control, store, lut, notify)
@@ -849,6 +849,94 @@ mod tests {
                 ("id-1".to_string(), 90),
             ],
             "start steps once, one heartbeat steps, trailing heartbeats coalesce and stop halts stepping"
+        );
+    }
+
+    #[test]
+    fn queued_kill_behind_heartbeats_still_runs_the_exit_restore() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store.clone());
+        runtime.session().mutate(&display, 60).unwrap();
+        control.calls.lock().unwrap().clear();
+        let (tx, rx) = mpsc::channel();
+        for command in [
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Start,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Heartbeat,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Heartbeat,
+            },
+            Command::Kill,
+        ] {
+            tx.send(command).unwrap();
+        }
+        drop(tx);
+        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        loop_thread.join().expect("the loop must exit");
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(snapshot.clean, "the queued kill must run the exit restore");
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 55), ("id-1".to_string(), 100)],
+            "the kill behind the heartbeats steps once then restores"
+        );
+    }
+
+    #[test]
+    fn queued_stop_behind_heartbeats_halts_stepping() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        let (tx, rx) = mpsc::channel();
+        for command in [
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Start,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Heartbeat,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Stop,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Heartbeat,
+            },
+            Command::Brightness {
+                direction: -1,
+                phase: Phase::Heartbeat,
+            },
+        ] {
+            tx.send(command).unwrap();
+        }
+        drop(tx);
+        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        loop_thread.join().expect("the loop must exit");
+        let calls = control.calls();
+        assert!(
+            calls == vec![("id-1".to_string(), 95)]
+                || calls == vec![("id-1".to_string(), 95), ("id-1".to_string(), 90)],
+            "steps must stop once the queued stop is consumed: {calls:?}"
         );
     }
 

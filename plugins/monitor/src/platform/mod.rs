@@ -90,6 +90,23 @@ pub(crate) fn display_server() -> DisplayServer {
     )
 }
 
+pub(crate) fn apply_configured_policies(control: &Control, device: &crate::config::DeviceConfig) {
+    let stable_ids: std::collections::HashSet<String> = control
+        .enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|handle| !handle.identity_unstable())
+        .map(|handle| handle.id().to_string())
+        .collect();
+    for (display_id, label) in &device.policy {
+        if stable_ids.contains(display_id) {
+            if let Some(policy) = crate::monitor::BrightnessPolicy::parse(label) {
+                control.select(display_id, policy);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

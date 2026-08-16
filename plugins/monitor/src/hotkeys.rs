@@ -6,6 +6,7 @@ use qol_headless::DoctorCheckResult;
 use qol_hotkeys::grammar;
 
 pub const PLUGIN_ID: &str = "plugin-monitor";
+pub const PLUGIN_UID: &str = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HostHotkeyBinding {
@@ -39,7 +40,7 @@ pub fn monitor_bindings(config: &HostHotkeyConfig) -> Vec<&HostHotkeyBinding> {
     config
         .hotkeys
         .iter()
-        .filter(|binding| binding.plugin_uid == PLUGIN_ID)
+        .filter(|binding| binding.plugin_uid == PLUGIN_ID || binding.plugin_uid == PLUGIN_UID)
         .collect()
 }
 
@@ -178,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn monitor_bindings_filter_by_plugin_id() {
+    fn monitor_bindings_filter_by_plugin_id_or_uid() {
         let config = HostHotkeyConfig {
             hotkeys: vec![
                 binding(
@@ -189,11 +190,17 @@ mod tests {
                     true,
                 ),
                 binding("h2", "ctrl+shift+b", "plugin-other", "other-action", true),
+                binding("h3", "ctrl+shift+d", PLUGIN_UID, "brightness-down", true),
+                binding("h4", "ctrl+shift+f", "plugin-foreign", "other-action", true),
             ],
         };
         let monitor = monitor_bindings(&config);
-        assert_eq!(monitor.len(), 1);
-        assert_eq!(monitor[0].action, "brightness-up");
+        assert_eq!(monitor.len(), 2);
+        assert!(monitor.iter().any(|item| item.action == "brightness-up"));
+        assert!(
+            monitor.iter().any(|item| item.action == "brightness-down"),
+            "a binding carrying the tray-written uid must match"
+        );
     }
 
     #[test]

@@ -25,10 +25,18 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 }
 
 fn app() -> HeadlessApp {
+    let control = crate::platform::control();
+    let config_root = crate::config::config_root();
+    let device = crate::config::load(config_root.as_deref().unwrap_or(std::path::Path::new("")))
+        .unwrap_or_else(|error| {
+            eprintln!("[plugin-monitor] device config unreadable: {error:#}");
+            crate::config::DeviceConfig::default()
+        });
+    crate::platform::apply_configured_policies(&control, &device);
     app_with_config_root(
-        crate::platform::control(),
+        control,
         Arc::new(crate::monitor::UdevGrantBackend),
-        crate::config::config_root(),
+        config_root,
     )
 }
 

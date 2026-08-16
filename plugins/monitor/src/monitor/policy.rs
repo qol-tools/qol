@@ -231,6 +231,7 @@ mod tests {
     }
 
     struct FakeDdc {
+        displays: Vec<DisplayHandle>,
         sets: Arc<Mutex<usize>>,
         gets: Arc<Mutex<usize>>,
         value: Arc<Mutex<u8>>,
@@ -243,6 +244,7 @@ mod tests {
     impl FakeDdc {
         fn healthy(value: u8) -> Self {
             Self {
+                displays: vec![],
                 sets: Arc::new(Mutex::new(0)),
                 gets: Arc::new(Mutex::new(0)),
                 value: Arc::new(Mutex::new(value)),
@@ -264,7 +266,7 @@ mod tests {
 
     impl DisplayControl for FakeDdc {
         fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
-            Ok(vec![])
+            Ok(self.displays.clone())
         }
 
         fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -435,6 +437,21 @@ mod tests {
         fn restore(&self, _handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
             *self.restore_calls.lock().unwrap() += 1;
             Ok(*self.restore_outcome.lock().unwrap())
+        }
+    }
+
+    impl crate::session::LutProvider for FakeGamma {
+        fn capture(&self, _connector: &str) -> Option<crate::monitor::GammaTable> {
+            None
+        }
+
+        fn write_guarded(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &crate::monitor::GammaTable,
+            _last_value: u8,
+        ) -> crate::session::LutRestoreOutcome {
+            crate::session::LutRestoreOutcome::Unavailable
         }
     }
 
@@ -668,6 +685,35 @@ mod tests {
         assert_eq!(control.gamma.set_counts(), 1);
         assert_eq!(control.gamma.value(), 33);
         assert_eq!(control.get_gamma(&display).unwrap().value, 33);
+    }
+
+    #[test]
+    fn configured_off_policy_refuses_cli_brightness() {
+        let stable = handle("id-1", "card0-DP-1");
+        let unstable = DisplayHandle::new("id-2".into(), "card0-DP-2".into(), None, true);
+        let mut ddc = FakeDdc::healthy(42);
+        ddc.displays = vec![stable.clone(), unstable.clone()];
+        let control = Arc::new(policy(ddc, FakeGamma::new()));
+        let shared: crate::platform::Control = control.clone();
+        let device = crate::config::DeviceConfig {
+            policy: std::collections::BTreeMap::from([
+                ("id-1".to_string(), "off".to_string()),
+                ("id-2".to_string(), "off".to_string()),
+            ]),
+            ..crate::config::DeviceConfig::default()
+        };
+        crate::platform::apply_configured_policies(&shared, &device);
+        assert_eq!(control.selection("id-1"), BrightnessPolicy::Off);
+        assert!(matches!(
+            control.set_brightness(&stable, 50),
+            Err(MonitorError::Refused { .. })
+        ));
+        assert_eq!(
+            control.selection("id-2"),
+            BrightnessPolicy::Auto,
+            "an unstable identity must never bind a configured policy"
+        );
+        control.set_brightness(&unstable, 50).unwrap();
     }
 
     struct FakeI2cMonitor {
