@@ -130,7 +130,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "resume": {
                         "type": "boolean",
-                        "description": "Reload the harness's persisted session for this key when a new terminal is launched (the per-tool resume flag from the spawn ledger); defaults to false. Ignored when the key is fresh or the session is reused",
+                        "description": "Force a resume of the harness's persisted session for this key when a new terminal is launched. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); resume: false opts out. The spawn outcome reports resume and resume_detail",
                     },
                 },
                 "required": ["tool", "cwd", "key", "task"],
@@ -362,8 +362,11 @@ mod tests {
         let description = spec.input_schema["properties"]["resume"]["description"]
             .as_str()
             .unwrap();
-        assert!(description.contains("persisted session"), "{description}");
-        assert!(description.contains("defaults to false"), "{description}");
+        assert!(description.contains("automatic"), "{description}");
+        assert!(description.contains("spawn ledger"), "{description}");
+        assert!(description.contains("same tool and cwd"), "{description}");
+        assert!(description.contains("resume: false"), "{description}");
+        assert!(description.contains("resume_detail"), "{description}");
     }
 
     #[test]

@@ -47,6 +47,10 @@ pub(super) struct SpawnOutcome {
     pub(super) background: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) autoclose: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) resume: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) resume_detail: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -447,6 +451,76 @@ impl SpawnLedger {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ResumeDecision {
+    Apply {
+        external_id: String,
+        args: Vec<String>,
+    },
+    Skip {
+        reason: &'static str,
+    },
+}
+
+impl ResumeDecision {
+    fn status(&self) -> &'static str {
+        match self {
+            ResumeDecision::Apply { .. } => "applied",
+            ResumeDecision::Skip { .. } => "skipped",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            ResumeDecision::Apply { external_id, .. } => external_id.clone(),
+            ResumeDecision::Skip { reason } => (*reason).to_owned(),
+        }
+    }
+}
+
+fn decide_resume(
+    requested: Option<bool>,
+    record: Option<&SpawnRecord>,
+    tool: &CliToolId,
+    cwd: &str,
+    interpreter: &CliSessionInterpreter,
+) -> ResumeDecision {
+    if requested == Some(false) {
+        return ResumeDecision::Skip {
+            reason: "opted_out",
+        };
+    }
+    let Some(record) = record else {
+        return ResumeDecision::Skip {
+            reason: "no_prior_record",
+        };
+    };
+    if record.tool != tool.to_string() {
+        return ResumeDecision::Skip {
+            reason: "tool_mismatch",
+        };
+    }
+    if record.cwd != cwd {
+        return ResumeDecision::Skip {
+            reason: "cwd_mismatch",
+        };
+    }
+    let Some(external_id) = record.external_id.as_deref().filter(|id| !id.is_empty()) else {
+        return ResumeDecision::Skip {
+            reason: "no_external_id",
+        };
+    };
+    let Some(args) = interpreter.resume_args_for(tool, external_id) else {
+        return ResumeDecision::Skip {
+            reason: "tool_has_no_resume",
+        };
+    };
+    ResumeDecision::Apply {
+        external_id: external_id.to_owned(),
+        args,
+    }
+}
+
 pub(super) struct SpawnLockGuard {
     file: File,
 }
@@ -688,11 +762,11 @@ struct SpawnArgs {
     task: Option<String>,
     background: bool,
     autoclose: bool,
-    resume: bool,
+    resume: Option<bool>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close] [--resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path. --resume reloads the harness's persisted session for this key from the spawn ledger when a new terminal is launched; it is a no-op for a fresh key and ignored on the reuse path.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close] [--resume] [--no-resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -702,7 +776,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut task = None;
     let mut background = false;
     let mut autoclose = false;
-    let mut resume = false;
+    let mut resume = None;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -746,7 +820,11 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 index += 1;
             }
             "--resume" => {
-                resume = true;
+                resume = Some(true);
+                index += 1;
+            }
+            "--no-resume" => {
+                resume = Some(false);
                 index += 1;
             }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
@@ -838,7 +916,7 @@ pub(super) fn spawn_or_reuse(
     ledger: &SpawnLedger,
     background: bool,
     autoclose: bool,
-    resume: bool,
+    resume: Option<bool>,
     task: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
 ) -> Result<SpawnOutcome> {
@@ -855,21 +933,33 @@ pub(super) fn spawn_or_reuse(
             SpawnDecision::Launch => {
                 require_model_for_launch(model)?;
                 let mut launch = wrap_launch(&prepared.launch, cap);
-                if resume {
-                    if let Some(record) = ledger.load(&prepared.key)? {
-                        if record.tool == prepared.tool_id.to_string() {
-                            let external_id = record
-                                .external_id
-                                .as_deref()
-                                .filter(|id| !id.is_empty());
-                            if let Some(external_id) = external_id {
-                                if let Some(args) = interpreter
-                                    .resume_args_for(&prepared.tool_id, external_id)
-                                {
-                                    launch.args.extend(args);
-                                }
-                            }
-                        }
+                let requested_cwd = canonicalize_cwd(cwd)?;
+                let resume_decision = decide_resume(
+                    resume,
+                    ledger.load(&prepared.key)?.as_ref(),
+                    &prepared.tool_id,
+                    &requested_cwd.to_string_lossy(),
+                    interpreter,
+                );
+                match &resume_decision {
+                    ResumeDecision::Apply { external_id, args } => {
+                        launch.args.extend(args.iter().cloned());
+                        qol_runtime::probe!(
+                            "CLI_SESSION_SPAWN",
+                            "event=resume_applied key={} tool={} id={}",
+                            prepared.identity.key,
+                            prepared.identity.tool,
+                            external_id
+                        );
+                    }
+                    ResumeDecision::Skip { reason } => {
+                        qol_runtime::probe!(
+                            "CLI_SESSION_SPAWN",
+                            "event=resume_skipped key={} tool={} reason={}",
+                            prepared.identity.key,
+                            prepared.identity.tool,
+                            reason
+                        );
                     }
                 }
                 if let Some(model) = model {
@@ -896,10 +986,10 @@ pub(super) fn spawn_or_reuse(
                     let request = SpawnRequest {
                         identity: prepared.identity.clone(),
                         launch,
-                        cwd: canonicalize_cwd(cwd)?,
+                        cwd: requested_cwd.clone(),
                         title: Some(prepared.title.clone()),
                     };
-                    let outcome = launch_background(
+                    let mut outcome = launch_background(
                         terminals,
                         interpreter,
                         pending,
@@ -911,16 +1001,18 @@ pub(super) fn spawn_or_reuse(
                         &prepared.title,
                         autoclose,
                     )?;
+                    outcome.resume = Some(resume_decision.status());
+                    outcome.resume_detail = Some(resume_decision.detail());
                     apply_slice_properties(cap);
                     Ok(outcome)
                 } else {
                     let request = SpawnRequest {
                         identity: prepared.identity.clone(),
                         launch,
-                        cwd: canonicalize_cwd(cwd)?,
+                        cwd: requested_cwd,
                         title: Some(prepared.title.clone()),
                     };
-                    let outcome = launch_ready(
+                    let mut outcome = launch_ready(
                         terminals,
                         interpreter,
                         pending,
@@ -931,6 +1023,8 @@ pub(super) fn spawn_or_reuse(
                         &prepared.title,
                         autoclose,
                     )?;
+                    outcome.resume = Some(resume_decision.status());
+                    outcome.resume_detail = Some(resume_decision.detail());
                     apply_slice_properties(cap);
                     match task {
                         Some(round_task) => deliver_task(
@@ -976,7 +1070,7 @@ pub(super) fn spawn_or_reuse(
                     &prepared.tool_id,
                     prepared.identity.surface,
                     &facts.cwd,
-                    descriptor.external_id.as_deref().or(model),
+                    model,
                     descriptor.external_id.as_deref(),
                 )?;
                 match task {
@@ -1028,6 +1122,74 @@ pub(super) fn spawn_or_reuse(
     result
 }
 
+pub(super) fn capture_lane_external_id(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    binding: &SessionBinding,
+) {
+    let Ok(facts) = terminals.discover() else {
+        return;
+    };
+    let Some(facts) = facts
+        .into_iter()
+        .find(|facts| facts.id == *binding.session_id())
+    else {
+        return;
+    };
+    let Some(identity) = facts.spawn_identity.as_ref() else {
+        return;
+    };
+    let Some(external_id) = interpreter
+        .describe(&facts)
+        .external_id
+        .filter(|id| !id.is_empty())
+    else {
+        qol_runtime::probe!(
+            "CLI_SESSION_SPAWN",
+            "event=external_id_unresolved key={} tool={}",
+            identity.key,
+            identity.tool
+        );
+        return;
+    };
+    let Ok(_guard) = locks.acquire(&identity.key) else {
+        qol_runtime::probe!(
+            "CLI_SESSION_SPAWN",
+            "event=external_id_capture_skipped key={} reason=spawn_in_flight",
+            identity.key
+        );
+        return;
+    };
+    match ledger.record(
+        &identity.key,
+        &identity.tool,
+        identity.surface,
+        &facts.cwd,
+        None,
+        Some(&external_id),
+    ) {
+        Ok(()) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_captured key={} tool={} id={}",
+                identity.key,
+                identity.tool,
+                external_id
+            );
+        }
+        Err(error) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_capture_failed key={} error={}",
+                identity.key,
+                error
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn launch_background(
     terminals: &TerminalSessionService,
@@ -1075,7 +1237,7 @@ fn launch_background(
         &identity.tool,
         identity.surface,
         &facts.cwd,
-        descriptor.external_id.as_deref().or(model),
+        model,
         descriptor.external_id.as_deref(),
     )?;
     let binding = facts
@@ -1143,7 +1305,7 @@ fn launch_ready(
         &identity.tool,
         identity.surface,
         &facts.cwd,
-        descriptor.external_id.as_deref().or(model),
+        model,
         descriptor.external_id.as_deref(),
     )?;
     let binding = facts
@@ -1256,6 +1418,8 @@ fn outcome_from_facts(
         elapsed_ms: 0,
         background: false,
         autoclose: false,
+        resume: None,
+        resume_detail: None,
     })
 }
 
@@ -1511,7 +1675,7 @@ mod tests {
         let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         run_spawn_with(
             terminals, tool, cwd, key, surface, model, title, config, locks, &ledger, false, false,
-            false, None, None, &pending,
+            None, None, None, &pending,
         )
     }
 
@@ -1529,7 +1693,7 @@ mod tests {
         ledger: &SpawnLedger,
         background: bool,
         autoclose: bool,
-        resume: bool,
+        resume: Option<bool>,
         task: Option<&str>,
         cap: Option<SpawnCapConfig>,
         pending: &super::super::bridge::PendingBridgeStore,
@@ -1586,7 +1750,7 @@ mod tests {
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
         assert!(parsed.background);
         assert!(parsed.autoclose);
-        assert!(parsed.resume);
+        assert_eq!(parsed.resume, Some(true));
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -1599,7 +1763,17 @@ mod tests {
         assert_eq!(parsed.task, None);
         assert!(!parsed.background);
         assert!(!parsed.autoclose);
-        assert!(!parsed.resume);
+        assert_eq!(parsed.resume, None);
+
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            "/tmp".into(),
+            "--no-resume".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.resume, Some(false));
     }
 
     #[test]
@@ -1656,6 +1830,152 @@ mod tests {
     }
 
     #[test]
+    fn decide_resume_covers_every_skip_reason_and_applies_when_the_data_allows() {
+        let interpreter = CliSessionInterpreter::system();
+        let pi = CliToolId::new("pi").unwrap();
+        let claude = CliToolId::new("claude").unwrap();
+        let record = |tool: &str, cwd: &str, external_id: Option<&str>| SpawnRecord {
+            key: "lane-1".to_owned(),
+            tool: tool.to_owned(),
+            surface: "tab".to_owned(),
+            cwd: cwd.to_owned(),
+            model: Some("flash-x".to_owned()),
+            external_id: external_id.map(str::to_owned),
+            created_at: 1,
+            last_seen: 1,
+        };
+        let cases = [
+            (
+                Some(false),
+                Some(record("pi", "/work", Some("01a00a6b"))),
+                &pi,
+                "/work",
+                "opted_out",
+            ),
+            (None, None, &pi, "/work", "no_prior_record"),
+            (
+                None,
+                Some(record("claude", "/work", Some("01a00a6b"))),
+                &pi,
+                "/work",
+                "tool_mismatch",
+            ),
+            (
+                None,
+                Some(record("pi", "/elsewhere", Some("01a00a6b"))),
+                &pi,
+                "/work",
+                "cwd_mismatch",
+            ),
+            (
+                None,
+                Some(record("pi", "/work", None)),
+                &pi,
+                "/work",
+                "no_external_id",
+            ),
+            (
+                None,
+                Some(record("pi", "/work", Some(""))),
+                &pi,
+                "/work",
+                "no_external_id",
+            ),
+            (
+                None,
+                Some(record("kimi", "/work", Some("01a00a6b"))),
+                &CliToolId::new("kimi").unwrap(),
+                "/work",
+                "tool_has_no_resume",
+            ),
+        ];
+        for (requested, record, tool, cwd, expected) in cases {
+            assert_eq!(
+                decide_resume(requested, record.as_ref(), tool, cwd, &interpreter),
+                ResumeDecision::Skip { reason: expected },
+                "requested: {requested:?} record: {record:?} tool: {tool}"
+            );
+        }
+
+        let applied = decide_resume(
+            None,
+            Some(&record("pi", "/work", Some("01a00a6b"))),
+            &pi,
+            "/work",
+            &interpreter,
+        );
+        assert_eq!(
+            applied,
+            ResumeDecision::Apply {
+                external_id: "01a00a6b".to_owned(),
+                args: vec!["--session-id".to_owned(), "01a00a6b".to_owned()],
+            }
+        );
+        assert_eq!(
+            decide_resume(
+                Some(true),
+                Some(&record("pi", "/work", Some("01a00a6b"))),
+                &pi,
+                "/work",
+                &interpreter,
+            ),
+            applied,
+            "an explicit --resume and the automatic default behave identically"
+        );
+        assert_eq!(
+            decide_resume(
+                None,
+                Some(&record("claude", "/work", Some("01a00a6b"))),
+                &claude,
+                "/work",
+                &interpreter,
+            ),
+            ResumeDecision::Apply {
+                external_id: "01a00a6b".to_owned(),
+                args: vec!["--resume".to_owned(), "01a00a6b".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn ledger_record_keeps_the_stored_model_when_only_the_external_id_refreshes() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-stomp").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                Some("flash-x"),
+                Some("01a00a6b"),
+            )
+            .unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                Some("01a00a6c"),
+            )
+            .unwrap();
+        let record = ledger.load(&key).unwrap().unwrap();
+        assert_eq!(
+            record.model.as_deref(),
+            Some("flash-x"),
+            "a refresh that passes None as the model must keep the stored model"
+        );
+        assert_eq!(
+            record.external_id.as_deref(),
+            Some("01a00a6c"),
+            "the refresh still updates the external id"
+        );
+    }
+
+    #[test]
     fn keyed_launch_after_a_dead_lane_embeds_the_resume_prompt() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
@@ -1684,7 +2004,7 @@ mod tests {
             &ledger,
             true,
             false,
-            false,
+            None,
             Some("implement the fix"),
             None,
             &pending,
@@ -1715,7 +2035,7 @@ mod tests {
             &ledger,
             true,
             false,
-            false,
+            None,
             Some("another fix"),
             None,
             &pending,
@@ -1909,7 +2229,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             None,
             Some(SpawnCapConfig::default()),
             &pending,
@@ -1939,6 +2259,74 @@ mod tests {
         );
         assert_eq!(request.identity.key.to_string(), "lane-cap");
         assert_eq!(request.cwd, std::path::PathBuf::from(&cwd));
+    }
+
+    #[test]
+    fn capped_resume_launch_keeps_the_resume_args_after_the_scope_wrapper() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let key = SpawnKey::new("lane-cap-resume").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash-x"),
+                Some("01a00a6b"),
+            )
+            .unwrap();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-cap-resume"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            false,
+            false,
+            None,
+            None,
+            Some(SpawnCapConfig::default()),
+            &pending,
+        )
+        .unwrap();
+        assert_eq!(outcome.resume, Some("applied"));
+        assert_eq!(outcome.resume_detail.as_deref(), Some("01a00a6b"));
+
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.launch.program, "systemd-run");
+        assert_eq!(
+            request.launch.args,
+            vec![
+                "--user".to_owned(),
+                "--scope".to_owned(),
+                "--quiet".to_owned(),
+                "--slice=qol-agents.slice".to_owned(),
+                "-p".to_owned(),
+                "CPUWeight=40".to_owned(),
+                "-p".to_owned(),
+                "IOWeight=40".to_owned(),
+                "--".to_owned(),
+                "pi".to_owned(),
+                "--session-id".to_owned(),
+                "01a00a6b".to_owned(),
+                "--model".to_owned(),
+                "flash-x".to_owned(),
+            ]
+        );
     }
 
     #[test]
@@ -2055,7 +2443,7 @@ mod tests {
             &ledger,
             true,
             false,
-            false,
+            None,
             Some("implement the fix"),
             None,
             &pending,
@@ -2111,7 +2499,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             Some("implement the fix"),
             None,
             &pending,
@@ -2149,7 +2537,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             None,
             None,
             &pending,
@@ -2176,7 +2564,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             None,
             None,
             &pending,
@@ -2204,7 +2592,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             None,
             None,
             &pending,
@@ -2244,7 +2632,7 @@ mod tests {
             &ledger,
             true,
             false,
-            false,
+            None,
             None,
             None,
             &pending,
@@ -2266,7 +2654,7 @@ mod tests {
             &ledger,
             true,
             false,
-            false,
+            None,
             Some("implement the fix"),
             None,
             &pending,
@@ -2302,7 +2690,7 @@ mod tests {
             &ledger,
             true,
             true,
-            false,
+            None,
             Some("implement the fix"),
             None,
             &pending,
@@ -2331,7 +2719,7 @@ mod tests {
             &ledger,
             false,
             true,
-            false,
+            None,
             None,
             None,
             &pending,
@@ -2355,7 +2743,7 @@ mod tests {
             &ledger,
             false,
             false,
-            false,
+            None,
             None,
             None,
             &pending,

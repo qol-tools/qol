@@ -163,10 +163,10 @@ Details:
   the fallback. --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
-  completion_marker, and next_command. --resume reloads the harness's
-  persisted session for this key from the spawn ledger when a new terminal
-  is launched, so the fresh lane continues the prior session; it is a no-op
-  for a fresh key and ignored on the reuse path.
+  completion_marker, and next_command. Resume is automatic when the spawn
+  ledger holds a session id for the key (same tool and cwd), so a respawned
+  lane continues the prior session; --no-resume opts out; the spawn JSON
+  reports resume and resume_detail.
   submit delivers one bounded task and returns immediately with the round
   recorded and open, so several lanes can run in parallel before any of them
   is awaited; it refuses when a round is already pending on that session.
@@ -381,6 +381,8 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
         .clamp(bridge::TIMEOUT_MIN_MS, bridge::TIMEOUT_MAX_MS);
     let terminals = service()?;
     let pending = bridge::PendingBridgeStore::system()?;
+    let ledger = spawn::SpawnLedger::system()?;
+    let locks = spawn::SpawnLocks::system()?;
     let mut outcome = match parsed.task.as_deref() {
         Some(task) => bridge::execute(
             &terminals,
@@ -389,6 +391,8 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
             task,
             std::time::Duration::from_millis(timeout_ms),
             &pending,
+            &ledger,
+            &locks,
             parsed.acknowledge_marker.as_deref(),
         )?,
         None => {
@@ -403,6 +407,8 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
                 &binding,
                 std::time::Duration::from_millis(timeout_ms),
                 &pending,
+                &ledger,
+                &locks,
                 false,
             )?
         }
@@ -526,6 +532,8 @@ fn run_resume(args: &[OsString]) -> Result<()> {
         &binding,
         std::time::Duration::from_millis(timeout_ms),
         &bridge::PendingBridgeStore::system()?,
+        &spawn::SpawnLedger::system()?,
+        &spawn::SpawnLocks::system()?,
         kickstart,
     )?;
     println!(

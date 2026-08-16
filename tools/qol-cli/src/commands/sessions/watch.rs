@@ -8,7 +8,9 @@ use qol_terminal_sessions::{
 };
 
 use super::bridge::{PendingBridgeStore, PendingRound};
-use super::spawn::SpawnLocks;
+use super::spawn::{SpawnLedger, SpawnLocks};
+
+use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(30);
@@ -85,7 +87,9 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let trace_dir = qol_config::data_subdir("sessions").unwrap_or_else(|| ".".into());
     watch(
         &TerminalSessionService::system(),
+        &CliSessionInterpreter::system(),
         &PendingBridgeStore::system()?,
+        &SpawnLedger::system()?,
         &SpawnLocks::system()?,
         &tokens,
         &mut std::io::stdout(),
@@ -94,9 +98,12 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn watch(
     terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
     pending: &PendingBridgeStore,
+    ledger: &SpawnLedger,
     locks: &SpawnLocks,
     tokens: &[String],
     out: &mut dyn Write,
@@ -115,7 +122,9 @@ pub(super) fn watch(
     };
     let result = watch_loop(
         terminals,
+        interpreter,
         pending,
+        ledger,
         locks,
         tokens,
         out,
@@ -135,9 +144,13 @@ struct RoundPoll {
     changed: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn poll_round(
     terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
     pending: &PendingBridgeStore,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
     round: &mut WatchedRound,
     out: &mut dyn Write,
     trace_dir: &std::path::Path,
@@ -257,6 +270,13 @@ fn poll_round(
                             changed: false,
                         });
                     }
+                    super::spawn::capture_lane_external_id(
+                        terminals,
+                        interpreter,
+                        ledger,
+                        locks,
+                        &round.binding,
+                    );
                     let tail = screen_tail(&screen);
                     let delivery = deliver_wake(
                         terminals,
@@ -433,8 +453,10 @@ fn screen_tail(screen: &str) -> &str {
 #[allow(clippy::too_many_arguments)]
 fn watch_loop(
     terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
     pending: &PendingBridgeStore,
-    _locks: &SpawnLocks,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
     tokens: &[String],
     out: &mut dyn Write,
     trace_dir: &std::path::Path,
@@ -462,7 +484,17 @@ fn watch_loop(
         let mut changed = false;
         let mut remaining = Vec::with_capacity(watched.len());
         for mut round in watched {
-            let outcome = poll_round(terminals, pending, &mut round, out, trace_dir, config)?;
+            let outcome = poll_round(
+                terminals,
+                interpreter,
+                pending,
+                ledger,
+                locks,
+                &mut round,
+                out,
+                trace_dir,
+                config,
+            )?;
             changed |= outcome.changed;
             if outcome.keep {
                 remaining.push(round);
@@ -704,7 +736,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::super::bridge::PendingBridgeStore;
-    use super::super::spawn::SpawnLocks;
+    use super::super::spawn::{SpawnLedger, SpawnLocks};
     use super::*;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -907,6 +939,10 @@ mod tests {
         SpawnLocks::with_dir(root.path().join("spawn-locks"))
     }
 
+    fn ledger(root: &tempfile::TempDir) -> SpawnLedger {
+        SpawnLedger::with_dir(root.path().join("spawn-records"))
+    }
+
     fn fast_config(stall_after: Duration) -> WatchConfig {
         WatchConfig {
             poll_base: Duration::from_millis(1),
@@ -942,7 +978,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -962,6 +1000,48 @@ mod tests {
     }
 
     #[test]
+    fn completed_without_a_spawn_identity_leaves_no_ledger_record() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let ledger = ledger(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec![
+                "idle".to_owned(),
+                "idle".to_owned(),
+                "done\nQOL_BRIDGE_DONE_round".to_owned(),
+            ],
+        );
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger,
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], "completed");
+        let ledger_dir = root.path().join("spawn-records");
+        assert!(
+            !ledger_dir.exists() || std::fs::read_dir(&ledger_dir).unwrap().next().is_none(),
+            "a completed lane without a spawn identity must not write a spawn record"
+        );
+    }
+
+    #[test]
     fn autoclose_round_closes_the_lane_terminal_after_completed_and_plain_rounds_stay_open() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
@@ -978,7 +1058,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1030,7 +1112,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:8:200".to_owned()],
             &mut out,
@@ -1067,7 +1151,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1115,7 +1201,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1155,7 +1243,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1197,7 +1287,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1250,7 +1342,9 @@ mod tests {
 
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1289,7 +1383,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &[
                 absent_binding.token().to_owned(),
@@ -1345,7 +1441,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned(), "v1:fake:8:200".to_owned()],
             &mut out,
@@ -1384,7 +1482,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &[stale_binding.token().to_owned()],
             &mut out,
@@ -1414,7 +1514,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &[binding.token().to_owned()],
             &mut out,
@@ -1446,7 +1548,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1495,7 +1599,9 @@ mod tests {
         let mut requested = Vec::new();
         watch_loop(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1533,7 +1639,9 @@ mod tests {
 
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &[],
             &mut out,
@@ -1547,7 +1655,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1575,7 +1685,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1594,7 +1706,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 3);
+        assert_eq!(ls, 4);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -1619,7 +1731,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1637,8 +1751,8 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            3,
-            "the first marker poll must not emit; the second confirms and the delivery re-checks the initiator"
+            4,
+            "the first marker poll must not emit; the second confirms, then the external-id capture and the delivery re-check each add a discovery"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -1666,7 +1780,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1699,10 +1815,14 @@ mod tests {
         let thread_out = Arc::clone(&out);
         let handle = std::thread::spawn(move || {
             let thread_locks = SpawnLocks::with_dir(root.path().join("spawn-locks"));
+            let thread_ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+            let thread_interpreter = CliSessionInterpreter::system();
             let thread_trace = root.path().to_path_buf();
             watch(
                 &thread_terminals,
+                &thread_interpreter,
                 &thread_pending,
+                &thread_ledger,
                 &thread_locks,
                 &["v1:fake:7:100".to_owned()],
                 &mut *thread_out.lock().unwrap(),
@@ -1765,7 +1885,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks(&root),
             &["v1:fake:7:100".to_owned()],
             &mut out,
@@ -1793,7 +1915,9 @@ mod tests {
 
         let error = watch(
             &TerminalSessionService::system(),
+            &CliSessionInterpreter::system(),
             &store(&root),
+            &ledger(&root),
             &locks,
             &[],
             &mut Vec::new(),
@@ -1831,7 +1955,9 @@ mod tests {
         ));
         let error = watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks,
             &[],
             &mut FailingWriter,
@@ -1857,7 +1983,9 @@ mod tests {
         let mut out = Vec::new();
         watch(
             &terminals,
+            &CliSessionInterpreter::system(),
             &pending,
+            &ledger(&root),
             &locks,
             &[],
             &mut out,

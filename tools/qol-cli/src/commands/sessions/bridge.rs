@@ -17,6 +17,8 @@ use qol_terminal_sessions::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::spawn::{SpawnLedger, SpawnLocks};
+
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
@@ -586,6 +588,7 @@ impl CompletionMarker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -593,6 +596,8 @@ pub(super) fn execute(
     task: &str,
     timeout: Duration,
     pending: &PendingBridgeStore,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
     acknowledge_marker: Option<&str>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
@@ -621,7 +626,16 @@ pub(super) fn execute(
                 DELIVERY_VERIFY_WINDOW,
             )?;
         if alive {
-            return resume_owned(terminals, interpreter, binding, timeout, pending, false);
+            return resume_owned(
+                terminals,
+                interpreter,
+                binding,
+                timeout,
+                pending,
+                ledger,
+                locks,
+                false,
+            );
         }
         pending.acknowledge(binding, &round.completion_marker, false)?;
         qol_runtime::probe!(
@@ -715,6 +729,9 @@ pub(super) fn execute(
         role,
     )?;
     pending.observe(binding, &marker.token, outcome.completed)?;
+    if outcome.completed {
+        super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
+    }
     qol_runtime::probe!(
         "CLI_SESSION_BRIDGE",
         "event={} target_backend={} subscription={} elapsed_ms={} reads={}",
@@ -845,24 +862,39 @@ pub(super) fn submit(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resume(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
     timeout: Duration,
     pending: &PendingBridgeStore,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
     kickstart: bool,
 ) -> Result<BridgeOutcome> {
     let _owner = pending.acquire_owner(binding)?;
-    resume_owned(terminals, interpreter, binding, timeout, pending, kickstart)
+    resume_owned(
+        terminals,
+        interpreter,
+        binding,
+        timeout,
+        pending,
+        ledger,
+        locks,
+        kickstart,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resume_owned(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
     timeout: Duration,
     pending: &PendingBridgeStore,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
     kickstart: bool,
 ) -> Result<BridgeOutcome> {
     let round = pending.pending_round(binding)?.ok_or_else(|| {
@@ -974,6 +1006,7 @@ fn resume_owned(
     )?;
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
+        super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
     }
     drop(subscription);
     Ok(outcome)
@@ -1569,6 +1602,8 @@ mod tests {
             "implement the bounded change",
             Duration::from_secs(10),
             &pending,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             None,
         )
         .unwrap();
@@ -1589,7 +1624,7 @@ mod tests {
             1
         );
         assert_eq!(get_text, outcome.reads + 2);
-        assert_eq!(ls, outcome.reads / 10 + 3);
+        assert_eq!(ls, outcome.reads / 10 + 4);
         assert!(ls - 3 <= outcome.reads.div_ceil(10) + 1);
     }
 
@@ -1817,6 +1852,8 @@ mod tests {
             "collaborator request",
             Duration::from_secs(10),
             &pending,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             None,
         )
         .unwrap();
@@ -2009,6 +2046,8 @@ mod tests {
             &binding,
             Duration::from_secs(10),
             &pending,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             false,
         )
         .unwrap();
@@ -2052,6 +2091,8 @@ mod tests {
             &binding,
             Duration::from_secs(10),
             &pending,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             false,
         )
         .unwrap_err()
