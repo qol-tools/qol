@@ -9,3 +9,6 @@ license = "PolyForm-Noncommercial-1.0.0"
 anyhow = "1"
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

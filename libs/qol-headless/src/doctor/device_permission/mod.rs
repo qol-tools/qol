@@ -15,18 +15,28 @@ pub fn device_permission_check() -> DoctorCheck {
     })
 }
 
+#[cfg(unix)]
+fn is_permission_denied(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn is_permission_denied(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+}
+
 fn evaluate(probe: &dyn I2cProbe) -> DoctorCheckResult {
     match probe.probe() {
         Ok(()) => DoctorCheckResult::ok("device_permissions", "i2c devices are readable"),
-        Err(error) => match error.kind() {
-            io::ErrorKind::PermissionDenied => {
-                DoctorCheckResult::fail("device_permissions", "no permission to access /dev/i2c-*")
-                    .with_fix(
+        Err(error) if is_permission_denied(&error) => {
+            DoctorCheckResult::fail("device_permissions", "no permission to access /dev/i2c-*")
+                .with_fix(
                     "grant the current user i2c access (add it to the i2c group or install a udev \
-                 uaccess rule), then reload and trigger the rules: \
-                 `sudo udevadm control --reload-rules && sudo udevadm trigger`",
+             uaccess rule), then reload and trigger the rules: \
+             `sudo udevadm control --reload-rules && sudo udevadm trigger`",
                 )
-            }
+        }
+        Err(error) => match error.kind() {
             io::ErrorKind::NotFound => DoctorCheckResult::fail(
                 "device_permissions",
                 "no /dev/i2c-* device nodes found; the i2c-dev kernel module is not loaded",
@@ -54,6 +64,7 @@ mod tests {
     use super::*;
 
     const EACCES: i32 = 13;
+    const EPERM: i32 = 1;
     const ENOENT: i32 = 2;
     const EBUSY: i32 = 16;
 
@@ -91,6 +102,15 @@ mod tests {
         let result = result_for(errno(EACCES));
         assert_eq!(result.status, DoctorStatus::Fail);
         let fix = result.fix.expect("EACCES must carry a grant fix hint");
+        assert!(fix.contains("udevadm control --reload-rules"));
+        assert!(fix.contains("i2c group"));
+    }
+
+    #[test]
+    fn eperm_maps_to_fail_with_grant_fix() {
+        let result = result_for(errno(EPERM));
+        assert_eq!(result.status, DoctorStatus::Fail);
+        let fix = result.fix.expect("EPERM must carry a grant fix hint");
         assert!(fix.contains("udevadm control --reload-rules"));
         assert!(fix.contains("i2c group"));
     }
