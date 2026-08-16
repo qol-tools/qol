@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use super::{Control, PlatformSupport};
-use crate::monitor::StubControl;
+use crate::monitor::backends::avservice::{
+    IokitAvTransport, MacAvServiceBackend, UnsupportedGamma,
+};
+use crate::monitor::PolicyControl;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
@@ -11,5 +14,8 @@ pub(crate) fn current_support() -> PlatformSupport {
 }
 
 pub(crate) fn control() -> Control {
-    Arc::new(StubControl)
+    Arc::new(PolicyControl::new(
+        MacAvServiceBackend::new(IokitAvTransport::new()),
+        UnsupportedGamma,
+    ))
 }

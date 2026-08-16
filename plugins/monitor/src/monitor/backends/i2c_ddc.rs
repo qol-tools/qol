@@ -25,12 +25,12 @@ const LENGTH_GET: u8 = 0x82;
 const LENGTH_SET: u8 = 0x84;
 const LENGTH_REPLY: u8 = 0x88;
 const REPLY_VIRTUAL_HOST: u8 = 0x50;
-const REPLY_LEN: usize = 11;
-const WRITE_RETRIES: usize = 1;
-const READ_ATTEMPTS: usize = 20;
-const SETTLE_DELAY: Duration = Duration::from_millis(50);
-const READ_POLL_DELAY: Duration = Duration::from_millis(10);
-const RESPONSE_DELAY: Duration = Duration::from_millis(40);
+pub(crate) const REPLY_LEN: usize = 11;
+pub(crate) const WRITE_RETRIES: usize = 1;
+pub(crate) const READ_ATTEMPTS: usize = 20;
+pub(crate) const SETTLE_DELAY: Duration = Duration::from_millis(50);
+pub(crate) const READ_POLL_DELAY: Duration = Duration::from_millis(10);
+pub(crate) const RESPONSE_DELAY: Duration = Duration::from_millis(40);
 const ERRNO_EIO: i32 = 5;
 const ERRNO_ENXIO: i32 = 6;
 
@@ -330,17 +330,17 @@ fn is_retryable(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(ERRNO_EIO) | Some(ERRNO_ENXIO))
 }
 
-fn xor_checksum(seed: u8, bytes: &[u8]) -> u8 {
+pub(crate) fn xor_checksum(seed: u8, bytes: &[u8]) -> u8 {
     bytes.iter().fold(seed, |acc, byte| acc ^ byte)
 }
 
-fn get_vcp_request(feature: u8) -> [u8; 5] {
+pub(crate) fn get_vcp_request(feature: u8) -> [u8; 5] {
     let mut frame = [HOST_ADDRESS, LENGTH_GET, OP_GET_VCP, feature, 0];
     frame[4] = xor_checksum(MONITOR_ADDRESS, &frame[..4]);
     frame
 }
 
-fn set_vcp_request(feature: u8, value: u16) -> [u8; 7] {
+pub(crate) fn set_vcp_request(feature: u8, value: u16) -> [u8; 7] {
     let mut frame = [
         HOST_ADDRESS,
         LENGTH_SET,
@@ -358,7 +358,10 @@ fn write_set_vcp(bus: &mut impl I2cBus, raw: u16) -> Result<(), I2cError> {
     bus.write(&set_vcp_request(FEATURE_BRIGHTNESS, raw))
 }
 
-fn parse_get_vcp_reply(feature: u8, frame: &[u8; REPLY_LEN]) -> Result<(u16, u16), I2cError> {
+pub(crate) fn parse_get_vcp_reply(
+    feature: u8,
+    frame: &[u8; REPLY_LEN],
+) -> Result<(u16, u16), I2cError> {
     if xor_checksum(REPLY_VIRTUAL_HOST, &frame[1..10]) != frame[10] {
         return Err(I2cError::Protocol {
             detail: "reply checksum mismatch".into(),
@@ -401,7 +404,7 @@ fn parse_get_vcp_reply(feature: u8, frame: &[u8; REPLY_LEN]) -> Result<(u16, u16
     ))
 }
 
-fn percent_from_raw(current: u16, max: u16) -> Result<u8, I2cError> {
+pub(crate) fn percent_from_raw(current: u16, max: u16) -> Result<u8, I2cError> {
     if max == 0 {
         return Err(I2cError::Protocol {
             detail: "the display reports a maximum brightness of 0".into(),
