@@ -28,6 +28,7 @@ pub(crate) use windows::{control, current_support};
 
 pub(crate) trait MonitorControl: DisplayControl + GammaStateControl {
     fn select(&self, display_id: &str, policy: BrightnessPolicy);
+    fn selection(&self, display_id: &str) -> BrightnessPolicy;
     fn gamma_backend(&self) -> Arc<dyn LutProvider>;
 }
 
@@ -35,6 +36,10 @@ pub(crate) type Control = Arc<dyn MonitorControl>;
 
 impl MonitorControl for StubControl {
     fn select(&self, _display_id: &str, _policy: BrightnessPolicy) {}
+
+    fn selection(&self, _display_id: &str) -> BrightnessPolicy {
+        BrightnessPolicy::Auto
+    }
 
     fn gamma_backend(&self) -> Arc<dyn LutProvider> {
         Arc::new(NoLutProvider)
@@ -48,6 +53,10 @@ where
 {
     fn select(&self, display_id: &str, policy: BrightnessPolicy) {
         PolicyControl::select(self, display_id, policy);
+    }
+
+    fn selection(&self, display_id: &str) -> BrightnessPolicy {
+        PolicyControl::selection(self, display_id)
     }
 
     fn gamma_backend(&self) -> Arc<dyn LutProvider> {
@@ -98,12 +107,8 @@ pub(crate) fn apply_configured_policies(control: &Control, device: &crate::confi
         .filter(|handle| !handle.identity_unstable())
         .map(|handle| handle.id().to_string())
         .collect();
-    for (display_id, label) in &device.policy {
-        if stable_ids.contains(display_id) {
-            if let Some(policy) = crate::monitor::BrightnessPolicy::parse(label) {
-                control.select(display_id, policy);
-            }
-        }
+    for display_id in stable_ids {
+        control.select(&display_id, device.policy_for(&display_id));
     }
 }
 

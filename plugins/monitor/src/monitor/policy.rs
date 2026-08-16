@@ -697,8 +697,18 @@ mod tests {
         let shared: crate::platform::Control = control.clone();
         let device = crate::config::DeviceConfig {
             policy: std::collections::BTreeMap::from([
-                ("id-1".to_string(), "off".to_string()),
-                ("id-2".to_string(), "off".to_string()),
+                (
+                    "id-1".to_string(),
+                    crate::config::PolicySelection {
+                        policy: "off".into(),
+                    },
+                ),
+                (
+                    "id-2".to_string(),
+                    crate::config::PolicySelection {
+                        policy: "off".into(),
+                    },
+                ),
             ]),
             ..crate::config::DeviceConfig::default()
         };

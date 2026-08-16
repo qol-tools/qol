@@ -27,11 +27,7 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 fn app() -> HeadlessApp {
     let control = crate::platform::control();
     let config_root = crate::config::config_root();
-    let device = crate::config::load(config_root.as_deref().unwrap_or(std::path::Path::new("")))
-        .unwrap_or_else(|error| {
-            eprintln!("[plugin-monitor] device config unreadable: {error:#}");
-            crate::config::DeviceConfig::default()
-        });
+    let (device, _origin) = crate::config::load_with_origin(config_root.as_deref());
     crate::platform::apply_configured_policies(&control, &device);
     app_with_config_root(
         control,
@@ -286,7 +282,7 @@ fn doctor_checks(
         ),
         DoctorCheck::new(
             "config_readable",
-            "Verify the device-scope config is readable.",
+            "Verify the monitor config is readable from the host store.",
             move || Ok(config_readable_result(config_root_for_config.as_deref())),
         ),
         DoctorCheck::new(
@@ -310,20 +306,16 @@ fn config_readable_result(config_root: Option<&std::path::Path>) -> DoctorCheckR
             "cannot locate the qol config directory",
         );
     };
-    match crate::config::load(root) {
-        Ok(config) => DoctorCheckResult::ok(
-            "config_readable",
-            format!(
-                "device-scope config: {} preferred brightness, {} policy selections",
-                config.preferred_brightness.len(),
-                config.policy.len()
-            ),
+    let (config, origin) = crate::config::load_with_origin(Some(root));
+    DoctorCheckResult::ok(
+        "config_readable",
+        format!(
+            "{}: {} preferred brightness, {} policy selections",
+            origin.label(),
+            config.preferred_brightness.len(),
+            config.policy.len()
         ),
-        Err(error) => DoctorCheckResult::fail(
-            "config_readable",
-            format!("device-scope config is unreadable: {error:#}"),
-        ),
-    }
+    )
 }
 
 fn grant_state_result(state: I2cGrantState) -> DoctorCheckResult {
@@ -947,7 +939,7 @@ mod tests {
             .find(|check| check.id == "config_readable")
             .expect("config check must exist");
         assert_eq!(config.status, DoctorStatus::Ok);
-        assert!(config.message.contains("device-scope config"));
+        assert!(config.message.contains("preferred brightness"));
 
         let hotkeys = crate::config::hotkeys_path(&config_root).unwrap();
         std::fs::create_dir_all(hotkeys.parent().unwrap()).unwrap();

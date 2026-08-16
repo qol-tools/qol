@@ -1,20 +1,57 @@
 schema_version = 1
 title = "Monitor"
-description = "Settings for display brightness, gamma, and mode control."
+description = "Display brightness, gamma, and mode control."
 
-# The native hosted settings panel engages when this file exists alongside
-# plugin.toml. Replace these placeholder fields with the plugin's real
-# settings contract when config arrives; see plugins/lights/qol-config.toml
-# and plugins/pointz/qol-config.toml for the full field vocabulary.
+[section.displays]
+label = "Displays"
+description = "Live brightness state for every connected display, read from the monitor daemon."
 
-[field.enabled]
-type = "boolean"
-config_key = "general.enabled"
-label = "Enabled"
-default = true
+[section.preferences]
+label = "Preferences"
+description = "Per-display preferred brightness and control policy, applied at daemon start and when changed."
 
-[field.display_name]
-type = "string"
-config_key = "general.display_name"
-label = "Display Name"
-default = "Monitor"
+[field.status]
+type = "status"
+label = "Status"
+section = "displays"
+query = "status"
+value_from = "state"
+label_map = { ok = "Brightness ready", no_displays = "No displays detected", unavailable = "Brightness unavailable" }
+tone_map = { ok = "success", no_displays = "warning", unavailable = "danger" }
+
+[field.displays]
+type = "list"
+label = "Displays"
+section = "displays"
+query = "displays"
+row_label = "{connector}"
+row_subtitle = "{detail}"
+empty_message = "No displays connected."
+
+[field.apply_preferred]
+type = "action"
+label = "Apply Preferred Now"
+section = "displays"
+action = "apply"
+variant = "primary"
+description = "Set every connected display to its preferred brightness immediately."
+
+[field.preferred_brightness]
+type = "object_map"
+config_key = "preferred_brightness"
+label = "Preferred Brightness"
+section = "preferences"
+key_label = "Display ID"
+description = "Brightness target per display, applied at daemon start and when this value changes. Entries outside 0-100 are ignored."
+entry_fields = { brightness = "number" }
+default = {}
+
+[field.policy]
+type = "object_map"
+config_key = "policy"
+label = "Control Policy"
+section = "preferences"
+key_label = "Display ID"
+description = "How each display is controlled. Labels: auto (prefer DDC, fall back to gamma), ddc, gamma, or off. Unknown labels are ignored."
+entry_fields = { policy = "string" }
+default = {}

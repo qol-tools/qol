@@ -10,29 +10,73 @@ pub const DEVICE_NAMESPACE: &str = "monitor";
 pub const DEVICE_CONFIG_FILE: &str = "config.json";
 pub const SESSION_SUBDIR: &str = "session";
 const PREFERRED_MAX: u8 = 100;
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DeviceConfig {
+    pub preferred_brightness: BTreeMap<String, BrightnessPreference>,
+    pub policy: BTreeMap<String, PolicySelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BrightnessPreference {
+    pub brightness: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PolicySelection {
+    pub policy: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigOrigin {
+    HostStore,
+    MaterializedFile,
+    LegacyAdopted,
+    Defaults,
+}
+
+impl ConfigOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HostStore => "host config store",
+            Self::MaterializedFile => "materialized config file",
+            Self::LegacyAdopted => "legacy device config",
+            Self::Defaults => "defaults",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct LegacyDeviceConfig {
     #[serde(default)]
-    pub preferred_brightness: BTreeMap<String, u8>,
+    preferred_brightness: BTreeMap<String, u8>,
     #[serde(default)]
-    pub policy: BTreeMap<String, String>,
+    policy: BTreeMap<String, String>,
 }
 
 impl DeviceConfig {
     pub fn validated(mut self) -> Self {
         self.preferred_brightness
-            .retain(|_, value| *value <= PREFERRED_MAX);
+            .retain(|_, preference| preference.brightness <= PREFERRED_MAX);
         self.policy
-            .retain(|_, label| BrightnessPolicy::parse(label).is_some());
+            .retain(|_, selection| BrightnessPolicy::parse(&selection.policy).is_some());
         self
     }
 
     pub fn policy_for(&self, display_id: &str) -> BrightnessPolicy {
         self.policy
             .get(display_id)
-            .and_then(|label| BrightnessPolicy::parse(label))
+            .and_then(|selection| BrightnessPolicy::parse(&selection.policy))
             .unwrap_or_default()
+    }
+
+    pub fn preferred_for(&self, display_id: &str) -> Option<u8> {
+        self.preferred_brightness
+            .get(display_id)
+            .map(|preference| preference.brightness)
     }
 }
 
@@ -55,10 +99,6 @@ pub fn device_dir(config_root: &Path) -> Result<PathBuf> {
         .map(|dir| profile_root(config_root).join(dir))
 }
 
-pub fn config_path(config_root: &Path) -> Result<PathBuf> {
-    device_dir(config_root).map(|dir| dir.join(DEVICE_CONFIG_FILE))
-}
-
 pub fn session_dir(config_root: &Path) -> Result<PathBuf> {
     device_dir(config_root).map(|dir| dir.join(SESSION_SUBDIR))
 }
@@ -67,29 +107,106 @@ pub fn hotkeys_path(config_root: &Path) -> Result<PathBuf> {
     Ok(SyncPaths::new(profile_root(config_root)).hotkeys_path())
 }
 
-pub fn load(config_root: &Path) -> Result<DeviceConfig> {
-    let path = config_path(config_root)?;
+pub fn legacy_config_path(config_root: &Path) -> Result<PathBuf> {
+    device_dir(config_root).map(|dir| dir.join(DEVICE_CONFIG_FILE))
+}
+
+pub fn materialized_config_path() -> Option<PathBuf> {
+    qol_config::config_dir().map(|dir| dir.join("plugins").join(PLUGIN_ID).join(DEVICE_CONFIG_FILE))
+}
+
+pub fn load() -> Result<DeviceConfig> {
+    Ok(load_with_origin(None).0)
+}
+
+pub fn load_with_origin(legacy_root: Option<&Path>) -> (DeviceConfig, ConfigOrigin) {
+    load_from(
+        qol_runtime::plugin_config::load_json(),
+        materialized_config_path().as_deref(),
+        legacy_root,
+    )
+}
+
+fn load_from(
+    store_json: Option<serde_json::Value>,
+    materialized: Option<&Path>,
+    legacy_root: Option<&Path>,
+) -> (DeviceConfig, ConfigOrigin) {
+    if let Some(json) = store_json.as_ref().filter(|value| !value.is_null()) {
+        match parse_store(json) {
+            Ok(config) => return (config, ConfigOrigin::HostStore),
+            Err(error) => eprintln!("[plugin-monitor] host config store unreadable: {error:#}"),
+        }
+    }
+    if let Some(path) = materialized {
+        if let Ok(config) = load_materialized(path) {
+            return (config, ConfigOrigin::MaterializedFile);
+        }
+    }
+    if let Some(root) = legacy_root {
+        if let Ok(config) = load_legacy(root) {
+            let _ = qol_runtime::plugin_config::save(&config);
+            return (config, ConfigOrigin::LegacyAdopted);
+        }
+    }
+    (DeviceConfig::default(), ConfigOrigin::Defaults)
+}
+
+fn load_materialized(path: &Path) -> Result<DeviceConfig> {
+    let content =
+        std::fs::read(path).with_context(|| format!("failed to read config {}", path.display()))?;
+    let json: serde_json::Value = serde_json::from_slice(&content)
+        .with_context(|| format!("failed to parse config {}", path.display()))?;
+    parse_store(&json).with_context(|| format!("invalid config {}", path.display()))
+}
+
+fn load_legacy(config_root: &Path) -> Result<DeviceConfig> {
+    let path = legacy_config_path(config_root)?;
     if !path.exists() {
-        return Ok(DeviceConfig::default());
+        anyhow::bail!("no legacy device config at {}", path.display());
     }
     let content = std::fs::read(&path)
-        .with_context(|| format!("failed to read device config {}", path.display()))?;
-    let config: DeviceConfig = serde_json::from_slice(&content)
-        .with_context(|| format!("failed to parse device config {}", path.display()))?;
+        .with_context(|| format!("failed to read legacy config {}", path.display()))?;
+    let legacy: LegacyDeviceConfig = serde_json::from_slice(&content)
+        .with_context(|| format!("failed to parse legacy config {}", path.display()))?;
+    Ok(migrate_legacy(legacy).validated())
+}
+
+fn migrate_legacy(legacy: LegacyDeviceConfig) -> DeviceConfig {
+    DeviceConfig {
+        preferred_brightness: legacy
+            .preferred_brightness
+            .into_iter()
+            .map(|(id, brightness)| (id, BrightnessPreference { brightness }))
+            .collect(),
+        policy: legacy
+            .policy
+            .into_iter()
+            .map(|(id, policy)| (id, PolicySelection { policy }))
+            .collect(),
+    }
+}
+
+fn parse_store(json: &serde_json::Value) -> Result<DeviceConfig> {
+    let config: DeviceConfig =
+        qol_config::deserialize_with_contract_defaults(CONFIG_CONTRACT, json.clone()).map_err(
+            |errors| {
+                anyhow::anyhow!(errors
+                    .iter()
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; "))
+            },
+        )?;
     Ok(config.validated())
 }
 
-pub fn save(config_root: &Path, config: &DeviceConfig) -> Result<()> {
-    let config = config.clone().validated();
-    let path = config_path(config_root)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create device config dir {}", parent.display()))?;
+pub fn save(config: &DeviceConfig) -> Result<()> {
+    if qol_runtime::plugin_config::save(config) {
+        Ok(())
+    } else {
+        anyhow::bail!("{PLUGIN_ID}: failed to persist config over the runtime socket")
     }
-    let content =
-        serde_json::to_vec_pretty(&config).context("failed to serialize device config")?;
-    qol_fs::atomic_write_durable_mode(&path, &content, 0o644)
-        .with_context(|| format!("failed to commit device config {}", path.display()))
 }
 
 #[cfg(test)]
@@ -110,6 +227,15 @@ mod tests {
     }
 
     #[test]
+    fn contract_defaults_match_the_runtime_type() {
+        qol_config::validate_contract_defaults_match_type::<DeviceConfig>(CONFIG_CONTRACT).unwrap();
+        let defaults: DeviceConfig =
+            qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
+        assert_eq!(defaults.preferred_brightness.len(), 0);
+        assert_eq!(defaults.policy.len(), 0);
+    }
+
+    #[test]
     fn device_paths_stay_under_the_profile_device_scope() {
         let (_dir, config_root) = root();
         let device = device_dir(&config_root).unwrap();
@@ -120,7 +246,7 @@ mod tests {
             "the device namespace is monitor"
         );
         assert_eq!(
-            config_path(&config_root).unwrap(),
+            legacy_config_path(&config_root).unwrap(),
             device.join(DEVICE_CONFIG_FILE)
         );
         assert_eq!(
@@ -165,58 +291,110 @@ mod tests {
     }
 
     #[test]
-    fn config_round_trips_through_the_device_scope() {
-        let (_dir, config_root) = root();
-        let config = DeviceConfig {
-            preferred_brightness: BTreeMap::from([
-                ("id-a".to_string(), 80),
-                ("id-b".to_string(), 45),
-            ]),
-            policy: BTreeMap::from([
-                ("id-a".to_string(), "gamma".to_string()),
-                ("id-b".to_string(), "off".to_string()),
-            ]),
-        };
-        save(&config_root, &config).unwrap();
-        let loaded = load(&config_root).unwrap();
-        assert_eq!(loaded, config);
-        let written = std::fs::read_to_string(config_path(&config_root).unwrap()).unwrap();
-        assert!(written.contains("\"id-a\""));
+    fn config_round_trips_through_the_contract_shape() {
+        let json = serde_json::json!({
+            "preferred_brightness": {
+                "id-a": { "brightness": 80 },
+                "id-b": { "brightness": 45 },
+            },
+            "policy": {
+                "id-a": { "policy": "gamma" },
+                "id-b": { "policy": "off" },
+            },
+        });
+        let config = parse_store(&json).unwrap();
+        assert_eq!(config.preferred_for("id-a"), Some(80));
+        assert_eq!(config.preferred_for("id-b"), Some(45));
+        assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Gamma);
+        assert_eq!(config.policy_for("id-b"), BrightnessPolicy::Off);
+        let round = serde_json::to_value(&config).unwrap();
+        assert_eq!(round, json);
     }
 
     #[test]
-    fn load_is_a_no_op_when_no_config_exists() {
+    fn load_from_defaults_when_every_source_is_absent() {
         let (_dir, config_root) = root();
-        assert_eq!(load(&config_root).unwrap(), DeviceConfig::default());
+        let (config, origin) = load_from(None, None, Some(&config_root));
+        assert_eq!(config, DeviceConfig::default());
+        assert_eq!(origin, ConfigOrigin::Defaults);
+    }
+
+    #[test]
+    fn load_from_prefers_the_host_store() {
+        let (_dir, config_root) = root();
+        let store = serde_json::json!({ "policy": { "id-a": { "policy": "ddc" } } });
+        let materialized = tempfile::tempdir().unwrap();
+        let path = materialized.path().join("config.json");
+        std::fs::write(&path, serde_json::to_vec(&store).unwrap()).unwrap();
+        let (config, origin) = load_from(Some(store), Some(&path), Some(&config_root));
+        assert_eq!(origin, ConfigOrigin::HostStore);
+        assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Ddc);
+    }
+
+    #[test]
+    fn load_from_falls_back_to_the_materialized_file() {
+        let (_dir, config_root) = root();
+        let materialized = tempfile::tempdir().unwrap();
+        let path = materialized.path().join("config.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({ "preferred_brightness": { "id-a": { "brightness": 30 } } })
+                .to_string(),
+        )
+        .unwrap();
+        let (config, origin) = load_from(None, Some(&path), Some(&config_root));
+        assert_eq!(origin, ConfigOrigin::MaterializedFile);
+        assert_eq!(config.preferred_for("id-a"), Some(30));
+    }
+
+    #[test]
+    fn load_from_adopts_the_legacy_flat_device_config() {
+        let (_dir, config_root) = root();
+        let legacy = legacy_config_path(&config_root).unwrap();
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            serde_json::json!({
+                "preferred_brightness": { "id-a": 80 },
+                "policy": { "id-a": "gamma" },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (config, origin) = load_from(None, None, Some(&config_root));
+        assert_eq!(origin, ConfigOrigin::LegacyAdopted);
+        assert_eq!(config.preferred_for("id-a"), Some(80));
+        assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Gamma);
     }
 
     #[test]
     fn validation_drops_out_of_range_and_unknown_values() {
-        let config = DeviceConfig {
-            preferred_brightness: BTreeMap::from([
-                ("id-a".to_string(), 101),
-                ("id-b".to_string(), 77),
-            ]),
-            policy: BTreeMap::from([
-                ("id-a".to_string(), "night".to_string()),
-                ("id-b".to_string(), "ddc".to_string()),
-            ]),
-        }
-        .validated();
-        assert_eq!(
-            config.preferred_brightness,
-            BTreeMap::from([("id-b".to_string(), 77)])
-        );
-        assert_eq!(
-            config.policy,
-            BTreeMap::from([("id-b".to_string(), "ddc".to_string())])
-        );
+        let json = serde_json::json!({
+            "preferred_brightness": {
+                "id-a": { "brightness": 101 },
+                "id-b": { "brightness": 77 },
+            },
+            "policy": {
+                "id-a": { "policy": "night" },
+                "id-b": { "policy": "ddc" },
+            },
+        });
+        let config = parse_store(&json).unwrap();
+        assert_eq!(config.preferred_for("id-a"), None);
+        assert_eq!(config.preferred_for("id-b"), Some(77));
+        assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Auto);
+        assert_eq!(config.policy_for("id-b"), BrightnessPolicy::Ddc);
     }
 
     #[test]
     fn policy_for_resolves_a_per_display_selection() {
         let config = DeviceConfig {
-            policy: BTreeMap::from([("id-a".to_string(), "gamma".to_string())]),
+            policy: BTreeMap::from([(
+                "id-a".to_string(),
+                PolicySelection {
+                    policy: "gamma".into(),
+                },
+            )]),
             ..DeviceConfig::default()
         };
         assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Gamma);

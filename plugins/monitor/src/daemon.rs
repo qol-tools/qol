@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
@@ -10,7 +10,8 @@ use qol_windowing::display::DisplayHandle;
 
 use crate::config::{self, DeviceConfig};
 use crate::monitor::{
-    DisplayControl, GammaStateControl, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
+    BrightnessState, DisplayControl, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
+    BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 use crate::platform::MonitorControl;
 use crate::session::{LutProvider, RestoreMode, Session, SessionStore};
@@ -21,6 +22,16 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
 };
+
+static LIVE: OnceLock<Arc<Mutex<Runtime<dyn MonitorControl>>>> = OnceLock::new();
+
+pub(crate) fn set_live_state(state: Arc<Mutex<Runtime<dyn MonitorControl>>>) {
+    let _ = LIVE.set(state);
+}
+
+fn live_state() -> Option<&'static Arc<Mutex<Runtime<dyn MonitorControl>>>> {
+    LIVE.get()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -45,6 +56,8 @@ impl Phase {
 pub enum Command {
     Brightness { direction: i8, phase: Phase },
     Settings,
+    ApplyPreferred,
+    Reload,
     Kill,
 }
 
@@ -53,6 +66,9 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         "ping" => return ReadResult::Handled,
         "kill" => return ReadResult::Command(Command::Kill),
         "settings" => return ReadResult::Command(Command::Settings),
+        "apply" => return ReadResult::Command(Command::ApplyPreferred),
+        "reload" => return ReadResult::Command(Command::Reload),
+        "displays" | "status" => return live_query(request.action.as_str()),
         "brightness-up" => {
             return match Phase::parse(&request.input) {
                 Ok(phase) => ReadResult::Command(Command::Brightness {
@@ -74,6 +90,89 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         _ => {}
     }
     ReadResult::Fallback
+}
+
+fn live_query(name: &str) -> ReadResult<Command> {
+    let Some(live) = live_state() else {
+        return ReadResult::Error("monitor daemon state is not ready".into());
+    };
+    let Ok(runtime) = live.lock() else {
+        return ReadResult::Error("monitor daemon state is poisoned".into());
+    };
+    let control: &dyn MonitorControl = &**runtime.session().control();
+    let payload = match name {
+        "displays" => displays_payload(control, &runtime.config()),
+        "status" => status_payload(control),
+        _ => unreachable!("live_query only handles declared queries"),
+    };
+    ReadResult::HandledWithData(payload)
+}
+
+pub(crate) fn displays_payload(
+    control: &dyn MonitorControl,
+    config: &DeviceConfig,
+) -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = control
+        .enumerate()
+        .unwrap_or_default()
+        .iter()
+        .map(|handle| {
+            let id = handle.id().to_string();
+            let policy = control.selection(handle.id()).label();
+            let preferred = config.preferred_for(&id);
+            let (brightness, source, detail) = match control.get_brightness(handle) {
+                Ok(state) => (
+                    serde_json::Value::from(state.value),
+                    state.source.label(),
+                    format!("{}% via {}", state.value, state.source.label()),
+                ),
+                Err(error) => (
+                    serde_json::Value::Null,
+                    "unavailable",
+                    brightness_detail(&error),
+                ),
+            };
+            serde_json::json!({
+                "id": id,
+                "connector": handle.connector(),
+                "stable": !handle.identity_unstable(),
+                "brightness": brightness,
+                "source": source,
+                "policy": policy,
+                "preferred": preferred,
+                "detail": detail,
+            })
+        })
+        .collect();
+    serde_json::json!(rows)
+}
+
+fn brightness_detail(error: &MonitorError) -> String {
+    match error {
+        MonitorError::Refused { reason, .. } => reason.clone(),
+        _ => "unavailable".to_string(),
+    }
+}
+
+pub(crate) fn status_payload(control: &dyn MonitorControl) -> serde_json::Value {
+    let handles = control.enumerate().unwrap_or_default();
+    if handles.is_empty() {
+        return serde_json::json!({ "state": "no_displays", "count": 0 });
+    }
+    let readable: Vec<BrightnessState> = handles
+        .iter()
+        .filter_map(|handle| control.get_brightness(handle).ok())
+        .collect();
+    if readable.is_empty() {
+        return serde_json::json!({ "state": "unavailable", "count": handles.len() });
+    }
+    let state = readable[0];
+    serde_json::json!({
+        "state": "ok",
+        "count": readable.len(),
+        "brightness": state.value,
+        "source": state.source.label(),
+    })
 }
 
 pub fn step_value(current: u8, direction: i8) -> Option<u8> {
@@ -121,11 +220,12 @@ impl HoldStepper {
     }
 }
 
-pub struct Runtime<C: DisplayControl + ?Sized> {
+pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     session: Session<C>,
     stepper: HoldStepper,
     stop_requested: bool,
     notify: Notify,
+    config: Arc<Mutex<DeviceConfig>>,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
@@ -142,6 +242,7 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             stepper: HoldStepper::new(HOLD_DEBOUNCE),
             stop_requested: false,
             notify: Arc::new(notify),
+            config: Arc::new(Mutex::new(DeviceConfig::default())),
         }
     }
 
@@ -152,6 +253,7 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
     pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
         let recovery = self.session.restore_all(RestoreMode::Recovery);
         self.surface_gamma_warnings(&recovery);
+        *self.config.lock().unwrap() = config.clone();
         self.apply_preferred(&config.preferred_brightness);
         recovery
     }
@@ -176,25 +278,37 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         }
     }
 
-    fn apply_preferred(&self, preferred: &BTreeMap<String, u8>) {
+    fn apply_preferred(&self, preferred: &BTreeMap<String, config::BrightnessPreference>) -> usize {
         let Ok(handles) = self.session.control().enumerate() else {
-            return;
+            return 0;
         };
+        let mut applied = 0;
         for handle in &handles {
             if handle.identity_unstable() {
                 continue;
             }
-            let Some(value) = preferred.get(handle.id()) else {
+            let Some(preference) = preferred.get(handle.id()) else {
                 continue;
             };
-            if let Err(error) = self.session.mutate(handle, *value) {
-                eprintln!(
-                    "[plugin-monitor] preferred brightness {} for {} failed: {error}",
-                    value,
-                    handle.connector()
-                );
+            if self.session.mutate(handle, preference.brightness).is_ok() {
+                applied += 1;
             }
         }
+        applied
+    }
+
+    fn first_display(&self) -> Option<DisplayHandle> {
+        self.session
+            .control()
+            .enumerate()
+            .ok()
+            .and_then(|handles| handles.into_iter().next())
+    }
+}
+
+impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
+    pub fn config(&self) -> DeviceConfig {
+        self.config.lock().unwrap().clone()
     }
 
     pub fn handle(&mut self, command: Command) -> bool {
@@ -227,11 +341,80 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
                 }
                 true
             }
+            Command::ApplyPreferred => {
+                let config = self.config();
+                let applied = self.apply_preferred(&config.preferred_brightness);
+                self.notify_applied(applied);
+                true
+            }
+            Command::Reload => {
+                let next = config::load().unwrap_or_else(|error| {
+                    eprintln!("[plugin-monitor] config reload failed: {error:#}");
+                    DeviceConfig::default()
+                });
+                let applied = self.reload_config(&next);
+                self.notify_applied(applied);
+                true
+            }
             Command::Kill => {
                 let report = self.session.restore_all(RestoreMode::Exit);
                 self.surface_gamma_warnings(&report);
                 false
             }
+        }
+    }
+
+    pub fn reload_config(&mut self, next: &DeviceConfig) -> usize {
+        let previous = std::mem::replace(&mut *self.config.lock().unwrap(), next.clone());
+        let stable_ids: HashSet<String> = self
+            .session
+            .control()
+            .enumerate()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|handle| !handle.identity_unstable())
+            .map(|handle| handle.id().to_string())
+            .collect();
+        for display_id in stable_ids {
+            self.session
+                .control()
+                .select(&display_id, next.policy_for(&display_id));
+        }
+        self.apply_preferred_deltas(&previous, next)
+    }
+
+    fn apply_preferred_deltas(&self, previous: &DeviceConfig, next: &DeviceConfig) -> usize {
+        let Ok(handles) = self.session.control().enumerate() else {
+            return 0;
+        };
+        let mut applied = 0;
+        for handle in &handles {
+            if handle.identity_unstable() {
+                continue;
+            }
+            let old = previous.preferred_for(handle.id());
+            let new = next.preferred_for(handle.id());
+            if new == old {
+                continue;
+            }
+            if let Some(value) = new {
+                if self.session.mutate(handle, value).is_ok() {
+                    applied += 1;
+                }
+            }
+        }
+        applied
+    }
+
+    fn notify_applied(&self, applied: usize) {
+        if applied > 0 {
+            (self.notify)(
+                "Monitor",
+                &format!(
+                    "Applied preferred brightness to {applied} display{}",
+                    if applied == 1 { "" } else { "s" }
+                ),
+            );
         }
     }
 
@@ -258,14 +441,6 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             "Monitor",
             &format!("Brightness {}% ({})", next, source.label()),
         );
-    }
-
-    fn first_display(&self) -> Option<DisplayHandle> {
-        self.session
-            .control()
-            .enumerate()
-            .ok()
-            .and_then(|handles| handles.into_iter().next())
     }
 }
 
@@ -296,11 +471,14 @@ fn drain_trailing_heartbeats(rx: &Receiver<Command>) -> Option<Command> {
     }
 }
 
-fn run_loop<C: DisplayControl + GammaStateControl + ?Sized>(
-    runtime: &mut Runtime<C>,
+fn run_loop<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized>(
+    runtime: &Mutex<Runtime<C>>,
     rx: &Receiver<Command>,
 ) {
     while let Ok(Some(command)) = receive_commands(rx) {
+        let mut runtime = runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if is_heartbeat(&command) {
             let carried = drain_trailing_heartbeats(rx);
             if !runtime.handle(command) {
@@ -349,20 +527,17 @@ pub fn run() -> Result<(), String> {
         ));
     }
     let config_root = config::config_root();
-    let device = config::load(config_root.as_deref().unwrap_or(std::path::Path::new("")))
-        .unwrap_or_else(|error| {
-            eprintln!("[plugin-monitor] device config unreadable: {error:#}");
-            DeviceConfig::default()
-        });
-    let mut runtime = build_runtime(config_root, &device);
+    let (device, _origin) = config::load_with_origin(config_root.as_deref());
+    let runtime = Arc::new(Mutex::new(build_runtime(config_root, &device)));
+    let recovery = runtime.lock().unwrap().start(&device);
+    set_live_state(Arc::clone(&runtime));
     let (tx, rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx.clone(), parse_request) {
         return Err("failed to start plugin-monitor daemon listener".into());
     }
-    let recovery = runtime.start(&device);
     trace_startup(&recovery);
     let _sigterm = install_sigterm_handler(tx);
-    run_loop(&mut runtime, &rx);
+    run_loop(&runtime, &rx);
     core_daemon::cleanup(&DAEMON_CONFIG);
     Ok(())
 }
@@ -414,9 +589,10 @@ fn trace_startup(recovery: &crate::session::RestoreReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{BrightnessPreference, PolicySelection};
     use crate::monitor::{
-        BrightnessSource, BrightnessState, DisplayCapabilities, DisplayMode, GammaState,
-        GammaStateControl, HdrState, MonitorError,
+        BrightnessPolicy, BrightnessSource, DisplayCapabilities, DisplayMode, GammaState, HdrState,
+        RestoreOutcome,
     };
     use crate::session::NoLutProvider;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -476,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn routes_ping_settings_kill_and_falls_back() {
+    fn routes_ping_settings_kill_apply_reload_and_falls_back() {
         assert!(matches!(
             parse_request(&request("ping", serde_json::Value::Null)),
             ReadResult::Handled
@@ -484,6 +660,14 @@ mod tests {
         assert!(matches!(
             parse_request(&request("settings", serde_json::Value::Null)),
             ReadResult::Command(Command::Settings)
+        ));
+        assert!(matches!(
+            parse_request(&request("apply", serde_json::Value::Null)),
+            ReadResult::Command(Command::ApplyPreferred)
+        ));
+        assert!(matches!(
+            parse_request(&request("reload", serde_json::Value::Null)),
+            ReadResult::Command(Command::Reload)
         ));
         assert!(matches!(
             parse_request(&request("kill", serde_json::Value::Null)),
@@ -538,6 +722,8 @@ mod tests {
         calls: StdMutex<Vec<(String, u8)>>,
         steps: AtomicUsize,
         warned: StdMutex<bool>,
+        refuse_get: bool,
+        selections: StdMutex<Vec<(String, BrightnessPolicy)>>,
     }
 
     impl FakeControl {
@@ -549,11 +735,37 @@ mod tests {
                 calls: StdMutex::new(Vec::new()),
                 steps: AtomicUsize::new(0),
                 warned: StdMutex::new(false),
+                refuse_get: false,
+                selections: StdMutex::new(Vec::new()),
             }
         }
 
         fn calls(&self) -> Vec<(String, u8)> {
             self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::platform::MonitorControl for FakeControl {
+        fn select(&self, display_id: &str, policy: BrightnessPolicy) {
+            self.selections
+                .lock()
+                .unwrap()
+                .push((display_id.to_string(), policy));
+        }
+
+        fn selection(&self, display_id: &str) -> BrightnessPolicy {
+            self.selections
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(id, _)| id == display_id)
+                .map(|(_, policy)| *policy)
+                .unwrap_or_default()
+        }
+
+        fn gamma_backend(&self) -> Arc<dyn LutProvider> {
+            Arc::new(NoLutProvider)
         }
     }
 
@@ -570,7 +782,7 @@ mod tests {
             &self,
             _handle: &DisplayHandle,
         ) -> Result<crate::monitor::RestoreOutcome, MonitorError> {
-            Ok(crate::monitor::RestoreOutcome::NothingToRestore)
+            Ok(RestoreOutcome::NothingToRestore)
         }
     }
 
@@ -584,6 +796,12 @@ mod tests {
         }
 
         fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
+            if self.refuse_get {
+                return Err(MonitorError::refused(
+                    "brightness",
+                    "control is off for this display",
+                ));
+            }
             Ok(BrightnessState {
                 value: *self.current.lock().unwrap(),
                 source: self.source,
@@ -700,7 +918,10 @@ mod tests {
             .unwrap();
         let mut runtime = runtime_with(control.clone(), store);
         let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([("id-1".to_string(), 80)]),
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
             ..DeviceConfig::default()
         };
         runtime.start(&preferred);
@@ -733,7 +954,10 @@ mod tests {
         ));
         let mut runtime = runtime_with(control.clone(), store);
         let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([("id-1".to_string(), 80)]),
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
             ..DeviceConfig::default()
         };
         runtime.start(&preferred);
@@ -774,7 +998,10 @@ mod tests {
             .unwrap();
         let mut runtime = runtime_with(control.clone(), store);
         let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([("id-1".to_string(), 20)]),
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 20 },
+            )]),
             ..DeviceConfig::default()
         };
         runtime.start(&preferred);
@@ -801,6 +1028,241 @@ mod tests {
     }
 
     #[test]
+    fn apply_preferred_command_applies_every_configured_display() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        let config = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 85 },
+            )]),
+            ..DeviceConfig::default()
+        };
+        runtime.start(&config);
+        control.calls.lock().unwrap().clear();
+        assert!(runtime.handle(Command::ApplyPreferred));
+        assert_eq!(control.calls(), vec![("id-1".to_string(), 85)]);
+    }
+
+    #[test]
+    fn reload_config_applies_policy_and_preferred_deltas_only() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        let initial = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
+            policy: BTreeMap::from([(
+                "id-1".to_string(),
+                PolicySelection {
+                    policy: "ddc".into(),
+                },
+            )]),
+        };
+        runtime.start(&initial);
+        control.calls.lock().unwrap().clear();
+        let next = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 90 },
+            )]),
+            policy: BTreeMap::from([(
+                "id-1".to_string(),
+                PolicySelection {
+                    policy: "gamma".into(),
+                },
+            )]),
+        };
+        assert_eq!(runtime.reload_config(&next), 1);
+        assert_eq!(control.calls(), vec![("id-1".to_string(), 90)]);
+        assert_eq!(control.selection("id-1"), BrightnessPolicy::Gamma);
+        assert_eq!(runtime.config().preferred_for("id-1"), Some(90));
+        control.calls.lock().unwrap().clear();
+        assert_eq!(
+            runtime.reload_config(&next),
+            0,
+            "an unchanged config applies nothing"
+        );
+        assert_eq!(control.calls(), Vec::<(String, u8)>::new());
+    }
+
+    #[test]
+    fn reload_config_removing_entries_reverts_policy_and_never_touches_brightness() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        let initial = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
+            policy: BTreeMap::from([(
+                "id-1".to_string(),
+                PolicySelection {
+                    policy: "off".into(),
+                },
+            )]),
+        };
+        runtime.start(&initial);
+        control.calls.lock().unwrap().clear();
+        assert_eq!(runtime.reload_config(&DeviceConfig::default()), 0);
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "removing a preference leaves the display where it is"
+        );
+        assert_eq!(
+            control.selection("id-1"),
+            BrightnessPolicy::Auto,
+            "removing a policy entry reverts the display to auto"
+        );
+    }
+
+    #[test]
+    fn displays_payload_reports_live_state_and_config() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        control.select("id-1", BrightnessPolicy::Gamma);
+        let config = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
+            ..DeviceConfig::default()
+        };
+        let payload = displays_payload(&control, &config);
+        assert_eq!(
+            payload,
+            serde_json::json!([
+                {
+                    "id": "id-1",
+                    "connector": "card0-DP-1",
+                    "stable": true,
+                    "brightness": 42,
+                    "source": "ddc",
+                    "policy": "gamma",
+                    "preferred": 80,
+                    "detail": "42% via ddc",
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn displays_payload_reports_unreadable_brightness() {
+        let mut control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        control.refuse_get = true;
+        let payload = displays_payload(&control, &DeviceConfig::default());
+        assert_eq!(payload[0]["brightness"], serde_json::Value::Null);
+        assert_eq!(payload[0]["source"], "unavailable");
+        assert_eq!(payload[0]["detail"], "control is off for this display");
+        assert_eq!(payload[0]["preferred"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn status_payload_maps_no_displays_ok_and_unavailable() {
+        let empty = FakeControl::new(Vec::new(), 0, BrightnessSource::Ddc);
+        assert_eq!(
+            status_payload(&empty),
+            serde_json::json!({ "state": "no_displays", "count": 0 })
+        );
+        let ok = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        assert_eq!(
+            status_payload(&ok),
+            serde_json::json!({
+                "state": "ok",
+                "count": 1,
+                "brightness": 42,
+                "source": "ddc",
+            })
+        );
+        let mut refused = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        refused.refuse_get = true;
+        assert_eq!(
+            status_payload(&refused),
+            serde_json::json!({ "state": "unavailable", "count": 1 })
+        );
+    }
+
+    #[test]
+    fn routes_queries_from_live_state_with_data() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            42,
+            BrightnessSource::Ddc,
+        ));
+        let config = DeviceConfig {
+            preferred_brightness: BTreeMap::from([(
+                "id-1".to_string(),
+                BrightnessPreference { brightness: 80 },
+            )]),
+            ..DeviceConfig::default()
+        };
+        let mut runtime: Runtime<dyn MonitorControl> = Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+        );
+        runtime.start(&config);
+        set_live_state(Arc::new(Mutex::new(runtime)));
+
+        let ReadResult::HandledWithData(payload) =
+            parse_request(&request("displays", serde_json::Value::Null))
+        else {
+            panic!("displays must answer with data");
+        };
+        assert_eq!(payload[0]["connector"], "card0-DP-1");
+        assert_eq!(
+            payload[0]["brightness"], 80,
+            "start applies the preferred value"
+        );
+        assert_eq!(payload[0]["preferred"], 80);
+
+        let ReadResult::HandledWithData(payload) =
+            parse_request(&request("status", serde_json::Value::Null))
+        else {
+            panic!("status must answer with data");
+        };
+        assert_eq!(payload["state"], "ok");
+    }
+
+    #[test]
     fn queued_heartbeats_never_step_after_stop() {
         let (_dir, store) = runtime_store();
         let display = handle("id-1", "card0-DP-1");
@@ -809,9 +1271,9 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store);
+        let runtime = Mutex::new(runtime_with(control.clone(), store));
         let (tx, rx) = mpsc::channel();
-        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         tx.send(Command::Brightness {
             direction: -1,
             phase: Phase::Start,
@@ -861,8 +1323,13 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store.clone());
-        runtime.session().mutate(&display, 60).unwrap();
+        let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
+        runtime
+            .lock()
+            .unwrap()
+            .session()
+            .mutate(&display, 60)
+            .unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
         for command in [
@@ -883,7 +1350,7 @@ mod tests {
             tx.send(command).unwrap();
         }
         drop(tx);
-        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         loop_thread.join().expect("the loop must exit");
         let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
         assert!(snapshot.clean, "the queued kill must run the exit restore");
@@ -903,7 +1370,7 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store);
+        let runtime = Mutex::new(runtime_with(control.clone(), store));
         let (tx, rx) = mpsc::channel();
         for command in [
             Command::Brightness {
@@ -930,7 +1397,7 @@ mod tests {
             tx.send(command).unwrap();
         }
         drop(tx);
-        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         loop_thread.join().expect("the loop must exit");
         let calls = control.calls();
         assert!(
@@ -949,12 +1416,17 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store.clone());
-        runtime.session().mutate(&display, 60).unwrap();
+        let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
+        runtime
+            .lock()
+            .unwrap()
+            .session()
+            .mutate(&display, 60)
+            .unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
         let _sigterm = install_sigterm_handler(tx);
-        let loop_thread = std::thread::spawn(move || run_loop(&mut runtime, &rx));
+        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         let status = std::process::Command::new("kill")
             .args(["-TERM", &std::process::id().to_string()])
             .status()

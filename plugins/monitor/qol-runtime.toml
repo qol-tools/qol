@@ -1,0 +1,15 @@
+schema_version = 1
+
+[action.apply]
+description = "Apply preferred brightness to every connected display now"
+
+[action.reload]
+description = "Reload the device config from the host and apply changes at runtime"
+
+[query.displays]
+description = "Connected displays with live brightness, source, policy, and preferred value"
+poll_interval_ms = 2000
+
+[query.status]
+description = "Overall brightness control state"
+poll_interval_ms = 2000
