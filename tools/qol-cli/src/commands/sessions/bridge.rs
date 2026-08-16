@@ -323,6 +323,19 @@ impl PendingBridgeStore {
             }))
     }
 
+    pub(super) fn has_key_history(&self, key: &str) -> Result<bool> {
+        let expected = format!("spawn-{key}");
+        for checkpoint in self.open_checkpoints()? {
+            let Ok(binding) = checkpoint.session.parse::<SessionBinding>() else {
+                continue;
+            };
+            if binding.session_id().native() == expected {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn set_role(&self, binding: &SessionBinding, role: Role) -> Result<()> {
         let _lock = self.lock_role(binding)?;
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
@@ -719,6 +732,7 @@ pub(super) fn execute(
     Ok(outcome)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn submit(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -727,6 +741,7 @@ pub(super) fn submit(
     pending: &PendingBridgeStore,
     acknowledge_marker: Option<&str>,
     autoclose: bool,
+    resume: bool,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
     let _owner = pending.acquire_owner(binding)?;
@@ -736,7 +751,16 @@ pub(super) fn submit(
     {
         bail!("cannot submit to the calling terminal; choose an independent session");
     }
-    let _target = resolve_target(terminals, binding)?;
+    let target = resolve_target(terminals, binding)?;
+    let requested_autoclose = autoclose;
+    let autoclose = autoclose && target.spawn_identity.is_some();
+    if autoclose != requested_autoclose {
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=autoclose_forced_off target_backend={}",
+            binding.session_id().backend()
+        );
+    }
     if let Some(marker) = acknowledge_marker {
         pending.acknowledge(binding, marker, true)?;
     } else if pending.pending_round(binding)?.is_some() {
@@ -746,7 +770,11 @@ pub(super) fn submit(
     }
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
-    let prompt = bridge_prompt(task, &marker, role);
+    let prompt = if resume {
+        resume_lane_prompt(task, &marker)
+    } else {
+        bridge_prompt(task, &marker, role)
+    };
     pending.start(binding, &marker.token, &driver_token(terminals), autoclose)?;
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -1099,6 +1127,13 @@ fn outcome(
 fn kickstart_prompt(marker: &CompletionMarker) -> String {
     format!(
         "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
+        marker.left, marker.right
+    )
+}
+
+pub(super) fn resume_lane_prompt(task: &str, marker: &CompletionMarker) -> String {
+    format!(
+        "[qol session bridge]\nThis lane key previously ran a session whose terminal is gone; this terminal is resuming that persisted session's work. Continue from the persisted state (the prior round's checkpoint and stored screen remain available via `qol sessions next`) instead of treating this as a fresh lane. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
         marker.left, marker.right
     )
 }
@@ -1559,6 +1594,117 @@ mod tests {
     }
 
     #[test]
+    fn submit_with_autoclose_stores_the_flag_and_forces_it_off_for_architects() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::new(TickerStrategy) as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+
+        let mut lane_facts = facts(&binding);
+        lane_facts.spawn_identity = Some(qol_terminal_sessions::SpawnIdentity {
+            key: qol_terminal_sessions::SpawnKey::new("lane-7").unwrap(),
+            tool: qol_terminal_sessions::cli::CliToolId::new("codex").unwrap(),
+            surface: qol_terminal_sessions::SpawnSurface::Tab,
+        });
+        let backend = FakeBackend::new(lane_facts, vec![">>> ready".to_owned()]);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let outcome = submit(
+            &terminals,
+            &interpreter,
+            &binding,
+            "implement the fix",
+            &pending,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        assert!(outcome.submitted);
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "a spawn-identity target keeps the requested autoclose flag"
+        );
+
+        pending
+            .acknowledge(&binding, &outcome.completion_marker, false)
+            .unwrap();
+        let backend = FakeBackend::new(facts(&binding), vec![">>> ready".to_owned()]);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let outcome = submit(
+            &terminals,
+            &interpreter,
+            &binding,
+            "implement the fix",
+            &pending,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        assert!(outcome.submitted);
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.autoclose,
+            "the spawn-identity guard must force autoclose off for architect sessions"
+        );
+    }
+
+    #[test]
+    fn has_key_history_detects_a_dead_lane_with_a_persisted_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let dead = SessionBinding::from_str("v1:kitty:spawn-lane-x:200").unwrap();
+        store
+            .start(&dead, "QOL_BRIDGE_DONE_x", "v1:kitty:8:800", true)
+            .unwrap();
+
+        assert!(
+            store.has_key_history("lane-x").unwrap(),
+            "an open checkpoint for spawn-lane-x counts as key history"
+        );
+        assert!(!store.has_key_history("other").unwrap());
+        assert!(!store.has_key_history("lane-y").unwrap());
+
+        store.discard(&dead).unwrap();
+        assert!(
+            !store.has_key_history("lane-x").unwrap(),
+            "discarding the checkpoint removes the key history"
+        );
+    }
+
+    #[test]
+    fn resume_lane_prompt_announces_the_resume_intent() {
+        let marker = CompletionMarker::from_nonce("abc123");
+        let prompt = resume_lane_prompt("implement the bounded change", &marker);
+
+        assert!(prompt.starts_with("[qol session bridge]\n"));
+        assert!(prompt.contains("resuming"), "{prompt}");
+        assert!(prompt.contains("persisted"), "{prompt}");
+        assert!(prompt.contains("qol sessions next"), "{prompt}");
+        assert!(
+            prompt.contains("Completion fragments: `QOL_BRIDGE_DONE_` and `abc123`."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("implement the bounded change"));
+        assert!(prompt.contains("QOL_BRIDGE_DONE_"));
+        assert!(prompt.contains("abc123"));
+        assert!(
+            !prompt.contains(&marker.token),
+            "the prompt never joins the fragments"
+        );
+    }
+
+    #[test]
     fn prompt_never_contains_the_joined_completion_marker() {
         let marker = CompletionMarker::from_nonce("abc123");
         for prompt in [
@@ -1698,6 +1844,7 @@ mod tests {
             "implement the fix",
             &pending,
             None,
+            false,
             false,
         )
         .unwrap();

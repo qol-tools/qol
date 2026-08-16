@@ -103,6 +103,10 @@ impl CliSessionStrategy for PiStrategy {
         Some(CliLaunchProgram::new("pi"))
     }
 
+    fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
+        Some(vec!["--session-id".to_owned(), external_id.to_owned()])
+    }
+
     fn model_catalog(&self) -> Option<CliModelCatalog> {
         Some(
             CliModelCatalog::new("pi", ["--list-models"])

@@ -102,6 +102,13 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.model_catalog())
     }
 
+    pub fn resume_args_for(&self, tool: &CliToolId, external_id: &str) -> Option<Vec<String>> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.resume_args(external_id))
+    }
+
     pub fn launchable_tools(&self) -> Vec<CliToolId> {
         self.strategies
             .iter()
@@ -264,6 +271,31 @@ mod tests {
             interpreter.launch_for(&CliToolId::new("future-tool").unwrap()),
             None
         );
+    }
+
+    #[test]
+    fn resume_args_map_known_tools_and_unknown_tools_have_no_resume_flag() {
+        let interpreter = CliSessionInterpreter::system();
+
+        let cases = [
+            ("pi", vec!["--session-id".to_owned(), "abc".to_owned()]),
+            ("codex", vec!["resume".to_owned(), "abc".to_owned()]),
+            ("claude", vec!["--resume".to_owned(), "abc".to_owned()]),
+        ];
+        for (tool, expected) in cases {
+            assert_eq!(
+                interpreter.resume_args_for(&CliToolId::new(tool).unwrap(), "abc"),
+                Some(expected),
+                "tool: {tool}"
+            );
+        }
+        for tool in ["kimi", "generic", "future-tool"] {
+            assert_eq!(
+                interpreter.resume_args_for(&CliToolId::new(tool).unwrap(), "abc"),
+                None,
+                "tool: {tool}"
+            );
+        }
     }
 
     #[test]

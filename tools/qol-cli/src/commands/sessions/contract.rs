@@ -128,6 +128,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "boolean",
                         "description": "Close the lane terminal automatically when the watcher confirms the round's completion; defaults to true. Only applies to newly spawned terminals, never to a reused session, so a reuse call must pass autoclose: false",
                     },
+                    "resume": {
+                        "type": "boolean",
+                        "description": "Reload the harness's persisted session for this key when a new terminal is launched (the per-tool resume flag from the spawn ledger); defaults to false. Ignored when the key is fresh or the session is reused",
+                    },
                 },
                 "required": ["tool", "cwd", "key", "task"],
             }),
@@ -135,7 +139,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_submit",
             label: "Submit a task without waiting",
-            description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual.",
+            description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual. Submitted rounds close the lane terminal automatically when the watcher confirms completion (autoclose defaults to on; opt out with autoclose: false); sessions without a spawn identity are never closed.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -150,6 +154,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     "acknowledge_marker": {
                         "type": "string",
                         "description": "Completion marker from the last reviewed completed bridge; required to submit a new round instead of recovering the prior response",
+                    },
+                    "autoclose": {
+                        "type": "boolean",
+                        "description": "Close the lane terminal automatically when the watcher confirms the round's completion; defaults to true. Only applies to sessions with a spawn identity (lanes); architect-receiver sessions are never auto-closed. Opt out with autoclose: false",
                     },
                 },
                 "required": ["session", "task"],
@@ -302,6 +310,60 @@ mod tests {
             description.contains("never to a reused session"),
             "{description}"
         );
+    }
+
+    #[test]
+    fn session_submit_schema_declares_autoclose_as_an_optional_boolean() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_submit")
+            .unwrap();
+        assert_eq!(
+            spec.input_schema["properties"]["autoclose"]["type"],
+            "boolean"
+        );
+        assert!(
+            !spec.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "autoclose"),
+            "autoclose must stay optional so callers can opt out"
+        );
+        let description = spec.input_schema["properties"]["autoclose"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            description.contains("Close the lane terminal"),
+            "{description}"
+        );
+        assert!(description.contains("defaults to true"), "{description}");
+        assert!(description.contains("spawn identity"), "{description}");
+        assert!(description.contains("never auto-closed"), "{description}");
+    }
+
+    #[test]
+    fn session_spawn_schema_declares_resume_as_an_optional_boolean() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .unwrap();
+        assert_eq!(spec.input_schema["properties"]["resume"]["type"], "boolean");
+        assert!(
+            !spec.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "resume"),
+            "resume must stay optional"
+        );
+        let description = spec.input_schema["properties"]["resume"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(description.contains("persisted session"), "{description}");
+        assert!(description.contains("defaults to false"), "{description}");
     }
 
     #[test]

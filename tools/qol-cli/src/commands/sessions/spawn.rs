@@ -11,7 +11,7 @@ use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
     SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(super) const SURFACE_TAB: &str = "tab";
@@ -358,6 +358,95 @@ pub(super) struct SpawnLocks {
     dir: PathBuf,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct SpawnRecord {
+    pub(super) key: String,
+    pub(super) tool: String,
+    pub(super) surface: String,
+    pub(super) cwd: String,
+    pub(super) model: Option<String>,
+    pub(super) external_id: Option<String>,
+    pub(super) created_at: u64,
+    pub(super) last_seen: u64,
+}
+
+pub(super) struct SpawnLedger {
+    dir: PathBuf,
+}
+
+impl SpawnLedger {
+    pub(super) fn system() -> Result<Self> {
+        let dir = qol_config::data_subdir("sessions")
+            .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?
+            .join("spawn-records");
+        Ok(Self { dir })
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_dir(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    pub(super) fn record(
+        &self,
+        key: &SpawnKey,
+        tool: &CliToolId,
+        surface: SpawnSurface,
+        cwd: &str,
+        model: Option<&str>,
+        external_id: Option<&str>,
+    ) -> Result<()> {
+        fs::create_dir_all(&self.dir).context("failed to create spawn record directory")?;
+        let path = self.file_for(key);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let previous = fs::read_to_string(&path)
+            .ok()
+            .and_then(|encoded| serde_json::from_str::<SpawnRecord>(&encoded).ok());
+        let record = SpawnRecord {
+            key: key.to_string(),
+            tool: tool.to_string(),
+            surface: surface_token(surface).to_owned(),
+            cwd: cwd.to_owned(),
+            model: model
+                .map(str::to_owned)
+                .or_else(|| previous.as_ref().and_then(|record| record.model.clone())),
+            external_id: external_id.map(str::to_owned).or_else(|| {
+                previous
+                    .as_ref()
+                    .and_then(|record| record.external_id.clone())
+            }),
+            created_at: previous
+                .as_ref()
+                .map(|record| record.created_at)
+                .unwrap_or(now),
+            last_seen: now,
+        };
+        let temporary = path.with_extension("tmp");
+        let encoded = serde_json::to_string(&record)?;
+        fs::write(&temporary, encoded).context("failed to write spawn record")?;
+        fs::rename(&temporary, &path).context("failed to publish spawn record")
+    }
+
+    pub(super) fn load(&self, key: &SpawnKey) -> Result<Option<SpawnRecord>> {
+        let encoded = match fs::read_to_string(self.file_for(key)) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("failed to read spawn record"),
+        };
+        serde_json::from_str(&encoded)
+            .map(Some)
+            .context("spawn record is invalid")
+    }
+
+    fn file_for(&self, key: &SpawnKey) -> PathBuf {
+        let digest = Sha256::digest(key.as_str().as_bytes());
+        self.dir.join(format!("{digest:x}.json"))
+    }
+}
+
 pub(super) struct SpawnLockGuard {
     file: File,
 }
@@ -516,8 +605,10 @@ fn run_with(
         config,
         cap.as_ref(),
         locks,
+        &SpawnLedger::system()?,
         parsed.background,
         parsed.autoclose,
+        parsed.resume,
         parsed.task.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
     )
@@ -530,6 +621,7 @@ pub(super) fn deliver_task(
     task: &str,
     pending: &super::bridge::PendingBridgeStore,
     autoclose: bool,
+    resumed: bool,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
         .session
@@ -544,6 +636,7 @@ pub(super) fn deliver_task(
         pending,
         None,
         autoclose,
+        resumed,
     )?;
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(submitted.completion_marker);
@@ -595,10 +688,11 @@ struct SpawnArgs {
     task: Option<String>,
     background: bool,
     autoclose: bool,
+    resume: bool,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close] [--resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path. --resume reloads the harness's persisted session for this key from the spawn ledger when a new terminal is launched; it is a no-op for a fresh key and ignored on the reuse path.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -608,6 +702,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut task = None;
     let mut background = false;
     let mut autoclose = false;
+    let mut resume = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -650,6 +745,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 autoclose = true;
                 index += 1;
             }
+            "--resume" => {
+                resume = true;
+                index += 1;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -665,6 +764,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         task,
         background,
         autoclose,
+        resume,
     })
 }
 
@@ -735,8 +835,10 @@ pub(super) fn spawn_or_reuse(
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
     locks: &SpawnLocks,
+    ledger: &SpawnLedger,
     background: bool,
     autoclose: bool,
+    resume: bool,
     task: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
 ) -> Result<SpawnOutcome> {
@@ -753,17 +855,44 @@ pub(super) fn spawn_or_reuse(
             SpawnDecision::Launch => {
                 require_model_for_launch(model)?;
                 let mut launch = wrap_launch(&prepared.launch, cap);
+                if resume {
+                    if let Some(record) = ledger.load(&prepared.key)? {
+                        if record.tool == prepared.tool_id.to_string() {
+                            let external_id = record
+                                .external_id
+                                .as_deref()
+                                .filter(|id| !id.is_empty());
+                            if let Some(external_id) = external_id {
+                                if let Some(args) = interpreter
+                                    .resume_args_for(&prepared.tool_id, external_id)
+                                {
+                                    launch.args.extend(args);
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(model) = model {
                     launch.args.extend(model_args(&prepared.tool_id, model)?);
                 }
+                let resumed = key.is_some()
+                    && task.is_some()
+                    && pending.has_key_history(prepared.key.as_str())?;
                 if background {
                     let round_task =
                         task.expect("the background guard above guarantees a task");
                     super::bridge::validate_task(round_task)?;
                     let marker = super::bridge::CompletionMarker::generate();
-                    launch
-                        .args
-                        .push(super::bridge::bridge_prompt(round_task, &marker, super::bridge::Role::Lane));
+                    let prompt = if resumed {
+                        super::bridge::resume_lane_prompt(round_task, &marker)
+                    } else {
+                        super::bridge::bridge_prompt(
+                            round_task,
+                            &marker,
+                            super::bridge::Role::Lane,
+                        )
+                    };
+                    launch.args.push(prompt);
                     let request = SpawnRequest {
                         identity: prepared.identity.clone(),
                         launch,
@@ -774,6 +903,7 @@ pub(super) fn spawn_or_reuse(
                         terminals,
                         interpreter,
                         pending,
+                        ledger,
                         &prepared.identity,
                         &request,
                         &marker.token,
@@ -794,6 +924,7 @@ pub(super) fn spawn_or_reuse(
                         terminals,
                         interpreter,
                         pending,
+                        ledger,
                         &prepared.identity,
                         &request,
                         model,
@@ -809,6 +940,7 @@ pub(super) fn spawn_or_reuse(
                             round_task,
                             pending,
                             autoclose,
+                            resumed,
                         ),
                         None => Ok(outcome),
                     }
@@ -838,10 +970,25 @@ pub(super) fn spawn_or_reuse(
                     .binding()
                     .context("spawned session cannot bind to a stable token")?;
                 pending.set_role(&binding, super::bridge::Role::Lane)?;
+                let descriptor = interpreter.describe(&facts);
+                ledger.record(
+                    &prepared.key,
+                    &prepared.tool_id,
+                    prepared.identity.surface,
+                    &facts.cwd,
+                    descriptor.external_id.as_deref().or(model),
+                    descriptor.external_id.as_deref(),
+                )?;
                 match task {
-                    Some(round_task) => {
-                        deliver_task(terminals, interpreter, outcome, round_task, pending, false)
-                    }
+                    Some(round_task) => deliver_task(
+                        terminals,
+                        interpreter,
+                        outcome,
+                        round_task,
+                        pending,
+                        false,
+                        false,
+                    ),
                     None => Ok(outcome),
                 }
             }
@@ -886,6 +1033,7 @@ fn launch_background(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     pending: &super::bridge::PendingBridgeStore,
+    ledger: &SpawnLedger,
     identity: &SpawnIdentity,
     request: &SpawnRequest,
     marker: &str,
@@ -921,6 +1069,15 @@ fn launch_background(
             identity.key, identity.tool
         );
     }
+    let descriptor = interpreter.describe(&facts);
+    ledger.record(
+        &identity.key,
+        &identity.tool,
+        identity.surface,
+        &facts.cwd,
+        descriptor.external_id.as_deref().or(model),
+        descriptor.external_id.as_deref(),
+    )?;
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
@@ -954,6 +1111,7 @@ fn launch_ready(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     pending: &super::bridge::PendingBridgeStore,
+    ledger: &SpawnLedger,
     identity: &SpawnIdentity,
     request: &SpawnRequest,
     model: Option<&str>,
@@ -978,6 +1136,15 @@ fn launch_ready(
         &session_id,
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
+    )?;
+    let descriptor = interpreter.describe(&facts);
+    ledger.record(
+        &identity.key,
+        &identity.tool,
+        identity.surface,
+        &facts.cwd,
+        descriptor.external_id.as_deref().or(model),
+        descriptor.external_id.as_deref(),
     )?;
     let binding = facts
         .binding()
@@ -1128,6 +1295,7 @@ fn decide(
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex};
 
@@ -1340,9 +1508,10 @@ mod tests {
     ) -> Result<SpawnOutcome> {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         run_spawn_with(
-            terminals, tool, cwd, key, surface, model, title, config, locks, false, false, None,
-            None, &pending,
+            terminals, tool, cwd, key, surface, model, title, config, locks, &ledger, false, false,
+            false, None, None, &pending,
         )
     }
 
@@ -1357,8 +1526,10 @@ mod tests {
         title: Option<&str>,
         config: Option<SpawnSurface>,
         locks: &SpawnLocks,
+        ledger: &SpawnLedger,
         background: bool,
         autoclose: bool,
+        resume: bool,
         task: Option<&str>,
         cap: Option<SpawnCapConfig>,
         pending: &super::super::bridge::PendingBridgeStore,
@@ -1375,8 +1546,10 @@ mod tests {
             config,
             cap.as_ref(),
             locks,
+            ledger,
             background,
             autoclose,
+            resume,
             task,
             pending,
         )
@@ -1401,6 +1574,7 @@ mod tests {
             "implement the fix".into(),
             "--background".into(),
             "--auto-close".into(),
+            "--resume".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -1412,6 +1586,7 @@ mod tests {
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
         assert!(parsed.background);
         assert!(parsed.autoclose);
+        assert!(parsed.resume);
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -1424,6 +1599,136 @@ mod tests {
         assert_eq!(parsed.task, None);
         assert!(!parsed.background);
         assert!(!parsed.autoclose);
+        assert!(!parsed.resume);
+    }
+
+    #[test]
+    fn spawn_ledger_records_roundtrip_and_are_keyed_by_the_spawn_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-ledger").unwrap();
+
+        assert!(ledger.load(&key).unwrap().is_none());
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                Some("flash-x"),
+                Some("01a00a6b"),
+            )
+            .unwrap();
+        let record = ledger.load(&key).unwrap().unwrap();
+        assert_eq!(record.key, "lane-ledger");
+        assert_eq!(record.tool, "pi");
+        assert_eq!(record.surface, "tab");
+        assert_eq!(record.cwd, "/work");
+        assert_eq!(record.model.as_deref(), Some("flash-x"));
+        assert_eq!(record.external_id.as_deref(), Some("01a00a6b"));
+        assert_eq!(record.created_at, record.last_seen);
+
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                None,
+            )
+            .unwrap();
+        let record = ledger.load(&key).unwrap().unwrap();
+        assert_eq!(
+            record.external_id.as_deref(),
+            Some("01a00a6b"),
+            "a refresh without an id must keep the last captured external id"
+        );
+        assert_eq!(
+            record.model.as_deref(),
+            Some("flash-x"),
+            "a refresh without a model keeps the previous model"
+        );
+        assert_eq!(
+            record.created_at, record.last_seen,
+            "the first record pins created_at and the refresh bumps last_seen"
+        );
+    }
+
+    #[test]
+    fn keyed_launch_after_a_dead_lane_embeds_the_resume_prompt() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let dead = SessionBinding::from_str("v1:kitty:spawn-lane-rs:200").unwrap();
+        pending
+            .start(&dead, "QOL_BRIDGE_DONE_dead", "v1:kitty:8:800", true)
+            .unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-rs"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            true,
+            false,
+            false,
+            Some("implement the fix"),
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.background);
+        assert!(!outcome.reused);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        let prompt = request.launch.args.last().unwrap();
+        assert!(prompt.contains("resuming"), "{prompt}");
+        assert!(prompt.contains("persisted session"), "{prompt}");
+        assert!(prompt.contains("implement the fix"));
+        assert!(
+            !prompt.contains("Act as the implementation agent"),
+            "a keyed respawn of a dead lane must not reuse the plain Lane prompt"
+        );
+
+        let outcome = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("fresh-lane"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            true,
+            false,
+            false,
+            Some("another fix"),
+            None,
+            &pending,
+        )
+        .unwrap();
+        assert!(outcome.background);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        let prompt = request.launch.args.last().unwrap();
+        assert!(
+            prompt.contains("Act as the implementation agent"),
+            "a fresh key in the same store still gets the plain Lane prompt"
+        );
+        assert!(!prompt.contains("resuming"));
     }
 
     #[test]
@@ -1583,6 +1888,7 @@ mod tests {
     fn capped_launch_carries_the_scope_wrapper_into_the_spawn_request() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())
             .unwrap()
             .to_string_lossy()
@@ -1600,6 +1906,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             None,
@@ -1726,6 +2034,7 @@ mod tests {
     fn background_launch_embeds_the_task_queues_the_round_and_skips_the_liveness_wait() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())
             .unwrap()
             .to_string_lossy()
@@ -1743,7 +2052,9 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
             true,
+            false,
             false,
             Some("implement the fix"),
             None,
@@ -1797,6 +2108,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             Some("implement the fix"),
@@ -1815,6 +2128,7 @@ mod tests {
     fn launch_and_reuse_write_the_lane_role_marker() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())
             .unwrap()
             .to_string_lossy()
@@ -1832,6 +2146,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             None,
@@ -1857,6 +2173,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             None,
@@ -1883,6 +2201,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             None,
@@ -1903,6 +2223,7 @@ mod tests {
     fn background_requires_a_task_and_never_bypasses_model_enforcement() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())
             .unwrap()
             .to_string_lossy()
@@ -1920,7 +2241,9 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
             true,
+            false,
             false,
             None,
             None,
@@ -1940,7 +2263,9 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
             true,
+            false,
             false,
             Some("implement the fix"),
             None,
@@ -1956,6 +2281,7 @@ mod tests {
     fn autoclose_marks_new_spawns_and_refuses_the_reuse_path() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())
             .unwrap()
             .to_string_lossy()
@@ -1973,8 +2299,10 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
             true,
             true,
+            false,
             Some("implement the fix"),
             None,
             &pending,
@@ -2000,8 +2328,10 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
             false,
             true,
+            false,
             None,
             None,
             &pending,
@@ -2022,6 +2352,8 @@ mod tests {
             None,
             None,
             &locks,
+            &ledger,
+            false,
             false,
             false,
             None,

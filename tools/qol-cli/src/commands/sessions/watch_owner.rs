@@ -10,8 +10,14 @@ use super::bridge::PendingBridgeStore;
 pub(super) struct ClientWatcher {
     dir: PathBuf,
     owner_key: String,
+    program: PathBuf,
     child: Arc<Mutex<Option<Child>>>,
 }
+
+const WATCH_PROGRAM: &str = "qol";
+
+#[cfg(test)]
+const ALWAYS_PRESENT_TEST_PROGRAM: &str = "/bin/echo";
 
 fn sessions_dir() -> PathBuf {
     qol_config::data_subdir("sessions").unwrap_or_else(|| ".".into())
@@ -35,6 +41,7 @@ impl ClientWatcher {
         Self {
             dir: sessions_dir(),
             owner_key,
+            program: PathBuf::from(WATCH_PROGRAM),
             child: Arc::new(Mutex::new(None)),
         }
     }
@@ -44,6 +51,7 @@ impl ClientWatcher {
         Self {
             dir,
             owner_key,
+            program: PathBuf::from(ALWAYS_PRESENT_TEST_PROGRAM),
             child: Arc::new(Mutex::new(None)),
         }
     }
@@ -129,7 +137,7 @@ impl ClientWatcher {
         if tokens.is_empty() {
             return;
         }
-        let mut child = match Command::new("qol")
+        let mut child = match Command::new(&self.program)
             .args(["sessions", "watch"])
             .args(tokens)
             .stdin(Stdio::null())

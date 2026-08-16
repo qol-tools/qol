@@ -129,8 +129,8 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]
-  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--auto-close] [--resume]
+  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--no-auto-close]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
@@ -163,10 +163,16 @@ Details:
   the fallback. --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
-  completion_marker, and next_command.
+  completion_marker, and next_command. --resume reloads the harness's
+  persisted session for this key from the spawn ledger when a new terminal
+  is launched, so the fresh lane continues the prior session; it is a no-op
+  for a fresh key and ignored on the reuse path.
   submit delivers one bounded task and returns immediately with the round
   recorded and open, so several lanes can run in parallel before any of them
   is awaited; it refuses when a round is already pending on that session.
+  Submitted rounds close their lane terminal after the watcher confirms
+  completion unless --no-auto-close; sessions without a spawn identity are
+  never closed.
   bridge submits one bounded task, supplies a generated completion signal,
   waits in the same call, and prints JSON with completed, submitted, session,
   completion_marker, screen, reads, and elapsed_ms. Without a task it
@@ -292,7 +298,7 @@ fn send(args: &[OsString]) -> Result<()> {
 }
 
 fn run_submit(args: &[OsString]) -> Result<()> {
-    let (binding_token, task, acknowledge_marker) = parse_submit_args(args)?;
+    let (binding_token, task, acknowledge_marker, autoclose) = parse_submit_args(args)?;
     let binding = SessionBinding::from_str(&binding_token)
         .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
     let terminals = service()?;
@@ -303,6 +309,7 @@ fn run_submit(args: &[OsString]) -> Result<()> {
         &task,
         &bridge::PendingBridgeStore::system()?,
         acknowledge_marker.as_deref(),
+        autoclose,
         false,
     )?;
     println!(
@@ -312,8 +319,9 @@ fn run_submit(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String>)> {
-    let usage = "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]";
+fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String>, bool)> {
+    let usage =
+        "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--no-auto-close]";
     let binding = args
         .first()
         .and_then(|argument| argument.to_str())
@@ -321,6 +329,7 @@ fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String
         .to_owned();
     let mut task = None;
     let mut acknowledge_marker = None;
+    let mut autoclose = true;
     let mut index = 1;
     while index < args.len() {
         let argument = args[index]
@@ -347,11 +356,19 @@ fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String
                 );
                 index += 2;
             }
+            "--no-auto-close" => {
+                autoclose = false;
+                index += 1;
+            }
+            "--auto-close" => {
+                autoclose = true;
+                index += 1;
+            }
             other => bail!("unknown submit flag `{other}`\nusage: {usage}"),
         }
     }
     let task = task.ok_or_else(|| anyhow!("usage: {usage}"))?;
-    Ok((binding, task, acknowledge_marker))
+    Ok((binding, task, acknowledge_marker, autoclose))
 }
 
 fn run_bridge(args: &[OsString]) -> Result<()> {
@@ -1215,6 +1232,25 @@ mod tests {
         assert_eq!(parsed.0, "v1:kitty:7:123");
         assert_eq!(parsed.1, "implement the fix");
         assert_eq!(parsed.2.as_deref(), Some("QOL_BRIDGE_DONE_previous"));
+        assert!(parsed.3, "autoclose must default to true");
+
+        let opted_out = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--no-auto-close".into(),
+        ])
+        .unwrap();
+        assert!(!opted_out.3, "--no-auto-close must opt the round out");
+
+        let explicit = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--auto-close".into(),
+        ])
+        .unwrap();
+        assert!(explicit.3, "--auto-close stays an accepted no-op");
 
         assert!(parse_submit_args(&["v1:kitty:7:123".into()]).is_err());
         assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--task".into()]).is_err());

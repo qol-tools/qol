@@ -94,6 +94,10 @@ impl CliSessionStrategy for ClaudeStrategy {
         Some(CliLaunchProgram::new("claude"))
     }
 
+    fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
+        Some(vec!["--resume".to_owned(), external_id.to_owned()])
+    }
+
     fn subscribe(
         &self,
         session: &SessionFacts,

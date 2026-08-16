@@ -63,4 +63,8 @@ pub trait CliSessionStrategy: Send + Sync {
     fn model_catalog(&self) -> Option<CliModelCatalog> {
         None
     }
+
+    fn resume_args(&self, _external_id: &str) -> Option<Vec<String>> {
+        None
+    }
 }

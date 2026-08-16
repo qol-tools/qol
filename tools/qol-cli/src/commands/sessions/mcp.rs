@@ -30,6 +30,7 @@ pub(crate) struct McpSessionServer {
     interpreter: CliSessionInterpreter,
     pending: super::bridge::PendingBridgeStore,
     locks: super::spawn::SpawnLocks,
+    ledger: super::spawn::SpawnLedger,
     spawn_model: Option<String>,
     spawn_surface: Option<SpawnSurface>,
     spawn_cap: Option<super::spawn::SpawnCapConfig>,
@@ -48,6 +49,7 @@ impl McpSessionServer {
             interpreter: CliSessionInterpreter::system(),
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
+            ledger: super::spawn::SpawnLedger::system()?,
             spawn_model: super::spawn::config_spawn_model()?,
             spawn_surface: super::spawn::config_surface()?,
             spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
@@ -67,6 +69,7 @@ impl McpSessionServer {
             interpreter,
             pending,
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            ledger: super::spawn::SpawnLedger::with_dir(root.path().join("spawn-records")),
             spawn_model: None,
             spawn_surface: None,
             spawn_cap: None,
@@ -90,6 +93,7 @@ impl McpSessionServer {
             interpreter,
             pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
+            ledger: super::spawn::SpawnLedger::with_dir(dir.join("spawn-records")),
             spawn_model: None,
             spawn_surface: None,
             spawn_cap: None,
@@ -258,6 +262,15 @@ impl McpSessionServer {
             })
             .transpose()?
             .unwrap_or(true);
+        let resume = arguments
+            .get("resume")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         let model =
             super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
                 .map_err(|error| error.to_string())?;
@@ -273,8 +286,10 @@ impl McpSessionServer {
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
+            &self.ledger,
             true,
             autoclose,
+            resume,
             Some(task),
             &self.pending,
         )
@@ -296,6 +311,24 @@ impl McpSessionServer {
                 })
             })
             .transpose()?;
+        let autoclose = arguments
+            .get("autoclose")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_submit `autoclose` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(true);
+        let resume = arguments
+            .get("resume")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_submit `resume` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         let outcome = super::bridge::submit(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -303,7 +336,8 @@ impl McpSessionServer {
             task,
             &self.pending,
             acknowledge_marker,
-            false,
+            autoclose,
+            resume,
         )
         .map_err(|error| error.to_string())?;
         if outcome.submitted {
@@ -430,7 +464,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`; a\n  `resume` argument reloads the harness's persisted session for the key from\n  the spawn ledger when a new terminal is launched).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion (autoclose defaults to on; pass autoclose: false to\n  keep the lane open), and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1080,6 +1114,44 @@ mod tests {
         assert_eq!(rows[0]["session"], token());
         assert_eq!(rows[0]["tool"], "generic");
         assert_eq!(rows[0]["display_name"], "agent");
+    }
+
+    #[test]
+    fn session_submit_autoclose_opt_out_leaves_the_round_plain() {
+        let (server, _) = server(Vec::new(), false, false);
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({
+                "session": token(),
+                "task": "implement the bounded change",
+                "autoclose": false,
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let binding: SessionBinding = token().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.autoclose,
+            "autoclose: false must opt the round out of lane closing"
+        );
+    }
+
+    #[test]
+    fn session_submit_never_autocloses_a_session_without_a_spawn_identity() {
+        let (server, _) = server(Vec::new(), false, false);
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "implement the bounded change" }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let binding: SessionBinding = token().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.autoclose,
+            "the spawn-identity guard must force autoclose off for architect targets even when the caller asks for it"
+        );
     }
 
     #[test]

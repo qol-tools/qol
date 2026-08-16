@@ -288,6 +288,7 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
       if (params.title != null) args.push("--title", params.title);
       args.push("--task", params.task, "--background");
       if (params.autoclose !== false) args.push("--auto-close");
+      if (params.resume === true) args.push("--resume");
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
@@ -299,6 +300,7 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
 
 const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["submit", params.session, "--task", params.task];
+      if (params.autoclose === false) args.push("--no-auto-close");
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
@@ -338,7 +340,7 @@ const EXECUTE_LOOP_CLOSE: &str = r#"    async execute(_toolCallId, params, signa
       const receipt = JSON.parse(text);
       setLoopPhase("closing", receipt.final_report);
       return {
-        content: [{ type: "text", text: JSON.stringify(receipt) }],
+        content: [{ type: "text", text: typeof receipt.final_report === "string" ? receipt.final_report : JSON.stringify(receipt) }],
         details: { receipt },
       };
     },
@@ -594,6 +596,18 @@ mod tests {
     }
 
     #[test]
+    fn pi_adapter_passes_spawn_resume_through_as_an_opt_in_flag() {
+        assert!(
+            EXECUTE_SPAWN.contains("if (params.resume === true) args.push(\"--resume\")"),
+            "spawn resume is opt-in, so only an explicit request pushes the flag"
+        );
+        assert!(
+            EXECUTE_SPAWN.contains("if (params.autoclose !== false) args.push(\"--auto-close\")"),
+            "the resume passthrough must not disturb the existing autoclose behavior"
+        );
+    }
+
+    #[test]
     fn pi_adapter_watches_every_spawn_round_without_a_foreground_split() {
         let source = pi_extension().expect("render");
         assert!(!EXECUTE_SPAWN.contains("outcome.task_submitted"));
@@ -702,6 +716,34 @@ mod tests {
         assert!(source.contains("name: \"session_loop_close\""));
         assert!(source.contains("run([\"mcp\"], 10_000"));
         assert!(source.contains("setLoopPhase(\"closing\", receipt.final_report)"));
+        assert!(
+            source.contains(
+                "text: typeof receipt.final_report === \"string\" ? receipt.final_report : JSON.stringify(receipt)"
+            ),
+            "the loop-close result text must be the human-readable final report, with the full receipt as fallback"
+        );
+        assert!(
+            !EXECUTE_LOOP_CLOSE
+                .contains("content: [{ type: \"text\", text: JSON.stringify(receipt) }]"),
+            "the raw JSON receipt must not be rendered into the chat"
+        );
+        assert!(EXECUTE_LOOP_CLOSE.contains("details: { receipt },"));
+    }
+
+    #[test]
+    fn pi_adapter_passes_submit_autoclose_through_as_an_opt_out_flag() {
+        assert!(
+            EXECUTE_SUBMIT
+                .contains("if (params.autoclose === false) args.push(\"--no-auto-close\")"),
+            "submit autoclose defaults on, so only an explicit opt-out pushes a flag"
+        );
+        assert!(
+            !EXECUTE_SUBMIT.contains("--auto-close"),
+            "submit must never push the spawn-side opt-in flag"
+        );
+        assert!(EXECUTE_SUBMIT.contains(
+            "if (params.acknowledge_marker != null) args.push(\"--acknowledge-marker\", params.acknowledge_marker)"
+        ));
     }
 
     #[test]
