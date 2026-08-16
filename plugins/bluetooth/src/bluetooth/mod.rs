@@ -327,7 +327,7 @@ pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
     });
     let mut options = vec![DeviceOption {
         value: String::new(),
-        label: "Automatic · BlueZ default".to_string(),
+        label: "Automatic · system default".to_string(),
     }];
     options.extend(sorted.into_iter().map(|adapter| DeviceOption {
         value: adapter.address.clone(),
@@ -531,7 +531,7 @@ mod tests {
             vec![
                 DeviceOption {
                     value: "".into(),
-                    label: "Automatic · BlueZ default".into(),
+                    label: "Automatic · system default".into(),
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:01".into(),

@@ -21,7 +21,7 @@ variant = "toggle"
 [field.adapter]
 type = "select"
 label = "Adapter"
-description = "Which Bluetooth adapter qol uses. Automatic follows the BlueZ default."
+description = "Which Bluetooth adapter qol uses. Automatic follows the system default."
 section = "devices"
 default = ""
 query = "adapter_options"
