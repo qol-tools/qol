@@ -7,7 +7,7 @@ use objc2_app_kit::{
     NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
     NSWindowAnimationBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSSize};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::PopupPresentation;
@@ -220,28 +220,63 @@ pub fn sync_window_layout(
 ) -> bool {
     let backing = window_backing_scale(title);
     crate::window::resize_or_sync_scale(window, size, backing);
-    reposition_window_by_title(title, origin.x.to_f64(), origin.y.to_f64())
+    set_window_frame_by_title(title, origin, size)
+}
+
+pub fn set_window_frame_by_title(
+    title: &str,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(window) = find_window_by_title(mtm, title) else {
+        return false;
+    };
+    let size = NSSize::new(size.width.to_f64(), size.height.to_f64());
+    let frame = NSRect::new(
+        cocoa_origin_for_top_left(mtm, origin.x.to_f64(), origin.y.to_f64(), size.height),
+        size,
+    );
+    window.setFrame_display(frame, true);
+    sync_backing_properties(&window);
+    true
 }
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
     };
-
-    let screens = NSScreen::screens(mtm);
-    let primary_h = screens
-        .iter()
-        .next()
-        .map(|s| s.frame().size.height)
-        .unwrap_or(1080.0);
-    let ns_point = NSPoint::new(gpui_x, primary_h - gpui_y);
-
     let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
-    window.setFrameTopLeftPoint(ns_point);
+    let current_height = window.frame().size.height;
+    let origin = cocoa_origin_for_top_left(mtm, gpui_x, gpui_y, current_height);
+    window.setFrameOrigin(origin);
     sync_backing_properties(&window);
     true
+}
+
+fn cocoa_origin_for_top_left(
+    mtm: MainThreadMarker,
+    gpui_x: f64,
+    gpui_y: f64,
+    frame_height: f64,
+) -> NSPoint {
+    let primary_screen_height = NSScreen::screens(mtm)
+        .iter()
+        .next()
+        .map(|screen| screen.frame().size.height)
+        .unwrap_or(1080.0);
+    NSPoint::new(
+        gpui_x,
+        cocoa_bottom_edge(primary_screen_height, gpui_y, frame_height),
+    )
+}
+
+fn cocoa_bottom_edge(primary_screen_height: f64, gpui_top: f64, frame_height: f64) -> f64 {
+    primary_screen_height - gpui_top - frame_height
 }
 
 fn resolve_window(title: &str) -> Option<Retained<NSWindow>> {
@@ -645,4 +680,25 @@ pub fn window_holds_input_focus(title: &str) -> Option<bool> {
         return Some(false);
     };
     Some(frontmost == number)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cocoa_bottom_edge;
+
+    #[test]
+    fn top_edge_survives_every_height_change() {
+        let screen = 1080.0;
+        let requested_top = 40.0;
+        for height in [720.0, 480.0, 320.0, 32.0] {
+            let bottom = cocoa_bottom_edge(screen, requested_top, height);
+            let resulting_top = screen - (bottom + height);
+            assert_eq!(resulting_top, requested_top, "height {height}");
+        }
+    }
+
+    #[test]
+    fn bottom_edge_sits_on_the_screen_floor_for_a_full_height_window() {
+        assert_eq!(cocoa_bottom_edge(1080.0, 0.0, 1080.0), 0.0);
+    }
 }
