@@ -87,14 +87,50 @@ pub fn has_process_focus() -> bool {
     frontmost_pid() == Some(std::process::id() as i32)
 }
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
+use std::sync::OnceLock;
 
 type DispatchFunction = unsafe extern "C" fn(*mut c_void);
 
-#[link(name = "System", kind = "framework")]
 extern "C" {
-    fn dispatch_get_main_queue() -> *const c_void;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, function: DispatchFunction);
+    fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+struct DispatchSymbols {
+    get_main_queue: unsafe extern "C" fn() -> *const c_void,
+    async_f: unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
+}
+
+fn dispatch_symbols() -> Option<&'static DispatchSymbols> {
+    static SYMBOLS: OnceLock<Option<DispatchSymbols>> = OnceLock::new();
+    SYMBOLS
+        .get_or_init(|| {
+            let handle = unsafe { dlopen(c"libSystem.B.dylib".as_ptr(), 0x1) };
+            if handle.is_null() {
+                return None;
+            }
+            let get_main_queue =
+                unsafe { dlsym(handle, c"_dispatch_get_main_queue".as_ptr()) as *const () };
+            let async_f = unsafe { dlsym(handle, c"_dispatch_async_f".as_ptr()) as *const () };
+            if get_main_queue.is_null() || async_f.is_null() {
+                return None;
+            }
+            Some(DispatchSymbols {
+                get_main_queue: unsafe {
+                    std::mem::transmute::<*const (), unsafe extern "C" fn() -> *const c_void>(
+                        get_main_queue,
+                    )
+                },
+                async_f: unsafe {
+                    std::mem::transmute::<
+                        *const (),
+                        unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
+                    >(async_f)
+                },
+            })
+        })
+        .as_ref()
 }
 
 unsafe extern "C" fn run_task_on_main(context: *mut c_void) {
@@ -103,13 +139,16 @@ unsafe extern "C" fn run_task_on_main(context: *mut c_void) {
 }
 
 pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
+    let Some(symbols) = dispatch_symbols() else {
+        return;
+    };
     unsafe {
-        let queue = dispatch_get_main_queue();
+        let queue = (symbols.get_main_queue)();
         if queue.is_null() {
             return;
         }
         let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(task);
-        dispatch_async_f(queue, Box::into_raw(boxed) as *mut c_void, run_task_on_main);
+        (symbols.async_f)(queue, Box::into_raw(boxed) as *mut c_void, run_task_on_main);
     }
 }
 
