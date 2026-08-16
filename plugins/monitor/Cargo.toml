@@ -1,0 +1,18 @@
+[package]
+name = "plugin-monitor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+qol-apps.workspace = true
+qol-conventions.workspace = true
+qol-headless.workspace = true
+qol-windowing.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true
+serde_json.workspace = true

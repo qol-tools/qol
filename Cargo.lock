@@ -5876,6 +5876,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-monitor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qol-apps",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-windowing",
+ "serde_json",
+]
+
+[[package]]
 name = "plugin-os-themes"
 version = "0.32.1"
 dependencies = [

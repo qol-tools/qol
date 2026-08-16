@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+plugin-monitor
+plugin-monitor.new
+.cargo/config.toml

@@ -1,0 +1,20 @@
+schema_version = 1
+title = "Monitor"
+description = "Settings for display brightness, gamma, and mode control."
+
+# The native hosted settings panel engages when this file exists alongside
+# plugin.toml. Replace these placeholder fields with the plugin's real
+# settings contract when config arrives; see plugins/lights/qol-config.toml
+# and plugins/pointz/qol-config.toml for the full field vocabulary.
+
+[field.enabled]
+type = "boolean"
+config_key = "general.enabled"
+label = "Enabled"
+default = true
+
+[field.display_name]
+type = "string"
+config_key = "general.display_name"
+label = "Display Name"
+default = "Monitor"

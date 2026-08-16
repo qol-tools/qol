@@ -1,0 +1,44 @@
+[plugin]
+id = "plugin-monitor"
+uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
+name = "Monitor"
+description = "Display brightness, gamma, and mode control"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "plugin-monitor"
+
+[action.brightness-up]
+label = "Brightness Up"
+args = ["up"]
+continuous = true
+
+[action.brightness-down]
+label = "Brightness Down"
+args = ["down"]
+continuous = true
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
+
+[capabilities]
+gpui = true
+doctor = true
+
+[daemon]
+enabled = true
+command = "plugin-monitor"
+socket = "/tmp/qol-plugin-monitor.sock"
+
+[menu]
+label = "Monitor"
+items = []
+
+[[dependencies.binaries]]
+name = "plugin-monitor"
+repo = "qol-tools/plugin-monitor"
+pattern = "plugin-monitor-{os}-{arch}"

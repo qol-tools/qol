@@ -2167,7 +2167,7 @@ default = true
                 .unwrap_or_else(|error| panic!("{plugin}: {error:?}"));
             contracts.push((plugin, spec));
         }
-        assert_eq!(contracts.len(), 14, "expected 14 plugin contracts");
+        assert_eq!(contracts.len(), 15, "expected 15 plugin contracts");
         let mut unsupported = Vec::new();
         for (plugin, spec) in &contracts {
             let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
