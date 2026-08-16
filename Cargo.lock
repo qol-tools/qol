@@ -6587,6 +6587,7 @@ dependencies = [
  "libc",
  "qol-config",
  "qol-conventions",
+ "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",
@@ -6773,6 +6774,12 @@ dependencies = [
 [[package]]
 name = "qol-windowing"
 version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
 
 [[package]]
 name = "qol-workspace"

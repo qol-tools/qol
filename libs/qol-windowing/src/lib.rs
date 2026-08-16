@@ -8,6 +8,9 @@ mod geometry;
 mod ops;
 mod window_id;
 
-pub use geometry::WindowRect;
+pub mod display;
+
+pub use display::{DisplayEnumerator, DisplayHandle, Platform};
+pub use geometry::{MonitorBounds, WindowRect};
 pub use ops::WindowOps;
 pub use window_id::WindowId;

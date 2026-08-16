@@ -1,5 +1,15 @@
 //! Window geometry.
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MonitorBounds {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// A window frame in screen coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WindowRect {
@@ -41,7 +51,7 @@ impl WindowRect {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowRect;
+    use super::*;
 
     #[test]
     fn array_round_trip() {
@@ -61,5 +71,20 @@ mod tests {
     #[test]
     fn default_is_zero_rect() {
         assert_eq!(WindowRect::default().to_array(), [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn monitor_bounds_serde_round_trip() {
+        let bounds = MonitorBounds {
+            x: -1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let json = serde_json::to_string(&bounds).unwrap();
+        assert_eq!(
+            serde_json::from_str::<MonitorBounds>(&json).unwrap(),
+            bounds
+        );
     }
 }

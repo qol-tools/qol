@@ -2,6 +2,8 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use qol_windowing::MonitorBounds;
+
 use super::system::{run_cinnamon_eval, run_status};
 
 pub fn move_monitor(script: &str, reveal_taskbar_after_move: bool) -> Result<(), String> {
@@ -109,41 +111,38 @@ fn display_edge_point_from_root_geometry() -> Result<(i32, i32), String> {
     Ok((width.saturating_sub(1), height.saturating_sub(1)))
 }
 
-#[derive(Clone, Copy)]
-struct MonitorBounds {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+trait MonitorBoundsExt {
+    fn left(self) -> i32;
+
+    fn right(self) -> i32;
+
+    fn bottom(self) -> i32;
+
+    fn contains(self, px: i32, py: i32) -> bool;
 }
 
-impl MonitorBounds {
-    fn from_xrandr(monitor: qol_runtime::display::x11::XrandrMonitor) -> Self {
-        Self {
-            x: monitor.bounds.x as i32,
-            y: monitor.bounds.y as i32,
-            width: monitor.bounds.width as i32,
-            height: monitor.bounds.height as i32,
-        }
-    }
-
+impl MonitorBoundsExt for MonitorBounds {
     fn left(self) -> i32 {
-        self.x
+        self.x as i32
     }
 
     fn right(self) -> i32 {
-        self.x.saturating_add(self.width).saturating_sub(1)
+        (self.x as i32)
+            .saturating_add(self.width as i32)
+            .saturating_sub(1)
     }
 
     fn bottom(self) -> i32 {
-        self.y.saturating_add(self.height).saturating_sub(1)
+        (self.y as i32)
+            .saturating_add(self.height as i32)
+            .saturating_sub(1)
     }
 
     fn contains(self, px: i32, py: i32) -> bool {
-        px >= self.x
-            && px < self.x.saturating_add(self.width)
-            && py >= self.y
-            && py < self.y.saturating_add(self.height)
+        px >= self.x as i32
+            && px < (self.x as i32).saturating_add(self.width as i32)
+            && py >= self.y as i32
+            && py < (self.y as i32).saturating_add(self.height as i32)
     }
 }
 
@@ -156,6 +155,6 @@ fn xrandr_monitor_bounds() -> Vec<MonitorBounds> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     qol_runtime::display::x11::parse_monitors(&stdout)
         .into_iter()
-        .map(MonitorBounds::from_xrandr)
+        .map(|monitor| monitor.bounds)
         .collect()
 }

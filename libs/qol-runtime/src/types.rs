@@ -7,13 +7,7 @@ pub struct CursorPos {
 }
 
 /// Monitor bounds as [x, y, width, height].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct MonitorBounds {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
+pub use qol_windowing::MonitorBounds;
 
 /// Focused window bounds as [x, y, width, height].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
