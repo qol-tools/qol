@@ -1,10 +1,12 @@
 use std::ffi::OsString;
 
 use anyhow::{bail, Context, Result};
-use qol_terminal_sessions::{SessionBinding, SessionInventory, TerminalSessionService};
+use qol_terminal_sessions::{
+    ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
+};
 use serde::Serialize;
 
-use super::bridge::PendingBridgeStore;
+use super::bridge::{PendingBridgeStore, Role};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +25,20 @@ pub(super) struct CloseOutcome {
     pub(super) tool: Option<String>,
     pub(super) closed: bool,
     pub(super) terminal_state: TerminalCloseState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) close_detail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct SiblingLaneClose {
+    pub(super) session: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tool: Option<String>,
+    pub(super) closed: bool,
+    pub(super) terminal_state: TerminalCloseState,
+    pub(super) report: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) close_detail: Option<String>,
 }
@@ -94,6 +110,44 @@ pub(super) fn close_spawned_terminal(
         terminal_state: TerminalCloseState::Closed,
         close_detail: None,
     })
+}
+
+pub(super) fn close_loop_siblings(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    initiator: &str,
+    named: &SessionBinding,
+) -> Result<Vec<SiblingLaneClose>> {
+    let mut siblings = Vec::new();
+    for round in pending.pending_rounds()? {
+        if round.session == named.token() || round.driver != initiator || !round.completed {
+            continue;
+        }
+        let binding: SessionBinding = round.session.parse().with_context(|| {
+            format!(
+                "sibling checkpoint carries an invalid session token `{}`",
+                round.session
+            )
+        })?;
+        if pending.role(&binding)? != Role::Lane {
+            continue;
+        }
+        let report = round
+            .screen
+            .filter(|screen| !screen.is_empty())
+            .unwrap_or_else(|| terminals.read_screen(&binding).unwrap_or_default());
+        let close = close_spawned_terminal(terminals, &binding)?;
+        siblings.push(SiblingLaneClose {
+            session: round.session,
+            key: close.key,
+            tool: close.tool,
+            closed: close.closed,
+            terminal_state: close.terminal_state,
+            report,
+            close_detail: close.close_detail,
+        });
+    }
+    Ok(siblings)
 }
 
 pub(super) fn execute(

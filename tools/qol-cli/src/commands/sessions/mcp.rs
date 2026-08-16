@@ -349,6 +349,12 @@ impl McpSessionServer {
         if !matches!(outcome, "accepted" | "paused") {
             return Err("session_loop_close `outcome` must be `accepted` or `paused`".to_owned());
         }
+        let initiator = self
+            .pending
+            .pending_round(&binding)
+            .map_err(|error| error.to_string())?
+            .map(|round| round.driver)
+            .filter(|driver| !driver.is_empty());
         let mut receipt = render_close_receipt(&arguments, outcome)?;
         self.pending
             .acknowledge(&binding, completion_marker, outcome == "accepted")
@@ -360,6 +366,18 @@ impl McpSessionServer {
             receipt["terminal_state"] = json!(close.terminal_state);
             if let Some(detail) = close.close_detail {
                 receipt["close_detail"] = json!(detail);
+            }
+            if let Some(initiator) = initiator {
+                let siblings = super::close::close_loop_siblings(
+                    self.terminals.as_ref(),
+                    &self.pending,
+                    &initiator,
+                    &binding,
+                )
+                .map_err(|error| error.to_string())?;
+                if !siblings.is_empty() {
+                    receipt["sibling_lanes"] = json!(siblings);
+                }
             }
         }
         serde_json::to_string(&receipt).map_err(|error| format!("serialization failed: {error}"))
@@ -412,7 +430,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -539,6 +557,8 @@ mod tests {
         spawn_identity: Mutex<Option<qol_terminal_sessions::SpawnIdentity>>,
         spawn_cwd: Mutex<Option<std::path::PathBuf>>,
         spawn_launch: Mutex<Option<qol_terminal_sessions::cli::CliLaunchProgram>>,
+        current_facts: Mutex<Option<SessionFacts>>,
+        lanes: Mutex<Vec<SessionFacts>>,
         closed: Mutex<Vec<SessionBinding>>,
     }
 
@@ -559,6 +579,8 @@ mod tests {
                 spawn_identity: Mutex::new(None),
                 spawn_cwd: Mutex::new(None),
                 spawn_launch: Mutex::new(None),
+                current_facts: Mutex::new(None),
+                lanes: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
             }
         }
@@ -578,6 +600,15 @@ mod tests {
 
         fn fail_closing(&self) {
             self.fail_close.store(true, Ordering::Relaxed);
+        }
+
+        fn add_lane(&self, facts: SessionFacts) {
+            self.lanes.lock().unwrap().push(facts);
+        }
+
+        fn set_current(&self, facts: SessionFacts) {
+            *self.current.lock().unwrap() = true;
+            *self.current_facts.lock().unwrap() = Some(facts);
         }
 
         fn spawned_session(&self) -> Option<SessionFacts> {
@@ -643,9 +674,13 @@ mod tests {
                 return Ok(Vec::new());
             }
             let mut facts = vec![Self::session()];
+            if let Some(current) = self.current_facts.lock().unwrap().clone() {
+                facts.push(current);
+            }
             if let Some(spawned) = self.spawned_session() {
                 facts.push(spawned);
             }
+            facts.extend(self.lanes.lock().unwrap().iter().cloned());
             Ok(facts)
         }
     }
@@ -725,7 +760,17 @@ mod tests {
         }
 
         fn current_session_id(&self) -> Option<SessionId> {
-            (*self.current.lock().unwrap()).then(|| Self::session().id)
+            if !*self.current.lock().unwrap() {
+                return None;
+            }
+            Some(
+                self.current_facts
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(Self::session)
+                    .id,
+            )
         }
 
         fn spawner(&self) -> Option<&dyn qol_terminal_sessions::SessionSpawner> {
@@ -814,6 +859,40 @@ mod tests {
             "verification": "Focused tests pass.",
             "remaining": "None.",
         })
+    }
+
+    fn lane_facts(key: &str, cwd: &str) -> SessionFacts {
+        SessionFacts {
+            id: SessionId::new(BackendId::new("kitty").unwrap(), format!("spawn-{key}")).unwrap(),
+            root_pid: 200,
+            cwd: cwd.to_owned(),
+            title: "Spawned".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: Some(qol_terminal_sessions::SpawnIdentity {
+                key: qol_terminal_sessions::SpawnKey::new(key).unwrap(),
+                tool: qol_terminal_sessions::cli::CliToolId::new("codex").unwrap(),
+                surface: qol_terminal_sessions::SpawnSurface::Tab,
+            }),
+        }
+    }
+
+    fn architect_facts(cwd: &str) -> SessionFacts {
+        SessionFacts {
+            id: SessionId::new(BackendId::new("kitty").unwrap(), "architect").unwrap(),
+            root_pid: 900,
+            cwd: cwd.to_owned(),
+            title: "Architect".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        }
     }
 
     fn request(id: i64, method: &str, params: Value) -> Value {
@@ -1477,6 +1556,143 @@ mod tests {
             .unwrap()
             .contains("fake close refused"));
         assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_accepted_closes_completed_sibling_lanes_and_routes_their_reports() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(architect_facts(&cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let initiator = super::super::bridge::driver_token(server.terminals.as_ref());
+        assert!(!initiator.is_empty(), "the initiator must be identifiable");
+
+        let mut named_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        named_arguments["model"] = json!("flash-x");
+        named_arguments["task"] = json!("build the bounded change");
+        let spawned = tool_call(&server, "session_spawn", named_arguments);
+        assert_eq!(
+            spawned["result"]["isError"], false,
+            "{}",
+            spawned["result"]["content"][0]["text"]
+        );
+        let named_outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let named_session = named_outcome["session"].as_str().unwrap().to_owned();
+        let named_marker = named_outcome["completion_marker"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let named_binding: SessionBinding = named_session.parse().unwrap();
+        server
+            .pending
+            .observe(&named_binding, &named_marker, true)
+            .unwrap();
+
+        let sibling_binding: SessionBinding = "v1:kitty:spawn-sib-lane:200".parse().unwrap();
+        backend.add_lane(lane_facts("sib-lane", &cwd));
+        server
+            .pending
+            .set_role(&sibling_binding, super::super::bridge::Role::Lane)
+            .unwrap();
+        server
+            .pending
+            .start(&sibling_binding, "QOL_BRIDGE_DONE_sib", &initiator, true)
+            .unwrap();
+        server
+            .pending
+            .observe(&sibling_binding, "QOL_BRIDGE_DONE_sib", true)
+            .unwrap();
+        server
+            .pending
+            .store_screen(
+                &sibling_binding,
+                "QOL_BRIDGE_DONE_sib",
+                "sibling final report",
+            )
+            .unwrap();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(named_session);
+        arguments["completion_marker"] = json!(named_marker);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["terminal_closed"], true);
+        let siblings = receipt["sibling_lanes"].as_array().unwrap();
+        assert_eq!(siblings.len(), 1);
+        assert_eq!(siblings[0]["session"], sibling_binding.token());
+        assert_eq!(siblings[0]["key"], "sib-lane");
+        assert_eq!(siblings[0]["tool"], "codex");
+        assert_eq!(siblings[0]["terminal_state"], "closed");
+        assert_eq!(siblings[0]["closed"], true);
+        assert_eq!(siblings[0]["report"], "sibling final report");
+        let closed = backend.closed.lock().unwrap();
+        assert_eq!(closed.len(), 2);
+        assert!(closed.contains(&named_binding));
+        assert!(closed.contains(&sibling_binding));
+    }
+
+    #[test]
+    fn loop_close_accepted_leaves_uncompleted_sibling_lanes_untouched() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(architect_facts(&cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let initiator = super::super::bridge::driver_token(server.terminals.as_ref());
+
+        let mut named_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        named_arguments["model"] = json!("flash-x");
+        named_arguments["task"] = json!("build the bounded change");
+        let spawned = tool_call(&server, "session_spawn", named_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let named_outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let named_session = named_outcome["session"].as_str().unwrap().to_owned();
+        let named_marker = named_outcome["completion_marker"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let named_binding: SessionBinding = named_session.parse().unwrap();
+        server
+            .pending
+            .observe(&named_binding, &named_marker, true)
+            .unwrap();
+
+        let open_binding: SessionBinding = "v1:kitty:spawn-open-lane:200".parse().unwrap();
+        backend.add_lane(lane_facts("open-lane", &cwd));
+        server
+            .pending
+            .set_role(&open_binding, super::super::bridge::Role::Lane)
+            .unwrap();
+        server
+            .pending
+            .start(&open_binding, "QOL_BRIDGE_DONE_open", &initiator, true)
+            .unwrap();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(named_session);
+        arguments["completion_marker"] = json!(named_marker);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert!(receipt.get("sibling_lanes").is_none());
+        let closed = backend.closed.lock().unwrap();
+        assert_eq!(closed.as_slice(), &[named_binding]);
     }
 
     #[test]
