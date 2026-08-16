@@ -225,6 +225,9 @@ impl McpSessionServer {
         if arguments.get("background").is_some() {
             return Err("session_spawn takes no `background`: background is the only mode and every spawn embeds its task in the launch. Drop that argument.".to_owned());
         }
+        if arguments.get("autoclose").is_some() {
+            return Err("`autoclose` was removed; lanes always close on completion".to_owned());
+        }
         let surface = arguments
             .get("surface")
             .map(|value| {
@@ -253,15 +256,6 @@ impl McpSessionServer {
             })
             .transpose()?;
         let task = string_argument(&arguments, "task")?;
-        let autoclose = arguments
-            .get("autoclose")
-            .map(|value| {
-                value
-                    .as_bool()
-                    .ok_or_else(|| "session_spawn `autoclose` must be a boolean".to_owned())
-            })
-            .transpose()?
-            .unwrap_or(true);
         let resume = arguments
             .get("resume")
             .map(|value| {
@@ -287,7 +281,7 @@ impl McpSessionServer {
             &self.locks,
             &self.ledger,
             true,
-            autoclose,
+            true,
             resume,
             Some(task),
             &self.pending,
@@ -310,15 +304,9 @@ impl McpSessionServer {
                 })
             })
             .transpose()?;
-        let autoclose = arguments
-            .get("autoclose")
-            .map(|value| {
-                value
-                    .as_bool()
-                    .ok_or_else(|| "session_submit `autoclose` must be a boolean".to_owned())
-            })
-            .transpose()?
-            .unwrap_or(true);
+        if arguments.get("autoclose").is_some() {
+            return Err("`autoclose` was removed; lanes always close on completion".to_owned());
+        }
         let resume = arguments
             .get("resume")
             .map(|value| {
@@ -335,7 +323,6 @@ impl McpSessionServer {
             task,
             &self.pending,
             acknowledge_marker,
-            autoclose,
             resume,
         )
         .map_err(|error| error.to_string())?;
@@ -465,7 +452,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`; a\n  `resume` argument forces a resume, which is otherwise automatic when the\n  spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion (autoclose defaults to on; pass autoclose: false to\n  keep the lane open), and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1118,24 +1105,25 @@ mod tests {
     }
 
     #[test]
-    fn session_submit_autoclose_opt_out_leaves_the_round_plain() {
-        let (server, _) = server(Vec::new(), false, false);
-        let response = tool_call(
-            &server,
-            "session_submit",
-            json!({
-                "session": token(),
-                "task": "implement the bounded change",
-                "autoclose": false,
-            }),
-        );
-        assert_eq!(response["result"]["isError"], false);
-        let binding: SessionBinding = token().parse().unwrap();
-        let round = server.pending.pending_round(&binding).unwrap().unwrap();
-        assert!(
-            !round.autoclose,
-            "autoclose: false must opt the round out of lane closing"
-        );
+    fn session_submit_rejects_an_explicit_autoclose_argument() {
+        let (server, backend) = server(Vec::new(), false, false);
+        for autoclose in [json!(true), json!(false), json!("yes")] {
+            let response = tool_call(
+                &server,
+                "session_submit",
+                json!({
+                    "session": token(),
+                    "task": "implement the bounded change",
+                    "autoclose": autoclose,
+                }),
+            );
+            assert_eq!(response["result"]["isError"], true);
+            assert!(response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("`autoclose` was removed; lanes always close on completion"));
+        }
+        assert!(backend.sent.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1151,7 +1139,7 @@ mod tests {
         let round = server.pending.pending_round(&binding).unwrap().unwrap();
         assert!(
             !round.autoclose,
-            "the spawn-identity guard must force autoclose off for architect targets even when the caller asks for it"
+            "rounds without a spawn identity are never closable"
         );
     }
 
@@ -2103,7 +2091,6 @@ mod tests {
                 "key": "mcp-bg",
                 "model": "flash-x",
                 "task": "second round",
-                "autoclose": false,
             }),
         );
         assert_eq!(second["result"]["isError"], true);
@@ -2126,7 +2113,6 @@ mod tests {
                 "key": "mcp-bg",
                 "model": "flash-x",
                 "task": "second round",
-                "autoclose": false,
             }),
         );
         assert_eq!(reused["result"]["isError"], false);
@@ -2191,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    fn autoclose_spawn_marks_the_outcome_and_round_and_reuse_refuses_it() {
+    fn autoclose_spawn_marks_the_outcome_and_round_and_rejects_the_argument() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
@@ -2203,7 +2189,6 @@ mod tests {
         let mut arguments = spawn_arguments("pi", "mcp-auto", None, &cwd);
         arguments["model"] = json!("flash-x");
         arguments["task"] = json!("implement the fix");
-        arguments["autoclose"] = json!(true);
         let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
@@ -2217,33 +2202,18 @@ mod tests {
             "the queued round must carry autoclose for the watcher"
         );
 
-        let reused = tool_call(
-            &server,
-            "session_spawn",
-            json!({
-                "tool": "pi",
-                "cwd": cwd,
-                "key": "mcp-auto",
-                "task": "second round",
-                "autoclose": true,
-            }),
-        );
-        assert_eq!(reused["result"]["isError"], true);
-        assert!(reused["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("--auto-close"));
-
-        let mut bad_flag = spawn_arguments("pi", "mcp-auto-bad", None, &cwd);
-        bad_flag["model"] = json!("flash-x");
-        bad_flag["task"] = json!("implement the fix");
-        bad_flag["autoclose"] = json!("yes");
-        let response = tool_call(&server, "session_spawn", bad_flag);
-        assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("autoclose` must be a boolean"));
+        for autoclose in [json!(true), json!(false), json!("yes")] {
+            let mut rejected = spawn_arguments("pi", "mcp-auto-rejected", None, &cwd);
+            rejected["model"] = json!("flash-x");
+            rejected["task"] = json!("implement the fix");
+            rejected["autoclose"] = autoclose;
+            let response = tool_call(&server, "session_spawn", rejected);
+            assert_eq!(response["result"]["isError"], true);
+            assert!(response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("`autoclose` was removed; lanes always close on completion"));
+        }
         assert_eq!(
             backend
                 .spawn_count
@@ -2253,7 +2223,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_defaults_autoclose_to_true_and_accepts_an_opt_out() {
+    fn spawn_defaults_autoclose_to_true_and_rejects_an_opt_out() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
@@ -2283,13 +2253,17 @@ mod tests {
         opted_out["task"] = json!("implement the fix");
         opted_out["autoclose"] = json!(false);
         let response = tool_call(&server, "session_spawn", opted_out);
-        assert_eq!(response["result"]["isError"], false);
-        let opted: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        let binding: SessionBinding = opted["session"].as_str().unwrap().parse().unwrap();
-        let round = server.pending.pending_round(&binding).unwrap().unwrap();
-        assert!(!round.autoclose, "autoclose: false must opt the round out");
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("`autoclose` was removed; lanes always close on completion"));
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]
@@ -2317,7 +2291,6 @@ mod tests {
 
         let mut second_arguments = spawn_arguments("pi", "mcp-lane", None, "ignored-missing-cwd");
         second_arguments["task"] = json!("second round");
-        second_arguments["autoclose"] = json!(false);
         let second = tool_call(&server, "session_spawn", second_arguments.clone());
         assert_eq!(second["result"]["isError"], true);
         assert!(second["result"]["content"][0]["text"]

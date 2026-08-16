@@ -287,7 +287,6 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
       if (params.model != null) args.push("--model", params.model);
       if (params.title != null) args.push("--title", params.title);
       args.push("--task", params.task, "--background");
-      if (params.autoclose !== false) args.push("--auto-close");
       if (params.resume === true) args.push("--resume");
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
@@ -300,7 +299,6 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
 
 const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["submit", params.session, "--task", params.task];
-      if (params.autoclose === false) args.push("--no-auto-close");
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
@@ -583,10 +581,14 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_passes_autoclose_through_and_lets_the_watcher_announce_the_closed_lane() {
+    fn pi_adapter_never_passes_an_autoclose_flag_and_lets_the_watcher_announce_the_closed_lane() {
         assert!(
-            EXECUTE_SPAWN.contains("if (params.autoclose !== false) args.push(\"--auto-close\")"),
-            "autoclose defaults on, so only an explicit opt-out suppresses the flag"
+            !EXECUTE_SPAWN.contains("--auto-close"),
+            "the removed autoclose knob must not reach the CLI"
+        );
+        assert!(
+            !EXECUTE_SPAWN.contains("params.autoclose"),
+            "the removed autoclose knob must not be read from params"
         );
         assert!(EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"));
         assert!(
@@ -602,8 +604,8 @@ mod tests {
             "spawn resume is opt-in, so only an explicit request pushes the flag"
         );
         assert!(
-            EXECUTE_SPAWN.contains("if (params.autoclose !== false) args.push(\"--auto-close\")"),
-            "the resume passthrough must not disturb the existing autoclose behavior"
+            !EXECUTE_SPAWN.contains("params.autoclose"),
+            "the resume passthrough must not reintroduce the autoclose knob"
         );
     }
 
@@ -731,15 +733,14 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_passes_submit_autoclose_through_as_an_opt_out_flag() {
+    fn pi_adapter_never_passes_submit_autoclose_through() {
         assert!(
-            EXECUTE_SUBMIT
-                .contains("if (params.autoclose === false) args.push(\"--no-auto-close\")"),
-            "submit autoclose defaults on, so only an explicit opt-out pushes a flag"
+            !EXECUTE_SUBMIT.contains("params.autoclose"),
+            "the removed autoclose knob must not be read from params"
         );
         assert!(
-            !EXECUTE_SUBMIT.contains("--auto-close"),
-            "submit must never push the spawn-side opt-in flag"
+            !EXECUTE_SUBMIT.contains("--no-auto-close") && !EXECUTE_SUBMIT.contains("--auto-close"),
+            "the removed autoclose knob must not reach the CLI"
         );
         assert!(EXECUTE_SUBMIT.contains(
             "if (params.acknowledge_marker != null) args.push(\"--acknowledge-marker\", params.acknowledge_marker)"

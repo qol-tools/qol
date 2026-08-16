@@ -187,7 +187,7 @@ fn poll_round(
                         &round.session,
                         &round.driver,
                         "completed",
-                        &wake_message(&round.session, "completed", tail, false),
+                        &wake_message(&round.session, "completed", tail, round.autoclose),
                         sleep,
                     )?;
                     pending.observe(&round.binding, &round.marker, true)?;
@@ -584,11 +584,16 @@ struct WakeDelivery {
 
 fn wake_message(session: &str, event: &str, screen: &str, autoclose: bool) -> String {
     match event {
-        "completed" => format!(
-            "qol sessions: lane {session} completed.\n\n{}\n\nReview it, then close the loop with session_loop_close.{}",
-            report_snippet(screen),
-            if autoclose { "\n\n(lane auto-closed)" } else { "" }
-        ),
+        "completed" => {
+            let report = report_snippet(screen);
+            if autoclose {
+                format!(
+                    "qol sessions: lane {session} completed and the lane terminal closed. Report below.\n\n{report}"
+                )
+            } else {
+                format!("qol sessions: {session} completed. Report below.\n\n{report}")
+            }
+        }
         "gone" => format!(
             "qol sessions: lane {session} gone. The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
         ),
@@ -1246,6 +1251,27 @@ mod tests {
     }
 
     #[test]
+    fn completed_wake_text_never_instructs_the_driver() {
+        let closable = wake_message("v1:kitty:5:100", "completed", "done", true);
+        assert!(
+            !closable.contains("session_loop_close") && !closable.contains("Review it"),
+            "the closable wake must not instruct the driver: {closable:?}"
+        );
+        assert!(closable.starts_with(
+            "qol sessions: lane v1:kitty:5:100 completed and the lane terminal closed. Report below."
+        ));
+        assert!(closable.ends_with("\n\ndone"));
+
+        let plain = wake_message("v1:kitty:5:100", "completed", "done", false);
+        assert!(
+            !plain.contains("session_loop_close") && !plain.contains("Review it"),
+            "the plain wake must not instruct the driver: {plain:?}"
+        );
+        assert!(plain.starts_with("qol sessions: v1:kitty:5:100 completed. Report below."));
+        assert!(plain.ends_with("\n\ndone"));
+    }
+
+    #[test]
     fn autoclose_round_closes_the_lane_terminal_after_completed_and_plain_rounds_stay_open() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
@@ -1291,9 +1317,12 @@ mod tests {
         let (driver, text, mode) = &sent[0];
         assert_eq!(driver.token(), auto_binding.token());
         assert_eq!(*mode, DeliveryMode::Submit);
-        assert!(text.contains("qol sessions: lane"));
+        assert!(text.contains("qol sessions: lane v1:fake:7:100 completed and the lane terminal closed. Report below."));
         assert!(text.contains("QOL_BRIDGE_DONE_auto"));
-        assert!(text.contains("(lane auto-closed)"));
+        assert!(
+            !text.contains("session_loop_close") && !text.contains("Review it"),
+            "the completed wake must not instruct the driver: {text:?}"
+        );
         assert!(
             text.lines().all(|line| line == line.trim_end()),
             "the wake text must not carry trailing padding: {text:?}"

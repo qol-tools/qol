@@ -681,7 +681,7 @@ fn run_with(
         locks,
         &SpawnLedger::system()?,
         parsed.background,
-        parsed.autoclose,
+        true,
         parsed.resume,
         parsed.task.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
@@ -694,7 +694,6 @@ pub(super) fn deliver_task(
     mut outcome: SpawnOutcome,
     task: &str,
     pending: &super::bridge::PendingBridgeStore,
-    autoclose: bool,
     resumed: bool,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
@@ -709,7 +708,6 @@ pub(super) fn deliver_task(
         task,
         pending,
         None,
-        autoclose,
         resumed,
     )?;
     outcome.task_submitted = Some(true);
@@ -761,12 +759,11 @@ struct SpawnArgs {
     title: Option<String>,
     task: Option<String>,
     background: bool,
-    autoclose: bool,
     resume: Option<bool>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--auto-close] [--resume] [--no-resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --auto-close closes the spawned terminal when the watcher confirms the round's completion; it refuses the reuse path. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -775,7 +772,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut title = None;
     let mut task = None;
     let mut background = false;
-    let mut autoclose = false;
     let mut resume = None;
     let mut index = 0;
     while index < args.len() {
@@ -815,10 +811,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 background = true;
                 index += 1;
             }
-            "--auto-close" => {
-                autoclose = true;
-                index += 1;
-            }
             "--resume" => {
                 resume = Some(true);
                 index += 1;
@@ -841,7 +833,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         title,
         task,
         background,
-        autoclose,
         resume,
     })
 }
@@ -1033,7 +1024,6 @@ pub(super) fn spawn_or_reuse(
                             outcome,
                             round_task,
                             pending,
-                            autoclose,
                             resumed,
                         ),
                         None => Ok(outcome),
@@ -1041,12 +1031,6 @@ pub(super) fn spawn_or_reuse(
                 }
             }
             SpawnDecision::Reuse(facts) => {
-                if autoclose {
-                    bail!(
-                        "--auto-close cannot reuse the session for key `{}`: closing a reused terminal would kill the user's live session; --auto-close only applies when a new terminal is spawned",
-                        prepared.key
-                    );
-                }
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=reuse key={} tool={}",
@@ -1080,7 +1064,6 @@ pub(super) fn spawn_or_reuse(
                         outcome,
                         round_task,
                         pending,
-                        false,
                         false,
                     ),
                     None => Ok(outcome),
@@ -1739,7 +1722,6 @@ mod tests {
             "--task".into(),
             "implement the fix".into(),
             "--background".into(),
-            "--auto-close".into(),
             "--resume".into(),
         ])
         .unwrap();
@@ -1751,7 +1733,6 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("Lane One"));
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
         assert!(parsed.background);
-        assert!(parsed.autoclose);
         assert_eq!(parsed.resume, Some(true));
 
         let parsed =
@@ -1764,7 +1745,6 @@ mod tests {
         assert_eq!(parsed.title, None);
         assert_eq!(parsed.task, None);
         assert!(!parsed.background);
-        assert!(!parsed.autoclose);
         assert_eq!(parsed.resume, None);
 
         let parsed = parse_args(&[
@@ -1776,6 +1756,24 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(parsed.resume, Some(false));
+    }
+
+    #[test]
+    fn spawn_args_reject_the_removed_autoclose_flags() {
+        for flag in ["--auto-close", "--no-auto-close"] {
+            let error = match parse_args(&[
+                "--tool".into(),
+                "pi".into(),
+                "--cwd".into(),
+                "/tmp".into(),
+                flag.into(),
+            ]) {
+                Ok(_) => panic!("{flag} must be rejected as an unknown flag"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("unknown spawn flag"), "{error}");
+            assert!(error.contains(flag), "{error}");
+        }
     }
 
     #[test]
@@ -2668,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    fn autoclose_marks_new_spawns_and_refuses_the_reuse_path() {
+    fn autoclose_marks_new_spawns_and_reuse_stays_allowed() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
         let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
@@ -2708,7 +2706,7 @@ mod tests {
             "the queued round must carry the autoclose flag for the watcher"
         );
 
-        let error = run_spawn_with(
+        let reused = run_spawn_with(
             &terminals,
             "pi",
             &cwd,
@@ -2726,13 +2724,19 @@ mod tests {
             None,
             &pending,
         )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("--auto-close"), "{error}");
-        assert!(error.contains("reuse"), "{error}");
+        .unwrap();
+        assert!(
+            reused.reused,
+            "reuse stays allowed with autoclose; closing is decided by the spawn identity"
+        );
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "the reused lane keeps its spawn identity, so its round stays closable"
+        );
 
-        let reused = run_spawn_with(
+        let plain = run_spawn_with(
             &terminals,
             "pi",
             &cwd,
@@ -2751,8 +2755,8 @@ mod tests {
             &pending,
         )
         .unwrap();
-        assert!(reused.reused, "plain reuse without autoclose stays allowed");
-        assert!(!reused.autoclose);
+        assert!(plain.reused, "plain reuse without autoclose stays allowed");
+        assert!(!plain.autoclose);
     }
 
     #[test]

@@ -757,7 +757,6 @@ pub(super) fn submit(
     task: &str,
     pending: &PendingBridgeStore,
     acknowledge_marker: Option<&str>,
-    autoclose: bool,
     resume: bool,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
@@ -769,15 +768,7 @@ pub(super) fn submit(
         bail!("cannot submit to the calling terminal; choose an independent session");
     }
     let target = resolve_target(terminals, binding)?;
-    let requested_autoclose = autoclose;
-    let autoclose = autoclose && target.spawn_identity.is_some();
-    if autoclose != requested_autoclose {
-        qol_runtime::probe!(
-            "CLI_SESSION_BRIDGE",
-            "event=autoclose_forced_off target_backend={}",
-            binding.session_id().backend()
-        );
-    }
+    let autoclose = target.spawn_identity.is_some();
     if let Some(marker) = acknowledge_marker {
         pending.acknowledge(binding, marker, true)?;
     } else if pending.pending_round(binding)?.is_some() {
@@ -1629,7 +1620,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_with_autoclose_stores_the_flag_and_forces_it_off_for_architects() {
+    fn submit_derives_autoclose_from_the_target_spawn_identity() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
@@ -1656,7 +1647,6 @@ mod tests {
             "implement the fix",
             &pending,
             None,
-            true,
             false,
         )
         .unwrap();
@@ -1664,7 +1654,7 @@ mod tests {
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(
             round.autoclose,
-            "a spawn-identity target keeps the requested autoclose flag"
+            "a spawn-identity target stores a closable round"
         );
 
         pending
@@ -1682,7 +1672,6 @@ mod tests {
             "implement the fix",
             &pending,
             None,
-            true,
             false,
         )
         .unwrap();
@@ -1690,7 +1679,7 @@ mod tests {
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(
             !round.autoclose,
-            "the spawn-identity guard must force autoclose off for architect sessions"
+            "a target without a spawn identity stores a non-closable round"
         );
     }
 
@@ -1881,7 +1870,6 @@ mod tests {
             "implement the fix",
             &pending,
             None,
-            false,
             false,
         )
         .unwrap();
