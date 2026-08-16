@@ -1115,9 +1115,12 @@ impl Render for RegionSelector {
         }
 
         if let Some(bounds) = guide_bounds {
-            let guide = Toast::new(self.guide_title(), self.guide_subtitle())
-                .layout(ToastLayout::Status)
-                .tone(ToastTone::Info);
+            let guide = Toast::new(
+                self.guide_title(),
+                self.guide_subtitle(),
+                ToastLayout::Status,
+            )
+            .tone(ToastTone::Info);
             root = root.child(guide.positioned(bounds));
         }
 

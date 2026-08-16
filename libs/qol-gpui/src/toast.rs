@@ -123,9 +123,8 @@ impl ToastHost {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastLayout {
-    #[default]
     Compact,
     Status,
 }
@@ -151,12 +150,16 @@ pub struct Toast {
 }
 
 impl Toast {
-    pub fn new(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+    pub fn new(
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+        layout: ToastLayout,
+    ) -> Self {
         Self {
             title: title.into(),
             message: message.into(),
             tone: ToastTone::Neutral,
-            layout: ToastLayout::Compact,
+            layout,
             timeout: Some(DEFAULT_TIMEOUT),
             activation: None,
         }
@@ -164,11 +167,6 @@ impl Toast {
 
     pub fn tone(mut self, tone: ToastTone) -> Self {
         self.tone = tone;
-        self
-    }
-
-    pub fn layout(mut self, layout: ToastLayout) -> Self {
-        self.layout = layout;
         self
     }
 
