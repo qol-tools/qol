@@ -1,4 +1,4 @@
-use crate::policy::{JournalPayload, PolicyError, PolicyPayload, ResidencyOwnerId, ResidentPolicy};
+use crate::policy::{PolicyError, ResidencyOwnerId, ResidentPolicy};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -141,14 +141,11 @@ pub fn sha256_hex(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub(crate) fn rendered_hash_of(payload: &PolicyPayload) -> Result<String> {
-    match payload {
-        PolicyPayload::Nvidia(payload) => Ok(sha256_hex(&render_fragment(
-            &payload.entries,
-            &payload.resource_identity,
-        ))),
-        PolicyPayload::UdevUaccess(payload) => payload.rendered_hash(),
-    }
+pub(crate) fn rendered_hash_of(payload: &NvidiaPayload) -> Result<String> {
+    Ok(sha256_hex(&render_fragment(
+        &payload.entries,
+        &payload.resource_identity,
+    )))
 }
 
 pub fn staged_path_for(fragment: &Path, nonce_hex: &str) -> PathBuf {

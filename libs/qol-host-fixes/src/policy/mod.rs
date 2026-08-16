@@ -235,7 +235,7 @@ impl journal::JournalPayload for PolicyPayload {
 
     fn rendered_hash(&self) -> Result<String> {
         match self {
-            Self::Nvidia(_) => nvidia::rendered_hash_of(self),
+            Self::Nvidia(payload) => nvidia::rendered_hash_of(payload),
             Self::UdevUaccess(payload) => payload.rendered_hash(),
         }
     }
@@ -1361,14 +1361,45 @@ mod tests {
             &payload.entries,
             &payload.resource_identity,
         ));
-        failed.payload = crate::policy::PolicyPayload::Nvidia(payload);
+        failed.payload = crate::policy::PolicyPayload::Nvidia(payload.clone());
         failed.state = JournalState::ReleaseFailed;
         failed.failure = Some(ReleaseFailure {
             stage: ReleaseStage::StagedCleanup,
-            expected_sha256: nvidia::rendered_hash_of(&failed.payload).unwrap(),
+            expected_sha256: nvidia::rendered_hash_of(&payload).unwrap(),
             actual_sha256: None,
         });
         validate_journal_invariants(&failed).unwrap();
+    }
+
+    #[test]
+    fn the_nvidia_rendered_hash_is_the_exact_fragment_sha256() {
+        let payload = payload_with_shape(true, false, false);
+        let expected = nvidia::sha256_hex(&nvidia::render_fragment(
+            &payload.entries,
+            &payload.resource_identity,
+        ));
+        assert_eq!(
+            nvidia::rendered_hash_of(&payload).unwrap(),
+            expected,
+            "the nvidia pin hash must stay the exact fragment sha256"
+        );
+        assert_eq!(payload.rendered_sha256, expected);
+    }
+
+    #[test]
+    fn the_udev_uaccess_hash_renders_through_its_own_payload() {
+        let payload = crate::policy::PolicyPayload::UdevUaccess(crate::udev::UdevUaccessPayload {
+            rule_path: crate::udev::rule_path(),
+            rule_sha256: crate::udev::sha256_hex(crate::udev::RULE_CONTENT),
+            rule_content: crate::udev::RULE_CONTENT.to_string(),
+            rule_applied: true,
+        });
+        let expected = crate::udev::sha256_hex(crate::udev::RULE_CONTENT);
+        assert_eq!(
+            payload.rendered_hash().unwrap(),
+            expected,
+            "the udev hash must render through the udev payload itself"
+        );
     }
 
     fn payload_with_shape(
@@ -1405,10 +1436,7 @@ mod tests {
 
     #[test]
     fn journal_state_shapes_are_enforced_per_state_and_lineage() {
-        let expected = nvidia::rendered_hash_of(&crate::policy::PolicyPayload::Nvidia(
-            payload_with_shape(true, false, false),
-        ))
-        .unwrap();
+        let expected = nvidia::rendered_hash_of(&payload_with_shape(true, false, false)).unwrap();
         let cases: Vec<(JournalState, bool, bool, bool, Option<ReleaseStage>, bool)> = vec![
             (JournalState::Preparing, false, false, false, None, false),
             (JournalState::Preparing, true, false, false, None, true),

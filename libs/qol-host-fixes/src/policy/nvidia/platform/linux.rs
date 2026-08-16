@@ -2336,6 +2336,11 @@ mod tests {
                 let acquired = lock::try_acquire(&policy()).is_ok();
                 std::process::exit(if acquired { 0 } else { 4 });
             }
+            Ok("lock-hold") => {
+                let _held = lock::try_acquire(&policy()).unwrap();
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                std::process::exit(6);
+            }
             _ => std::process::exit(5),
         }
     }
@@ -4178,6 +4183,51 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains("lock"))
             .count();
         assert_eq!(leftovers, 0, "the abstract-socket lock leaves no residue");
+    }
+
+    #[test]
+    fn a_killed_holder_cannot_squat_the_policy_lock() {
+        let _guard = serialized_tests();
+        test_support::reset_dir();
+        let policy = policy();
+        let mut holder = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(SUBPROCESS_TEST)
+            .arg("--nocapture")
+            .env("QOL_POLICY_SUBPROCESS", "1")
+            .env("QOL_POLICY_PROBE", "lock-hold")
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut observed_busy = false;
+        while std::time::Instant::now() < deadline {
+            match lock::try_acquire(&policy) {
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<PolicyError>(),
+                        Some(PolicyError::Busy { .. })
+                    ) =>
+                {
+                    observed_busy = true;
+                    break;
+                }
+                Ok(guard) => drop(guard),
+                Err(_) => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(observed_busy, "the holder must acquire the lock first");
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        let reacquired = lock::try_acquire(&policy).unwrap();
+        drop(reacquired);
+        let dir = test_dir();
+        let leftovers = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains("lock"))
+            .count();
+        assert_eq!(leftovers, 0, "a killed holder must leave no lock residue");
     }
 
     #[test]
