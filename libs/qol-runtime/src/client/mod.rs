@@ -1,6 +1,6 @@
 use crate::protocol::{
-    ArmedLifelinesResponse, NotificationLevel, PluginConfigResponse, PushAck, RuntimeEvent,
-    RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
+    RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 use crate::PlatformState;
 use serde::Serialize;
@@ -127,6 +127,17 @@ impl PlatformStateClient {
         level: NotificationLevel,
         action: Option<(&str, &str)>,
     ) -> bool {
+        self.send_notification_with_layout(title, body, level, action, None)
+    }
+
+    pub fn send_notification_with_layout(
+        &self,
+        title: &str,
+        body: &str,
+        level: NotificationLevel,
+        action: Option<(&str, &str)>,
+        layout: Option<NotificationLayout>,
+    ) -> bool {
         let plugin_id = self.plugin_id_from_env();
         let request = RuntimeRequest::PushNotification {
             plugin_id,
@@ -135,6 +146,7 @@ impl PlatformStateClient {
             level,
             action_label: action.map(|(label, _)| label.to_string()),
             action_payload: action.map(|(_, payload)| payload.to_string()),
+            layout,
         };
         matches!(self.request_json(&request), Some(PushAck::Handled))
     }

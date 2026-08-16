@@ -3,6 +3,7 @@ pub(in crate::settings_surface) fn show_toast(
     _body: &str,
     _level: &str,
     _action: Option<(&str, &str)>,
+    _layout: Option<qol_runtime::protocol::NotificationLayout>,
 ) -> bool {
     false
 }

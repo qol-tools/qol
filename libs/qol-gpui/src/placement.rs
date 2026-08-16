@@ -65,6 +65,18 @@ impl MonitorPlacement {
     }
 }
 
+pub fn anchor_placement(anchor: &str) -> Option<MonitorPlacement> {
+    match anchor {
+        "top-center" => Some(MonitorPlacement::top_center(TOP_CENTER_MARGIN)),
+        "top-left" => Some(MonitorPlacement::corner(Corner::TopLeft, CORNER_MARGIN)),
+        "top-right" => Some(MonitorPlacement::corner(Corner::TopRight, CORNER_MARGIN)),
+        "bottom-left" => Some(MonitorPlacement::corner(Corner::BottomLeft, CORNER_MARGIN)),
+        "bottom-right" => Some(MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN)),
+        "center" => Some(MonitorPlacement::center()),
+        _ => None,
+    }
+}
+
 pub fn clamp_origin_to_monitor(
     monitor: Bounds<Pixels>,
     bounds: Bounds<Pixels>,

@@ -67,6 +67,8 @@ pub enum RuntimeRequest {
         action_label: Option<String>,
         #[serde(default)]
         action_payload: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layout: Option<NotificationLayout>,
     },
     PushStatus {
         plugin_id: String,
@@ -83,6 +85,18 @@ pub enum NotificationLevel {
     Info,
     Warn,
     Error,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NotificationLayout {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 /// Ack for the plugin-to-host push requests (`PushNotification`, `PushStatus`).
@@ -252,6 +266,7 @@ mod tests {
             level: NotificationLevel::Info,
             action_label: None,
             action_payload: None,
+            layout: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"cmd\":\"push_notification\""));
@@ -264,6 +279,7 @@ mod tests {
             level,
             action_label,
             action_payload,
+            layout,
         } = serde_json::from_str(&wire).expect("deserialize")
         else {
             panic!("variant mismatch");
@@ -274,6 +290,7 @@ mod tests {
         assert_eq!(level, NotificationLevel::Info);
         assert_eq!(action_label, None);
         assert_eq!(action_payload, None);
+        assert_eq!(layout, None);
     }
 
     #[test]
@@ -285,19 +302,23 @@ mod tests {
             level: NotificationLevel::Info,
             action_label: Some("Open Folder".to_string()),
             action_payload: Some("/home/u/Videos/qol-shot.mp4".to_string()),
+            layout: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"action_label\":\"Open Folder\""));
         assert!(wire.contains("\"action_payload\":\"/home/u/Videos/qol-shot.mp4\""));
+        assert!(!wire.contains("layout"));
 
         let RuntimeRequest::PushNotification {
             action_label,
             action_payload,
+            layout,
             ..
         } = serde_json::from_str(&wire).expect("deserialize")
         else {
             panic!("variant mismatch");
         };
+        assert_eq!(layout, None);
         assert_eq!(action_label.as_deref(), Some("Open Folder"));
         assert_eq!(
             action_payload.as_deref(),
@@ -313,6 +334,7 @@ mod tests {
             level,
             action_label,
             action_payload,
+            layout,
             ..
         } = serde_json::from_str(wire).expect("deserialize")
         else {
@@ -322,6 +344,43 @@ mod tests {
         assert_eq!(level, NotificationLevel::Info);
         assert_eq!(action_label, None);
         assert_eq!(action_payload, None);
+        assert_eq!(layout, None);
+    }
+
+    #[test]
+    fn push_notification_with_layout_round_trips() {
+        let request = RuntimeRequest::PushNotification {
+            plugin_id: "plugin-cli-sessions".to_string(),
+            title: "lane".to_string(),
+            body: "needs you".to_string(),
+            level: NotificationLevel::Info,
+            action_label: None,
+            action_payload: None,
+            layout: Some(NotificationLayout {
+                anchor: Some("bottom-right".to_string()),
+                width: Some(400.0),
+                height: Some(84.0),
+                style: Some("compact".to_string()),
+            }),
+        };
+        let wire = serde_json::to_string(&request).expect("serialize");
+        assert!(wire.contains("\"layout\":{\"anchor\":\"bottom-right\""));
+        assert!(wire.contains("\"style\":\"compact\""));
+
+        let RuntimeRequest::PushNotification { layout, .. } =
+            serde_json::from_str(&wire).expect("deserialize")
+        else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(
+            layout,
+            Some(NotificationLayout {
+                anchor: Some("bottom-right".to_string()),
+                width: Some(400.0),
+                height: Some(84.0),
+                style: Some("compact".to_string()),
+            })
+        );
     }
 
     #[test]

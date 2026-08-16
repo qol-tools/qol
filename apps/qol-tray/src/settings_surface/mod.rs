@@ -1,5 +1,7 @@
 mod platform;
 
+use qol_runtime::protocol::NotificationLayout;
+
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
 
 #[derive(Debug, PartialEq)]
@@ -33,8 +35,14 @@ pub fn stop() {
     platform::stop();
 }
 
-pub fn show_toast(title: &str, body: &str, level: &str, action: Option<(&str, &str)>) -> bool {
-    platform::show_toast(title, body, level, action)
+pub fn show_toast(
+    title: &str,
+    body: &str,
+    level: &str,
+    action: Option<(&str, &str)>,
+    layout: Option<NotificationLayout>,
+) -> bool {
+    platform::show_toast(title, body, level, action, layout)
 }
 
 pub fn prewarm() {

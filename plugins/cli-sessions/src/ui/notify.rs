@@ -1,5 +1,6 @@
 use crate::session::status::Status;
 use crate::session::tool::Tool;
+use qol_runtime::protocol::NotificationLayout;
 
 pub struct Notice {
     pub title: String,
@@ -27,5 +28,14 @@ pub fn announces_attention(prev: Status, new: Status) -> bool {
 }
 
 pub fn send(notice: &Notice) {
-    qol_plugin_daemon::notification::send_notification(&notice.title, &notice.body);
+    qol_plugin_daemon::notification::send_notification_with_layout(
+        &notice.title,
+        &notice.body,
+        Some(NotificationLayout {
+            anchor: Some("bottom-right".to_string()),
+            width: Some(380.0),
+            height: Some(76.0),
+            style: Some("compact".to_string()),
+        }),
+    );
 }

@@ -6,7 +6,9 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
+use crate::placement::{
+    anchor_placement, Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN,
+};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
 use crate::theme::{toast_runtime, ToastPalette};
 
@@ -161,6 +163,26 @@ impl ToastLayout {
     pub fn sized(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn for_push(
+        anchor: Option<&str>,
+        width: Option<f32>,
+        height: Option<f32>,
+        style: Option<&str>,
+    ) -> Self {
+        let base = match style {
+            Some("compact") => ToastLayout::compact(),
+            _ => ToastLayout::status(),
+        };
+        let Some(placement) = anchor.and_then(anchor_placement) else {
+            return base;
+        };
+        let mut layout = base.at(placement);
+        if let (Some(width), Some(height)) = (width, height) {
+            layout = layout.sized(size(px(width), px(height)));
+        }
+        layout
     }
 
     pub fn placement(self) -> MonitorPlacement {
@@ -372,7 +394,7 @@ mod tests {
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
     use crate::theme::ToastPalette;
 
-    use super::{ToastLayout, ToastTone};
+    use super::{ToastLayout, ToastStyle, ToastTone};
 
     #[test]
     fn a_caller_overrides_the_preset_placement_and_size() {
@@ -384,6 +406,75 @@ mod tests {
         assert_eq!(layout.size().width.to_f64(), 700.0);
         assert_eq!(layout.size().height.to_f64(), 120.0);
         assert_eq!(ToastLayout::status().size().width.to_f64(), 520.0);
+    }
+
+    #[test]
+    fn for_push_without_layout_is_the_status_preset() {
+        assert_eq!(
+            ToastLayout::for_push(None, None, None, None),
+            ToastLayout::status()
+        );
+    }
+
+    #[test]
+    fn for_push_with_unknown_anchor_falls_back_to_the_status_preset() {
+        assert_eq!(
+            ToastLayout::for_push(Some("corner"), Some(400.0), Some(84.0), None),
+            ToastLayout::status()
+        );
+    }
+
+    #[test]
+    fn for_push_with_compact_style_is_the_compact_preset_whole() {
+        assert_eq!(
+            ToastLayout::for_push(None, None, None, Some("compact")),
+            ToastLayout::compact()
+        );
+        assert_eq!(
+            ToastLayout::compact().placement(),
+            MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN)
+        );
+        assert_eq!(ToastLayout::compact().size().width.to_f64(), 340.0);
+        assert_eq!(ToastLayout::compact().size().height.to_f64(), 76.0);
+    }
+
+    #[test]
+    fn for_push_with_unknown_style_falls_back_to_the_status_preset() {
+        assert_eq!(
+            ToastLayout::for_push(None, None, None, Some("headline")),
+            ToastLayout::status()
+        );
+    }
+
+    #[test]
+    fn for_push_places_and_sizes_at_a_corner() {
+        let layout = ToastLayout::for_push(Some("bottom-right"), Some(400.0), Some(84.0), None);
+        assert_eq!(
+            layout.placement(),
+            MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN)
+        );
+        assert_eq!(layout.size().width.to_f64(), 400.0);
+        assert_eq!(layout.size().height.to_f64(), 84.0);
+    }
+
+    #[test]
+    fn for_push_with_partial_size_keeps_the_preset_dimensions() {
+        let layout = ToastLayout::for_push(Some("center"), Some(600.0), None, None);
+        assert_eq!(layout.placement(), MonitorPlacement::center());
+        assert_eq!(layout.size(), ToastLayout::status().size());
+    }
+
+    #[test]
+    fn for_push_with_compact_style_still_applies_overrides() {
+        let layout =
+            ToastLayout::for_push(Some("top-left"), Some(420.0), Some(90.0), Some("compact"));
+        assert_eq!(layout.style, ToastStyle::Compact);
+        assert_eq!(
+            layout.placement(),
+            MonitorPlacement::corner(Corner::TopLeft, CORNER_MARGIN)
+        );
+        assert_eq!(layout.size().width.to_f64(), 420.0);
+        assert_eq!(layout.size().height.to_f64(), 90.0);
     }
 
     #[test]

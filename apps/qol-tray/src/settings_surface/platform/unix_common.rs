@@ -11,7 +11,7 @@ use qol_gpui::settings_panel::SettingsActivation;
 use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHost};
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
-use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
 
 use super::super::HostBoot;
 
@@ -23,6 +23,7 @@ enum Command {
         body: String,
         level: String,
         action: Option<(String, String)>,
+        layout: Option<NotificationLayout>,
     },
     Kill,
 }
@@ -302,8 +303,9 @@ fn spawn_command_loop(
                     body,
                     level,
                     action,
+                    layout,
                 } => {
-                    show_toast_in_host(toast_host, title, body, level, action, &cx);
+                    show_toast_in_host(toast_host, title, body, level, action, layout, &cx);
                     LoopFlow::Continue
                 }
                 Command::Kill => LoopFlow::Stop,
@@ -318,10 +320,27 @@ fn show_toast_in_host(
     body: String,
     level: String,
     action: Option<(String, String)>,
+    layout: Option<NotificationLayout>,
     cx: &gpui::AsyncApp,
 ) {
     let result = cx.update(move |cx| {
-        let mut toast = Toast::new(title, body, ToastLayout::status()).tone(toast_tone(&level));
+        let (anchor, width, height, style) = layout
+            .as_ref()
+            .map(|layout| {
+                (
+                    layout.anchor.as_deref(),
+                    layout.width,
+                    layout.height,
+                    layout.style.as_deref(),
+                )
+            })
+            .unwrap_or((None, None, None, None));
+        let mut toast = Toast::new(
+            title,
+            body,
+            ToastLayout::for_push(anchor, width, height, style),
+        )
+        .tone(toast_tone(&level));
         if let Some((_, payload)) = action {
             toast = toast.on_activate(move |_cx| {
                 if let Err(error) = crate::paths::open_url(&payload) {
@@ -470,6 +489,7 @@ pub(in crate::settings_surface) fn show_toast(
     body: &str,
     level: &str,
     action: Option<(&str, &str)>,
+    layout: Option<NotificationLayout>,
 ) -> bool {
     let config = config();
     let action =
@@ -483,6 +503,7 @@ pub(in crate::settings_surface) fn show_toast(
                 "body": body,
                 "level": level,
                 "action": action,
+                "layout": layout,
             }),
             Duration::from_millis(500),
         ),
@@ -519,12 +540,17 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 .get("action")
                 .and_then(serde_json::Value::as_object)
                 .and_then(validated_action);
+            let layout = request
+                .input
+                .get("layout")
+                .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok());
             match (title, body, level) {
                 (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
                     title: title.to_string(),
                     body: body.to_string(),
                     level: level.to_string(),
                     action,
+                    layout,
                 }),
                 _ => ReadResult::Error("toast requires title, body and level".into()),
             }
@@ -632,11 +658,13 @@ mod tests {
                 body,
                 level,
                 action,
+                layout,
             }) => {
                 assert_eq!(title, "title");
                 assert_eq!(body, "body");
                 assert_eq!(level, "warn");
                 assert_eq!(action, Some(("open".to_string(), payload)));
+                assert_eq!(layout, None);
             }
             _ => panic!("toast request did not parse as a command"),
         }
@@ -658,6 +686,48 @@ mod tests {
         };
         match parse_request(&missing_payload) {
             ReadResult::Command(Command::Toast { action, .. }) => assert_eq!(action, None),
+            _ => panic!("toast request did not parse as a command"),
+        }
+    }
+
+    #[test]
+    fn toast_protocol_carries_a_semantic_layout_override() {
+        let request = DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({
+                "title": "title",
+                "body": "body",
+                "level": "info",
+                "layout": {
+                    "anchor": "bottom-right",
+                    "width": 400.0,
+                    "height": 84.0,
+                    "style": "compact",
+                },
+            }),
+        };
+        match parse_request(&request) {
+            ReadResult::Command(Command::Toast { layout, .. }) => {
+                let layout = layout.expect("layout override parsed");
+                assert_eq!(layout.anchor.as_deref(), Some("bottom-right"));
+                assert_eq!(layout.width, Some(400.0));
+                assert_eq!(layout.height, Some(84.0));
+                assert_eq!(layout.style.as_deref(), Some("compact"));
+            }
+            _ => panic!("toast request did not parse as a command"),
+        }
+
+        let malformed = DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({
+                "title": "title",
+                "body": "body",
+                "level": "info",
+                "layout": "bottom-right",
+            }),
+        };
+        match parse_request(&malformed) {
+            ReadResult::Command(Command::Toast { layout, .. }) => assert_eq!(layout, None),
             _ => panic!("toast request did not parse as a command"),
         }
     }

@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use qol_plugin_api::manifest::is_valid_plugin_id;
 use qol_runtime::protocol::{
-    ArmedLifelinesResponse, NotificationLevel, PluginConfigResponse, PushAck, RuntimeEvent,
-    RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
+    RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 
 use super::io::{write_flushed_json_line, write_state};
@@ -71,15 +71,11 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
             level,
             action_label,
             action_payload,
-        } => handle_push_notification(
-            writer,
-            &plugin_id,
-            &title,
-            &body,
-            level,
-            action_label.as_deref(),
-            action_payload.as_deref(),
-        ),
+            layout,
+        } => {
+            let action = resolve_action(action_label.as_deref(), action_payload.as_deref());
+            handle_push_notification(writer, &plugin_id, &title, &body, level, action, layout)
+        }
         RuntimeRequest::PushStatus { plugin_id, status } => {
             handle_push_status(writer, &plugin_id, &status)
         }
@@ -94,8 +90,8 @@ fn handle_push_notification(
     title: &str,
     body: &str,
     level: NotificationLevel,
-    action_label: Option<&str>,
-    action_payload: Option<&str>,
+    action: Option<(&str, &str)>,
+    layout: Option<NotificationLayout>,
 ) {
     let accepted = push_plugin_known(plugin_id);
     respond_to_push(writer, plugin_id, "notification", accepted);
@@ -104,10 +100,9 @@ fn handle_push_notification(
     }
     log::info!(
         "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
-        action_label.unwrap_or("-")
+        action.map(|(label, _)| label).unwrap_or("-")
     );
-    let action = resolve_action(action_label, action_payload);
-    crate::surfaces::show_plugin_notification(title, body, level, action);
+    crate::surfaces::show_plugin_notification(title, body, level, action, layout);
 }
 
 fn resolve_action<'a>(
