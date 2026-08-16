@@ -7,7 +7,7 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
+    CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
     CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
     CliSessionSubscriptionError, CliTool, CliViewportState,
 };
@@ -101,6 +101,14 @@ impl CliSessionStrategy for PiStrategy {
 
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("pi"))
+    }
+
+    fn model_catalog(&self) -> Option<CliModelCatalog> {
+        Some(
+            CliModelCatalog::new("pi", ["--list-models"])
+                .model_column(1)
+                .header_rows(1),
+        )
     }
 
     fn subscribe(

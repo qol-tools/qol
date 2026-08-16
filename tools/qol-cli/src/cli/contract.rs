@@ -216,6 +216,14 @@ fn app() -> HeadlessApp {
                 "Exits non-zero when discovery fails.",
             ))
             .subcommand(command(
+                "capability",
+                "Report whether a lane can be spawned, optionally at a named tier.",
+                "qol sessions capability [--tier TOKEN]",
+                "Answers whether spawning a lane is possible right now: lane_spawn is true when a registered tool is installed and a model is resolvable, and --tier TOKEN narrows that to models whose id carries the token, so a caller asks for a tier without naming a vendor or a model. Each tool row reports its launch program, whether that program is installed, the models its catalog lists, and the subset matching the tier. A tool whose harness exposes no model catalog reports no models and answers only the untiered question.",
+                "Capability JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when a flag is invalid or the spawn model config cannot be read.",
+            ))
+            .subcommand(command(
                 "spawn",
                 "Launch a tagged tool session or reuse its live match.",
                 "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK]",

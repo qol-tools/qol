@@ -7,8 +7,9 @@ use crate::SessionFacts;
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    CliLaunchProgram, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
-    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliToolId,
+    CliLaunchProgram, CliModelCatalog, CliScreenEvidence, CliSessionChangeHandler,
+    CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
+    CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +93,21 @@ impl CliSessionInterpreter {
             .iter()
             .find(|strategy| &strategy.tool().id == tool)
             .and_then(|strategy| strategy.launch())
+    }
+
+    pub fn model_catalog_for(&self, tool: &CliToolId) -> Option<CliModelCatalog> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.model_catalog())
+    }
+
+    pub fn launchable_tools(&self) -> Vec<CliToolId> {
+        self.strategies
+            .iter()
+            .filter(|strategy| strategy.launch().is_some())
+            .map(|strategy| strategy.tool().id.clone())
+            .collect()
     }
 
     pub fn subscribe(

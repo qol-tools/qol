@@ -16,8 +16,8 @@ pub use builtins::{
     KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use evidence::{
-    CliActivityEvidence, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
-    CliViewportState,
+    CliActivityEvidence, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
+    CliSessionEvidence, CliViewportState,
 };
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
 pub use model::{CliSessionDescriptor, CliTool, CliToolColor, CliToolId};
@@ -57,6 +57,10 @@ pub trait CliSessionStrategy: Send + Sync {
     }
 
     fn launch(&self) -> Option<CliLaunchProgram> {
+        None
+    }
+
+    fn model_catalog(&self) -> Option<CliModelCatalog> {
         None
     }
 }

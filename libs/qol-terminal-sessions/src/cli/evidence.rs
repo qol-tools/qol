@@ -61,6 +61,38 @@ impl CliLaunchProgram {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CliModelCatalog {
+    pub program: String,
+    pub args: Vec<String>,
+    pub model_column: usize,
+    pub header_rows: usize,
+}
+
+impl CliModelCatalog {
+    pub fn new(
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+            model_column: 0,
+            header_rows: 0,
+        }
+    }
+
+    pub fn model_column(mut self, column: usize) -> Self {
+        self.model_column = column;
+        self
+    }
+
+    pub fn header_rows(mut self, rows: usize) -> Self {
+        self.header_rows = rows;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -11,6 +11,7 @@ use qol_terminal_sessions::{
 };
 
 mod bridge;
+mod capability;
 mod close;
 mod contract;
 mod export;
@@ -25,10 +26,14 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 16] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 17] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
+    },
+    SessionSubcommand {
+        name: "capability",
+        run: |rest, _format| capability::run(rest),
     },
     SessionSubcommand {
         name: "spawn",
