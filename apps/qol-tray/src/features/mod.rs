@@ -4,6 +4,7 @@ pub mod gpu_driver_sync;
 pub mod launcher_apps;
 #[cfg(feature = "dev")]
 pub mod mode_toggle;
+pub mod notifications;
 pub mod plugin_store;
 pub mod profile;
 pub mod resident_policy;

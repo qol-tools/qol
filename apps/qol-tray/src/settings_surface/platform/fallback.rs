@@ -1,3 +1,12 @@
+pub(in crate::settings_surface) fn show_toast(
+    _title: &str,
+    _body: &str,
+    _level: &str,
+    _action: Option<(&str, &str)>,
+) -> bool {
+    false
+}
+
 pub(in crate::settings_surface) fn request(_plugin_id: &str) -> anyhow::Result<bool> {
     Ok(false)
 }

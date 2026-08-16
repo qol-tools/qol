@@ -33,6 +33,10 @@ pub fn stop() {
     platform::stop();
 }
 
+pub fn show_toast(title: &str, body: &str, level: &str, action: Option<(&str, &str)>) -> bool {
+    platform::show_toast(title, body, level, action)
+}
+
 pub fn prewarm() {
     platform::prewarm();
 }

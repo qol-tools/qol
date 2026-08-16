@@ -9,6 +9,7 @@ use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::SettingsActivation;
 use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHost};
+use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
@@ -17,6 +18,12 @@ use super::super::HostBoot;
 #[derive(Debug)]
 enum Command {
     Open(String),
+    Toast {
+        title: String,
+        body: String,
+        level: String,
+        action: Option<(String, String)>,
+    },
     Kill,
 }
 
@@ -253,6 +260,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
         qol_gpui::platform::set_accessory_policy();
         qol_gpui::keepalive::open_keepalive(cx, Some(qol_conventions::SETTINGS_SURFACE_APP_ID));
         let tracker = MonitorTracker::start(cx);
+        let toast_host = ToastHost::new(tracker.clone());
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
         if let Some(plugin_id) = initial {
             let activation_host = host.clone();
@@ -262,7 +270,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
             })
             .detach();
         }
-        spawn_command_loop(command_rx, host, tracker, cx);
+        spawn_command_loop(command_rx, host, tracker, toast_host, cx);
     });
     core_daemon::cleanup(&config);
     Ok(())
@@ -272,11 +280,13 @@ fn spawn_command_loop(
     command_rx: mpsc::Receiver<Command>,
     host: Rc<RefCell<SettingsWindowHost>>,
     tracker: MonitorTracker,
+    toast_host: ToastHost,
     cx: &mut App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, command_rx, move |cx, command| {
         let host = host.clone();
         let tracker = tracker.clone();
+        let toast_host = toast_host.clone();
         async move {
             match command {
                 Command::Open(plugin_id) => {
@@ -287,10 +297,54 @@ fn spawn_command_loop(
                     activate(host, tracker, plugin_id, &cx).await;
                     LoopFlow::Continue
                 }
+                Command::Toast {
+                    title,
+                    body,
+                    level,
+                    action,
+                } => {
+                    show_toast_in_host(toast_host, title, body, level, action, &cx);
+                    LoopFlow::Continue
+                }
                 Command::Kill => LoopFlow::Stop,
             }
         }
     });
+}
+
+fn show_toast_in_host(
+    toast_host: ToastHost,
+    title: String,
+    body: String,
+    level: String,
+    action: Option<(String, String)>,
+    cx: &gpui::AsyncApp,
+) {
+    let result = cx.update(move |cx| {
+        let mut toast = Toast::new(title, body, ToastLayout::Status).tone(toast_tone(&level));
+        if let Some((_, payload)) = action {
+            toast = toast.on_activate(move |_cx| {
+                if let Err(error) = crate::paths::open_url(&payload) {
+                    log::warn!("[toast] activation open failed: {error:#}");
+                }
+            });
+        }
+        if let Err(error) = toast_host.show(toast, cx) {
+            log::warn!("[toast] render failed: {error:#}");
+        }
+    });
+    if let Err(error) = result {
+        log::warn!("[toast] app update failed: {error:#}");
+    }
+}
+
+fn toast_tone(level: &str) -> ToastTone {
+    match level {
+        "info" => ToastTone::Info,
+        "warn" => ToastTone::Warning,
+        "error" => ToastTone::Danger,
+        _ => ToastTone::Neutral,
+    }
 }
 
 async fn activate(
@@ -411,6 +465,31 @@ fn forward_open(plugin_id: &str) -> bool {
     )
 }
 
+pub(in crate::settings_surface) fn show_toast(
+    title: &str,
+    body: &str,
+    level: &str,
+    action: Option<(&str, &str)>,
+) -> bool {
+    let config = config();
+    let action =
+        action.map(|(label, payload)| serde_json::json!({ "label": label, "payload": payload }));
+    matches!(
+        core_daemon::send_request(
+            &config,
+            "toast",
+            serde_json::json!({
+                "title": title,
+                "body": body,
+                "level": level,
+                "action": action,
+            }),
+            Duration::from_millis(500),
+        ),
+        Ok(DaemonResponse::Handled { .. })
+    )
+}
+
 fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => ReadResult::Handled,
@@ -422,8 +501,51 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
             .filter(|plugin_id| crate::paths::is_safe_path_component(plugin_id))
             .map(|plugin_id| ReadResult::Command(Command::Open(plugin_id.to_string())))
             .unwrap_or_else(|| ReadResult::Error("open requires a valid plugin_id".into())),
+        "toast" => {
+            let title = request
+                .input
+                .get("title")
+                .and_then(serde_json::Value::as_str);
+            let body = request
+                .input
+                .get("body")
+                .and_then(serde_json::Value::as_str);
+            let level = request
+                .input
+                .get("level")
+                .and_then(serde_json::Value::as_str);
+            let action = request
+                .input
+                .get("action")
+                .and_then(serde_json::Value::as_object)
+                .and_then(validated_action);
+            match (title, body, level) {
+                (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
+                    title: title.to_string(),
+                    body: body.to_string(),
+                    level: level.to_string(),
+                    action,
+                }),
+                _ => ReadResult::Error("toast requires title, body and level".into()),
+            }
+        }
         _ => ReadResult::Fallback,
     }
+}
+
+fn validated_action(
+    action: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(String, String)> {
+    let label = action.get("label").and_then(serde_json::Value::as_str)?;
+    let payload = action.get("payload").and_then(serde_json::Value::as_str)?;
+    if label.trim().is_empty() {
+        return None;
+    }
+    let path = std::path::Path::new(payload);
+    if !path.is_absolute() || !path.exists() {
+        return None;
+    }
+    Some((label.to_string(), payload.to_string()))
 }
 
 fn activation_name(activation: SettingsActivation) -> &'static str {
@@ -486,6 +608,57 @@ mod tests {
                 valid,
                 "plugin_id={plugin_id:?}"
             );
+        }
+    }
+
+    #[test]
+    fn toast_protocol_accepts_complete_payloads_and_drops_invalid_actions() {
+        let existing = tempfile::tempdir().unwrap();
+        let existing_path = existing.path().join("target");
+        std::fs::write(&existing_path, "x").unwrap();
+        let payload = existing_path.to_str().unwrap().to_string();
+        let request = DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({
+                "title": "title",
+                "body": "body",
+                "level": "warn",
+                "action": { "label": "open", "payload": payload },
+            }),
+        };
+        match parse_request(&request) {
+            ReadResult::Command(Command::Toast {
+                title,
+                body,
+                level,
+                action,
+            }) => {
+                assert_eq!(title, "title");
+                assert_eq!(body, "body");
+                assert_eq!(level, "warn");
+                assert_eq!(action, Some(("open".to_string(), payload)));
+            }
+            _ => panic!("toast request did not parse as a command"),
+        }
+
+        let incomplete = DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({ "title": "title" }),
+        };
+        assert!(matches!(parse_request(&incomplete), ReadResult::Error(_)));
+
+        let missing_payload = DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({
+                "title": "title",
+                "body": "body",
+                "level": "info",
+                "action": { "label": "open", "payload": "/does/not/exist" },
+            }),
+        };
+        match parse_request(&missing_payload) {
+            ReadResult::Command(Command::Toast { action, .. }) => assert_eq!(action, None),
+            _ => panic!("toast request did not parse as a command"),
         }
     }
 
