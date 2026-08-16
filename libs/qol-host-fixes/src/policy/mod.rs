@@ -1848,7 +1848,6 @@ mod tests {
         write_journal_durable(&zero).unwrap();
         std::fs::write(&staged_path, b"operator data").unwrap();
         let error = restore_journal("nvidia-driver-version-pin").unwrap_err();
-        std::env::remove_var("QOL_RESIDENT_FRAGMENT_PATH");
         assert!(format!("{error:#}").contains("preserved"), "{error:#}");
         assert_eq!(
             std::fs::read(&staged_path).unwrap(),
@@ -1859,6 +1858,7 @@ mod tests {
             read_journal("nvidia-driver-version-pin").unwrap().is_some(),
             "the journal must survive while an unaccounted staged file exists"
         );
+        std::env::remove_var("QOL_RESIDENT_FRAGMENT_PATH");
     }
 
     #[test]

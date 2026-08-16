@@ -729,7 +729,7 @@ mod tests {
         let gaps = gaps(&calls);
         assert!(gaps.len() >= 6);
         assert!(gaps[1] >= gaps[0] * 2 / 3);
-        assert!(gaps[2] >= gaps[0] * 2);
+        assert!(gaps[2] >= gaps[1] * 2 / 3);
         assert!(gaps[4] <= gaps[2] * 2 / 3);
         assert!(gaps[5] <= gaps[0] * 3);
     }

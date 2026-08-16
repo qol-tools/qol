@@ -56,5 +56,9 @@ git2 = { version = "0.20", default-features = false, features = ["https", "vendo
 # Git sync: HTTPS runs on libgit2's SecureTransport backend here, no vendored OpenSSL
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
 
+[target.'cfg(windows)'.dependencies]
+# Git sync: HTTPS runs on libgit2's native WinHTTP backend here, no vendored OpenSSL
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

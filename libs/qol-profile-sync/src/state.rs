@@ -355,10 +355,10 @@ mod tests {
         std::fs::write(paths.profile_root.join("active"), "work\n").unwrap();
 
         let bucket = current_os_bucket();
-        assert!(paths.os_dir().ends_with(&format!("work/os/{bucket}")));
+        assert!(paths.os_dir().ends_with(format!("work/os/{bucket}")));
         assert!(paths
             .hotkeys_path()
-            .ends_with(&format!("work/os/{bucket}/hotkeys.json")));
+            .ends_with(format!("work/os/{bucket}/hotkeys.json")));
     }
 
     #[test]

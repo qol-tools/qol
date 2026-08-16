@@ -306,6 +306,10 @@ pub fn is_pid_zombie(pid: u32) -> bool {
     platform::is_pid_zombie(pid)
 }
 
+pub fn is_pid_gone(pid: u32) -> bool {
+    !platform::is_pid_alive(pid) || platform::is_pid_zombie(pid)
+}
+
 pub fn process_identity(pid: u32) -> io::Result<String> {
     platform::process_identity(pid)
 }

@@ -297,6 +297,7 @@ mod tests {
     #[test]
     fn a_traced_status_attempt_emits_exactly_one_request_and_one_result() {
         let _guard = test_support::serialized();
+        test_support::reset_dir();
         let mut recorder = CountedEmissionRecorder::default();
         let result = super::super::nvidia::run_resident_policy_cli_traced_with(
             &["status".to_string()],
