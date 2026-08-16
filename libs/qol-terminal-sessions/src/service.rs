@@ -298,6 +298,7 @@ impl TerminalSessionService {
             liveness,
             stall_after,
             WaitBackoff::default(),
+            &mut |duration| std::thread::sleep(duration),
         )
     }
 
@@ -313,6 +314,7 @@ impl TerminalSessionService {
         liveness: &dyn Fn() -> Option<bool>,
         stall_after: Duration,
         backoff: WaitBackoff,
+        sleep: &mut dyn FnMut(Duration),
     ) -> Result<WaitOutcome, TerminalError> {
         let started = Instant::now();
         let mut previous = None;
@@ -382,7 +384,7 @@ impl TerminalSessionService {
                     Err(mpsc::RecvTimeoutError::Disconnected) => subscribed = false,
                 }
             } else {
-                std::thread::sleep(interval);
+                sleep(interval);
             }
         }
     }
@@ -577,10 +579,6 @@ mod tests {
         calls.iter().filter(|(call, _)| *call == kind).count()
     }
 
-    fn gaps(calls: &[(CallKind, Instant)]) -> Vec<Duration> {
-        calls.windows(2).map(|pair| pair[1].1 - pair[0].1).collect()
-    }
-
     #[test]
     fn every_tenth_poll_is_a_strict_full_read() {
         let screens = vec!["idle".to_owned(); 25]
@@ -661,16 +659,19 @@ mod tests {
 
     #[test]
     fn no_change_polls_grow_the_sleep_up_to_the_cap() {
-        let backend = FakeBackend::new(vec!["idle".to_owned(); 8]);
+        let mut screens = vec!["idle".to_owned(); 8];
+        screens.push("done\nQOL_BRIDGE_DONE_never".to_owned());
+        let backend = FakeBackend::new(screens);
         let terminals = service(backend.clone());
         let (tx, rx) = mpsc::sync_channel::<()>(1);
         drop(tx);
+        let mut requested = Vec::new();
 
         let outcome = terminals
             .wait_for_completion_with_backoff(
                 &binding(),
                 "QOL_BRIDGE_DONE_never",
-                Duration::from_millis(700),
+                Duration::from_secs(30),
                 rx,
                 false,
                 true,
@@ -680,17 +681,29 @@ mod tests {
                     base: Duration::from_millis(30),
                     cap: Duration::from_millis(120),
                 },
+                &mut |duration| {
+                    requested.push(duration);
+                    std::thread::sleep(duration);
+                },
             )
             .unwrap();
 
-        assert!(!outcome.completed);
-        let calls = backend.calls.lock().unwrap();
-        let gaps = gaps(&calls);
-        assert!(gaps.len() >= 4);
-        assert!(gaps[1] >= gaps[0] * 2 / 3);
-        assert!(gaps[2] >= gaps[1] * 2 / 3);
-        assert!(gaps[3] <= gaps[0] * 8);
-        assert!(gaps[3] >= gaps[0]);
+        assert!(outcome.completed);
+        assert_eq!(
+            outcome.reads, 10,
+            "completion needs two stable matching reads"
+        );
+        assert_eq!(
+            &requested[..5],
+            &[
+                Duration::from_millis(30),
+                Duration::from_millis(60),
+                Duration::from_millis(120),
+                Duration::from_millis(120),
+                Duration::from_millis(120),
+            ],
+            "the sleep must double from the base until it caps"
+        );
     }
 
     #[test]
@@ -706,6 +719,7 @@ mod tests {
         let terminals = service(backend.clone());
         let (tx, rx) = mpsc::sync_channel::<()>(1);
         drop(tx);
+        let mut requested = Vec::new();
 
         let outcome = terminals
             .wait_for_completion_with_backoff(
@@ -721,16 +735,26 @@ mod tests {
                     base: Duration::from_millis(30),
                     cap: Duration::from_millis(120),
                 },
+                &mut |duration| {
+                    requested.push(duration);
+                    std::thread::sleep(duration);
+                },
             )
             .unwrap();
 
         assert!(!outcome.completed);
-        let calls = backend.calls.lock().unwrap();
-        let gaps = gaps(&calls);
-        assert!(gaps.len() >= 6);
-        assert!(gaps[1] >= gaps[0] * 2 / 3);
-        assert!(gaps[2] >= gaps[1] * 2 / 3);
-        assert!(gaps[4] <= gaps[2] * 2 / 3);
-        assert!(gaps[5] <= gaps[0] * 3);
+        assert_eq!(
+            &requested[..7],
+            &[
+                Duration::from_millis(30),
+                Duration::from_millis(60),
+                Duration::from_millis(120),
+                WAIT_SETTLE_INTERVAL,
+                Duration::from_millis(30),
+                Duration::from_millis(30),
+                Duration::from_millis(60),
+            ],
+            "a changed screen must drop the sleep back to the base"
+        );
     }
 }

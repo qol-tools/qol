@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub(crate) const RESUME_TRAY_PID_ENV: &str = "QOL_DEV_RESUME_TRAY_PID";
+#[cfg(unix)]
 pub(crate) const PRIOR_TERMIOS_ENV: &str = "QOL_DEV_PRIOR_TERMIOS";
 
 mod platform;
