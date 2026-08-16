@@ -218,6 +218,9 @@ impl McpSessionServer {
         let tool = string_argument(&arguments, "tool")?;
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
+        if arguments.get("background").is_some() {
+            return Err("session_spawn takes no `background`: background is the only mode and every spawn embeds its task in the launch. Drop that argument.".to_owned());
+        }
         let surface = arguments
             .get("surface")
             .map(|value| {
@@ -245,24 +248,7 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `title` must be a string".to_owned())
             })
             .transpose()?;
-        let task = arguments
-            .get("task")
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| "session_spawn `task` must be a string".to_owned())
-            })
-            .transpose()?;
-        let background = arguments
-            .get("background")
-            .map(|value| {
-                value
-                    .as_bool()
-                    .ok_or_else(|| "session_spawn `background` must be a boolean".to_owned())
-            })
-            .transpose()?
-            .unwrap_or(false);
+        let task = string_argument(&arguments, "task")?;
         let autoclose = arguments
             .get("autoclose")
             .map(|value| {
@@ -271,7 +257,7 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `autoclose` must be a boolean".to_owned())
             })
             .transpose()?
-            .unwrap_or(false);
+            .unwrap_or(true);
         let model =
             super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
                 .map_err(|error| error.to_string())?;
@@ -287,9 +273,9 @@ impl McpSessionServer {
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
-            background,
+            true,
             autoclose,
-            task.as_deref(),
+            Some(task),
             &self.pending,
         )
         .map_err(|error| error.to_string())?;
@@ -320,47 +306,31 @@ impl McpSessionServer {
             false,
         )
         .map_err(|error| error.to_string())?;
+        if outcome.submitted {
+            self.watcher.record_token(&outcome.session, &self.pending);
+        }
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
     fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        let task = arguments.get("task").and_then(Value::as_str);
+        if arguments.get("task").is_some() {
+            return Err("session_bridge takes no `task`: delivery belongs to session_spawn and session_submit, and bridge only collects the round after its wake. Resend this call without that argument.".to_owned());
+        }
         if arguments.get("timeout_ms").is_some() {
             return Err("session_bridge takes no `timeout_ms`; the round stays open until the implementation emits its completion signal. Resend this call without that argument.".to_owned());
         }
-        let acknowledge_marker = arguments
-            .get("acknowledge_marker")
-            .map(|value| {
-                value.as_str().ok_or_else(|| {
-                    "session_bridge `acknowledge_marker` must be a string".to_owned()
-                })
-            })
-            .transpose()?;
-        let outcome = match task {
-            Some(task) => super::bridge::execute(
-                self.terminals.as_ref(),
-                &self.interpreter,
-                &binding,
-                task,
-                self.round_timeout,
-                &self.pending,
-                acknowledge_marker,
-            ),
-            None => {
-                if acknowledge_marker.is_some() {
-                    return Err("session_bridge without a task takes no `acknowledge_marker`; acknowledge the reviewed round on the next submit or the loop close".to_owned());
-                }
-                super::bridge::resume(
-                    self.terminals.as_ref(),
-                    &self.interpreter,
-                    &binding,
-                    self.round_timeout,
-                    &self.pending,
-                    false,
-                )
-            }
+        if arguments.get("acknowledge_marker").is_some() {
+            return Err("session_bridge takes no `acknowledge_marker`; acknowledge the reviewed round on the next submit or the loop close".to_owned());
         }
+        let outcome = super::bridge::resume(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &binding,
+            self.round_timeout,
+            &self.pending,
+            false,
+        )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
@@ -442,7 +412,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> &'static str {
-    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and an\n  optional `task` delivers the\n  first round at spawn time so the round is already open when the call\n  returns. session_submit delivers one bounded task without waiting and\n  returns with the round open. session_bridge submits once and waits for the\n  implementation terminal's generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
+    "qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  sessions_list, session_spawn, session_submit, session_bridge,\n  session_loop_close, session_close\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; `autoclose` defaults to on for\n  newly spawned terminals and can be turned off with `autoclose: false`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n"
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -643,8 +613,19 @@ mod tests {
         }
 
         fn generated_completion(&self) -> Option<String> {
-            let sent = self.sent.lock().unwrap();
-            let prompt = &sent.last()?.1;
+            let prompt = self
+                .sent
+                .lock()
+                .unwrap()
+                .last()
+                .map(|(_, text, _)| text.clone())
+                .or_else(|| {
+                    self.spawn_launch
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|launch| launch.args.last().cloned())
+                })?;
             let fragments = prompt
                 .split('`')
                 .enumerate()
@@ -1055,6 +1036,33 @@ mod tests {
     }
 
     #[test]
+    fn session_submit_records_the_round_token_in_the_watch_owner_state() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({ "session": token(), "task": "implement the bounded change" }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["submitted"], true);
+
+        let watcher = crate::commands::sessions::watch_owner::ClientWatcher::with_dir(
+            root.path().join("watch-state"),
+            "test-owner".to_owned(),
+        );
+        assert_eq!(
+            watcher.read_tokens(),
+            vec![outcome["session"].as_str().unwrap().to_owned()],
+            "a submitted round must arm the client watcher so the initiator wakes"
+        );
+    }
+
+    #[test]
     fn session_submit_refuses_when_a_round_is_already_pending() {
         let (server, backend) = server(Vec::new(), false, false);
         let first = tool_call(
@@ -1132,48 +1140,31 @@ mod tests {
     }
 
     #[test]
-    fn bridge_submits_once_and_waits_for_the_joined_completion_signal() {
+    fn bridge_with_a_task_is_rejected() {
         let (server, backend) = server(Vec::new(), true, false);
         let response = tool_call(
             &server,
             "session_bridge",
             json!({ "session": token(), "task": "implement and test the bounded change" }),
         );
-        assert_eq!(response["result"]["isError"], false);
-        let outcome: Value =
-            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap();
-        assert_eq!(outcome["completed"], true);
-        assert!(outcome["screen"]
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("QOL_BRIDGE_DONE_"));
-
-        let sent = backend.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].2, DeliveryMode::Submit);
-        let fragments = sent[0]
-            .1
-            .split('`')
-            .enumerate()
-            .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
-            .collect::<Vec<_>>();
-        let joined = format!(
-            "{}{}",
-            fragments[fragments.len() - 2],
-            fragments[fragments.len() - 1]
-        );
-        assert!(!sent[0].1.contains(&joined));
+            .contains("delivery belongs to session_spawn and session_submit"));
+        assert_eq!(backend.sent.lock().unwrap().len(), 0);
     }
 
     #[test]
-    fn bridge_timeout_does_not_resubmit_the_task() {
+    fn bridge_waits_on_the_pending_round_without_delivering_again() {
         let (server, backend) = server(vec![">>> working".to_owned()], false, false);
-        let response = tool_call(
+        let submitted = tool_call(
             &server,
-            "session_bridge",
+            "session_submit",
             json!({ "session": token(), "task": "keep working" }),
         );
+        assert_eq!(submitted["result"]["isError"], false);
+        let response = tool_call(&server, "session_bridge", json!({ "session": token() }));
         let outcome: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
@@ -1188,23 +1179,24 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let first = tool_call(
             &server,
-            "session_bridge",
+            "session_submit",
             json!({ "session": token(), "task": "first task" }),
         );
         let first_outcome: Value =
             serde_json::from_str(first["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(first_outcome["completed"], false);
         assert_eq!(first_outcome["submitted"], true);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        let first_wait = tool_call(&server, "session_bridge", json!({ "session": token() }));
+        let first_wait_outcome: Value =
+            serde_json::from_str(first_wait["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(first_wait_outcome["completed"], false);
         assert_eq!(backend.sent.lock().unwrap().len(), 1);
         drop(server);
 
         backend.complete_bridge.store(true, Ordering::Relaxed);
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let recovered = tool_call(
-            &server,
-            "session_bridge",
-            json!({ "session": token(), "task": "second task" }),
-        );
+        let recovered = tool_call(&server, "session_bridge", json!({ "session": token() }));
         let recovered_outcome: Value =
             serde_json::from_str(recovered["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
@@ -1212,40 +1204,50 @@ mod tests {
         assert_eq!(recovered_outcome["submitted"], false);
         assert_eq!(backend.sent.lock().unwrap().len(), 1);
 
-        let mismatched = tool_call(
+        let with_marker = tool_call(
             &server,
             "session_bridge",
-            json!({
-                "session": token(),
-                "task": "second task",
-                "acknowledge_marker": "QOL_BRIDGE_DONE_wrong",
-            }),
+            json!({ "session": token(), "acknowledge_marker": "QOL_BRIDGE_DONE_wrong" }),
         );
-        assert_eq!(mismatched["result"]["isError"], true);
+        assert_eq!(with_marker["result"]["isError"], true);
+        assert!(with_marker["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("takes no `acknowledge_marker`"));
         assert_eq!(backend.sent.lock().unwrap().len(), 1);
 
         let second = tool_call(
             &server,
-            "session_bridge",
+            "session_submit",
             json!({
                 "session": token(),
                 "task": "second task",
                 "acknowledge_marker": recovered_outcome["completion_marker"],
             }),
         );
-        let second_outcome: Value =
+        assert_eq!(second["result"]["isError"], false);
+        let second_submit: Value =
             serde_json::from_str(second["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(second_outcome["completed"], true);
-        assert_eq!(second_outcome["submitted"], true);
+        assert_eq!(second_submit["submitted"], true);
+        assert_eq!(backend.sent.lock().unwrap().len(), 2);
+
+        let second_wait = tool_call(&server, "session_bridge", json!({ "session": token() }));
+        let second_wait_outcome: Value = serde_json::from_str(
+            second_wait["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(second_wait_outcome["completed"], true);
         assert_eq!(backend.sent.lock().unwrap().len(), 2);
     }
 
     #[test]
-    fn bridge_surfaces_validation_and_delivery_failures() {
+    fn submit_surfaces_validation_and_delivery_failures() {
         let (valid_server, _) = server(Vec::new(), false, false);
         let invalid = tool_call(
             &valid_server,
-            "session_bridge",
+            "session_submit",
             json!({ "session": token(), "task": "bad\u{1b}[31m" }),
         );
         assert_eq!(invalid["result"]["isError"], true);
@@ -1257,7 +1259,7 @@ mod tests {
         let (server, _) = server(Vec::new(), false, true);
         let failed = tool_call(
             &server,
-            "session_bridge",
+            "session_submit",
             json!({ "session": token(), "task": "safe task" }),
         );
         assert_eq!(failed["result"]["isError"], true);
@@ -1274,7 +1276,7 @@ mod tests {
             let response = tool_call(
                 &server,
                 "session_bridge",
-                json!({ "session": token(), "task": "safe task", "timeout_ms": timeout }),
+                json!({ "session": token(), "timeout_ms": timeout }),
             );
             assert_eq!(response["result"]["isError"], true);
             assert!(response["result"]["content"][0]["text"]
@@ -1294,19 +1296,14 @@ mod tests {
     }
 
     #[test]
-    fn bridge_rejects_the_calling_terminal_before_delivery() {
+    fn bridge_without_a_pending_round_is_rejected() {
         let (server, backend) = server(Vec::new(), true, false);
-        *backend.current.lock().unwrap() = true;
-        let response = tool_call(
-            &server,
-            "session_bridge",
-            json!({ "session": token(), "task": "self deadlock" }),
-        );
+        let response = tool_call(&server, "session_bridge", json!({ "session": token() }));
         assert_eq!(response["result"]["isError"], true);
         assert!(response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("calling terminal"));
+            .contains("no pending bridge exists"));
         assert!(backend.sent.lock().unwrap().is_empty());
     }
 
@@ -1371,24 +1368,20 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut spawned_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
         spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
         let spawned = tool_call(&server, "session_spawn", spawned_arguments);
         assert_eq!(spawned["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
         let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
         let binding: SessionBinding = session.parse().unwrap();
-        server
-            .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
-            .unwrap();
-        server
-            .pending
-            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
-            .unwrap();
+        server.pending.observe(&binding, &marker, true).unwrap();
 
         let mut arguments = close_arguments("accepted");
         arguments["session"] = json!(session);
+        arguments["completion_marker"] = json!(marker);
         let response = tool_call(&server, "session_loop_close", arguments);
         assert_eq!(response["result"]["isError"], false);
         let receipt: Value =
@@ -1415,25 +1408,21 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut spawned_arguments = spawn_arguments("codex", "mcp-lane-gone", None, &cwd);
         spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
         let spawned = tool_call(&server, "session_spawn", spawned_arguments);
         assert_eq!(spawned["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
         let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
         let binding: SessionBinding = session.parse().unwrap();
-        server
-            .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
-            .unwrap();
-        server
-            .pending
-            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
-            .unwrap();
+        server.pending.observe(&binding, &marker, true).unwrap();
         backend.mark_gone();
 
         let mut arguments = close_arguments("accepted");
         arguments["session"] = json!(session);
+        arguments["completion_marker"] = json!(marker);
         let response = tool_call(&server, "session_loop_close", arguments);
         assert_eq!(response["result"]["isError"], false);
         let receipt: Value =
@@ -1460,25 +1449,21 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut spawned_arguments = spawn_arguments("codex", "mcp-lane-fail", None, &cwd);
         spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
         let spawned = tool_call(&server, "session_spawn", spawned_arguments);
         assert_eq!(spawned["result"]["isError"], false);
         let outcome: Value =
             serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
         let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
         let binding: SessionBinding = session.parse().unwrap();
-        server
-            .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
-            .unwrap();
-        server
-            .pending
-            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
-            .unwrap();
+        server.pending.observe(&binding, &marker, true).unwrap();
         backend.fail_closing();
 
         let mut arguments = close_arguments("accepted");
         arguments["session"] = json!(session);
+        arguments["completion_marker"] = json!(marker);
         let response = tool_call(&server, "session_loop_close", arguments);
         assert_eq!(response["result"]["isError"], false);
         let receipt: Value =
@@ -1582,13 +1567,21 @@ mod tests {
 
         let mut close_lane = spawn_arguments("codex", "mcp-lane", None, &cwd);
         close_lane["model"] = json!("flash-x");
-        tool_call(&server, "session_spawn", close_lane);
+        close_lane["task"] = json!("build the bounded change");
+        let spawned_response = tool_call(&server, "session_spawn", close_lane);
+        assert_eq!(spawned_response["result"]["isError"], false);
+        let spawned_outcome: Value = serde_json::from_str(
+            spawned_response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let spawned_marker = spawned_outcome["completion_marker"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let spawned = "v1:kitty:spawn-mcp-lane:200";
         let binding: SessionBinding = spawned.parse().unwrap();
-        server
-            .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
-            .unwrap();
         let open_loop = tool_call(&server, "session_close", json!({ "session": spawned }));
         assert_eq!(open_loop["result"]["isError"], true);
         assert!(open_loop["result"]["content"][0]["text"]
@@ -1599,7 +1592,7 @@ mod tests {
 
         server
             .pending
-            .acknowledge(&binding, "QOL_BRIDGE_DONE_final", false)
+            .acknowledge(&binding, &spawned_marker, false)
             .unwrap();
         let closed = tool_call(&server, "session_close", json!({ "session": spawned }));
         assert_eq!(closed["result"]["isError"], false);
@@ -1666,6 +1659,7 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
         arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement the fix");
         let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
@@ -1696,6 +1690,7 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut arguments = spawn_arguments("pi", "mcp-lane-model", None, &cwd);
         arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement the fix");
         let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
@@ -1704,9 +1699,14 @@ mod tests {
         assert_eq!(outcome["model"], json!("flash-x"));
         let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
         assert_eq!(request.program, "pi");
+        assert_eq!(request.args.len(), 3);
         assert_eq!(
-            request.args,
+            request.args[..2],
             vec!["--model".to_owned(), "flash-x".to_owned()]
+        );
+        assert!(
+            request.args[2].contains("[qol session bridge]"),
+            "the launch must embed the first round after the model flags"
         );
     }
 
@@ -1739,11 +1739,9 @@ mod tests {
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
 
-        let missing = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, &cwd),
-        );
+        let mut missing = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        missing["task"] = json!("implement the fix");
+        let missing = tool_call(&server, "session_spawn", missing);
         assert_eq!(missing["result"]["isError"], true);
         assert!(missing["result"]["content"][0]["text"]
             .as_str()
@@ -1752,6 +1750,7 @@ mod tests {
 
         let mut empty = spawn_arguments("codex", "mcp-lane-empty", None, &cwd);
         empty["model"] = json!("");
+        empty["task"] = json!("implement the fix");
         let empty = tool_call(&server, "session_spawn", empty);
         assert_eq!(empty["result"]["isError"], true);
         assert!(empty["result"]["content"][0]["text"]
@@ -1767,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn background_spawn_queues_the_round_without_pasting_and_reuse_stays_unchanged() {
+    fn spawn_queues_the_round_without_pasting_and_reuse_delivers_on_top() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
@@ -1779,7 +1778,6 @@ mod tests {
         let mut arguments = spawn_arguments("pi", "mcp-bg", None, &cwd);
         arguments["model"] = json!("flash-x");
         arguments["task"] = json!("implement the fix");
-        arguments["background"] = json!(true);
         let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);
         let outcome: Value =
@@ -1794,7 +1792,7 @@ mod tests {
         assert_eq!(
             backend.sent.lock().unwrap().len(),
             0,
-            "background embeds the task in the launch instead of pasting it"
+            "the spawn embeds the task in the launch instead of pasting it"
         );
 
         let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
@@ -1816,7 +1814,7 @@ mod tests {
                 "key": "mcp-bg",
                 "model": "flash-x",
                 "task": "second round",
-                "background": true,
+                "autoclose": false,
             }),
         );
         assert_eq!(second["result"]["isError"], true);
@@ -1839,7 +1837,7 @@ mod tests {
                 "key": "mcp-bg",
                 "model": "flash-x",
                 "task": "second round",
-                "background": true,
+                "autoclose": false,
             }),
         );
         assert_eq!(reused["result"]["isError"], false);
@@ -1849,36 +1847,52 @@ mod tests {
         assert_eq!(
             backend.sent.lock().unwrap().len(),
             1,
-            "the reuse path keeps foreground delivery semantics"
+            "the reuse path pastes the task into the live session"
         );
     }
 
     #[test]
-    fn background_spawn_rejects_non_boolean_flags_and_missing_tasks() {
+    fn spawn_rejects_an_explicit_background_argument() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let mut bad_flag = spawn_arguments("pi", "mcp-bg", None, &cwd);
-        bad_flag["model"] = json!("flash-x");
-        bad_flag["background"] = json!("yes");
-        let response = tool_call(&server, "session_spawn", bad_flag);
-        assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("background` must be a boolean"));
+        for background in [json!(true), json!("yes")] {
+            let mut arguments = spawn_arguments("pi", "mcp-bg", None, &cwd);
+            arguments["model"] = json!("flash-x");
+            arguments["task"] = json!("implement the fix");
+            arguments["background"] = background;
+            let response = tool_call(&server, "session_spawn", arguments);
+            assert_eq!(response["result"]["isError"], true);
+            assert!(response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("background is the only mode"));
+        }
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
 
+    #[test]
+    fn spawn_requires_a_task() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut no_task = spawn_arguments("pi", "mcp-bg", None, &cwd);
         no_task["model"] = json!("flash-x");
-        no_task["background"] = json!(true);
         let response = tool_call(&server, "session_spawn", no_task);
         assert_eq!(response["result"]["isError"], true);
         assert!(response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("--task"));
+            .contains("missing `task` string argument"));
         assert_eq!(
             backend
                 .spawn_count
@@ -1921,6 +1935,7 @@ mod tests {
                 "tool": "pi",
                 "cwd": cwd,
                 "key": "mcp-auto",
+                "task": "second round",
                 "autoclose": true,
             }),
         );
@@ -1932,6 +1947,7 @@ mod tests {
 
         let mut bad_flag = spawn_arguments("pi", "mcp-auto-bad", None, &cwd);
         bad_flag["model"] = json!("flash-x");
+        bad_flag["task"] = json!("implement the fix");
         bad_flag["autoclose"] = json!("yes");
         let response = tool_call(&server, "session_spawn", bad_flag);
         assert_eq!(response["result"]["isError"], true);
@@ -1948,26 +1964,86 @@ mod tests {
     }
 
     #[test]
+    fn spawn_defaults_autoclose_to_true_and_accepts_an_opt_out() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], false, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-defaults", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement the fix");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["autoclose"], true);
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            round.autoclose,
+            "the queued round must default to autoclose"
+        );
+
+        let mut opted_out = spawn_arguments("pi", "mcp-no-auto", None, &cwd);
+        opted_out["model"] = json!("flash-x");
+        opted_out["task"] = json!("implement the fix");
+        opted_out["autoclose"] = json!(false);
+        let response = tool_call(&server, "session_spawn", opted_out);
+        assert_eq!(response["result"]["isError"], false);
+        let opted: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let binding: SessionBinding = opted["session"].as_str().unwrap().parse().unwrap();
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(!round.autoclose, "autoclose: false must opt the round out");
+    }
+
+    #[test]
     fn session_spawn_reuses_the_live_match_and_never_launches_twice() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
-            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+            FakeBackend::new(vec![live_pi_screen()], false, false)
+                .with_id(BackendId::new("kitty").unwrap()),
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
+        let mut first_arguments = spawn_arguments("pi", "mcp-lane", None, &cwd);
         first_arguments["model"] = json!("flash-x");
+        first_arguments["task"] = json!("first round");
         let first = tool_call(&server, "session_spawn", first_arguments);
         assert_eq!(first["result"]["isError"], false);
-        let second = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", None, "ignored-missing-cwd"),
-        );
-        assert_eq!(second["result"]["isError"], false);
+        let first_outcome: Value =
+            serde_json::from_str(first["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let binding: SessionBinding = first_outcome["session"].as_str().unwrap().parse().unwrap();
+        let marker = first_outcome["completion_marker"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let mut second_arguments = spawn_arguments("pi", "mcp-lane", None, "ignored-missing-cwd");
+        second_arguments["task"] = json!("second round");
+        second_arguments["autoclose"] = json!(false);
+        let second = tool_call(&server, "session_spawn", second_arguments.clone());
+        assert_eq!(second["result"]["isError"], true);
+        assert!(second["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already pending"));
+
+        server
+            .pending
+            .acknowledge(&binding, &marker, false)
+            .unwrap();
+        let third = tool_call(&server, "session_spawn", second_arguments);
+        assert_eq!(third["result"]["isError"], false);
         let outcome: Value =
-            serde_json::from_str(second["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+            serde_json::from_str(third["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(outcome["reused"], true);
         assert_eq!(outcome["session"], "v1:kitty:spawn-mcp-lane:200");
         assert_eq!(outcome["cwd"], json!(cwd));
@@ -1990,12 +2066,11 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut first_arguments = spawn_arguments("codex", "mcp-lane", None, &cwd);
         first_arguments["model"] = json!("flash-x");
+        first_arguments["task"] = json!("first round");
         tool_call(&server, "session_spawn", first_arguments);
-        let conflict = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("claude", "mcp-lane", None, &cwd),
-        );
+        let mut conflict_arguments = spawn_arguments("claude", "mcp-lane", None, &cwd);
+        conflict_arguments["task"] = json!("conflicting round");
+        let conflict = tool_call(&server, "session_spawn", conflict_arguments);
         assert_eq!(conflict["result"]["isError"], true);
         assert!(conflict["result"]["content"][0]["text"]
             .as_str()
@@ -2051,11 +2126,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let unknown = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("codex", "mcp-lane", Some("floating"), &cwd),
-        );
+        let mut unknown_arguments = spawn_arguments("codex", "mcp-lane", Some("floating"), &cwd);
+        unknown_arguments["task"] = json!("first round");
+        let unknown = tool_call(&server, "session_spawn", unknown_arguments);
         assert_eq!(unknown["result"]["isError"], true);
         assert!(unknown["result"]["content"][0]["text"]
             .as_str()
@@ -2065,6 +2138,7 @@ mod tests {
         let mut unsupported_arguments =
             spawn_arguments("codex", "mcp-lane", Some("os-window"), &cwd);
         unsupported_arguments["model"] = json!("flash-x");
+        unsupported_arguments["task"] = json!("first round");
         let unsupported = tool_call(&server, "session_spawn", unsupported_arguments);
         assert_eq!(unsupported["result"]["isError"], true);
         assert!(unsupported["result"]["content"][0]["text"]
@@ -2082,11 +2156,9 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let response = tool_call(
-            &server,
-            "session_spawn",
-            spawn_arguments("generic", "mcp-lane", None, &cwd),
-        );
+        let mut generic_arguments = spawn_arguments("generic", "mcp-lane", None, &cwd);
+        generic_arguments["task"] = json!("first round");
+        let response = tool_call(&server, "session_spawn", generic_arguments);
         assert_eq!(response["result"]["isError"], true);
         assert!(response["result"]["content"][0]["text"]
             .as_str()

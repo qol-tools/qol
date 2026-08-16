@@ -286,26 +286,13 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
       if (params.surface != null) args.push("--surface", params.surface);
       if (params.model != null) args.push("--model", params.model);
       if (params.title != null) args.push("--title", params.title);
-      if (params.task != null) args.push("--task", params.task);
-      if (params.background === true) args.push("--background");
-      if (params.autoclose === true) args.push("--auto-close");
+      args.push("--task", params.task, "--background");
+      if (params.autoclose !== false) args.push("--auto-close");
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
-      let text;
-      if (params.background === true) {
-        await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
-        await startWatcher(ctx);
-        text = `spawned session ${outcome.session} in the background (${outcome.tool}, key ${outcome.key}); round queued, you will be woken when it completes`;
-      } else {
-        if (outcome.task_submitted === true) {
-          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
-          await startWatcher(ctx);
-        }
-        text = outcome.reused
-          ? `reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`
-          : `spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`
-            + (outcome.task_submitted ? "; first round delivered, wait with session_bridge (omit task)" : "");
-      }
+      await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
+      await startWatcher(ctx);
+      const text = `spawned session ${outcome.session} in the background (${outcome.tool}, key ${outcome.key}); round queued, you will be woken when it completes`;
       return { content: [{ type: "text", text }], details: { outcome } };
     },
 "#;
@@ -323,17 +310,13 @@ const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _
 
 const EXECUTE_BRIDGE: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["bridge", params.session];
-      if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
-      if (params.task != null) args.push("--", params.task);
       setLoopPhase("waiting");
       try {
         const stdout = await run(args, BRIDGE_TIMEOUT_MS, undefined, signal);
         const outcome = JSON.parse(stdout);
         setLoopPhase(outcome.completed ? "review" : "paused");
         const text = outcome.completed
-          ? outcome.submitted
-            ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
-            : `recovered the previous implementation response before submitting new work after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
+          ? `implementation completed after ${outcome.elapsed_ms}ms (${outcome.reads} screen reads)`
           : `bridge timed out after ${outcome.elapsed_ms}ms; do not resend the task`;
         return {
           content: [{ type: "text", text: `${text}\n${outcome.screen}` }],
@@ -465,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn pi_schema_maps_the_bridge_task_without_a_round_deadline() {
+    fn pi_schema_maps_the_bridge_as_a_collect_only_tool_without_a_deadline() {
         let specs = tool_specs();
         let spec = specs
             .iter()
@@ -477,12 +460,14 @@ mod tests {
         assert!(source.contains(
             "session: Type.String({ description: \"Stable session token from sessions_list\" }),"
         ));
-        assert!(source.contains(
-            "task: Type.Optional(Type.String({ description: \"Bounded implementation task to submit exactly once after any pending response is acknowledged; omit to wait for the round a prior session_submit or spawn task left open\" })),"
-        ));
-        assert!(source.contains("acknowledge_marker: Type.Optional(Type.String"));
-        assert!(source.contains("args.push(\"--acknowledge-marker\""));
-        assert!(source.contains("if (params.task != null) args.push(\"--\", params.task)"));
+        assert!(
+            !source.contains("task:"),
+            "bridge takes no task property: delivery belongs to spawn and submit"
+        );
+        assert!(!source.contains("acknowledge_marker:"));
+        assert!(!EXECUTE_BRIDGE.contains("--acknowledge-marker"));
+        assert!(!EXECUTE_BRIDGE.contains("params.task"));
+        assert!(EXECUTE_BRIDGE.contains("const args = [\"bridge\", params.session];"));
     }
 
     #[test]
@@ -568,30 +553,40 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_records_background_spawns_before_starting_the_watcher() {
-        let source = pi_extension().expect("render");
+    fn pi_adapter_always_spawns_in_background_and_records_the_round_before_the_watcher() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .expect("spawn in contract");
+        let source = render_tool_block(spec).expect("render");
+        let extension = pi_extension().expect("render");
+        assert!(
+            !source.contains("background:"),
+            "the schema no longer accepts a background flag"
+        );
         assert!(source.contains(
-            "background: Type.Optional(Type.Boolean({ description: \"Fire-and-forget launch"
+            "task: Type.String({ description: \"Required bounded first-round task embedded in the launch"
         ));
         assert!(
-            EXECUTE_SPAWN.contains("if (params.background === true) args.push(\"--background\")")
+            EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"),
+            "every spawn embeds the task and runs in the background"
         );
         assert!(EXECUTE_SPAWN.contains(
             "await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session)"
         ));
         assert!(EXECUTE_SPAWN.contains("await startWatcher(ctx)"));
         assert!(EXECUTE_SPAWN.contains("round queued, you will be woken when it completes"));
-        assert!(source.contains("watch-owner-${sessionId}.json"));
+        assert!(extension.contains("watch-owner-${sessionId}.json"));
     }
 
     #[test]
     fn pi_adapter_passes_autoclose_through_and_lets_the_watcher_announce_the_closed_lane() {
         assert!(
-            EXECUTE_SPAWN.contains("if (params.autoclose === true) args.push(\"--auto-close\")")
+            EXECUTE_SPAWN.contains("if (params.autoclose !== false) args.push(\"--auto-close\")"),
+            "autoclose defaults on, so only an explicit opt-out suppresses the flag"
         );
-        assert!(
-            EXECUTE_SPAWN.contains("if (params.background === true) args.push(\"--background\")")
-        );
+        assert!(EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"));
         assert!(
             !WATCH_GLUE.contains("lane auto-closed"),
             "the closed-lane note now lives in the watcher's wake message"
@@ -599,20 +594,14 @@ mod tests {
     }
 
     #[test]
-    fn pi_adapter_watches_foreground_and_reuse_spawns_that_open_a_round() {
+    fn pi_adapter_watches_every_spawn_round_without_a_foreground_split() {
         let source = pi_extension().expect("render");
-        assert!(EXECUTE_SPAWN.contains("if (outcome.task_submitted === true) {"));
+        assert!(!EXECUTE_SPAWN.contains("outcome.task_submitted"));
         assert!(EXECUTE_SPAWN.contains(
-            "if (outcome.task_submitted === true) {\n          await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);\n          await startWatcher(ctx);\n        }\n        text = outcome.reused"
+            "await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);\n      await startWatcher(ctx);"
         ));
         assert!(EXECUTE_SPAWN.contains(
-            "`reused session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd})`"
-        ));
-        assert!(EXECUTE_SPAWN.contains(
-            "`spawned session ${outcome.session} (${outcome.tool}, key ${outcome.key}, ${outcome.cwd}, ${outcome.surface})`"
-        ));
-        assert!(EXECUTE_SPAWN.contains(
-            "outcome.task_submitted ? \"; first round delivered, wait with session_bridge (omit task)\""
+            "`spawned session ${outcome.session} in the background (${outcome.tool}, key ${outcome.key}); round queued, you will be woken when it completes`"
         ));
         assert!(source.contains("await startWatcher(ctx)"));
     }
@@ -651,7 +640,10 @@ mod tests {
         let source = pi_extension().expect("render");
         assert!(source.contains("setLoopPhase(\"waiting\")"));
         assert!(source.contains("setLoopPhase(outcome.completed ? \"review\" : \"paused\")"));
-        assert!(source.contains("recovered the previous implementation response"));
+        assert!(
+            !source.contains("recovered the previous implementation response"),
+            "bridge no longer submits, so there is no recovered-submit copy"
+        );
         assert!(source.contains("pi.on(\"agent_settled\""));
         assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
     }
@@ -695,7 +687,7 @@ mod tests {
         ));
         assert!(source.contains("surface: Type.Optional(Type.String"));
         assert!(EXECUTE_SPAWN.contains("args.push(\"--surface\", params.surface)"));
-        assert!(EXECUTE_SPAWN.contains("outcome.reused"));
+        assert!(EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"));
         assert!(EXECUTE_SPAWN.contains("spawned session ${outcome.session}"));
     }
 
