@@ -88,9 +88,11 @@ pub(crate) fn run_session(
     start_trace(&mut dash);
     dash.disk_scan_pending = true;
     let mut terminal = if resuming {
-        ratatui::try_init_with_options(ratatui::TerminalOptions {
+        let mut terminal = ratatui::try_init_with_options(ratatui::TerminalOptions {
             viewport: ratatui::Viewport::Fullscreen,
-        })?
+        })?;
+        terminal.clear()?;
+        terminal
     } else {
         ratatui::init()
     };
