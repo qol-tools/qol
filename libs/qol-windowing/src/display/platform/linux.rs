@@ -212,7 +212,7 @@ mod tests {
         let handles = enumerate_from(dir.path()).unwrap();
         assert_eq!(
             handles.iter().map(|h| h.connector()).collect::<Vec<_>>(),
-            vec!["DP-1", "DP-2"]
+            vec!["card0-DP-1", "card0-DP-2"]
         );
     }
 }
