@@ -133,7 +133,11 @@ extern "C" {
 fn tap_trace() -> &'static TraceSink {
     static SINK: OnceLock<TraceSink> = OnceLock::new();
     SINK.get_or_init(|| {
-        TraceSink::spawn("hotkey-tap-trace", QUEUE_DEPTH, |line| log::warn!("{line}"))
+        TraceSink::spawn("hotkey-tap-trace", QUEUE_DEPTH, |batch| {
+            for line in batch {
+                log::warn!("{line}");
+            }
+        })
     })
 }
 

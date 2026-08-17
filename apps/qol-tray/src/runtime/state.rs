@@ -161,7 +161,16 @@ fn pick_log_changed(key: PickLog) -> bool {
 }
 
 #[cfg(debug_assertions)]
-fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &str) {
+fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &'static str) {
+    static LAST: std::sync::Mutex<PickProbeGate> =
+        std::sync::Mutex::new(PickProbeGate { last: None });
+    let changed = LAST
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .changed(cursor, focus, winner);
+    if !changed {
+        return;
+    }
     qol_runtime::probe!(
         "PICK",
         "cursor=({},{}) cursor_age_ms={} focus=({},{}) focus_age_ms={} winner={}",
@@ -173,6 +182,27 @@ fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &str) {
         focus.at.elapsed().as_millis(),
         winner,
     );
+}
+
+#[cfg(debug_assertions)]
+type PickKey = ((i32, i32), (i32, i32), &'static str);
+
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct PickProbeGate {
+    last: Option<PickKey>,
+}
+
+#[cfg(debug_assertions)]
+impl PickProbeGate {
+    fn changed(&mut self, cursor: &Stamped, focus: &Stamped, winner: &'static str) -> bool {
+        let key = (imon(&cursor.monitor), imon(&focus.monitor), winner);
+        if self.last.as_ref() == Some(&key) {
+            return false;
+        }
+        self.last = Some(key);
+        true
+    }
 }
 
 pub(crate) fn monitor_for_bounds(
@@ -365,6 +395,42 @@ mod tests {
             }),
         };
         assert_eq!(pick_active_monitor(&state), Some(focus_mon));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn pick_probe_gate_emits_once_per_material_change() {
+        let mut gate = PickProbeGate::default();
+        let cursor = Stamped {
+            monitor: mon(0.0, 0.0, 1920.0, 1080.0),
+            at: Instant::now(),
+        };
+        let focus = Stamped {
+            monitor: mon(1920.0, 0.0, 1920.0, 1080.0),
+            at: Instant::now(),
+        };
+        assert!(gate.changed(&cursor, &focus, "cursor"));
+        assert!(!gate.changed(&cursor, &focus, "cursor"));
+        assert!(!gate.changed(&cursor, &focus, "cursor"));
+
+        let focus = Stamped {
+            monitor: focus.monitor,
+            at: Instant::now() + Duration::from_secs(1),
+        };
+        assert!(gate.changed(&cursor, &focus, "focus"));
+        assert!(!gate.changed(&cursor, &focus, "focus"));
+
+        let focus = Stamped {
+            monitor: focus.monitor,
+            at: Instant::now() + Duration::from_secs(2),
+        };
+        assert!(!gate.changed(&cursor, &focus, "focus"));
+
+        let cursor = Stamped {
+            monitor: mon(1.0, 1.0, 1920.0, 1080.0),
+            at: Instant::now(),
+        };
+        assert!(gate.changed(&cursor, &focus, "focus"));
     }
 
     #[test]

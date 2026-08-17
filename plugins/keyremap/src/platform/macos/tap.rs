@@ -328,8 +328,10 @@ fn event_character(event: &core_graphics::event::CGEvent) -> Option<String> {
 fn tap_trace() -> &'static TraceSink {
     static SINK: OnceLock<TraceSink> = OnceLock::new();
     SINK.get_or_init(|| {
-        TraceSink::spawn("keyremap-tap-trace", QUEUE_DEPTH, |line| {
-            eprintln!("{line}")
+        TraceSink::spawn("keyremap-tap-trace", QUEUE_DEPTH, |batch| {
+            for line in batch {
+                eprintln!("{line}");
+            }
         })
     })
 }

@@ -10,20 +10,24 @@ impl TraceSink {
     pub fn spawn(
         thread_name: &str,
         depth: usize,
-        mut write: impl FnMut(String) + Send + 'static,
+        mut write: impl FnMut(&[String]) + Send + 'static,
     ) -> Self {
         let (lines, incoming) = mpsc::sync_channel::<String>(depth);
         std::thread::Builder::new()
             .name(thread_name.to_owned())
             .spawn(move || {
                 while let Ok(line) = incoming.recv() {
-                    write(line);
+                    let mut batch = Vec::with_capacity(4);
+                    batch.push(line);
+                    while let Ok(more) = incoming.try_recv() {
+                        batch.push(more);
+                    }
+                    write(&batch);
                 }
             })
             .expect("the event tap trace writer thread must start");
         Self { lines }
     }
-
     pub fn offer(&self, line: String) {
         let _ = self.lines.try_send(line);
     }
@@ -39,9 +43,9 @@ mod tests {
     fn a_stalled_writer_never_blocks_the_caller() {
         let (release, blocked) = channel::<()>();
         let (wrote, written) = channel::<String>();
-        let sink = TraceSink::spawn("test-tap-trace", QUEUE_DEPTH, move |line| {
+        let sink = TraceSink::spawn("test-tap-trace", QUEUE_DEPTH, move |batch| {
             let _ = blocked.recv();
-            let _ = wrote.send(line);
+            let _ = wrote.send(batch.join(""));
         });
 
         let started = Instant::now();
