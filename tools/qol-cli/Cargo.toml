@@ -48,13 +48,13 @@ ansi-to-tui = "8.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Git sync (libgit2 bindings; vendored so the host needs no system git)
-# vendored-openssl is Linux-only: on macOS libgit2 uses SecureTransport for HTTPS,
-# so vendored OpenSSL there would compile for nothing.
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-# Git sync: HTTPS runs on libgit2's SecureTransport backend here, no vendored OpenSSL
+[target.'cfg(all(target_os = "macos", not(target_arch = "x86_64")))'.dependencies]
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 
 [target.'cfg(windows)'.dependencies]
 # Git sync: HTTPS runs on libgit2's native WinHTTP backend here, no vendored OpenSSL
