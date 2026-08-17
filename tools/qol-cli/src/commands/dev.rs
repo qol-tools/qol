@@ -29,6 +29,7 @@ const TRAY_DEV_BINS: [&str; 2] = qol_dev_build::tray::DEV_TRAY_BINARIES;
 const TRAY_RELOAD_BINS: [&str; 2] = qol_dev_build::tray::DEV_TRAY_BINARIES;
 pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
 pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
+const DEV_PREBUILD_FRESH_ENV: &str = "QOL_DEV_PREBUILD_FRESH";
 pub(crate) const DEV_RELOAD_PROGRESS_PREFIX: &str = "[qol dev:reload-progress]\t";
 pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 5] = ["build", "-p", "qol", "--bin", "qol"];
 
@@ -356,6 +357,9 @@ fn reload_linked_plugins(verbose: bool, skip_plugins: bool, branch: Option<&str>
 }
 
 pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
+    if std::env::var_os(DEV_PREBUILD_FRESH_ENV).is_none() {
+        return prebuild_via_fresh_cli(args, verbose, skip_plugins);
+    }
     let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
     let directive = tray_directive(optional_single_arg(args, &usage)?);
     let root = repo_root()?;
@@ -379,11 +383,43 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     }
     dev_reload_progress("build", "qol-tray dev");
     build_qol_tray_dev(&plan.target.root, &TRAY_RELOAD_BINS, verbose)?;
-    dev_reload_progress("build", "qol dev cli");
-    build_qol_cli_debug(&root, verbose)?;
     dev_reload_progress("handoff", "successor generation");
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
     Ok(())
+}
+
+fn prebuild_via_fresh_cli(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
+    let root = repo_root()?;
+    dev_reload_progress("build", "qol dev cli");
+    build_qol_cli_debug(&root, verbose)?;
+    let fresh = root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol"));
+    let mut command = std::process::Command::new(&fresh);
+    command
+        .args(fresh_prebuild_args(args, verbose, skip_plugins))
+        .env(DEV_PREBUILD_FRESH_ENV, "1")
+        .current_dir(&root);
+    let status = command
+        .status()
+        .with_context(|| format!("failed to run fresh qol cli prebuild {}", fresh.display()))?;
+    if !status.success() {
+        bail!("fresh qol cli prebuild failed: {status}");
+    }
+    Ok(())
+}
+
+fn fresh_prebuild_args(args: &[OsString], verbose: bool, skip_plugins: bool) -> Vec<OsString> {
+    let mut full = vec![OsString::from(DEV_PREBUILD_COMMAND)];
+    if verbose {
+        full.push("-v".into());
+    }
+    if skip_plugins {
+        full.push("-n".into());
+    }
+    full.extend(args.iter().cloned());
+    full
 }
 
 fn dev_reload_progress(phase: &str, detail: &str) {
@@ -1224,6 +1260,20 @@ mod tests {
         for (arg, expected) in cases {
             assert_eq!(tray_directive(arg), expected, "arg: {arg:?}");
         }
+    }
+
+    #[test]
+    fn fresh_prebuild_args_forward_flags_and_target_to_the_rebuilt_cli() {
+        let target = [OsString::from("feat/x")];
+
+        assert_eq!(
+            fresh_prebuild_args(&target, true, true),
+            [DEV_PREBUILD_COMMAND, "-v", "-n", "feat/x"].map(OsString::from)
+        );
+        assert_eq!(
+            fresh_prebuild_args(&[], false, false),
+            [OsString::from(DEV_PREBUILD_COMMAND)]
+        );
     }
 
     #[test]
