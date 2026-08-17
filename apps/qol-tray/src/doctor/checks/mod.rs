@@ -32,6 +32,8 @@ mod rust_clippy;
 mod rust_formatting;
 #[cfg(feature = "dev")]
 mod single_source_guard;
+#[cfg(feature = "dev")]
+mod ttl_cell;
 
 #[cfg(feature = "dev")]
 pub(super) use dev_link_paths::relocate_dev_link;
@@ -63,8 +65,8 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
 #[cfg(feature = "dev")]
 fn dev_checks() -> impl Iterator<Item = Box<dyn DoctorCheck>> {
     [
-        Box::new(cargo_target_cache::CargoTargetCacheCheck) as Box<dyn DoctorCheck>,
-        Box::new(cargo_target_total::CargoTargetTotalCheck),
+        Box::new(cargo_target_cache::CargoTargetCacheCheck::new()) as Box<dyn DoctorCheck>,
+        Box::new(cargo_target_total::CargoTargetTotalCheck::new()),
         Box::new(plugin_daemon_health::PluginDaemonHealthCheck),
         Box::new(plugin_staleness::PluginStalenessCheck),
         Box::new(dev_link_paths::DevLinkPathsCheck),

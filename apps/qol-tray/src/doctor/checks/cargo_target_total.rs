@@ -1,15 +1,28 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::workspace_root;
+use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{
     dir_size, format_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
 };
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const ID: &str = "cargo_target_total";
 const WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
-pub(super) struct CargoTargetTotalCheck;
+pub(super) struct CargoTargetTotalCheck {
+    sizes: TtlCell<(TargetSize, u64)>,
+}
+
+impl CargoTargetTotalCheck {
+    pub(super) fn new() -> Self {
+        Self {
+            sizes: TtlCell::new(),
+        }
+    }
+}
 
 impl DoctorCheck for CargoTargetTotalCheck {
     fn meta(&self) -> CheckMeta {
@@ -23,8 +36,10 @@ impl DoctorCheck for CargoTargetTotalCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
         let path = root.join("target");
-        let prunable = prunable_target_bytes(&path);
-        report_for(target_size(&path), prunable, path)
+        let (size, prunable) = self.sizes.get_or_compute(CACHE_TTL, || {
+            (target_size(&path), prunable_target_bytes(&path))
+        });
+        report_for(size, prunable, path)
     }
 }
 

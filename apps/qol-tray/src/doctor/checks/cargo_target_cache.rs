@@ -1,13 +1,26 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::workspace_root;
+use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{dir_size, format_bytes};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const ID: &str = "cargo_target_cache";
 const WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
-pub(super) struct CargoTargetCacheCheck;
+pub(super) struct CargoTargetCacheCheck {
+    sizes: TtlCell<CacheSize>,
+}
+
+impl CargoTargetCacheCheck {
+    pub(super) fn new() -> Self {
+        Self {
+            sizes: TtlCell::new(),
+        }
+    }
+}
 
 impl DoctorCheck for CargoTargetCacheCheck {
     fn meta(&self) -> CheckMeta {
@@ -21,7 +34,8 @@ impl DoctorCheck for CargoTargetCacheCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target cache");
         };
         let path = cargo_incremental_dir(&root);
-        report_for(cache_size(&path), path)
+        let size = self.sizes.get_or_compute(CACHE_TTL, || cache_size(&path));
+        report_for(size, path)
     }
 }
 
