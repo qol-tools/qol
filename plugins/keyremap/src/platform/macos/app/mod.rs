@@ -15,18 +15,21 @@ pub(crate) fn run() {
         resolved.excluded_apps.len(),
     );
 
-    let mut current_key_rules = resolved.key_rules.clone();
-    let app_tracker = super::app_tracker::AppTracker::start();
-    let state = std::sync::Arc::new(super::tap::TapState::new(resolved, app_tracker));
-    super::tap::start_tap(std::sync::Arc::clone(&state));
-
     let (tx, rx) = std::sync::mpsc::channel();
-    if !daemon::start_listener(tx) {
+    let Some((mut current_key_rules, state)) =
+        start_services_if_singleton(daemon::start_listener(tx), || {
+            let app_tracker = super::app_tracker::AppTracker::start();
+            let current_key_rules = resolved.key_rules.clone();
+            let state = std::sync::Arc::new(super::tap::TapState::new(resolved, app_tracker));
+            super::tap::start_tap(std::sync::Arc::clone(&state));
+            (current_key_rules, state)
+        })
+    else {
         if daemon::send_reload() {
             eprintln!("[keyremap] another instance running, sent reload");
         }
         return;
-    }
+    };
 
     eprintln!("[keyremap] daemon started");
 
@@ -63,4 +66,31 @@ pub(crate) fn run() {
     }
 
     daemon::cleanup();
+}
+
+fn start_services_if_singleton<T>(is_singleton: bool, start: impl FnOnce() -> T) -> Option<T> {
+    is_singleton.then(start)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn services_start_only_when_singleton() {
+        let mut started = false;
+        let result = start_services_if_singleton(false, || {
+            started = true;
+            0
+        });
+        assert!(result.is_none());
+        assert!(!started);
+
+        let result = start_services_if_singleton(true, || {
+            started = true;
+            42
+        });
+        assert_eq!(result, Some(42));
+        assert!(started);
+    }
 }
