@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
-use super::super::{latest_version, verify_host_update, GITHUB_REPO};
+use super::super::{latest_version, verify_courier_update, verify_host_update, GITHUB_REPO};
 use super::unix;
 use super::InstallKind;
 
@@ -246,6 +246,11 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
             expected_version,
             qol_artifact::ArtifactExpectation::with_compatible_target,
         )?;
+        let courier = bundle
+            .join("Contents")
+            .join("MacOS")
+            .join(qol_conventions::artifact::COURIER_BINARY_NAME);
+        verify_courier_update(&courier)?;
         replace_app_bundle(&bundle, &current_bundle)
     });
     install_result?;

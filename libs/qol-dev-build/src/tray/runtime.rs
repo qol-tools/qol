@@ -97,6 +97,75 @@ fn stage_file(
     })
 }
 
+pub fn stage_courier(
+    root: &Path,
+    generation: &StagedRuntimeGeneration,
+    courier_source: &Path,
+) -> Result<PathBuf, String> {
+    let expectation = qol_artifact::ArtifactExpectation::development_debug(
+        qol_conventions::artifact::COURIER_BINARY_NAME,
+        qol_conventions::artifact::COURIER_PACKAGE_NAME,
+        qol_conventions::artifact::BuildRole::Courier,
+        false,
+    );
+    let expected = qol_artifact::verify_path(courier_source, &expectation)
+        .map_err(|error| format!("cannot stage unverified courier: {error}"))?;
+    let runtime_root = runtime_root(root);
+    let destination = generation
+        .executable()
+        .parent()
+        .ok_or_else(|| "courier generation has no directory".to_string())?
+        .join(qol_conventions::artifact::COURIER_BINARY_NAME);
+    if existing_matches(&destination, courier_source) {
+        let copied = qol_artifact::inspect_path(&destination)
+            .map_err(|error| format!("staged courier is invalid: {error}"))?;
+        if copied == expected {
+            return Ok(destination);
+        }
+    }
+    let mut staging = tempfile::Builder::new()
+        .prefix(".qol-courier-stage-")
+        .tempfile_in(&runtime_root)
+        .map_err(|error| format!("failed to create courier staging file: {error}"))?;
+    let (digest, permissions) = copy_and_digest(courier_source, staging.as_file_mut())?;
+    staging
+        .as_file()
+        .set_permissions(permissions)
+        .map_err(|error| format!("failed to preserve courier permissions: {error}"))?;
+    qol_artifact::verify_path(staging.path(), &expectation)
+        .map_err(|error| format!("staged courier is invalid: {error}"))?;
+    if destination.exists() {
+        fs::remove_file(&destination).map_err(|error| {
+            format!(
+                "failed to replace stale courier {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+    staging.persist_noclobber(&destination).map_err(|error| {
+        format!(
+            "failed to publish courier {}: {}",
+            destination.display(),
+            error.error
+        )
+    })?;
+    log::info!(
+        "[dev-runtime] staged courier {digest} at {}",
+        destination.display()
+    );
+    Ok(destination)
+}
+
+fn existing_matches(path: &Path, source: &Path) -> bool {
+    let Ok(source_digest) = digest_file(source) else {
+        return false;
+    };
+    let Ok(existing) = digest_file(path) else {
+        return false;
+    };
+    source_digest == existing
+}
+
 pub fn prune_runtime_generations(root: &Path, protected: &[&Path]) -> Result<(), String> {
     let runtime_root = runtime_root(root);
     let entries = match fs::read_dir(&runtime_root) {

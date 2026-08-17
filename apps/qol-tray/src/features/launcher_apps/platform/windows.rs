@@ -1,7 +1,4 @@
-pub(super) fn sync(
-    _entries: &[super::super::LauncherEntry],
-    _binary_path: &std::path::Path,
-) -> anyhow::Result<()> {
+pub(super) fn sync(_entries: &[super::super::ResolvedEntry]) -> anyhow::Result<()> {
     Ok(())
 }
 

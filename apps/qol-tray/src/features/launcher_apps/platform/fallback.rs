@@ -1,9 +1,6 @@
 use super::super::LauncherEntry;
 
-pub(super) fn sync(
-    _entries: &[LauncherEntry],
-    _binary_path: &std::path::Path,
-) -> anyhow::Result<()> {
+pub(super) fn sync(_entries: &[super::super::ResolvedEntry]) -> anyhow::Result<()> {
     anyhow::bail!("launcher application integration is unavailable on this platform")
 }
 

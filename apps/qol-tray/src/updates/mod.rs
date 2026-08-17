@@ -177,6 +177,21 @@ pub(super) fn verify_host_update(
     Ok(())
 }
 
+pub(super) fn verify_courier_update(path: &Path) -> Result<()> {
+    let expectation = qol_artifact::ArtifactExpectation::production(
+        qol_conventions::artifact::COURIER_BINARY_NAME,
+        qol_conventions::artifact::COURIER_PACKAGE_NAME,
+        qol_conventions::artifact::BuildRole::Courier,
+    );
+    let inspected = qol_artifact::verify_path(path, &expectation)?;
+    log::info!(
+        "[artifact-identity] verified self-update courier path={} slices={}",
+        path.display(),
+        inspected.slices.len()
+    );
+    Ok(())
+}
+
 fn host_update_expectation(
     running_target: &str,
     expected_version: Option<&str>,

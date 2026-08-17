@@ -236,7 +236,7 @@ fn request_daemon_reload(plugin_id: &str) -> Result<()> {
     let path = qol_conventions::dev_routes::api_path(&qol_conventions::dev_routes::reload_plugin(
         plugin_id,
     ));
-    let (status, _) = crate::local_http::post_to_daemon(&path, "")?;
+    let (status, _) = qol_plugin_api::host_exec::post_to_daemon(&path, "")?;
     if status == 200 || status == 202 {
         Ok(())
     } else {

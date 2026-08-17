@@ -36,6 +36,23 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/uninstall/{id}", post(uninstall_plugin))
 }
 
+fn trace_action_resolve(
+    phase: &str,
+    plugin_id: &str,
+    action_id: &str,
+    #[cfg(debug_assertions)] started: &std::time::Instant,
+    #[cfg(not(debug_assertions))] started: &(),
+) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "ACTION_RESOLVE",
+        "plugin={plugin_id} action={action_id} phase={phase} elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (phase, plugin_id, action_id, started);
+}
+
 pub(super) async fn query_plugin_handler(
     Path((id, query)): Path<(String, String)>,
     State(state): State<AppState>,
@@ -118,6 +135,7 @@ pub(super) async fn execute_plugin_action(
     State(state): State<AppState>,
     input: Option<Json<serde_json::Value>>,
 ) -> (StatusCode, Json<ExecuteActionResult>) {
+    qol_runtime::probe!("ACTION_RECV", "plugin={} action={}", id, action);
     if validate_plugin_id(&id).is_err() {
         return invalid_plugin_id_action_result();
     }
@@ -125,13 +143,20 @@ pub(super) async fn execute_plugin_action(
     let worker_id = id.clone();
     let worker_action = action.clone();
     let worker_input = input.map(|Json(value)| value).unwrap_or_default();
+    #[cfg(debug_assertions)]
+    let resolve_started = std::time::Instant::now();
+    #[cfg(not(debug_assertions))]
+    let resolve_started = ();
     match tokio::task::spawn_blocking(move || {
-        crate::plugins::action_executor::try_execute_action_with_input_result(
+        trace_action_resolve("start", &worker_id, &worker_action, &resolve_started);
+        let result = crate::plugins::action_executor::try_execute_action_with_input_result(
             &plugin_manager,
             &worker_id,
             &worker_action,
             worker_input,
-        )
+        );
+        trace_action_resolve("done", &worker_id, &worker_action, &resolve_started);
+        result
     })
     .await
     {

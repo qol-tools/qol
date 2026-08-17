@@ -39,6 +39,14 @@ pub(crate) fn binary_filename() -> String {
     Platform.binary_filename()
 }
 
+pub(crate) fn courier_filename() -> String {
+    format!(
+        "{}{}",
+        qol_conventions::artifact::COURIER_BINARY_NAME,
+        std::env::consts::EXE_SUFFIX
+    )
+}
+
 pub(crate) fn install_dir() -> Result<PathBuf> {
     Platform.install_dir()
 }

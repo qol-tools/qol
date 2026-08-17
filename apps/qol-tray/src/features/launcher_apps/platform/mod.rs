@@ -16,11 +16,19 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(super) fn sync(
-    entries: &[super::LauncherEntry],
-    binary_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    imp::sync(entries, binary_path)
+pub(super) fn sync(entries: &[super::ResolvedEntry]) -> anyhow::Result<()> {
+    imp::sync(entries)
+}
+
+pub(super) fn verify_target(resolved: &super::ResolvedEntry) -> anyhow::Result<()> {
+    if resolved.target.is_file() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "launcher entry {} points at missing binary {}",
+        resolved.entry.file_stem,
+        resolved.target.display()
+    )
 }
 
 pub(super) fn publish_synced() {

@@ -1,4 +1,5 @@
 pub mod capability;
+pub mod host_exec;
 pub mod manifest;
 pub mod restore;
 

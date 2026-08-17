@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
-use super::super::{latest_version, verify_host_update, GITHUB_REPO};
+use super::super::{latest_version, verify_courier_update, verify_host_update, GITHUB_REPO};
 use super::unix;
 use super::InstallKind;
 
@@ -157,6 +157,20 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
             &binary,
             expected_version,
             qol_artifact::ArtifactExpectation::with_exact_target,
+        )?;
+        let courier = unix::extract_tar_gz_entry(
+            &dest,
+            qol_conventions::artifact::COURIER_BINARY_NAME,
+            false,
+        )?;
+        verify_courier_update(&courier)?;
+        atomic_replace(
+            &courier,
+            &current_exe.with_file_name(format!(
+                "{}{}",
+                qol_conventions::artifact::COURIER_BINARY_NAME,
+                std::env::consts::EXE_SUFFIX
+            )),
         )?;
         atomic_replace(&binary, &current_exe)
     });

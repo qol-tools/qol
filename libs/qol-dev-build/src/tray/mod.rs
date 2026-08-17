@@ -1,7 +1,11 @@
 mod artifacts;
+mod courier;
 mod runtime;
 
-pub use runtime::{prune_runtime_generations, stage_runtime_generation, StagedRuntimeGeneration};
+pub use courier::{build_courier, courier_debug_binary_path, courier_manifest_path};
+pub use runtime::{
+    prune_runtime_generations, stage_courier, stage_runtime_generation, StagedRuntimeGeneration,
+};
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};

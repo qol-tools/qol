@@ -1,10 +1,10 @@
-use super::super::LauncherEntry;
+use super::super::{LauncherEntry, ResolvedEntry};
 use crate::shortcuts::model::{AppRef, ShortcutAction};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
+pub(super) fn sync(entries: &[ResolvedEntry]) -> Result<()> {
     let dir = apps_dir().context("Could not determine home directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
@@ -12,12 +12,12 @@ pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> 
     let app_names = app_dirnames(entries);
     let expected: HashSet<String> = app_names.values().cloned().collect();
 
-    for entry in entries {
-        let Some(app_name) = app_names.get(&entry.file_stem) else {
+    for resolved in entries {
+        let Some(app_name) = app_names.get(&resolved.entry.file_stem) else {
             continue;
         };
         let app_dir = dir.join(app_name);
-        write_app_bundle(&app_dir, entry, binary_path)?;
+        write_app_bundle(&app_dir, resolved)?;
     }
 
     clean_stale(&dir, &expected)?;
@@ -38,8 +38,11 @@ pub(super) fn publish_synced() {
     crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
 }
 
-fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
-    let sanitized: Vec<String> = entries.iter().map(sanitized_display_name).collect();
+fn app_dirnames(entries: &[ResolvedEntry]) -> HashMap<String, String> {
+    let sanitized: Vec<String> = entries
+        .iter()
+        .map(|resolved| sanitized_display_name(&resolved.entry))
+        .collect();
 
     let mut counts = HashMap::new();
     for name in &sanitized {
@@ -47,7 +50,8 @@ fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
     }
 
     let mut names = HashMap::new();
-    for (entry, base) in entries.iter().zip(&sanitized) {
+    for (resolved, base) in entries.iter().zip(&sanitized) {
+        let entry = &resolved.entry;
         let app_name = if counts.get(base.as_str()).copied().unwrap_or(0) <= 1 {
             format!("{}.app", base)
         } else {
@@ -76,13 +80,17 @@ fn sanitized_display_name(entry: &LauncherEntry) -> String {
     entry.file_stem.clone()
 }
 
-fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
+fn write_app_bundle(app_dir: &Path, resolved: &ResolvedEntry) -> Result<()> {
+    let entry = &resolved.entry;
+    if build_shortcut_script(entry).is_none() {
+        super::verify_target(resolved)?;
+    }
     let contents_dir = app_dir.join("Contents");
     let macos_dir = contents_dir.join("MacOS");
     let run_path = macos_dir.join("run");
     let plist_path = contents_dir.join("Info.plist");
 
-    let expected_script = build_script(binary_path, entry);
+    let expected_script = build_script(&resolved.target, entry);
     let expected_plist = build_info_plist(entry);
 
     if file_matches(&run_path, &expected_script)
@@ -140,11 +148,11 @@ fn write_executable(path: &Path, script: &str) -> Result<()> {
     Ok(())
 }
 
-fn build_script(binary_path: &Path, entry: &LauncherEntry) -> String {
+fn build_script(target: &Path, entry: &LauncherEntry) -> String {
     if let Some(script) = build_shortcut_script(entry) {
         return script;
     }
-    let bin = shell_escape_single_quote(&binary_path.display().to_string());
+    let bin = shell_escape_single_quote(&target.display().to_string());
     let args: String = entry
         .exec_args
         .iter()
@@ -274,9 +282,16 @@ mod tests {
         }
     }
 
+    fn res(entry: LauncherEntry) -> ResolvedEntry {
+        ResolvedEntry {
+            entry,
+            target: PathBuf::from("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+        }
+    }
+
     #[test]
     fn app_dirnames_preserve_friendly_names() {
-        let names = app_dirnames(&[entry("shortcut-browser", "Open Browser")]);
+        let names = app_dirnames(&[res(entry("shortcut-browser", "Open Browser"))]);
 
         assert_eq!(
             names.get("shortcut-browser"),
@@ -286,7 +301,7 @@ mod tests {
 
     #[test]
     fn app_dirnames_sanitize_unsafe_display_names() {
-        let names = app_dirnames(&[entry("shortcut-docs", "Docs:/Team\nPortal")]);
+        let names = app_dirnames(&[res(entry("shortcut-docs", "Docs:/Team\nPortal"))]);
 
         assert_eq!(
             names.get("shortcut-docs"),
@@ -296,7 +311,7 @@ mod tests {
 
     #[test]
     fn app_dirnames_fallback_to_file_stem_when_name_is_empty_after_sanitize() {
-        let names = app_dirnames(&[entry("shortcut-empty", "/:\n\r\t")]);
+        let names = app_dirnames(&[res(entry("shortcut-empty", "/:\n\r\t"))]);
 
         assert_eq!(
             names.get("shortcut-empty"),
@@ -307,8 +322,8 @@ mod tests {
     #[test]
     fn app_dirnames_disambiguate_duplicates() {
         let names = app_dirnames(&[
-            entry("shortcut-a", "Open Browser"),
-            entry("shortcut-b", "Open Browser"),
+            res(entry("shortcut-a", "Open Browser")),
+            res(entry("shortcut-b", "Open Browser")),
         ]);
 
         assert_eq!(
@@ -394,20 +409,20 @@ mod tests {
     #[test]
     fn build_script_falls_back_to_qol_tray_exec_without_shortcut_action() {
         let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
             &fallback_entry(),
         );
 
         assert_eq!(
             script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'shortcut' 'browser'\n"
         );
     }
 
     #[test]
     fn build_script_falls_back_to_qol_tray_exec_for_plugin_action_shortcuts() {
         let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
             &shortcut_entry(ShortcutAction::PluginAction {
                 plugin_id: "plugin-cli-sessions".to_string(),
                 action: "open".to_string(),
@@ -416,7 +431,70 @@ mod tests {
 
         assert_eq!(
             script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'shortcut' 'browser'\n"
+        );
+    }
+
+    #[test]
+    fn build_script_keeps_qol_tray_for_command_entries() {
+        let entry = LauncherEntry {
+            file_stem: "command-shortcuts-add".to_string(),
+            display_name: "QoL \u{203a} Add Shortcut".to_string(),
+            description: String::new(),
+            bundle_id: String::new(),
+            exec_args: vec!["open".into(), "shortcuts/add".into()],
+            shortcut_action: None,
+        };
+        let script = build_script(
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            &entry,
+        );
+
+        assert_eq!(
+            script,
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'open' 'shortcuts/add'\n"
+        );
+    }
+
+    #[test]
+    fn build_script_falls_back_to_qol_tray_when_the_courier_is_absent() {
+        let entry = LauncherEntry {
+            file_stem: "plugin-settings-monitor".to_string(),
+            display_name: "Monitor Settings".to_string(),
+            description: String::new(),
+            bundle_id: String::new(),
+            exec_args: vec!["exec".into(), "plugin-monitor".into(), "settings".into()],
+            shortcut_action: None,
+        };
+        let script = build_script(
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            &entry,
+        );
+
+        assert_eq!(
+            script,
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'plugin-monitor' 'settings'\n"
+        );
+    }
+
+    #[test]
+    fn build_script_uses_courier_for_plugin_settings_entries() {
+        let entry = LauncherEntry {
+            file_stem: "plugin-settings-monitor".to_string(),
+            display_name: "Monitor Settings".to_string(),
+            description: String::new(),
+            bundle_id: String::new(),
+            exec_args: vec!["exec".into(), "plugin-monitor".into(), "settings".into()],
+            shortcut_action: None,
+        };
+        let script = build_script(
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
+            &entry,
+        );
+
+        assert_eq!(
+            script,
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'plugin-monitor' 'settings'\n"
         );
     }
 
@@ -444,5 +522,47 @@ mod tests {
             prop_assert!(!sanitized.starts_with('.'));
             prop_assert!(!sanitized.ends_with('.'));
         }
+    }
+
+    #[test]
+    fn app_bundle_refuses_a_missing_referenced_binary() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+
+        let error = write_app_bundle(
+            tmp.path(),
+            &ResolvedEntry {
+                entry: entry("command-shortcuts-add", "Add Shortcut"),
+                target: binary.clone(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("missing binary"), "got: {error}");
+        assert!(
+            !tmp.path().join("Contents").exists(),
+            "a dead app bundle must not be written"
+        );
+    }
+
+    #[test]
+    fn app_bundle_without_a_binary_reference_skips_verification() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+
+        write_app_bundle(
+            tmp.path(),
+            &ResolvedEntry {
+                entry: shortcut_entry(ShortcutAction::OpenUrl {
+                    url: "https://example.com".to_string(),
+                    browser_override: None,
+                }),
+                target: binary.clone(),
+            },
+        )
+        .unwrap();
+
+        let script = std::fs::read_to_string(tmp.path().join("Contents/MacOS/run")).unwrap();
+        assert!(script.starts_with("#!/bin/sh\nexec /usr/bin/open"));
     }
 }

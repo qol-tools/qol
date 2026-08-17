@@ -1,0 +1,23 @@
+[package]
+name = "qol-courier"
+version.workspace = true
+edition.workspace = true
+description = "Minimal launcher-to-tray action courier for generated OS entries"
+license.workspace = true
+
+[dependencies]
+qol-conventions.workspace = true
+qol-plugin-api.workspace = true
+qol-runtime.workspace = true
+
+[build-dependencies]
+qol-build-identity.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

@@ -1,7 +1,37 @@
 use anyhow::{anyhow, Result};
+use std::fmt;
 
 use super::model::{AppRef, Shortcut, ShortcutAction};
 use super::platform;
+
+#[derive(Debug)]
+pub enum ExecuteByIdError {
+    InvalidId(String),
+    LoadFailed(anyhow::Error),
+    NotFound(String),
+    ExecuteFailed(anyhow::Error),
+}
+
+impl fmt::Display for ExecuteByIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidId(message) => formatter.write_str(message),
+            Self::LoadFailed(error) => write!(formatter, "failed to load shortcuts: {error}"),
+            Self::NotFound(id) => write!(formatter, "shortcut '{id}' not found"),
+            Self::ExecuteFailed(error) => write!(formatter, "failed to execute shortcut: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecuteByIdError {}
+
+pub fn execute_by_id(id: &str) -> std::result::Result<(), ExecuteByIdError> {
+    super::validation::validate_id(id).map_err(ExecuteByIdError::InvalidId)?;
+    let config = super::store::load().map_err(ExecuteByIdError::LoadFailed)?;
+    let shortcut = super::store::find_by_id(&config, id)
+        .ok_or_else(|| ExecuteByIdError::NotFound(id.to_string()))?;
+    execute(&shortcut).map_err(ExecuteByIdError::ExecuteFailed)
+}
 
 pub fn execute(shortcut: &Shortcut) -> Result<()> {
     if !shortcut.enabled {
@@ -69,7 +99,7 @@ fn launch_app(app: &AppRef) -> Result<()> {
 
 fn run_plugin_action(plugin_id: &str, action: &str) -> Result<()> {
     let path = format!("/api/plugins/{plugin_id}/actions/{action}");
-    match crate::local_http::post_to_daemon(&path, "") {
+    match qol_plugin_api::host_exec::post_to_daemon(&path, "") {
         Ok((status, _)) if (200..300).contains(&status) => Ok(()),
         Ok((status, body)) if body.is_empty() => {
             Err(anyhow!("plugin action request failed with HTTP {}", status))

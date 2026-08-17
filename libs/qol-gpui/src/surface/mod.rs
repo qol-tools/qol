@@ -662,15 +662,36 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         let _ = &repaint_requested;
         visible.set(shown);
         reveal_pending.set(false);
-        qol_runtime::probe!(
-            "SURFACE_REVEAL",
-            "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested}",
-            readiness.moved,
-            readiness.layout_confirmed,
-            readiness.viewport_ready,
-            readiness.fresh_frame,
-            readiness.content_rendered
-        );
+        #[cfg(debug_assertions)]
+        {
+            if shown && repaint_requested {
+                let paint_started = std::time::Instant::now();
+                let paint_title = title.clone();
+                let registered = cx
+                    .update(|cx| {
+                        handle
+                            .update(cx, |_, window, _| {
+                                window.on_next_frame(move |_, _| {
+                                    trace_revealed(
+                                        &paint_title,
+                                        readiness,
+                                        attempts,
+                                        shown,
+                                        repaint_requested,
+                                        Some(paint_started.elapsed().as_millis()),
+                                    );
+                                });
+                            })
+                            .is_ok()
+                    })
+                    .unwrap_or(false);
+                if !registered {
+                    trace_revealed(&title, readiness, attempts, shown, repaint_requested, None);
+                }
+            } else {
+                trace_revealed(&title, readiness, attempts, shown, repaint_requested, None);
+            }
+        }
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         crate::popup_window::reassert_normal_focus_until_held(
             &title,
@@ -711,6 +732,27 @@ struct RevealWait {
     attempts: usize,
     geometry_session: Option<crate::popup_window::WindowGeometrySession>,
     cancelled: bool,
+}
+
+#[cfg(debug_assertions)]
+fn trace_revealed(
+    title: &str,
+    readiness: RevealReadiness,
+    attempts: usize,
+    shown: bool,
+    repaint_requested: bool,
+    first_paint_latency_ms: Option<u128>,
+) {
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested} first_paint_latency_ms={}",
+        readiness.moved,
+        readiness.layout_confirmed,
+        readiness.viewport_ready,
+        readiness.fresh_frame,
+        readiness.content_rendered,
+        first_paint_latency_ms.map_or_else(|| "none".to_owned(), |ms| ms.to_string())
+    );
 }
 
 impl RevealReadiness {

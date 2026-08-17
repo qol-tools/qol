@@ -2,7 +2,7 @@ mod platform;
 
 use crate::plugins::{Plugin, PluginManager};
 use crate::shortcuts::model::{Shortcut, ShortcutAction};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -72,8 +72,37 @@ pub fn collect_plugin_settings_entries<'a>(
         .collect()
 }
 
-pub fn sync_entries(entries: &[LauncherEntry], binary_path: &Path) {
-    if let Err(e) = platform::sync(entries, binary_path) {
+pub struct ResolvedEntry {
+    pub entry: LauncherEntry,
+    pub target: PathBuf,
+}
+
+fn entry_uses_courier(entry: &LauncherEntry) -> bool {
+    entry.file_stem.starts_with("plugin-settings-") || entry.file_stem.starts_with("shortcut-")
+}
+
+pub fn resolve_entries(
+    entries: Vec<LauncherEntry>,
+    binary_path: &Path,
+    courier_path: &Path,
+) -> Vec<ResolvedEntry> {
+    let courier_available = courier_path.is_file();
+    entries
+        .into_iter()
+        .map(|entry| {
+            let target = if courier_available && entry_uses_courier(&entry) {
+                courier_path.to_path_buf()
+            } else {
+                binary_path.to_path_buf()
+            };
+            ResolvedEntry { entry, target }
+        })
+        .collect()
+}
+
+pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path, courier_path: &Path) {
+    let resolved = resolve_entries(entries, binary_path, courier_path);
+    if let Err(e) = platform::sync(&resolved) {
         log::error!("Failed to sync launcher apps: {}", e);
     }
 }
@@ -125,7 +154,12 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
             Ok(b) => b,
             Err(_) => return,
         };
-        sync_entries(&entries, &bin);
+        let courier = bin.with_file_name(format!(
+            "{}{}",
+            qol_conventions::artifact::COURIER_BINARY_NAME,
+            std::env::consts::EXE_SUFFIX
+        ));
+        sync_entries(entries, &bin, &courier);
         platform::publish_synced();
     });
 }
@@ -138,6 +172,49 @@ mod tests {
 
     fn manifest(toml: &str) -> PluginManifest {
         toml::from_str(toml).unwrap()
+    }
+
+    fn named(file_stem: &str) -> LauncherEntry {
+        LauncherEntry {
+            file_stem: file_stem.to_string(),
+            display_name: file_stem.to_string(),
+            description: String::new(),
+            bundle_id: String::new(),
+            exec_args: Vec::new(),
+            shortcut_action: None,
+        }
+    }
+
+    #[test]
+    fn resolve_entries_routes_settings_and_shortcuts_to_an_available_courier() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+        let courier = tmp.path().join("qol-courier");
+        std::fs::write(&courier, "").unwrap();
+
+        let resolved = resolve_entries(
+            vec![
+                named("plugin-settings-monitor"),
+                named("shortcut-space"),
+                named("command-shortcuts-add"),
+            ],
+            &binary,
+            &courier,
+        );
+
+        let targets: Vec<_> = resolved.iter().map(|r| r.target.clone()).collect();
+        assert_eq!(targets, vec![courier.clone(), courier, binary]);
+    }
+
+    #[test]
+    fn resolve_entries_falls_back_to_the_tray_binary_when_the_courier_is_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+        let courier = tmp.path().join("qol-courier");
+
+        let resolved = resolve_entries(vec![named("plugin-settings-monitor")], &binary, &courier);
+
+        assert_eq!(resolved[0].target, binary);
     }
 
     #[test]

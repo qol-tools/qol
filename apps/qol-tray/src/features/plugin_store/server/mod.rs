@@ -34,6 +34,7 @@ mod plugin_services;
 mod restart;
 pub(crate) mod security;
 mod settings;
+mod shortcut_handlers;
 mod types;
 mod ui_trace_handlers;
 
@@ -306,6 +307,7 @@ fn api_router(app_state: AppState, http_security: security::HttpSecurity) -> Rou
         .merge(crate::features::github_auth::routes())
         .merge(crate::features::auth::routes())
         .merge(meta_handlers::routes())
+        .merge(shortcut_handlers::routes())
         .merge(ui_trace_handlers::routes())
         .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]

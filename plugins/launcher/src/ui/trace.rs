@@ -115,6 +115,32 @@ pub(super) fn input(
     );
 }
 
+pub(super) fn launch(
+    view: &LauncherView,
+    phase: &'static str,
+    #[cfg(debug_assertions)] started: std::time::Instant,
+    #[cfg(not(debug_assertions))] started: (),
+) {
+    #[cfg(debug_assertions)]
+    {
+        let selected_name = view
+            .store
+            .get(view.state.selected)
+            .map(|scored| view.store.name(scored))
+            .unwrap_or("");
+        qol_runtime::probe!(
+            "LAUNCHER_LAUNCH",
+            "phase={phase} elapsed_ms={} selected_name=\"{}\" title={}",
+            started.elapsed().as_millis(),
+            qol_runtime::probe::quoted(selected_name, 120),
+            qol_runtime::probe::token(&view.window_title),
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    let _ = (view, phase, started);
+}
+
 pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
     #[cfg(debug_assertions)]
     {

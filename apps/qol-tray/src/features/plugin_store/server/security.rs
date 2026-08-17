@@ -79,20 +79,8 @@ fn load_or_create_token() -> Result<Arc<str>> {
 }
 
 fn load_token() -> Result<String> {
-    let path = crate::paths::http_auth_token_path()?;
-    let metadata = std::fs::symlink_metadata(&path)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        anyhow::bail!("HTTP auth token path is not a regular file");
-    }
-    let token = std::fs::read_to_string(&path)?;
-    let token = token.trim();
-    let decoded = URL_SAFE_NO_PAD
-        .decode(token)
-        .context("HTTP auth token is not valid base64url")?;
-    if decoded.len() != 32 {
-        anyhow::bail!("HTTP auth token must be 32 bytes");
-    }
-    Ok(token.to_string())
+    qol_plugin_api::host_exec::read_auth_token()
+        .map_err(|error| anyhow::anyhow!("failed to load HTTP auth token: {error}"))
 }
 
 fn host_is_allowed(headers: &HeaderMap, port: u16) -> bool {

@@ -8,6 +8,7 @@ use super::platform;
 #[derive(Debug)]
 pub(super) struct ParsedArgs {
     pub(super) source: Option<PathBuf>,
+    pub(super) courier_source: Option<PathBuf>,
     pub(super) workspace: Option<PathBuf>,
     pub(super) dev_mode: bool,
 }
@@ -20,6 +21,7 @@ pub(super) struct ResolvedSource {
 
 pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<ParsedArgs> {
     let mut source = None;
+    let mut courier_source = None;
     let mut workspace = None;
     let mut dev_mode = false;
 
@@ -31,6 +33,12 @@ pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<Pars
                     .next()
                     .ok_or_else(|| anyhow!("--source requires a path"))?;
                 source = Some(PathBuf::from(value));
+            }
+            "--source-courier" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--source-courier requires a path"))?;
+                courier_source = Some(PathBuf::from(value));
             }
             "--workspace" => {
                 let value = iter
@@ -45,6 +53,7 @@ pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<Pars
 
     Ok(ParsedArgs {
         source,
+        courier_source,
         workspace,
         dev_mode,
     })
@@ -77,6 +86,73 @@ impl ResolvedSource {
             exact_source: None,
         }
     }
+}
+
+pub(super) fn resolve_courier_source(
+    repo_root: &Path,
+    source_override: Option<&Path>,
+    dev_mode: bool,
+    tray_source: &Path,
+) -> Result<ResolvedSource> {
+    if dev_mode {
+        if source_override.is_some() {
+            return Err(anyhow!(
+                "--source-courier cannot be combined with --dev: the installer must build the courier from the source tree."
+            ));
+        }
+        if env::var_os("QOL_TRAY_INSTALL_SOURCE").is_some() {
+            return Err(anyhow!(
+                "--dev cannot be combined with QOL_TRAY_INSTALL_SOURCE: the installer must build the courier from the source tree."
+            ));
+        }
+        return build_release_courier(repo_root, true);
+    }
+    if let Some(path) = source_override {
+        return ensure_existing_source(path.to_path_buf()).map(ResolvedSource::external);
+    }
+    let sibling = tray_source.with_file_name(format!(
+        "{}{}",
+        qol_conventions::artifact::COURIER_BINARY_NAME,
+        std::env::consts::EXE_SUFFIX
+    ));
+    if sibling.is_file() {
+        return Ok(ResolvedSource::external(sibling));
+    }
+    build_release_courier(repo_root, false)
+}
+
+fn build_release_courier(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
+    let mut command = Command::new("cargo");
+    command
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg(qol_conventions::artifact::COURIER_PACKAGE_NAME)
+        .current_dir(repo_root);
+    if !dev {
+        command.arg("--locked");
+    }
+    let identity = if dev {
+        qol_build_identity::BuildIdentityEnvironment::development(repo_root)?
+    } else {
+        qol_build_identity::BuildIdentityEnvironment::production(repo_root)?
+    };
+    identity.apply_to(&mut command);
+    let output = qol_dev_build::cargo_build::run_cargo_command(&mut command)?;
+    identity.verify_unchanged(repo_root)?;
+    let path = qol_dev_build::cargo_build::select_binary_executable(
+        &output.artifacts,
+        &repo_root
+            .join("apps")
+            .join(qol_conventions::artifact::COURIER_PACKAGE_NAME)
+            .join("Cargo.toml"),
+        qol_conventions::artifact::COURIER_BINARY_NAME,
+    )
+    .map_err(anyhow::Error::from)?;
+    Ok(ResolvedSource {
+        path,
+        exact_source: Some(identity.source().clone()),
+    })
 }
 
 fn resolve_dev_source(repo_root: &Path, source: Option<&Path>) -> Result<ResolvedSource> {
@@ -214,6 +290,7 @@ mod tests {
     struct Case {
         input: &'static [&'static str],
         source: Option<&'static str>,
+        courier_source: Option<&'static str>,
         workspace: Option<&'static str>,
         dev_mode: bool,
     }
@@ -224,30 +301,42 @@ mod tests {
             Case {
                 input: &[],
                 source: None,
+                courier_source: None,
                 workspace: None,
                 dev_mode: false,
             },
             Case {
                 input: &["--source", "/tmp/binary"],
                 source: Some("/tmp/binary"),
+                courier_source: None,
+                workspace: None,
+                dev_mode: false,
+            },
+            Case {
+                input: &["--source-courier", "/tmp/courier"],
+                source: None,
+                courier_source: Some("/tmp/courier"),
                 workspace: None,
                 dev_mode: false,
             },
             Case {
                 input: &["--dev"],
                 source: None,
+                courier_source: None,
                 workspace: None,
                 dev_mode: true,
             },
             Case {
                 input: &["--dev", "--source", "/y"],
                 source: Some("/y"),
+                courier_source: None,
                 workspace: None,
                 dev_mode: true,
             },
             Case {
                 input: &["--workspace", "/workspace"],
                 source: None,
+                courier_source: None,
                 workspace: Some("/workspace"),
                 dev_mode: false,
             },
@@ -258,6 +347,15 @@ mod tests {
                 parsed.source.as_deref().map(|p| p.to_str().unwrap()),
                 case.source,
                 "source for input={:?}",
+                case.input
+            );
+            assert_eq!(
+                parsed
+                    .courier_source
+                    .as_deref()
+                    .map(|p| p.to_str().unwrap()),
+                case.courier_source,
+                "courier_source for input={:?}",
                 case.input
             );
             assert_eq!(
@@ -272,6 +370,12 @@ mod tests {
                 case.input
             );
         }
+    }
+
+    #[test]
+    fn parse_args_rejects_source_courier_without_value() {
+        let err = parse(&["--source-courier"]).unwrap_err();
+        assert!(err.to_string().contains("--source-courier requires a path"));
     }
 
     #[test]

@@ -84,8 +84,13 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     let run_root = dev_run_root(&target.root);
     let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose)?;
     phases.mark("tray build");
+    build_qol_courier_dev(&target.root, verbose)?;
+    phases.mark("courier build");
     let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
-        .map_err(anyhow::Error::msg)?;
+        .map_err(|error| anyhow::anyhow!("tray runtime staging failed: {error}"))?;
+    let courier = qol_dev_build::tray::courier_debug_binary_path(&target.root);
+    qol_dev_build::tray::stage_courier(&root, &runtime, &courier)
+        .map_err(|error| anyhow::anyhow!("courier staging failed: {error}"))?;
     phases.mark("stage");
     apply_marker_update(&plan.marker_update)?;
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
@@ -365,12 +370,22 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
-    dev_reload_progress("format", "rustfmt");
-    fix_rustfmt(&root, verbose)?;
-    dev_reload_progress("plugins", "dev-linked plugins");
-    reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
+    dev_reload_progress("plugins", "workspace plugins");
+    boot_preflight(
+        &root,
+        verbose,
+        skip_plugins,
+        false,
+        plan.target.branch.as_deref(),
+    )?;
+    if plan.target.branch.is_some() {
+        dev_reload_progress("plugins", "dev-linked plugins");
+        reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
+    }
     dev_reload_progress("build", "qol-tray dev");
     build_qol_tray_dev(&plan.target.root, &TRAY_RELOAD_BINS, verbose)?;
+    dev_reload_progress("build", "qol-courier dev");
+    build_qol_courier_dev(&plan.target.root, verbose)?;
     dev_reload_progress("build", "qol dev cli");
     build_qol_cli_debug(&root, verbose)?;
     dev_reload_progress("handoff", "successor generation");
@@ -525,6 +540,22 @@ fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathB
         qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
     )
     .map_err(anyhow::Error::from)
+}
+
+fn build_qol_courier_dev(root: &Path, verbose: bool) -> Result<()> {
+    dev_step_label("build", StepKind::Pending, "qol-courier dev", verbose);
+    let result = qol_dev_build::tray::build_courier(root, |percent, phase| {
+        dev_step_label(
+            "build",
+            StepKind::Info,
+            &format!("{percent}% {phase}"),
+            verbose,
+        );
+    });
+    if !result.success {
+        bail!("{}", result.output);
+    }
+    Ok(())
 }
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {

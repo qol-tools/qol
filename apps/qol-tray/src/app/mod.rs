@@ -21,6 +21,10 @@ use qol_conventions::DEFAULT_PORT;
 const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) fn run() -> Result<()> {
+    #[cfg(debug_assertions)]
+    let started = std::time::Instant::now();
+    #[cfg(not(debug_assertions))]
+    let started = ();
     if qol_process::process_tree_guardian_requested() {
         qol_process::run_process_tree_guardian_entry()
             .context("task command process-tree guardian failed")?;
@@ -32,6 +36,14 @@ pub(crate) fn run() -> Result<()> {
     qol_tray::console_guard::guard_console_pipes();
 
     if let Some(code) = dispatch_host_cli(host_cli::from_env()) {
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "HOST_ENTRY",
+            "phase=cli elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        #[cfg(not(debug_assertions))]
+        let _ = &started;
         std::process::exit(code);
     }
 
@@ -186,7 +198,9 @@ fn dispatch_host_cli(invocation: host_cli::Invocation) -> Option<i32> {
         host_cli::Invocation::ResidentPolicyHidden(args) => {
             Some(qol_tray::features::resident_policy::run_hidden(&args))
         }
-        host_cli::Invocation::Exec { target, action } => Some(exec_subcommand(&target, &action)),
+        host_cli::Invocation::Exec { target, action } => {
+            Some(qol_plugin_api::host_exec::run_exec(&target, &action))
+        }
         host_cli::Invocation::Open(route) => Some(forward_route(&route)),
         host_cli::Invocation::UrlCourier(route) => Some(courier_forward_with_retry(&route)),
         host_cli::Invocation::Url(route) => {
@@ -287,47 +301,6 @@ fn open_pending_cold_route(route: &str) {
     let _ = qol_tray::paths::open_url(&url);
 }
 
-fn exec_subcommand(target: &str, action: &str) -> i32 {
-    if target == "shortcut" {
-        return exec_shortcut(action);
-    }
-    if !qol_tray::plugins::manifest::is_valid_plugin_id(target) {
-        eprintln!("Invalid plugin id: {target}");
-        return 1;
-    }
-    if !qol_tray::plugins::manifest::is_valid_action_id(action) {
-        eprintln!("Invalid action id: {action}");
-        return 1;
-    }
-    fire_action_request(target, action)
-}
-
-fn exec_shortcut(id: &str) -> i32 {
-    if let Err(e) = qol_tray::shortcuts::validation::validate_id(id) {
-        eprintln!("Invalid shortcut id: {}", e);
-        return 1;
-    }
-    let config = match qol_tray::shortcuts::store::load() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load shortcuts: {}", e);
-            return 1;
-        }
-    };
-    let shortcut = match qol_tray::shortcuts::store::find_by_id(&config, id) {
-        Some(s) => s,
-        None => {
-            eprintln!("Shortcut '{}' not found", id);
-            return 1;
-        }
-    };
-    if let Err(e) = qol_tray::shortcuts::executor::execute(&shortcut) {
-        eprintln!("Failed to execute shortcut: {}", e);
-        return 1;
-    }
-    0
-}
-
 fn run_startup_doctor() {
     let report = qol_tray::doctor::auto_fix_startup();
     println!("{}", qol_tray::doctor::startup_doctor_summary(&report));
@@ -339,7 +312,7 @@ fn run_startup_doctor() {
 /// falls back to opening a fresh browser tab.
 fn navigated_open_tab(route: &str) -> bool {
     let body = serde_json::json!({ "route": route }).to_string();
-    match qol_tray::local_http::post_to_daemon("/api/navigate", &body) {
+    match qol_plugin_api::host_exec::post_to_daemon("/api/navigate", &body) {
         Ok((status, body)) if (200..300).contains(&status) => {
             serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
@@ -347,26 +320,6 @@ fn navigated_open_tab(route: &str) -> bool {
                 .unwrap_or(false)
         }
         _ => false,
-    }
-}
-
-fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
-    let path = format!("/api/plugins/{plugin_id}/actions/{action_id}");
-    match qol_tray::local_http::post_to_daemon(&path, "") {
-        Ok((status, _)) if (200..300).contains(&status) => 0,
-        Ok((status, body)) => {
-            let msg = if body.is_empty() {
-                format!("Request failed (HTTP {})", status)
-            } else {
-                body
-            };
-            eprintln!("{}", msg);
-            1
-        }
-        Err(_) => {
-            eprintln!("qol-tray is not running");
-            1
-        }
     }
 }
 

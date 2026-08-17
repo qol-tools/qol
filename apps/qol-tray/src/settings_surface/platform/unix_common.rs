@@ -107,7 +107,16 @@ fn spawn_replacement_after_handover(ping_alive: bool, handover_broken: bool) -> 
 }
 
 fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
+    let spawn_started = std::time::Instant::now();
     let executable = std::env::current_exe().context("failed to locate qol-tray executable")?;
+    let resolved_plugin = plugin_id.unwrap_or("none");
+    #[cfg(not(debug_assertions))]
+    let _ = &resolved_plugin;
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin={resolved_plugin} phase=resolve outcome=resolved elapsed_ms={}",
+        spawn_started.elapsed().as_millis()
+    );
     let mut command = std::process::Command::new(executable);
     command.arg(super::super::HOST_ARGUMENT);
     if let Some(plugin_id) = plugin_id {
@@ -128,8 +137,70 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
     }
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
-    qol_process::spawn_detached(&mut command)?;
+    let spawned = qol_process::spawn_detached(&mut command);
+    let outcome = if spawned.is_ok() {
+        "spawned"
+    } else {
+        "spawn_failed"
+    };
+    #[cfg(not(debug_assertions))]
+    let _ = &outcome;
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin={resolved_plugin} phase=spawn outcome={outcome} elapsed_ms={}",
+        spawn_started.elapsed().as_millis()
+    );
+    spawned?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+const USER_HZ: u64 = 100;
+
+#[cfg(target_os = "linux")]
+fn process_elapsed_ms() -> Option<u64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let start_ticks = stat
+        .rsplit_once(')')?
+        .1
+        .split_ascii_whitespace()
+        .nth(19)?
+        .parse::<u64>()
+        .ok()?;
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let uptime_ms = (uptime
+        .split_ascii_whitespace()
+        .next()?
+        .parse::<f64>()
+        .ok()?
+        * 1000.0) as u64;
+    uptime_ms.checked_sub(start_ticks * 1000 / USER_HZ)
+}
+
+#[cfg(target_os = "macos")]
+fn process_elapsed_ms() -> Option<u64> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let read = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            libc::PROC_PIDTBSDINFO,
+            0,
+            std::ptr::from_mut(&mut info).cast(),
+            i32::try_from(size).ok()?,
+        )
+    };
+    if read != i32::try_from(size).ok()? {
+        return None;
+    }
+    let started = std::time::UNIX_EPOCH.checked_add(std::time::Duration::new(
+        info.pbi_start_tvsec,
+        u32::try_from(info.pbi_start_tvusec * 1000).ok()?,
+    ))?;
+    std::time::SystemTime::now()
+        .duration_since(started)
+        .ok()
+        .map(|elapsed| elapsed.as_millis() as u64)
 }
 
 pub(in crate::settings_surface) fn stop() -> bool {
@@ -255,7 +326,8 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
     let _ = &boot_label;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
-        "plugin={boot_label} phase=host outcome=started"
+        "plugin={boot_label} phase=host outcome=started elapsed_ms={}",
+        process_elapsed_ms().map_or_else(|| "unavailable".to_owned(), |ms| ms.to_string())
     );
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();

@@ -150,6 +150,11 @@ impl LauncherView {
     }
 
     fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        let started = std::time::Instant::now();
+        #[cfg(not(debug_assertions))]
+        let started = ();
+        trace::launch(self, "start", started);
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {
@@ -172,7 +177,10 @@ impl LauncherView {
         let is_app = matches!(scored.source, crate::discovery::search::ResultSource::App);
         let name = self.store.name(scored).to_string();
         eprintln!("[controller] launching item...");
-        if let Err(error) = crate::launch::launch_item(&item) {
+        trace::launch(self, "send", started);
+        let launch_result = crate::launch::launch_item(&item);
+        trace::launch(self, "sent", started);
+        if let Err(error) = launch_result {
             eprintln!("[controller] launch error: {error}");
             self.state.set_launch_error(error.to_string());
             cx.notify();

@@ -421,14 +421,44 @@ fn ensure_daemon_ready_for_action(
     let Some(socket_path) = resolved.daemon_socket.as_deref() else {
         return Ok(());
     };
-
-    ensure_daemon_ready(
+    #[cfg(debug_assertions)]
+    let started = Instant::now();
+    #[cfg(not(debug_assertions))]
+    let started = ();
+    trace_daemon_ready(
+        "start",
+        resolved.plugin_id.as_str(),
+        &resolved.action_id,
+        &started,
+    );
+    let result = ensure_daemon_ready(
         plugin_manager,
         resolved.plugin_id.as_str(),
         &resolved.action_id,
         socket_path,
         daemon_socket_ready,
-    )
+    );
+    trace_daemon_ready(
+        "done",
+        resolved.plugin_id.as_str(),
+        &resolved.action_id,
+        &started,
+    );
+    result
+}
+
+#[cfg(debug_assertions)]
+fn trace_daemon_ready(phase: &str, plugin_id: &str, action_id: &str, started: &Instant) {
+    qol_runtime::probe!(
+        "ACTION_READY",
+        "plugin={plugin_id} action={action_id} phase={phase} elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_daemon_ready(phase: &str, plugin_id: &str, action_id: &str, started: &()) {
+    let _ = (phase, plugin_id, action_id, started);
 }
 
 fn ensure_daemon_ready(
