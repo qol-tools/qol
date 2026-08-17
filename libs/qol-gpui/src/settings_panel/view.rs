@@ -21,6 +21,7 @@ use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
+use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
@@ -106,6 +107,7 @@ pub(super) struct SettingsPanelView {
     palette: SettingsPanelPalette,
     stream: super::stream::StreamClient,
     focus_handle: FocusHandle,
+    nav_guard: PhantomNavGuard,
 }
 
 pub(super) struct SettingsPanelState {
@@ -190,6 +192,7 @@ impl SettingsPanelView {
                     .map(|port| format!("ws://127.0.0.1:{port}")),
             ),
             focus_handle: cx.focus_handle(),
+            nav_guard: PhantomNavGuard::new(),
         };
         view.selected = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.resume_runtime_poll(cx);
@@ -529,11 +532,14 @@ impl SettingsPanelView {
         }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
         if editing {
-            if horizontal_step_direction(key)
-                .is_some_and(|direction| self.step_number_edit(direction))
-            {
-                cx.notify();
-                return;
+            if let Some(direction) = horizontal_step_direction(key) {
+                if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
+                    return;
+                }
+                if self.step_number_edit(direction) {
+                    cx.notify();
+                    return;
+                }
             }
             if matches!(key, "up" | "down") {
                 self.commit_edit(cx);
@@ -544,11 +550,17 @@ impl SettingsPanelView {
         };
         match intent {
             Intent::Up => {
+                if self.nav_guard.swallow(NavAxis::Vertical, -1.0) {
+                    return;
+                }
                 self.selected =
                     adjacent_visible_row(&self.current_visible_rows(), self.selected, -1);
                 self.sync_scroll();
             }
             Intent::Down => {
+                if self.nav_guard.swallow(NavAxis::Vertical, 1.0) {
+                    return;
+                }
                 self.selected =
                     adjacent_visible_row(&self.current_visible_rows(), self.selected, 1);
                 self.sync_scroll();
@@ -727,6 +739,9 @@ impl SettingsPanelView {
             return;
         }
         if let Some(direction) = horizontal_step_direction(key) {
+            if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
+                return;
+            }
             if self.step_selected_list_slider(direction, cx) {
                 cx.notify();
                 return;
@@ -735,6 +750,14 @@ impl SettingsPanelView {
         let Some(intent) = list_intent(key) else {
             return;
         };
+        let guarded = match intent {
+            ListIntent::Up => self.nav_guard.swallow(NavAxis::Vertical, -1.0),
+            ListIntent::Down => self.nav_guard.swallow(NavAxis::Vertical, 1.0),
+            _ => false,
+        };
+        if guarded {
+            return;
+        }
         if intent == ListIntent::Activate {
             self.dispatch_list_action(cx);
             return;
@@ -3079,6 +3102,60 @@ impl SettingsPanelView {
                             .w(px(fill))
                             .rounded_full()
                             .bg(rgb(self.palette.row_border_selected)),
+                    )
+                    .child(
+                        canvas(
+                            move |bounds, _, _| track_bounds.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            let Some(bounds) = bounds_for_down.get() else {
+                                return;
+                            };
+                            let fraction = (((event.position.x - bounds.left()).to_f64()
+                                / bounds.size.width.to_f64())
+                            .clamp(0.0, 1.0)) as f32;
+                            this.slider_drag = Some((index, id_for_down.clone()));
+                            this.set_list_slider_value(index, &id_for_down, fraction, cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                        if !event.dragging()
+                            || this.slider_drag.as_ref() != Some(&(index, id_for_move.clone()))
+                        {
+                            return;
+                        }
+                        let Some(bounds) = bounds_for_move.get() else {
+                            return;
+                        };
+                        let fraction = (((event.position.x - bounds.left()).to_f64()
+                            / bounds.size.width.to_f64())
+                        .clamp(0.0, 1.0)) as f32;
+                        this.set_list_slider_value(index, &id_for_move, fraction, cx);
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseUpEvent, _, _| {
+                            if this.slider_drag.as_ref() == Some(&(index, id_for_up.clone())) {
+                                this.slider_drag = None;
+                            }
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseUpEvent, _, _| {
+                            if this.slider_drag.as_ref() == Some(&(index, id_for_up_out.clone())) {
+                                this.slider_drag = None;
+                            }
+                        }),
                     ),
             )
             .child(
@@ -3086,61 +3163,6 @@ impl SettingsPanelView {
                     .text_xs()
                     .text_color(rgb(self.palette.label_text))
                     .child(percent),
-            )
-            .relative()
-            .child(
-                canvas(
-                    move |bounds, _, _| track_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    let Some(bounds) = bounds_for_down.get() else {
-                        return;
-                    };
-                    let fraction = (((event.position.x - bounds.left()).to_f64()
-                        / bounds.size.width.to_f64())
-                    .clamp(0.0, 1.0)) as f32;
-                    this.slider_drag = Some((index, id_for_down.clone()));
-                    this.set_list_slider_value(index, &id_for_down, fraction, cx);
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
-            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                if !event.dragging()
-                    || this.slider_drag.as_ref() != Some(&(index, id_for_move.clone()))
-                {
-                    return;
-                }
-                let Some(bounds) = bounds_for_move.get() else {
-                    return;
-                };
-                let fraction = (((event.position.x - bounds.left()).to_f64()
-                    / bounds.size.width.to_f64())
-                .clamp(0.0, 1.0)) as f32;
-                this.set_list_slider_value(index, &id_for_move, fraction, cx);
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                    if this.slider_drag.as_ref() == Some(&(index, id_for_up.clone())) {
-                        this.slider_drag = None;
-                    }
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                    if this.slider_drag.as_ref() == Some(&(index, id_for_up_out.clone())) {
-                        this.slider_drag = None;
-                    }
-                }),
             )
     }
 
@@ -3868,6 +3890,7 @@ mod tests {
         stepped_number, stepped_slider_value, text_or_placeholder, visible_row_window, Intent,
         ListIntent, Row, RowControl,
     };
+    use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
 
@@ -4474,6 +4497,51 @@ default = "visible"
         for (text, expected) in cases {
             assert_eq!(parsed_color(text), expected, "text: {text:?}");
         }
+    }
+
+    #[test]
+    fn right_then_left_within_phantom_window_steps_slider_once() {
+        let mut guard = PhantomNavGuard::new();
+        let (min, max, step) = (0.0, 100.0, 10.0);
+        let mut value = 50.0;
+
+        assert!(!guard.swallow(NavAxis::Horizontal, 1.0));
+        value = stepped_slider_value(value, 1.0, min, max, step);
+        assert_eq!(value, 60.0);
+
+        assert!(
+            guard.swallow(NavAxis::Horizontal, -1.0),
+            "a left arriving within the phantom window must be swallowed"
+        );
+        assert_eq!(
+            value, 60.0,
+            "the slider holds at one step after a real right and a phantom left"
+        );
+    }
+
+    #[test]
+    fn down_then_up_within_phantom_window_moves_list_selection_once() {
+        let mut guard = PhantomNavGuard::new();
+        let mut list = ScrollList::new(5);
+
+        assert!(!guard.swallow(NavAxis::Vertical, 1.0));
+        list.move_down(7);
+        list.sync(7);
+        assert_eq!(list.selected, 1);
+
+        let swallowed = guard.swallow(NavAxis::Vertical, -1.0);
+        assert!(
+            swallowed,
+            "an up arriving within the phantom window must be swallowed"
+        );
+        if !swallowed {
+            list.move_up();
+        }
+        list.sync(7);
+        assert_eq!(
+            list.selected, 1,
+            "list selection holds against the phantom up"
+        );
     }
 
     #[test]

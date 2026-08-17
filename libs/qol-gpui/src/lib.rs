@@ -7,6 +7,7 @@ pub mod ghost;
 pub mod history;
 pub mod keepalive;
 pub mod monitor;
+pub mod phantom_nav;
 pub mod placement;
 pub mod platform;
 pub mod popup_window;
