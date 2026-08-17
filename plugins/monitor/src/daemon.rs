@@ -14,6 +14,7 @@ use crate::monitor::{
 };
 use crate::platform::MonitorControl;
 use crate::session::{LutProvider, RestoreMode, Session, SessionStore};
+use qol_windowing::display::DisplayHandle;
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
 
@@ -54,7 +55,7 @@ impl Phase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Brightness { direction: i8, phase: Phase },
-    SetBrightness,
+    SetBrightness { display: String, value: u8 },
     Settings,
     ApplyPreferred,
     Reload,
@@ -68,8 +69,15 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         "settings" => return ReadResult::Command(Command::Settings),
         "apply" => return ReadResult::Command(Command::ApplyPreferred),
         "reload" => return ReadResult::Command(Command::Reload),
-        "set_brightness" => return ReadResult::Command(Command::SetBrightness),
-        "displays" | "status" | "display_options" => return live_query(request.action.as_str()),
+        "set_brightness" => {
+            return match parse_brightness_input(&request.input) {
+                Ok((display, value)) => {
+                    ReadResult::Command(Command::SetBrightness { display, value })
+                }
+                Err(error) => ReadResult::Error(error),
+            };
+        }
+        "displays" | "status" => return live_query(request.action.as_str()),
         "brightness-up" => {
             return match Phase::parse(&request.input) {
                 Ok(phase) => ReadResult::Command(Command::Brightness {
@@ -93,6 +101,27 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     ReadResult::Fallback
 }
 
+fn parse_brightness_input(input: &serde_json::Value) -> Result<(String, u8), String> {
+    let id = input
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "set_brightness input requires a display id".to_string())?
+        .to_string();
+    let value = input
+        .get("value")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|raw| u8::try_from(raw).ok())
+        .filter(|value| *value <= BRIGHTNESS_MAX)
+        .ok_or_else(|| {
+            format!(
+                "set_brightness input requires a value between {} and {BRIGHTNESS_MAX}",
+                BRIGHTNESS_MIN
+            )
+        })?;
+    Ok((id, value))
+}
+
 fn live_query(name: &str) -> ReadResult<Command> {
     let Some(live) = live_state() else {
         return ReadResult::Error("monitor daemon state is not ready".into());
@@ -104,34 +133,9 @@ fn live_query(name: &str) -> ReadResult<Command> {
     let payload = match name {
         "displays" => displays_payload(control, &runtime.config()),
         "status" => status_payload(control),
-        "display_options" => display_options_payload(control),
         _ => unreachable!("live_query only handles declared queries"),
     };
     ReadResult::HandledWithData(payload)
-}
-
-pub(crate) fn display_options_payload(control: &dyn MonitorControl) -> serde_json::Value {
-    let mut options = vec![serde_json::json!({
-        "value": config::ACTIVE_DISPLAY_ALL,
-        "label": "All displays",
-    })];
-    options.extend(
-        control
-            .enumerate()
-            .unwrap_or_default()
-            .iter()
-            .map(|handle| {
-                let detail = match control.get_brightness(handle) {
-                    Ok(state) => format!("{}% via {}", state.value, state.source.label()),
-                    Err(error) => brightness_detail(&error),
-                };
-                serde_json::json!({
-                    "value": handle.id(),
-                    "label": format!("{} ({detail})", handle.connector()),
-                })
-            }),
-    );
-    serde_json::Value::Array(options)
 }
 
 pub(crate) fn displays_payload(
@@ -351,12 +355,27 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 }
                 true
             }
-            Command::SetBrightness => {
-                let config = config::load().unwrap_or_else(|error| {
-                    eprintln!("[plugin-monitor] config read failed: {error:#}");
-                    self.config()
-                });
-                self.set_active_brightness(&config);
+            Command::SetBrightness { display, value } => {
+                let applied = self.set_brightness(&display, value);
+                if applied.is_empty() {
+                    (self.notify)(
+                        "Monitor",
+                        "Brightness could not be set on the selected display",
+                    );
+                    return true;
+                }
+                let mut next = self.config();
+                for id in &applied {
+                    next.preferred_brightness.insert(
+                        id.clone(),
+                        config::BrightnessPreference { brightness: value },
+                    );
+                }
+                *self.config.lock().unwrap() = next.clone();
+                if let Err(error) = config::save(&next) {
+                    eprintln!("[plugin-monitor] failed to persist preferred brightness: {error:#}");
+                }
+                (self.notify)("Monitor", &format!("Brightness {value}%"));
                 true
             }
             Command::Settings => {
@@ -444,29 +463,23 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         }
     }
 
-    fn set_active_brightness(&self, config: &DeviceConfig) {
-        let target = config.active_display.as_str();
+    fn set_brightness(&self, display: &str, value: u8) -> Vec<String> {
         let handles = self.session.control().enumerate().unwrap_or_default();
-        let applied = handles
-            .iter()
-            .filter(|handle| target == config::ACTIVE_DISPLAY_ALL || handle.id() == target)
-            .filter(|handle| {
-                self.session
-                    .mutate(handle, config.active_brightness)
-                    .is_ok()
-            })
-            .count();
-        if applied == 0 {
-            (self.notify)(
-                "Monitor",
-                "Brightness could not be set on the selected display",
-            );
-            return;
+        let targets: Vec<&DisplayHandle> = if display == "all" {
+            handles.iter().collect()
+        } else {
+            handles
+                .iter()
+                .filter(|handle| handle.id() == display)
+                .collect()
+        };
+        let mut applied = Vec::new();
+        for handle in targets {
+            if self.session.mutate(handle, value).is_ok() {
+                applied.push(handle.id().to_string());
+            }
         }
-        (self.notify)(
-            "Monitor",
-            &format!("Brightness {}%", config.active_brightness),
-        );
+        applied
     }
 
     fn step(&mut self, direction: i8) {
@@ -654,7 +667,6 @@ mod tests {
         RestoreOutcome,
     };
     use crate::session::NoLutProvider;
-    use qol_windowing::display::DisplayHandle;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
 
@@ -730,10 +742,6 @@ mod tests {
             ReadResult::Command(Command::Reload)
         ));
         assert!(matches!(
-            parse_request(&request("set_brightness", serde_json::Value::Null)),
-            ReadResult::Command(Command::SetBrightness)
-        ));
-        assert!(matches!(
             parse_request(&request("kill", serde_json::Value::Null)),
             ReadResult::Command(Command::Kill)
         ));
@@ -741,6 +749,48 @@ mod tests {
             parse_request(&request("nope", serde_json::Value::Null)),
             ReadResult::Fallback
         ));
+    }
+
+    #[test]
+    fn parses_set_brightness_with_an_id_and_value() {
+        assert!(matches!(
+            parse_request(&request(
+                "set_brightness",
+                serde_json::json!({ "id": "id-1", "value": 45 })
+            )),
+            ReadResult::Command(Command::SetBrightness { display, value })
+                if display == "id-1" && value == 45
+        ));
+        assert!(matches!(
+            parse_request(&request(
+                "set_brightness",
+                serde_json::json!({ "id": "all", "value": 0 })
+            )),
+            ReadResult::Command(Command::SetBrightness { display, value })
+                if display == "all" && value == 0
+        ));
+    }
+
+    #[test]
+    fn rejects_set_brightness_with_missing_or_out_of_range_input() {
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({ "value": 45 }),
+            serde_json::json!({ "id": "" }),
+            serde_json::json!({ "id": "id-1" }),
+            serde_json::json!({ "id": "id-1", "value": 101 }),
+            serde_json::json!({ "id": "id-1", "value": -5 }),
+            serde_json::json!({ "id": "id-1", "value": "45" }),
+            serde_json::json!({ "id": "id-1", "value": 45.5 }),
+        ] {
+            assert!(
+                matches!(
+                    parse_request(&request("set_brightness", input.clone())),
+                    ReadResult::Error(_)
+                ),
+                "input: {input}"
+            );
+        }
     }
 
     #[test]
@@ -1032,30 +1082,37 @@ mod tests {
     }
 
     #[test]
-    fn set_active_brightness_writes_one_display_or_every_display() {
+    fn set_brightness_writes_one_display_or_every_display() {
         let (_dir, store) = runtime_store();
         let control = Arc::new(FakeControl::new(
             vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
             60,
             BrightnessSource::Ddc,
         ));
-        let (runtime, toasts) = runtime_with_toasts(control.clone(), store);
-        runtime.set_active_brightness(&DeviceConfig {
-            active_display: "id-2".into(),
-            active_brightness: 25,
-            ..DeviceConfig::default()
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.handle(Command::SetBrightness {
+            display: "id-2".into(),
+            value: 25,
         });
         assert_eq!(control.calls(), vec![("id-2".to_string(), 25)]);
+        assert_eq!(
+            runtime.config().preferred_for("id-2"),
+            Some(25),
+            "a single-id set persists preferred brightness for exactly that id"
+        );
+        assert_eq!(runtime.config().preferred_for("id-1"), None);
         control.calls.lock().unwrap().clear();
-        runtime.set_active_brightness(&DeviceConfig {
-            active_display: config::ACTIVE_DISPLAY_ALL.into(),
-            active_brightness: 80,
-            ..DeviceConfig::default()
+        runtime.handle(Command::SetBrightness {
+            display: "all".into(),
+            value: 80,
         });
         assert_eq!(
             control.calls(),
-            vec![("id-1".to_string(), 80), ("id-2".to_string(), 80)]
+            vec![("id-1".to_string(), 80), ("id-2".to_string(), 80)],
+            "id all writes every connected display"
         );
+        assert_eq!(runtime.config().preferred_for("id-1"), Some(80));
+        assert_eq!(runtime.config().preferred_for("id-2"), Some(80));
         assert_eq!(
             toasts.lock().unwrap().as_slice(),
             ["Brightness 25%", "Brightness 80%"]
@@ -1063,40 +1120,27 @@ mod tests {
     }
 
     #[test]
-    fn set_active_brightness_reports_an_unknown_display_instead_of_failing_silently() {
+    fn set_brightness_reports_an_unknown_display_instead_of_failing_silently() {
         let (_dir, store) = runtime_store();
         let control = Arc::new(FakeControl::new(
             vec![handle("id-1", "card0-DP-1")],
             60,
             BrightnessSource::Ddc,
         ));
-        let (runtime, toasts) = runtime_with_toasts(control.clone(), store);
-        runtime.set_active_brightness(&DeviceConfig {
-            active_display: "id-gone".into(),
-            active_brightness: 25,
-            ..DeviceConfig::default()
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.handle(Command::SetBrightness {
+            display: "id-gone".into(),
+            value: 25,
         });
         assert_eq!(control.calls(), Vec::<(String, u8)>::new());
         assert_eq!(
-            toasts.lock().unwrap().as_slice(),
-            ["Brightness could not be set on the selected display"]
-        );
-    }
-
-    #[test]
-    fn display_options_lead_with_all_displays_and_label_live_state() {
-        let control = FakeControl::new(
-            vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
-            60,
-            BrightnessSource::Ddc,
+            runtime.config().preferred_for("id-gone"),
+            None,
+            "an unknown display is never persisted"
         );
         assert_eq!(
-            display_options_payload(&control),
-            serde_json::json!([
-                { "value": "all", "label": "All displays" },
-                { "value": "id-1", "label": "card0-DP-1 (60% via ddc)" },
-                { "value": "id-2", "label": "card0-HDMI-1 (60% via ddc)" },
-            ])
+            toasts.lock().unwrap().as_slice(),
+            ["Brightness could not be set on the selected display"]
         );
     }
 
@@ -1267,7 +1311,6 @@ mod tests {
                     policy: "ddc".into(),
                 },
             )]),
-            ..DeviceConfig::default()
         };
         runtime.start(&initial);
         control.calls.lock().unwrap().clear();
@@ -1282,7 +1325,6 @@ mod tests {
                     policy: "gamma".into(),
                 },
             )]),
-            ..DeviceConfig::default()
         };
         assert_eq!(runtime.reload_config(&next), 1);
         assert_eq!(control.calls(), vec![("id-1".to_string(), 90)]);
@@ -1318,7 +1360,6 @@ mod tests {
                     policy: "off".into(),
                 },
             )]),
-            ..DeviceConfig::default()
         };
         runtime.start(&initial);
         control.calls.lock().unwrap().clear();
