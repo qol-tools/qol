@@ -1534,7 +1534,8 @@ mod tests {
         }];
         edit_worktrees(&mut dash, KeyCode::Enter);
         assert!(dash.armed && dash.worktree_diverged());
-        assert_eq!(frame_accent(&dash), ORANGE);
+        assert_eq!(frame_accent(&dash), Color::Yellow);
+        assert_eq!(super::super::draw::sign_accent(&dash), ORANGE);
 
         handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
 

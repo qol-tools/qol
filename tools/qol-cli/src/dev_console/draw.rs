@@ -49,7 +49,7 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
         content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
-    draw_branch_sign(frame, dash, body, accent, navigation);
+    draw_branch_sign(frame, dash, body, navigation);
     draw_keys_hud(frame, dash, inner);
 }
 
@@ -161,7 +161,12 @@ pub(super) fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
     if dash.quit_prompt_active() {
         spans.push(" · QUIT?".fg(Color::Red).bold());
     } else if dash.is_reloading() {
-        spans.push(" · RELOADING".fg(Color::Red).bold());
+        let tone = if dash.worktree_diverged() {
+            ORANGE
+        } else {
+            Color::Red
+        };
+        spans.push(" · RELOADING".fg(tone).bold());
     } else if dash.worktree_diverged() {
         spans.push(
             format!(" · WORKTREE {}", dash.pinned_label())
@@ -212,13 +217,12 @@ pub(super) fn draw_branch_sign(
     frame: &mut Frame,
     dash: &Dash,
     body: Rect,
-    accent: Color,
     navigation: NavigationOverflow,
 ) {
     Sign {
         content: branch_sign_line(dash),
     }
-    .render_bottom(frame, body, accent, navigation);
+    .render_bottom(frame, body, sign_accent(dash), navigation);
 }
 
 pub(super) fn quit_prompt_rows() -> Vec<Line<'static>> {
@@ -490,14 +494,26 @@ pub(super) fn dash_row(
 const DASH_LABEL_WIDTH: usize = "sandboxes".len();
 
 pub(super) fn frame_accent(dash: &Dash) -> Color {
-    if dash.quit_prompt_active() || dash.is_reloading() {
+    if dash.quit_prompt_active() {
         Color::Red
-    } else if dash.worktree_diverged() {
-        ORANGE
+    } else if dash.is_reloading() {
+        if dash.worktree_diverged() {
+            ORANGE
+        } else {
+            Color::Red
+        }
     } else if dash.armed || dash.is_busy() {
         Color::Yellow
     } else {
         BASE_ACCENT
+    }
+}
+
+pub(super) fn sign_accent(dash: &Dash) -> Color {
+    if dash.worktree_diverged() && !dash.quit_prompt_active() {
+        ORANGE
+    } else {
+        frame_accent(dash)
     }
 }
 
@@ -1422,8 +1438,13 @@ mod tests {
         assert!(dash.worktree_diverged());
         assert_eq!(
             frame_accent(&dash),
+            Color::Yellow,
+            "an armed worktree leaves the frame on the armed colour"
+        );
+        assert_eq!(
+            sign_accent(&dash),
             ORANGE,
-            "worktree change outranks armed"
+            "the pending worktree shows on the sign box alone"
         );
         let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
         assert!(crumb.contains("WORKTREE feat/x"), "crumb: {crumb}");
@@ -1436,10 +1457,21 @@ mod tests {
             rx,
             activity: ReloadProgress::new(),
         };
-        assert_eq!(frame_accent(&dash), Color::Red);
+        assert_eq!(
+            frame_accent(&dash),
+            ORANGE,
+            "reloading into a pending worktree holds the whole frame orange"
+        );
         let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
         assert!(crumb.contains("RELOADING"), "crumb: {crumb}");
         assert!(!crumb.contains("WORKTREE"), "single flag only: {crumb}");
+
+        dash.worktree_selection = WorktreeSelection::Follow;
+        assert_eq!(
+            frame_accent(&dash),
+            Color::Red,
+            "a reload with no pending worktree stays red"
+        );
         if let Reload::Running { mut child, .. } = dash.reload {
             let _ = child.wait();
         }
