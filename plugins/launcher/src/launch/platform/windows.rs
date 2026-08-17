@@ -2,6 +2,10 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
+pub(crate) fn daemon_action_args(_path: &Path, _exec: &[String]) -> Option<(String, String)> {
+    None
+}
+
 pub(crate) fn launch_app(_path: &Path, exec: &[String]) -> io::Result<()> {
     let Some((program, args)) = exec.split_first() else {
         return Err(io::Error::new(

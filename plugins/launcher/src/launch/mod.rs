@@ -36,20 +36,35 @@ pub fn launch_item(item: &search::ResultItem<'_>) -> Result<(), LaunchError> {
         item,
         |path| qol_apps::desktop_integration::open_with_default_app_checked(path),
         platform::launch_app,
+        |path, exec| {
+            platform::daemon_action_args(path, exec)
+                .map(|(target, action)| qol_plugin_api::host_exec::run_exec(&target, &action))
+        },
     )
 }
 
-fn launch_item_with<OpenFile, LaunchApp>(
+fn launch_item_with<OpenFile, LaunchApp, DaemonLaunch>(
     item: &search::ResultItem<'_>,
     mut open_file: OpenFile,
     mut launch_app: LaunchApp,
+    mut daemon_launch: DaemonLaunch,
 ) -> Result<(), LaunchError>
 where
     OpenFile: FnMut(&Path) -> io::Result<()>,
     LaunchApp: FnMut(&Path, &[String]) -> io::Result<()>,
+    DaemonLaunch: FnMut(&Path, &[String]) -> Option<i32>,
 {
     match item {
         search::ResultItem::App(entry) => {
+            if let Some(code) = daemon_launch(&entry.path, &entry.exec) {
+                if code == 0 {
+                    return Ok(());
+                }
+                return Err(LaunchError::AppFailed {
+                    name: entry.name.clone(),
+                    message: format!("qol daemon action failed with exit code {code}"),
+                });
+            }
             eprintln!("[launch] app: {:?} exec: {:?}", entry.name, entry.exec);
             launch_app(&entry.path, &entry.exec).map_err(|error| LaunchError::AppFailed {
                 name: entry.name.clone(),
@@ -90,6 +105,7 @@ mod tests {
             &ResultItem::File(&entry),
             |_| panic!("missing files must not reach the opener"),
             |_, _| Ok(()),
+            |_, _| None,
         )
         .unwrap_err();
 
@@ -111,6 +127,7 @@ mod tests {
             &ResultItem::File(&entry),
             |_| Err(io::Error::other("no default handler")),
             |_, _| Ok(()),
+            |_, _| None,
         )
         .unwrap_err();
 
@@ -135,10 +152,84 @@ mod tests {
                     "executable not found",
                 ))
             },
+            |_, _| None,
         )
         .unwrap_err();
 
         assert!(matches!(error, LaunchError::AppFailed { .. }));
         assert!(error.to_string().contains("executable not found"));
+    }
+
+    #[test]
+    fn qol_daemon_entry_launches_in_process_without_calling_os() {
+        let entry = AppEntry {
+            name: "Monitor Settings".to_string(),
+            exec: vec![
+                "/Applications/qol-tray.app/Contents/MacOS/qol-courier".to_string(),
+                "exec".to_string(),
+                "plugin-monitor".to_string(),
+                "settings".to_string(),
+            ],
+            path: PathBuf::from("/Applications/Monitor Settings.app"),
+        };
+
+        let result = launch_item_with(
+            &ResultItem::App(&entry),
+            |_| panic!("files must not reach the opener"),
+            |_, _| panic!("qol daemon entries must not reach the OS launcher"),
+            |_, _| Some(0),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn failed_qol_daemon_action_returns_app_failure_with_reason() {
+        let entry = AppEntry {
+            name: "Monitor Settings".to_string(),
+            exec: vec![
+                "/Applications/qol-tray.app/Contents/MacOS/qol-courier".to_string(),
+                "exec".to_string(),
+                "plugin-monitor".to_string(),
+                "settings".to_string(),
+            ],
+            path: PathBuf::from("/Applications/Monitor Settings.app"),
+        };
+
+        let error = launch_item_with(
+            &ResultItem::App(&entry),
+            |_| panic!("files must not reach the opener"),
+            |_, _| panic!("failed qol daemon entries must not reach the OS launcher"),
+            |_, _| Some(1),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, LaunchError::AppFailed { .. }));
+        assert!(error.to_string().contains("exit code 1"));
+    }
+
+    #[test]
+    fn non_qol_app_entry_falls_back_to_os_launch() {
+        let entry = AppEntry {
+            name: "Firefox".to_string(),
+            exec: vec!["/usr/bin/firefox".to_string()],
+            path: PathBuf::from("/Applications/Firefox.app"),
+        };
+        let mut os_launched = false;
+
+        let result = launch_item_with(
+            &ResultItem::App(&entry),
+            |_| Ok(()),
+            |path, exec| {
+                os_launched = true;
+                assert_eq!(path, &entry.path);
+                assert_eq!(exec, &entry.exec);
+                Ok(())
+            },
+            |_, _| None,
+        );
+
+        assert!(result.is_ok());
+        assert!(os_launched);
     }
 }
