@@ -320,7 +320,10 @@ pub(super) fn tui_session(
                         tray_pid: child.id(),
                     });
                 }
-                PostHandoff::ContinueInProcess { line } => dash.push_log(line),
+                PostHandoff::ContinueInProcess { line } => {
+                    rearm_boot_checks(dash);
+                    dash.push_log(line);
+                }
                 PostHandoff::HandoffFailed { error } => {
                     dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
                     dash.notice = Some((Instant::now(), "handoff failed".to_string()));
@@ -379,6 +382,12 @@ pub(super) enum PostHandoff<'a> {
     ExecCli,
     ContinueInProcess { line: String },
     HandoffFailed { error: &'a anyhow::Error },
+}
+
+pub(super) fn rearm_boot_checks(dash: &mut Dash) {
+    dash.health = Health::Checking;
+    dash.web = Health::Checking;
+    start_disk_scan(dash);
 }
 
 pub(super) fn post_handoff<'a>(
@@ -1813,6 +1822,36 @@ mod tests {
                 assert!(line.contains("cli restart skipped"), "{label}: {line}");
             }
         }
+    }
+
+    #[test]
+    fn continue_in_process_rearms_boot_checks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.health = Health::Up;
+        dash.web = Health::Up;
+
+        rearm_boot_checks(&mut dash);
+
+        assert!(
+            dash.health == Health::Checking,
+            "tray health returns to checking"
+        );
+        assert!(
+            dash.web == Health::Checking,
+            "web health returns to checking"
+        );
+        assert_eq!(
+            dash.disk
+                .scan
+                .as_ref()
+                .expect("disk scan worker")
+                .activity(0)
+                .phase,
+            "scanning",
+            "a fresh disk scan starts"
+        );
     }
 
     #[test]
