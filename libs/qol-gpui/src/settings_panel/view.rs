@@ -33,7 +33,7 @@ const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::fro
 const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
 const ROW_CHROME: f32 = 28.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
-const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
+const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 use std::sync::PoisonError;
 
@@ -95,6 +95,7 @@ pub(super) struct SettingsPanelView {
     runtime_poll_generation: u64,
     slider_dispatch_generation: u64,
     slider_drag: Option<(usize, String)>,
+    slider_pending: std::collections::HashSet<(usize, String)>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
     frame_pump_armed: bool,
@@ -174,6 +175,7 @@ impl SettingsPanelView {
             runtime_poll_generation: 0,
             slider_dispatch_generation: 0,
             slider_drag: None,
+            slider_pending: std::collections::HashSet::new(),
             frame_paced_samples: None,
             applied_query_payloads: std::collections::HashMap::new(),
             frame_pump_armed: false,
@@ -328,7 +330,20 @@ impl SettingsPanelView {
                             }
                             if !batch.is_empty() {
                                 for (query, result) in batch {
-                                    apply_runtime_query(&mut this.rows, &query, result);
+                                    apply_runtime_query(
+                                        &mut this.rows,
+                                        &query,
+                                        result,
+                                        &|index, id| {
+                                            this.slider_drag.as_ref().is_some_and(
+                                                |(drag_index, drag_id)| {
+                                                    *drag_index == index && drag_id == id
+                                                },
+                                            ) || this
+                                                .slider_pending
+                                                .contains(&(index, id.to_string()))
+                                        },
+                                    );
                                 }
                                 cx.notify();
                             }
@@ -394,7 +409,12 @@ impl SettingsPanelView {
             }
             self.applied_query_payloads
                 .insert(query.clone(), result.clone());
-            apply_runtime_query(&mut self.rows, &query, result);
+            apply_runtime_query(&mut self.rows, &query, result, &|index, id| {
+                self.slider_drag
+                    .as_ref()
+                    .is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id)
+                    || self.slider_pending.contains(&(index, id.to_string()))
+            });
             changed = true;
         }
         changed
@@ -1001,7 +1021,14 @@ impl SettingsPanelView {
                         *error = result.err();
                     }
                     if let Some((query, result)) = refreshed {
-                        apply_runtime_query(&mut this.rows, &query, result);
+                        apply_runtime_query(&mut this.rows, &query, result, &|index, id| {
+                            this.slider_drag
+                                .as_ref()
+                                .is_some_and(|(drag_index, drag_id)| {
+                                    *drag_index == index && drag_id == id
+                                })
+                                || this.slider_pending.contains(&(index, id.to_string()))
+                        });
                     }
                     #[cfg(debug_assertions)]
                     if let Some(RowControl::Action { active, error, .. }) =
@@ -1193,6 +1220,7 @@ impl SettingsPanelView {
             item.id.clone(),
             SliderHold {
                 value: next,
+                dispatched: None,
                 until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
             },
         );
@@ -1229,6 +1257,7 @@ impl SettingsPanelView {
             item_id.to_string(),
             SliderHold {
                 value,
+                dispatched: None,
                 until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
             },
         );
@@ -1243,6 +1272,8 @@ impl SettingsPanelView {
     ) {
         self.slider_dispatch_generation += 1;
         let generation = self.slider_dispatch_generation;
+        self.slider_pending.clear();
+        self.slider_pending.insert((row_index, item_id.to_string()));
         let item_id = item_id.to_string();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
@@ -1263,8 +1294,10 @@ impl SettingsPanelView {
     }
 
     fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
+        self.slider_pending
+            .remove(&(row_index, item_id.to_string()));
         let Some(RowControl::List { slider, items, .. }) =
-            self.rows.get(row_index).map(|row| &row.control)
+            self.rows.get_mut(row_index).map(|row| &mut row.control)
         else {
             return;
         };
@@ -1275,6 +1308,9 @@ impl SettingsPanelView {
             return;
         };
         let value = list_slider_value(&slider.spec, &slider.values, item);
+        if let Some(hold) = slider.values.get_mut(item_id) {
+            hold.dispatched = Some(value);
+        }
         let action = resolve_slider_action(&slider.spec, &item.data, value);
         let item_id = item.id.clone();
         let runtime = self.runtime.clone();
@@ -1289,6 +1325,7 @@ impl SettingsPanelView {
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if let Err(error) = result {
                         this.set_list_action_error(row_index, &item_id, error);
+                        super::rows::clear_slider_hold(&mut this.rows, row_index, &item_id);
                     }
                     cx.notify();
                 });

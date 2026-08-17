@@ -34,6 +34,7 @@ impl ListItem {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SliderHold {
     pub(super) value: f64,
+    pub(super) dispatched: Option<f64>,
     pub(super) until: std::time::Instant,
 }
 
@@ -769,8 +770,9 @@ pub(super) fn apply_runtime_query(
     rows: &mut [Row],
     query: &str,
     result: Result<serde_json::Value, String>,
+    slider_protected: &dyn Fn(usize, &str) -> bool,
 ) {
-    for row in rows {
+    for (row_index, row) in rows.iter_mut().enumerate() {
         match &mut row.control {
             RowControl::Select {
                 options,
@@ -869,7 +871,21 @@ pub(super) fn apply_runtime_query(
                             let now = std::time::Instant::now();
                             if let Some(slider) = slider {
                                 slider.values.retain(|id, hold| {
-                                    hold.until > now && refreshed.iter().any(|item| &item.id == id)
+                                    if slider_protected(row_index, id) {
+                                        return true;
+                                    }
+                                    let Some(item) = refreshed.iter().find(|item| &item.id == id)
+                                    else {
+                                        return false;
+                                    };
+                                    let fresh = item
+                                        .data
+                                        .get(&slider.spec.value_from)
+                                        .and_then(serde_json::Value::as_f64);
+                                    let confirmed = hold
+                                        .dispatched
+                                        .is_some_and(|dispatched| fresh == Some(dispatched));
+                                    !confirmed && hold.until > now
                                 });
                             }
                             *items = refreshed;
@@ -1032,6 +1048,16 @@ fn list_item_tone(row: &serde_json::Value, key: &str) -> Option<StatusTone> {
         .and_then(StatusTone::from_contract)
 }
 
+pub(super) fn clear_slider_hold(rows: &mut [Row], row_index: usize, item_id: &str) {
+    let Some(RowControl::List { slider, .. }) = rows.get_mut(row_index).map(|row| &mut row.control)
+    else {
+        return;
+    };
+    if let Some(slider) = slider {
+        slider.values.remove(item_id);
+    }
+}
+
 pub(super) fn list_slider_value(
     slider: &RowSliderSpec,
     slider_values: &std::collections::HashMap<String, SliderHold>,
@@ -1181,15 +1207,19 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
-        list_item_actions, list_items, list_slider_value, merged_config, option_accent,
-        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
-        rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
-        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
-        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
+        apply_list_filter, apply_runtime_query, begin_list_item_action, clear_slider_hold,
+        filtered_list_items, list_item_actions, list_items, list_slider_value, merged_config,
+        option_accent, primary_list_item_action, row_action, row_is_visible, row_streams,
+        row_value_json, rows_from_resolved, runtime_query_names, section_label_for,
+        sections_from_resolved, set_config_value, stream_gated, visible_row_indices, FieldDefault,
+        ListActions, ListItem, ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
+
+    fn apply_query(rows: &mut [Row], query: &str, result: Result<serde_json::Value, String>) {
+        apply_runtime_query(rows, query, result, &|_, _| false);
+    }
 
     const SPEC: &str = r#"
 schema_version = 1
@@ -1335,7 +1365,7 @@ query = "controller_input"
         let mut rows = rows_from_resolved(&resolved);
 
         assert_eq!(runtime_query_names(&rows), ["controller_input"]);
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "controller_input",
             Ok(serde_json::json!({
@@ -1652,7 +1682,7 @@ default = "System Default"
             let resolved = qol_config::normalized::resolve_config(&spec, &overrides).unwrap();
             let mut rows = rows_from_resolved(&resolved);
             assert_eq!(runtime_query_names(&rows), ["audio_sources"]);
-            apply_runtime_query(
+            apply_query(
                 &mut rows,
                 "audio_sources",
                 Ok(serde_json::json!([
@@ -1763,7 +1793,7 @@ query = "managed_device_options"
         .unwrap();
         let mut rows = rows_from_resolved(&resolved);
         assert_eq!(runtime_query_names(&rows), ["managed_device_options"]);
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "managed_device_options",
             Ok(serde_json::json!([
@@ -1979,12 +2009,12 @@ input = { address = "{address}" }
         let mut rows = rows_from_resolved(&resolved);
         assert_eq!(runtime_query_names(&rows), ["devices", "search_status"]);
 
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "search_status",
             Ok(serde_json::json!({ "searching": true })),
         );
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "devices",
             Ok(serde_json::json!({
@@ -2060,7 +2090,160 @@ input = { address = "{address}" }
     }
 
     #[test]
-    fn slider_holds_keep_local_values_over_query_refreshes_until_expiry() {
+    fn slider_hold_survives_a_mismatched_refresh_inside_the_safety_window() {
+        let mut rows = slider_rows();
+        insert_slider_hold(
+            &mut rows,
+            42.0,
+            Some(42.0),
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        );
+        apply_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 10 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+        );
+        let RowControl::List { slider, items, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_ref().unwrap();
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            42.0,
+            "a stale echo inside the safety window must keep the hold"
+        );
+        assert!(slider.values.contains_key("kbd"));
+    }
+
+    #[test]
+    fn slider_hold_drops_when_the_query_echoes_the_dispatched_value() {
+        let mut rows = slider_rows();
+        insert_slider_hold(
+            &mut rows,
+            42.0,
+            Some(42.0),
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        );
+        apply_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 42 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+        );
+        let RowControl::List { slider, items, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_ref().unwrap();
+        assert!(
+            slider.values.is_empty(),
+            "an echo of the dispatched value confirms the write and drops the hold"
+        );
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            42.0,
+            "the slider falls back to the echoed query truth"
+        );
+    }
+
+    #[test]
+    fn slider_hold_drops_after_the_safety_timeout() {
+        let mut rows = slider_rows();
+        insert_slider_hold(
+            &mut rows,
+            42.0,
+            Some(42.0),
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        apply_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 10 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+        );
+        let RowControl::List { slider, items, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_ref().unwrap();
+        assert!(
+            slider.values.is_empty(),
+            "a hold past the safety timeout must drop even without an echo"
+        );
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            10.0
+        );
+    }
+
+    #[test]
+    fn slider_hold_survives_refresh_while_the_item_is_protected() {
+        let mut rows = slider_rows();
+        insert_slider_hold(
+            &mut rows,
+            42.0,
+            Some(42.0),
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        );
+        apply_runtime_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 42 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+            &|index, id| index == 0 && id == "kbd",
+        );
+        let RowControl::List { slider, items, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_ref().unwrap();
+        assert!(
+            slider.values.contains_key("kbd"),
+            "a dragging or pending item keeps its hold even when the query echoes"
+        );
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            42.0
+        );
+    }
+
+    #[test]
+    fn clearing_a_slider_hold_on_error_falls_back_to_query_truth() {
+        let mut rows = slider_rows();
+        insert_slider_hold(
+            &mut rows,
+            42.0,
+            None,
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        );
+        clear_slider_hold(&mut rows, 0, "kbd");
+        let RowControl::List { slider, items, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_ref().unwrap();
+        assert!(slider.values.is_empty());
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            30.0,
+            "after a dispatch error the row must show the query truth"
+        );
+    }
+
+    fn slider_rows() -> Vec<Row> {
         const SLIDER_SPEC: &str = r#"
 schema_version = 1
 
@@ -2081,7 +2264,7 @@ input = { id = "{id}", value = "{value}" }
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
         let mut rows = rows_from_resolved(&resolved);
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "volumes",
             Ok(serde_json::json!({
@@ -2091,77 +2274,25 @@ input = { id = "{id}", value = "{value}" }
                 ]
             })),
         );
-        let RowControl::List { slider, items, .. } = &mut rows[0].control else {
+        rows
+    }
+
+    fn insert_slider_hold(
+        rows: &mut [Row],
+        value: f64,
+        dispatched: Option<f64>,
+        until: std::time::Instant,
+    ) {
+        let RowControl::List { slider, .. } = &mut rows[0].control else {
             unreachable!();
         };
-        let slider = slider.as_mut().unwrap();
-        assert_eq!(
-            list_slider_value(&slider.spec, &slider.values, &items[0]),
-            30.0
-        );
-        assert_eq!(
-            list_slider_value(&slider.spec, &slider.values, &items[1]),
-            0.0,
-            "missing value_from falls back to min"
-        );
-        slider.values.insert(
+        slider.as_mut().unwrap().values.insert(
             "kbd".into(),
             SliderHold {
-                value: 42.0,
-                until: std::time::Instant::now() + std::time::Duration::from_secs(1),
+                value,
+                dispatched,
+                until,
             },
-        );
-        apply_runtime_query(
-            &mut rows,
-            "volumes",
-            Ok(serde_json::json!({
-                "items": [
-                    { "id": "kbd", "name": "Keyboard", "volume": 10 },
-                    { "id": "speaker", "name": "Speaker" }
-                ]
-            })),
-        );
-        {
-            let RowControl::List { slider, items, .. } = &rows[0].control else {
-                unreachable!();
-            };
-            let slider = slider.as_ref().unwrap();
-            assert_eq!(
-                list_slider_value(&slider.spec, &slider.values, &items[0]),
-                42.0,
-                "unexpired hold wins over query data"
-            );
-        }
-        {
-            let RowControl::List { slider, items, .. } = &mut rows[0].control else {
-                unreachable!();
-            };
-            let slider = slider.as_mut().unwrap();
-            slider.values.insert(
-                "kbd".into(),
-                SliderHold {
-                    value: 42.0,
-                    until: std::time::Instant::now() - std::time::Duration::from_secs(1),
-                },
-            );
-            assert_eq!(
-                list_slider_value(&slider.spec, &slider.values, &items[0]),
-                10.0
-            );
-        }
-        apply_runtime_query(
-            &mut rows,
-            "volumes",
-            Ok(serde_json::json!({
-                "items": [{ "id": "kbd", "name": "Keyboard", "volume": 10 }]
-            })),
-        );
-        let RowControl::List { slider, .. } = &rows[0].control else {
-            unreachable!();
-        };
-        assert!(
-            slider.as_ref().unwrap().values.is_empty(),
-            "expired holds are pruned on the next refresh"
         );
     }
 
@@ -2183,7 +2314,7 @@ tone_map = { light = "muted", dark = "accent" }
         let mut rows = rows_from_resolved(&resolved);
         assert_eq!(runtime_query_names(&rows), ["theme_status"]);
 
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "theme_status",
             Ok(serde_json::json!({ "scheme": "dark" })),
@@ -2198,7 +2329,7 @@ tone_map = { light = "muted", dark = "accent" }
             } if label == "Dark"
         ));
 
-        apply_runtime_query(&mut rows, "theme_status", Err("unavailable".into()));
+        apply_query(&mut rows, "theme_status", Err("unavailable".into()));
         assert!(matches!(
             &rows[0].control,
             RowControl::Status {
@@ -2381,7 +2512,7 @@ value_from = "app_download_url"
         assert_eq!(url, &None);
         assert!(modules.is_empty());
 
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "connection_info",
             Ok(serde_json::json!({ "app_download_url": "http://192.168.1.5:45455/app" })),
@@ -2405,7 +2536,7 @@ value_from = "app_download_url"
             "quiet zone keeps the matrix square"
         );
 
-        apply_runtime_query(
+        apply_query(
             &mut rows,
             "connection_info",
             Ok(serde_json::json!({ "hostname": "host" })),
@@ -2416,7 +2547,7 @@ value_from = "app_download_url"
         assert_eq!(url, &None, "a payload without the path clears the code");
         assert!(modules.is_empty());
 
-        apply_runtime_query(&mut rows, "connection_info", Err("unavailable".into()));
+        apply_query(&mut rows, "connection_info", Err("unavailable".into()));
         let RowControl::QrCode { error, .. } = &rows[0].control else {
             panic!("expected a qr code row");
         };

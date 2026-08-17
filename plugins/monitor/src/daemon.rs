@@ -9,8 +9,8 @@ use qol_runtime::protocol::DaemonRequest;
 
 use crate::config::{self, DeviceConfig};
 use crate::monitor::{
-    BrightnessState, DisplayControl, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
-    BRIGHTNESS_MIN, BRIGHTNESS_STEP,
+    BrightnessPolicy, BrightnessSource, BrightnessState, DisplayControl, GammaStateControl,
+    MonitorError, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 use crate::platform::MonitorControl;
 use crate::session::{LutProvider, RestoreMode, Session, SessionStore};
@@ -126,13 +126,13 @@ fn live_query(name: &str) -> ReadResult<Command> {
     let Some(live) = live_state() else {
         return ReadResult::Error("monitor daemon state is not ready".into());
     };
-    let Ok(runtime) = live.lock() else {
+    let Ok(mut runtime) = live.lock() else {
         return ReadResult::Error("monitor daemon state is poisoned".into());
     };
-    let control: &dyn MonitorControl = &**runtime.session().control();
+    let control = Arc::clone(runtime.session().control());
     let payload = match name {
-        "displays" => displays_payload(control, &runtime.config()),
-        "status" => status_payload(control),
+        "displays" => displays_payload(&*control, &runtime.config(), &mut runtime.brightness_cache),
+        "status" => status_payload(&*control, &mut runtime.brightness_cache),
         _ => unreachable!("live_query only handles declared queries"),
     };
     ReadResult::HandledWithData(payload)
@@ -141,26 +141,36 @@ fn live_query(name: &str) -> ReadResult<Command> {
 pub(crate) fn displays_payload(
     control: &dyn MonitorControl,
     config: &DeviceConfig,
+    cache: &mut BTreeMap<String, BrightnessState>,
 ) -> serde_json::Value {
-    let rows: Vec<serde_json::Value> = control
-        .enumerate()
-        .unwrap_or_default()
+    let handles = control.enumerate().unwrap_or_default();
+    let rows: Vec<serde_json::Value> = handles
         .iter()
         .map(|handle| {
             let id = handle.id().to_string();
             let policy = control.selection(handle.id()).label();
             let preferred = config.preferred_for(&id);
-            let (brightness, source, detail) = match control.get_brightness(handle) {
-                Ok(state) => (
+            let (brightness, source, detail) = match cache.get(handle.id()).copied() {
+                Some(state) => (
                     serde_json::Value::from(state.value),
                     state.source.label(),
                     format!("{}% via {}", state.value, state.source.label()),
                 ),
-                Err(error) => (
-                    serde_json::Value::Null,
-                    "unavailable",
-                    brightness_detail(&error),
-                ),
+                None => match control.get_brightness(handle) {
+                    Ok(state) => {
+                        cache.insert(handle.id().to_string(), state);
+                        (
+                            serde_json::Value::from(state.value),
+                            state.source.label(),
+                            format!("{}% via {}", state.value, state.source.label()),
+                        )
+                    }
+                    Err(error) => (
+                        serde_json::Value::Null,
+                        "unavailable",
+                        brightness_detail(&error),
+                    ),
+                },
             };
             serde_json::json!({
                 "id": id,
@@ -174,6 +184,7 @@ pub(crate) fn displays_payload(
             })
         })
         .collect();
+    cache.retain(|id, _| handles.iter().any(|handle| handle.id() == id.as_str()));
     serde_json::json!(rows)
 }
 
@@ -184,14 +195,22 @@ fn brightness_detail(error: &MonitorError) -> String {
     }
 }
 
-pub(crate) fn status_payload(control: &dyn MonitorControl) -> serde_json::Value {
+pub(crate) fn status_payload(
+    control: &dyn MonitorControl,
+    cache: &mut BTreeMap<String, BrightnessState>,
+) -> serde_json::Value {
     let handles = control.enumerate().unwrap_or_default();
     if handles.is_empty() {
         return serde_json::json!({ "state": "no_displays", "count": 0 });
     }
     let readable: Vec<BrightnessState> = handles
         .iter()
-        .filter_map(|handle| control.get_brightness(handle).ok())
+        .filter_map(|handle| match cache.get(handle.id()).copied() {
+            Some(state) => Some(state),
+            None => control.get_brightness(handle).ok().inspect(|&state| {
+                cache.insert(handle.id().to_string(), state);
+            }),
+        })
         .collect();
     if readable.is_empty() {
         return serde_json::json!({ "state": "unavailable", "count": handles.len() });
@@ -256,6 +275,7 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     stop_requested: bool,
     notify: Notify,
     config: Arc<Mutex<DeviceConfig>>,
+    brightness_cache: BTreeMap<String, BrightnessState>,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
@@ -273,19 +293,12 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             stop_requested: false,
             notify: Arc::new(notify),
             config: Arc::new(Mutex::new(DeviceConfig::default())),
+            brightness_cache: BTreeMap::new(),
         }
     }
 
     pub fn session(&self) -> &Session<C> {
         &self.session
-    }
-
-    pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
-        let recovery = self.session.restore_all(RestoreMode::Recovery);
-        self.surface_gamma_warnings(&recovery);
-        *self.config.lock().unwrap() = config.clone();
-        self.apply_preferred(&config.preferred_brightness);
-        recovery
     }
 
     fn surface_gamma_warnings(&self, report: &crate::session::RestoreReport) {
@@ -307,8 +320,25 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             }
         }
     }
+}
 
-    fn apply_preferred(&self, preferred: &BTreeMap<String, config::BrightnessPreference>) -> usize {
+impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
+    pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
+        let recovery = self.session.restore_all(RestoreMode::Recovery);
+        self.surface_gamma_warnings(&recovery);
+        *self.config.lock().unwrap() = config.clone();
+        self.apply_preferred(&config.preferred_brightness);
+        recovery
+    }
+
+    pub fn config(&self) -> DeviceConfig {
+        self.config.lock().unwrap().clone()
+    }
+
+    fn apply_preferred(
+        &mut self,
+        preferred: &BTreeMap<String, config::BrightnessPreference>,
+    ) -> usize {
         let Ok(handles) = self.session.control().enumerate() else {
             return 0;
         };
@@ -321,16 +351,11 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
                 continue;
             };
             if self.session.mutate(handle, preference.brightness).is_ok() {
+                self.remember_brightness(handle, preference.brightness);
                 applied += 1;
             }
         }
         applied
-    }
-}
-
-impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
-    pub fn config(&self) -> DeviceConfig {
-        self.config.lock().unwrap().clone()
     }
 
     pub fn handle(&mut self, command: Command) -> bool {
@@ -428,7 +453,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         self.apply_preferred_deltas(&previous, next)
     }
 
-    fn apply_preferred_deltas(&self, previous: &DeviceConfig, next: &DeviceConfig) -> usize {
+    fn apply_preferred_deltas(&mut self, previous: &DeviceConfig, next: &DeviceConfig) -> usize {
         let Ok(handles) = self.session.control().enumerate() else {
             return 0;
         };
@@ -444,6 +469,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             }
             if let Some(value) = new {
                 if self.session.mutate(handle, value).is_ok() {
+                    self.remember_brightness(handle, value);
                     applied += 1;
                 }
             }
@@ -463,7 +489,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         }
     }
 
-    fn set_brightness(&self, display: &str, value: u8) -> Vec<String> {
+    fn set_brightness(&mut self, display: &str, value: u8) -> Vec<String> {
         let handles = self.session.control().enumerate().unwrap_or_default();
         let targets: Vec<&DisplayHandle> = if display == "all" {
             handles.iter().collect()
@@ -476,6 +502,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let mut applied = Vec::new();
         for handle in targets {
             if self.session.mutate(handle, value).is_ok() {
+                self.remember_brightness(handle, value);
                 applied.push(handle.id().to_string());
             }
         }
@@ -486,22 +513,23 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let handles = self.session.control().enumerate().unwrap_or_default();
         let mut stepped: Vec<(u8, &'static str)> = Vec::new();
         for handle in &handles {
-            let Ok(state) = self.session.control().get_brightness(handle) else {
+            let Some(current) = self.cached_brightness(handle) else {
                 continue;
             };
-            let Some(next) = step_value(state.value, direction) else {
+            let Some(next) = step_value(current.value, direction) else {
                 continue;
             };
             if self.session.mutate(handle, next).is_err() {
                 continue;
             }
-            let source = self
-                .session
-                .control()
-                .get_brightness(handle)
-                .map(|state| state.source)
-                .unwrap_or(state.source);
-            stepped.push((next, source.label()));
+            self.brightness_cache.insert(
+                handle.id().to_string(),
+                BrightnessState {
+                    value: next,
+                    source: current.source,
+                },
+            );
+            stepped.push((next, current.source.label()));
         }
         let message = match stepped.as_slice() {
             [] => return,
@@ -513,6 +541,32 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             ),
         };
         (self.notify)("Monitor", &message);
+    }
+
+    fn cached_brightness(&mut self, handle: &DisplayHandle) -> Option<BrightnessState> {
+        if let Some(state) = self.brightness_cache.get(handle.id()) {
+            return Some(*state);
+        }
+        let state = self.session.control().get_brightness(handle).ok()?;
+        self.brightness_cache.insert(handle.id().to_string(), state);
+        Some(state)
+    }
+
+    fn remember_brightness(&mut self, handle: &DisplayHandle, value: u8) {
+        let source = self
+            .brightness_cache
+            .get(handle.id())
+            .map(|state| state.source)
+            .unwrap_or_else(|| self.write_source(handle));
+        self.brightness_cache
+            .insert(handle.id().to_string(), BrightnessState { value, source });
+    }
+
+    fn write_source(&self, handle: &DisplayHandle) -> BrightnessSource {
+        match self.session.control().selection(handle.id()) {
+            BrightnessPolicy::Gamma => BrightnessSource::Gamma,
+            _ => BrightnessSource::Ddc,
+        }
     }
 }
 
@@ -835,6 +889,7 @@ mod tests {
         source: BrightnessSource,
         calls: StdMutex<Vec<(String, u8)>>,
         steps: AtomicUsize,
+        gets: AtomicUsize,
         warned: StdMutex<bool>,
         refuse_get: bool,
         selections: StdMutex<Vec<(String, BrightnessPolicy)>>,
@@ -852,6 +907,7 @@ mod tests {
                 source,
                 calls: StdMutex::new(Vec::new()),
                 steps: AtomicUsize::new(0),
+                gets: AtomicUsize::new(0),
                 warned: StdMutex::new(false),
                 refuse_get: false,
                 selections: StdMutex::new(Vec::new()),
@@ -914,6 +970,7 @@ mod tests {
         }
 
         fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
             if self.refuse_get {
                 return Err(MonitorError::refused(
                     "brightness",
@@ -1391,7 +1448,7 @@ mod tests {
             )]),
             ..DeviceConfig::default()
         };
-        let payload = displays_payload(&control, &config);
+        let payload = displays_payload(&control, &config, &mut BTreeMap::new());
         assert_eq!(
             payload,
             serde_json::json!([
@@ -1417,7 +1474,7 @@ mod tests {
             BrightnessSource::Ddc,
         );
         control.refuse_get = true;
-        let payload = displays_payload(&control, &DeviceConfig::default());
+        let payload = displays_payload(&control, &DeviceConfig::default(), &mut BTreeMap::new());
         assert_eq!(payload[0]["brightness"], serde_json::Value::Null);
         assert_eq!(payload[0]["source"], "unavailable");
         assert_eq!(payload[0]["detail"], "control is off for this display");
@@ -1428,7 +1485,7 @@ mod tests {
     fn status_payload_maps_no_displays_ok_and_unavailable() {
         let empty = FakeControl::new(Vec::new(), 0, BrightnessSource::Ddc);
         assert_eq!(
-            status_payload(&empty),
+            status_payload(&empty, &mut BTreeMap::new()),
             serde_json::json!({ "state": "no_displays", "count": 0 })
         );
         let ok = FakeControl::new(
@@ -1437,7 +1494,7 @@ mod tests {
             BrightnessSource::Ddc,
         );
         assert_eq!(
-            status_payload(&ok),
+            status_payload(&ok, &mut BTreeMap::new()),
             serde_json::json!({
                 "state": "ok",
                 "count": 1,
@@ -1452,9 +1509,108 @@ mod tests {
         );
         refused.refuse_get = true;
         assert_eq!(
-            status_payload(&refused),
+            status_payload(&refused, &mut BTreeMap::new()),
             serde_json::json!({ "state": "unavailable", "count": 1 })
         );
+    }
+
+    #[test]
+    fn displays_payload_serves_the_written_value_without_a_hardware_read() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 25,
+        });
+        let gets_after_write = control.gets.load(Ordering::SeqCst);
+        let payload = displays_payload(&*control, &runtime.config(), &mut runtime.brightness_cache);
+        assert_eq!(payload[0]["brightness"], 25);
+        assert_eq!(payload[0]["detail"], "25% via ddc");
+        assert_eq!(
+            control.gets.load(Ordering::SeqCst),
+            gets_after_write,
+            "a warm cache must not read the display hardware"
+        );
+    }
+
+    #[test]
+    fn displays_payload_reads_an_unknown_display_once_then_caches_it() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        let mut cache = BTreeMap::new();
+        let first = displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        assert_eq!(first[0]["brightness"], 42);
+        assert_eq!(control.gets.load(Ordering::SeqCst), 1);
+        let second = displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        assert_eq!(second[0]["brightness"], 42);
+        assert_eq!(
+            control.gets.load(Ordering::SeqCst),
+            1,
+            "the second poll is served from the cache"
+        );
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn displays_payload_drops_cache_entries_for_gone_displays() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        );
+        let mut cache = BTreeMap::from([(
+            "id-gone".to_string(),
+            BrightnessState {
+                value: 50,
+                source: BrightnessSource::Ddc,
+            },
+        )]);
+        displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        assert!(
+            !cache.contains_key("id-gone"),
+            "a display that left the topology must leave the cache"
+        );
+    }
+
+    #[test]
+    fn hotkey_steps_serve_the_cache_and_update_it_without_a_read() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store);
+        runtime.handle(Command::Brightness {
+            direction: 1,
+            phase: Phase::Start,
+        });
+        assert_eq!(control.calls(), vec![("id-1".to_string(), 65)]);
+        let gets_after_first_step = control.gets.load(Ordering::SeqCst);
+        runtime.handle(Command::Brightness {
+            direction: 1,
+            phase: Phase::Start,
+        });
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 65), ("id-1".to_string(), 70),]
+        );
+        assert_eq!(
+            control.gets.load(Ordering::SeqCst),
+            gets_after_first_step,
+            "a warm cache steps without reading the hardware again"
+        );
+        assert_eq!(runtime.brightness_cache["id-1"].value, 70);
     }
 
     #[test]
