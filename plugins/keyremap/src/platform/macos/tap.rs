@@ -2,7 +2,10 @@ use std::mem::ManuallyDrop;
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+
+static TRACE_KEYS: LazyLock<bool> =
+    LazyLock::new(|| std::env::var_os("QOL_KEYREMAP_TRACE").is_some());
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::{CFMachPort, CFMachPortInvalidate, CFMachPortRef};
@@ -354,6 +357,7 @@ fn handle_key_event(
     let action = remap::process_key_event(config, mods, keycode, event_char.as_deref(), bundle_id);
 
     if cfg!(debug_assertions)
+        && *TRACE_KEYS
         && (!matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id))
     {
         tap_trace().offer(format!(
