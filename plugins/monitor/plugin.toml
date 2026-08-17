@@ -3,7 +3,7 @@ id = "plugin-monitor"
 uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Monitor"
 description = "Display brightness, gamma, and mode control"
-version = "0.1.0"
+version = "0.1.1"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 

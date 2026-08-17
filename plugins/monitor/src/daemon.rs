@@ -344,7 +344,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         self.surface_gamma_warnings(&recovery);
         *self.config.lock().unwrap() = policy_config(config);
         self.preferred = config::load_preferred(self.config_root.as_deref());
-        self.apply_preferred_map();
         recovery
     }
 
@@ -1266,7 +1265,7 @@ mod tests {
     }
 
     #[test]
-    fn start_restores_stale_snapshots_before_applying_preferred() {
+    fn start_restores_stale_snapshots_and_never_applies_preferred() {
         let (_dir, store) = runtime_store();
         let (_root, config_root) = preferred_root();
         write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
@@ -1283,20 +1282,18 @@ mod tests {
         runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
-            vec![("id-1".to_string(), 100), ("id-1".to_string(), 80),],
-            "crash restore runs first, then preferred as a fresh snapshot"
+            vec![("id-1".to_string(), 100)],
+            "crash restore runs and preferred is never written on top"
         );
-        let snapshot = runtime
-            .session()
-            .store()
-            .load_snapshot("id-1")
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            snapshot.value, 100,
-            "preferred snapshots the restored value"
+        assert!(
+            runtime
+                .session()
+                .store()
+                .load_snapshot("id-1")
+                .unwrap()
+                .is_none(),
+            "a recovered snapshot is cleared"
         );
-        assert_eq!(snapshot.last_value, 80);
     }
 
     #[test]
@@ -1312,6 +1309,7 @@ mod tests {
         ));
         let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
         runtime.start(&DeviceConfig::default());
+        assert!(runtime.handle(Command::ApplyPreferred));
         control.calls.lock().unwrap().clear();
         assert!(!runtime.handle(Command::Kill), "kill stops the loop");
         assert_eq!(
@@ -1353,8 +1351,8 @@ mod tests {
         runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
-            vec![("id-1".to_string(), 50), ("id-1".to_string(), 20),],
-            "the crash-restored value is the snapshot base; preferred is a mutation on top"
+            vec![("id-1".to_string(), 50)],
+            "the crash-restored value stands; preferred is never layered on top"
         );
     }
 
@@ -1370,6 +1368,26 @@ mod tests {
         let mut runtime = runtime_with(control.clone(), store);
         runtime.start(&DeviceConfig::default());
         assert_eq!(control.calls(), Vec::<(String, u8)>::new());
+        assert_eq!(control.steps.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn start_never_writes_brightness_when_preferred_is_configured() {
+        let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 30)]));
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            75,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "opening the settings panel spawns the daemon and must move no display"
+        );
         assert_eq!(control.steps.load(Ordering::SeqCst), 0);
     }
 
@@ -1680,8 +1698,8 @@ mod tests {
         };
         assert_eq!(payload[0]["connector"], "card0-DP-1");
         assert_eq!(
-            payload[0]["brightness"], 80,
-            "start applies the preferred value"
+            payload[0]["brightness"], 42,
+            "start reports the live value it read, never one it wrote"
         );
         assert_eq!(payload[0]["preferred"], 80);
 
