@@ -8,6 +8,6 @@ mod windows;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{cancel_recording, install, start_recording};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{cancel_recording, install, start_recording};
+pub(crate) use macos::{cancel_recording, install, release_tap, start_recording};
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{cancel_recording, install, start_recording};

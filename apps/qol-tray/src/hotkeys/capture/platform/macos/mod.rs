@@ -11,8 +11,10 @@ use core_graphics::event::{
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar::Modifier as Mod;
 use qol_hotkeys::macos_keycode;
+use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -85,20 +87,12 @@ fn spawn_reload_thread(
                         continue;
                     }
                 };
-                let stopped = match matcher.write() {
-                    Ok(mut guard) => {
-                        let stopped = guard.reload(bindings);
-                        log::info!("macOS hotkey capture: bindings reloaded");
-                        stopped
-                    }
-                    Err(poisoned) => {
-                        log::error!(
-                            "macOS hotkey matcher lock poisoned during reload; recovering: {poisoned}"
-                        );
-                        let mut guard = poisoned.into_inner();
-                        guard.reload(bindings)
-                    }
-                };
+                let (stopped, poisoned) = reload_under_lock(&matcher, bindings);
+                if poisoned {
+                    log::error!("macOS hotkey matcher lock poisoned during reload; recovered");
+                } else {
+                    log::info!("macOS hotkey capture: bindings reloaded");
+                }
                 for event in stopped {
                     let _ = fire_tx.send(event);
                 }
@@ -108,6 +102,16 @@ fn spawn_reload_thread(
 
 fn drain_pending(reload_rx: &Receiver<()>) {
     while reload_rx.try_recv().is_ok() {}
+}
+
+fn reload_under_lock(
+    matcher: &RwLock<MacBindingMatcher>,
+    bindings: Vec<Binding>,
+) -> (Vec<CaptureEvent>, bool) {
+    match matcher.write() {
+        Ok(mut guard) => (guard.reload(bindings), false),
+        Err(poisoned) => (poisoned.into_inner().reload(bindings), true),
+    }
 }
 
 fn requires_reenable(event_type: CGEventType) -> bool {
@@ -126,13 +130,41 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 }
 
+fn tap_trace() -> &'static TraceSink {
+    static SINK: OnceLock<TraceSink> = OnceLock::new();
+    SINK.get_or_init(|| {
+        TraceSink::spawn("hotkey-tap-trace", QUEUE_DEPTH, |line| log::warn!("{line}"))
+    })
+}
+
+static TAP_PORT: OnceLock<ReenablePort> = OnceLock::new();
+static TAP_RELEASED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn release_tap() {
+    if TAP_RELEASED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(port) = TAP_PORT.get() {
+        unsafe { CGEventTapEnable(port.0, false) };
+    }
+}
+
+fn reenable_target() -> Option<CFMachPortRef> {
+    reenable_gate(TAP_RELEASED.load(Ordering::SeqCst), TAP_PORT.get())
+}
+
+fn reenable_gate(released: bool, port: Option<&ReenablePort>) -> Option<CFMachPortRef> {
+    if released {
+        return None;
+    }
+    port.map(|port| port.0)
+}
+
 fn run_tap(
     matcher: Arc<RwLock<MacBindingMatcher>>,
     fire_tx: Sender<CaptureEvent>,
     ready_tx: Sender<Result<(), String>>,
 ) {
-    let reenable: Arc<OnceLock<ReenablePort>> = Arc::new(OnceLock::new());
-    let cb_reenable = Arc::clone(&reenable);
     let events = vec![CGEventType::KeyDown, CGEventType::KeyUp];
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
@@ -141,9 +173,9 @@ fn run_tap(
         events,
         move |_proxy, event_type, event| {
             if requires_reenable(event_type) {
-                if let Some(port) = cb_reenable.get() {
-                    log::warn!("macOS hotkey tap disabled by OS; re-enabling");
-                    unsafe { CGEventTapEnable(port.0, true) };
+                if let Some(port) = reenable_target() {
+                    tap_trace().offer("macOS hotkey tap disabled by OS; re-enabling".to_owned());
+                    unsafe { CGEventTapEnable(port, true) };
                 }
                 return CallbackResult::Keep;
             }
@@ -176,7 +208,7 @@ fn run_tap(
             return;
         }
     };
-    let _ = reenable.set(ReenablePort(tap.mach_port().as_concrete_TypeRef()));
+    let _ = TAP_PORT.set(ReenablePort(tap.mach_port().as_concrete_TypeRef()));
 
     let loop_source = match tap.mach_port().create_runloop_source(0) {
         Ok(loop_source) => loop_source,
@@ -320,6 +352,30 @@ fn parse_mac_combo(binding: &Binding) -> Option<MacCombo> {
 mod tests {
     use super::*;
     use crate::hotkeys::capture::parse_combo;
+
+    #[test]
+    fn a_reload_releases_the_matcher_before_the_caller_logs() {
+        let matcher = RwLock::new(MacBindingMatcher::new(vec![binding("ctrl+a")]));
+        let (_stopped, poisoned) = reload_under_lock(&matcher, vec![binding("ctrl+b")]);
+        assert!(!poisoned);
+        assert!(
+            matcher.try_write().is_ok(),
+            "the reload must drop the matcher guard before the caller logs, or the tap callback waits behind a blocked stdout write and macOS kills the tap"
+        );
+    }
+
+    #[test]
+    fn a_released_tap_is_never_re_armed_by_a_late_disable_event() {
+        let port = ReenablePort(1 as CFMachPortRef);
+        assert!(
+            reenable_gate(false, Some(&port)).is_some(),
+            "a live tray re-enables its tap so hotkeys survive an OS timeout"
+        );
+        assert!(
+            reenable_gate(true, Some(&port)).is_none(),
+            "a tray that has begun shutting down must never re-arm its HID tap, or every keystroke stays gated until it exits"
+        );
+    }
 
     fn binding(key: &str) -> Binding {
         Binding {
