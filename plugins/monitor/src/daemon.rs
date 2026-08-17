@@ -348,7 +348,6 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         recovery
     }
 
-    #[cfg(test)]
     pub fn config(&self) -> DeviceConfig {
         self.config.lock().unwrap().clone()
     }
@@ -410,7 +409,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if let Err(error) = (self.preferred_save)(&self.preferred) {
                     eprintln!("[plugin-monitor] failed to persist preferred brightness: {error:#}");
                 }
-                (self.notify)("Monitor", &format!("Brightness {value}%"));
+                if self.config().notify_on_change {
+                    (self.notify)("Monitor", &format!("Brightness {value}%"));
+                }
                 true
             }
             Command::Settings => {
@@ -530,7 +531,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 many.len()
             ),
         };
-        (self.notify)("Monitor", &message);
+        if self.config().notify_on_change {
+            (self.notify)("Monitor", &message);
+        }
     }
 
     fn cached_brightness(&mut self, handle: &DisplayHandle) -> Option<BrightnessState> {
@@ -1420,6 +1423,7 @@ mod tests {
                     policy: "gamma".into(),
                 },
             )]),
+            ..DeviceConfig::default()
         };
         assert_eq!(runtime.reload_config(&next), 1);
         assert_eq!(
@@ -1687,6 +1691,92 @@ mod tests {
             panic!("status must answer with data");
         };
         assert_eq!(payload["state"], "ok");
+    }
+
+    #[test]
+    fn set_brightness_toasts_the_value_by_default() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 25,
+        });
+        assert_eq!(
+            toasts.lock().unwrap().as_slice(),
+            ["Brightness 25%"],
+            "the default config keeps the value toast"
+        );
+    }
+
+    #[test]
+    fn set_brightness_skips_the_value_toast_when_notify_on_change_is_off() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.start(&DeviceConfig {
+            notify_on_change: false,
+            ..DeviceConfig::default()
+        });
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 30,
+        });
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 30)],
+            "the write still happens"
+        );
+        assert!(
+            toasts.lock().unwrap().is_empty(),
+            "the value toast is silenced"
+        );
+        runtime.handle(Command::SetBrightness {
+            display: "id-gone".into(),
+            value: 35,
+        });
+        assert_eq!(
+            toasts.lock().unwrap().as_slice(),
+            ["Brightness could not be set on the selected display"],
+            "error toasts stay unconditional"
+        );
+    }
+
+    #[test]
+    fn step_skips_the_value_toast_when_notify_on_change_is_off() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.start(&DeviceConfig {
+            notify_on_change: false,
+            ..DeviceConfig::default()
+        });
+        runtime.handle(Command::Brightness {
+            direction: 1,
+            phase: Phase::Start,
+        });
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 65)],
+            "stepping still works"
+        );
+        assert!(
+            toasts.lock().unwrap().is_empty(),
+            "the step toast is silenced"
+        );
     }
 
     #[test]

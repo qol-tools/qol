@@ -14,11 +14,27 @@ const PREFERRED_MAX: u8 = 100;
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DeviceConfig {
     pub preferred_brightness: BTreeMap<String, BrightnessPreference>,
     pub policy: BTreeMap<String, PolicySelection>,
+    #[serde(default = "default_true")]
+    pub notify_on_change: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self {
+            preferred_brightness: BTreeMap::new(),
+            policy: BTreeMap::new(),
+            notify_on_change: default_true(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -189,6 +205,7 @@ fn migrate_legacy(legacy: LegacyDeviceConfig) -> DeviceConfig {
             .into_iter()
             .map(|(id, policy)| (id, PolicySelection { policy }))
             .collect(),
+        notify_on_change: default_true(),
     }
 }
 
@@ -458,6 +475,7 @@ mod tests {
                 "id-a": { "policy": "gamma" },
                 "id-b": { "policy": "off" },
             },
+            "notify_on_change": true,
         });
         let config = parse_store(&json).unwrap();
         assert_eq!(config.preferred_for("id-a"), Some(80));
@@ -541,6 +559,16 @@ mod tests {
         assert_eq!(config.preferred_for("id-b"), Some(77));
         assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Auto);
         assert_eq!(config.policy_for("id-b"), BrightnessPolicy::Ddc);
+    }
+
+    #[test]
+    fn notify_on_change_defaults_to_true_and_accepts_false() {
+        let config = parse_store(&serde_json::json!({})).unwrap();
+        assert!(config.notify_on_change, "the serde default is on");
+        let disabled = parse_store(&serde_json::json!({ "notify_on_change": false })).unwrap();
+        assert!(!disabled.notify_on_change);
+        let enabled = parse_store(&serde_json::json!({ "notify_on_change": true })).unwrap();
+        assert!(enabled.notify_on_change);
     }
 
     #[test]

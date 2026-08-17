@@ -46,3 +46,11 @@ key_label = "Display ID"
 description = "How each display is controlled. Labels: auto (prefer DDC, fall back to gamma), ddc, gamma, or off. Unknown labels are ignored."
 entry_fields = { policy = "string" }
 default = {}
+
+[field.notify_on_change]
+type = "boolean"
+config_key = "notify_on_change"
+label = "Brightness notifications"
+section = "preferences"
+default = true
+description = "Show a notification with the new brightness level whenever brightness changes. Turn this off to silence the brightness toasts."
