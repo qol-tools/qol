@@ -1200,22 +1200,13 @@ fn launch_background(
         surface_token(identity.surface),
         model.unwrap_or("default")
     );
-    let facts = terminals
-        .discover()
-        .context("spawn discovery failed")?
-        .into_iter()
-        .find(|facts| facts.id == session_id)
-        .ok_or_else(|| {
-            anyhow!(
-                "spawned session `{session_id}` was not discoverable right after launch; the lane may have exited before tagging - rerun with the same key"
-            )
-        })?;
-    if facts.spawn_identity.as_ref() != Some(identity) {
-        bail!(
-            "spawned session `{session_id}` appeared with a different spawn identity than requested (key `{}`, tool `{}`); refusing to queue a round for it",
-            identity.key, identity.tool
-        );
-    }
+    let facts = poll_ready(
+        terminals,
+        interpreter,
+        &session_id,
+        identity,
+        Duration::from_millis(READY_TIMEOUT_MS),
+    )?;
     let descriptor = interpreter.describe(&facts);
     ledger.record(
         &identity.key,
@@ -1351,6 +1342,11 @@ fn poll_ready(
             if last.bound && last.described.as_ref() == Some(&identity.tool) {
                 return Ok(facts.clone());
             }
+        } else if last.appeared {
+            bail!(
+                "spawned session `{session_id}` exited before `{}` was running in it; the launch arguments are the first thing to check",
+                identity.tool
+            );
         }
         if started.elapsed() >= timeout {
             let observed = if last.appeared {
@@ -1471,6 +1467,8 @@ mod tests {
         last_request: Mutex<Option<SpawnRequest>>,
         spawned: Mutex<Option<SpawnedState>>,
         reveal_spawned: bool,
+        dying_spawn: bool,
+        spawn_reveals: AtomicUsize,
     }
 
     impl FakeBackend {
@@ -1485,7 +1483,14 @@ mod tests {
                 last_request: Mutex::new(None),
                 spawned: Mutex::new(None),
                 reveal_spawned: true,
+                dying_spawn: false,
+                spawn_reveals: AtomicUsize::new(0),
             }
+        }
+
+        fn dying_spawn(mut self) -> Self {
+            self.dying_spawn = true;
+            self
         }
 
         fn facts(id: &str, key: &str, tool: &str, cwd: &str) -> SessionFacts {
@@ -1504,6 +1509,13 @@ mod tests {
                     tool: CliToolId::new(tool).unwrap(),
                     surface: SpawnSurface::Tab,
                 }),
+            }
+        }
+
+        fn shell_only_facts(state: &SpawnedState) -> SessionFacts {
+            SessionFacts {
+                foreground_basenames: vec!["zsh".to_owned()],
+                ..Self::spawned_facts(state)
             }
         }
 
@@ -1535,7 +1547,13 @@ mod tests {
             if self.reveal_spawned {
                 if let Some(state) = self.spawned.lock().unwrap().clone() {
                     if !facts.iter().any(|facts| facts.id == state.id) {
-                        facts.push(Self::spawned_facts(&state));
+                        match self.dying_spawn {
+                            false => facts.push(Self::spawned_facts(&state)),
+                            true if self.spawn_reveals.fetch_add(1, Ordering::SeqCst) == 0 => {
+                                facts.push(Self::shell_only_facts(&state));
+                            }
+                            true => {}
+                        }
                     }
                 }
             }
@@ -1623,7 +1641,11 @@ mod tests {
     }
 
     fn harness(discoveries: Vec<Vec<SessionFacts>>) -> (TerminalSessionService, Arc<FakeBackend>) {
-        let backend = Arc::new(FakeBackend::new(discoveries));
+        harness_with(FakeBackend::new(discoveries))
+    }
+
+    fn harness_with(backend: FakeBackend) -> (TerminalSessionService, Arc<FakeBackend>) {
+        let backend = Arc::new(backend);
         let terminals = TerminalSessionService::from_backends([
             Arc::clone(&backend) as Arc<dyn TerminalBackend>
         ])
@@ -1972,6 +1994,82 @@ mod tests {
             record.external_id.as_deref(),
             Some("01a00a6c"),
             "the refresh still updates the external id"
+        );
+    }
+
+    #[test]
+    fn a_tab_still_sitting_at_a_shell_prompt_never_counts_as_ready() {
+        let identity = identity("lane-shell", "pi", SpawnSurface::Tab);
+        let shell = SessionFacts {
+            foreground_basenames: vec!["zsh".to_owned()],
+            ..FakeBackend::facts("9", "lane-shell", "pi", "/work")
+        };
+        let session_id = shell.id.clone();
+        let (terminals, _backend) = harness(vec![vec![shell]]);
+
+        let error = poll_ready(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &session_id,
+            &identity,
+            Duration::from_millis(300),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("was not live and bridgeable"),
+            "a tab whose tool never started must never be handed back as a lane: {error}"
+        );
+        assert!(
+            error.contains("described=generic"),
+            "the error has to name what the tab is actually running: {error}"
+        );
+    }
+
+    #[test]
+    fn a_background_lane_whose_tool_never_started_is_an_error_not_a_queued_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (terminals, _backend) = harness_with(FakeBackend::new(vec![vec![]]).dying_spawn());
+        let locks = locks(&root);
+
+        let error = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-dead-tool"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            true,
+            false,
+            None,
+            Some("implement the fix"),
+            None,
+            &pending,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("exited before `pi` was running in it"),
+            "a tab that never ran the requested tool must not be reported as a live lane: {error}"
+        );
+        assert!(
+            ledger
+                .load(&SpawnKey::new("lane-dead-tool").unwrap())
+                .unwrap()
+                .is_none(),
+            "a lane that never came up must not leave a spawn record behind"
         );
     }
 
