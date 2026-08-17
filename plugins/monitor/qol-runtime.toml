@@ -6,6 +6,13 @@ description = "Apply preferred brightness to every connected display now"
 [action.reload]
 description = "Reload the device config from the host and apply changes at runtime"
 
+[action.set_brightness]
+description = "Set the selected display to the configured brightness right now"
+
+[query.display_options]
+description = "Selectable brightness targets: every connected display plus an all-displays entry"
+poll_interval_ms = 5000
+
 [query.displays]
 description = "Connected displays with live brightness, source, policy, and preferred value"
 poll_interval_ms = 2000

@@ -51,10 +51,36 @@ mod tests {
         assert_eq!(daemon.command, "plugin-monitor");
         assert!(daemon.socket.is_some());
 
-        let mut expected = std::collections::BTreeSet::new();
-        expected.insert("brightness-up".to_string());
-        expected.insert("brightness-down".to_string());
-        expected.insert("settings".to_string());
-        assert_eq!(manifest.executable_action_ids(), expected);
+        let expected = [
+            "apply",
+            "brightness-down",
+            "brightness-up",
+            "reload",
+            "set_brightness",
+            "settings",
+        ]
+        .map(str::to_string);
+        assert_eq!(
+            manifest.executable_action_ids(),
+            std::collections::BTreeSet::from(expected)
+        );
+    }
+
+    #[test]
+    fn every_runtime_action_is_reachable_through_the_manifest() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let runtime = qol_config::contract::parse_runtime_spec("qol-runtime.toml")
+            .expect("qol-runtime.toml invalid");
+        let declared = manifest.executable_action_ids();
+        let unreachable: Vec<&String> = runtime
+            .actions
+            .keys()
+            .filter(|action| !declared.contains(*action))
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "runtime actions the host cannot dispatch without a plugin.toml [action.*] entry: {unreachable:?}"
+        );
     }
 }

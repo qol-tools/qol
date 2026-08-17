@@ -13,11 +13,27 @@ const PREFERRED_MAX: u8 = 100;
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub const ACTIVE_DISPLAY_ALL: &str = "all";
+const DEFAULT_ACTIVE_BRIGHTNESS: u8 = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DeviceConfig {
+    pub active_display: String,
+    pub active_brightness: u8,
     pub preferred_brightness: BTreeMap<String, BrightnessPreference>,
     pub policy: BTreeMap<String, PolicySelection>,
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self {
+            active_display: ACTIVE_DISPLAY_ALL.to_string(),
+            active_brightness: DEFAULT_ACTIVE_BRIGHTNESS,
+            preferred_brightness: BTreeMap::new(),
+            policy: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -59,6 +75,7 @@ struct LegacyDeviceConfig {
 
 impl DeviceConfig {
     pub fn validated(mut self) -> Self {
+        self.active_brightness = self.active_brightness.min(PREFERRED_MAX);
         self.preferred_brightness
             .retain(|_, preference| preference.brightness <= PREFERRED_MAX);
         self.policy
@@ -184,6 +201,7 @@ fn migrate_legacy(legacy: LegacyDeviceConfig) -> DeviceConfig {
             .into_iter()
             .map(|(id, policy)| (id, PolicySelection { policy }))
             .collect(),
+        ..DeviceConfig::default()
     }
 }
 
@@ -233,6 +251,11 @@ mod tests {
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert_eq!(defaults.preferred_brightness.len(), 0);
         assert_eq!(defaults.policy.len(), 0);
+        assert_eq!(
+            defaults,
+            DeviceConfig::default(),
+            "the contract defaults and the runtime defaults must not drift apart"
+        );
     }
 
     #[test]
@@ -293,6 +316,8 @@ mod tests {
     #[test]
     fn config_round_trips_through_the_contract_shape() {
         let json = serde_json::json!({
+            "active_display": "id-b",
+            "active_brightness": 35,
             "preferred_brightness": {
                 "id-a": { "brightness": 80 },
                 "id-b": { "brightness": 45 },
@@ -303,6 +328,8 @@ mod tests {
             },
         });
         let config = parse_store(&json).unwrap();
+        assert_eq!(config.active_display, "id-b");
+        assert_eq!(config.active_brightness, 35);
         assert_eq!(config.preferred_for("id-a"), Some(80));
         assert_eq!(config.preferred_for("id-b"), Some(45));
         assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Gamma);
@@ -370,6 +397,7 @@ mod tests {
     #[test]
     fn validation_drops_out_of_range_and_unknown_values() {
         let json = serde_json::json!({
+            "active_brightness": 240,
             "preferred_brightness": {
                 "id-a": { "brightness": 101 },
                 "id-b": { "brightness": 77 },
@@ -380,6 +408,7 @@ mod tests {
             },
         });
         let config = parse_store(&json).unwrap();
+        assert_eq!(config.active_brightness, 100, "clamped to the hardware max");
         assert_eq!(config.preferred_for("id-a"), None);
         assert_eq!(config.preferred_for("id-b"), Some(77));
         assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Auto);

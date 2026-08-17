@@ -6,6 +6,10 @@ description = "Display brightness, gamma, and mode control."
 label = "Displays"
 description = "Live brightness state for every connected display, read from the monitor daemon."
 
+[section.controls]
+label = "Controls"
+description = "Pick a display and set its brightness now."
+
 [section.preferences]
 label = "Preferences"
 description = "Per-display preferred brightness and control policy, applied at daemon start and when changed."
@@ -35,6 +39,29 @@ section = "displays"
 action = "apply"
 variant = "primary"
 description = "Set every connected display to its preferred brightness immediately."
+
+[field.active_display]
+type = "select"
+config_key = "active_display"
+label = "Display"
+section = "controls"
+query = "display_options"
+default = "all"
+option_labels = { all = "All displays" }
+description = "Which display the brightness control below writes to."
+
+[field.active_brightness]
+type = "number"
+config_key = "active_brightness"
+label = "Brightness"
+section = "controls"
+default = 50
+min = 0
+max = 100
+step = 5
+variant = "slider"
+action = "set_brightness"
+description = "Press Enter, adjust with the left and right arrow keys, then press Enter to apply."
 
 [field.preferred_brightness]
 type = "object_map"

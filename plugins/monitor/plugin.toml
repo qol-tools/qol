@@ -20,6 +20,18 @@ label = "Brightness Down"
 args = ["down"]
 continuous = true
 
+[action.set_brightness]
+label = "Set Brightness"
+args = ["set_brightness"]
+
+[action.apply]
+label = "Apply Preferred Brightness"
+args = ["apply"]
+
+[action.reload]
+label = "Reload Monitor Config"
+args = ["reload"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"
