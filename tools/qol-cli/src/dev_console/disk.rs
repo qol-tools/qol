@@ -135,6 +135,7 @@ fn spawn_disk_worker(
     let progress = Arc::new(Mutex::new(String::new()));
     let worker_progress = Arc::clone(&progress);
     std::thread::spawn(move || {
+        lower_worker_priority();
         let _ = tx.send(work(&worker_progress));
     });
     DiskScan {
@@ -142,6 +143,26 @@ fn spawn_disk_worker(
         progress,
         started_at_ms: now_unix_ms(),
         phase,
+    }
+}
+
+fn lower_worker_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        const IOPOL_TYPE_DISK: libc::c_int = 0;
+        const IOPOL_SCOPE_THREAD: libc::c_int = 1;
+        const IOPOL_THROTTLE: libc::c_int = 3;
+        unsafe extern "C" {
+            fn setiopolicy_np(
+                scope: libc::c_int,
+                policy: libc::c_int,
+                value: libc::c_int,
+            ) -> libc::c_int;
+        }
+        unsafe {
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0);
+            setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE);
+        }
     }
 }
 

@@ -85,7 +85,7 @@ pub(crate) fn run_session(
     dash.start_log_file();
     dash.boot_rx = boot;
     start_trace(&mut dash);
-    start_disk_scan(&mut dash);
+    dash.disk_scan_pending = true;
     let mut terminal = if resuming {
         ratatui::try_init_with_options(ratatui::TerminalOptions {
             viewport: ratatui::Viewport::Fullscreen,
@@ -387,7 +387,7 @@ pub(super) enum PostHandoff<'a> {
 pub(super) fn rearm_boot_checks(dash: &mut Dash) {
     dash.health = Health::Checking;
     dash.web = Health::Checking;
-    start_disk_scan(dash);
+    dash.disk_scan_pending = true;
 }
 
 pub(super) fn post_handoff<'a>(
@@ -927,6 +927,10 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
     if !was_up && dash.health == Health::Up {
         dash.pokes.links = true;
         dash.pokes.doctor = true;
+        if dash.disk_scan_pending {
+            dash.disk_scan_pending = false;
+            start_disk_scan(dash);
+        }
     }
 }
 
@@ -954,6 +958,7 @@ pub(super) fn act_plugin(dash: &mut Dash) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev_console::disk::DiskScan;
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
 
@@ -968,6 +973,80 @@ mod tests {
 
     use crate::dev_console::draw::breadcrumb;
     use crate::dev_console::session::{apply_action, edit_filters, handle_key, KeyOutcome};
+
+    #[test]
+    fn boot_disk_scan_is_deferred_until_the_first_health_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.disk_scan_pending = true;
+
+        assert!(dash.disk.scan.is_none(), "no scan before health is up");
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: false,
+                web: false,
+            },
+        );
+        assert!(
+            dash.disk.scan.is_none() && dash.disk_scan_pending,
+            "a down snapshot must not start the scan"
+        );
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: true,
+                web: true,
+            },
+        );
+        let first = dash
+            .disk
+            .scan
+            .as_ref()
+            .expect("up flip starts the deferred scan") as *const DiskScan;
+        assert!(!dash.disk_scan_pending, "the deferral fires exactly once");
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: false,
+                web: false,
+            },
+        );
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: true,
+                web: true,
+            },
+        );
+        assert!(
+            std::ptr::eq(first, dash.disk.scan.as_ref().expect("scan")),
+            "a later flip must not spawn another scan"
+        );
+    }
+
+    #[test]
+    fn rearm_boot_checks_requeues_the_deferred_disk_scan() {
+        let mut dash = Dash::new(Vec::new());
+        dash.disk_scan_pending = false;
+
+        rearm_boot_checks(&mut dash);
+
+        assert!(dash.health == Health::Checking);
+        assert!(dash.disk_scan_pending, "rearm re-defers the boot scan");
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: true,
+                web: true,
+            },
+        );
+        assert!(
+            dash.disk.scan.is_some() && !dash.disk_scan_pending,
+            "the re-armed scan starts on the next up flip"
+        );
+    }
 
     #[test]
     fn diving_into_emu_requests_an_emu_poke() {
@@ -1842,15 +1921,13 @@ mod tests {
             dash.web == Health::Checking,
             "web health returns to checking"
         );
-        assert_eq!(
-            dash.disk
-                .scan
-                .as_ref()
-                .expect("disk scan worker")
-                .activity(0)
-                .phase,
-            "scanning",
-            "a fresh disk scan starts"
+        assert!(
+            dash.disk_scan_pending,
+            "the disk scan is re-deferred until health is up"
+        );
+        assert!(
+            dash.disk.scan.is_none(),
+            "no scan starts before the health probe reports up"
         );
     }
 
