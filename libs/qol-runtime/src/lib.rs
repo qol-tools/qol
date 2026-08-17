@@ -1,4 +1,5 @@
 pub mod display;
+pub mod event_tap_trace;
 pub mod keyremap_marker;
 pub mod local_http;
 pub mod pane_field;

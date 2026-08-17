@@ -2,7 +2,6 @@ use std::mem::ManuallyDrop;
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use core_foundation::base::TCFType;
@@ -15,6 +14,7 @@ use core_graphics::event::{
 use core_graphics::sys::CGEventRef;
 use foreign_types_shared::ForeignType;
 use qol_hotkeys::macos_keycode as keycode;
+use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 use qol_runtime::keyremap_marker;
 
 type RawEventTapCallback = unsafe extern "C" fn(
@@ -325,34 +325,13 @@ fn event_character(event: &core_graphics::event::CGEvent) -> Option<String> {
     String::from_utf16(&buf[..len as usize]).ok()
 }
 
-const TRACE_QUEUE_DEPTH: usize = 256;
-
-pub(crate) struct TraceSink {
-    lines: SyncSender<String>,
-}
-
-impl TraceSink {
-    fn spawn(depth: usize, mut write: impl FnMut(String) + Send + 'static) -> Self {
-        let (lines, incoming) = mpsc::sync_channel::<String>(depth);
-        std::thread::Builder::new()
-            .name("keyremap-tap-trace".into())
-            .spawn(move || {
-                while let Ok(line) = incoming.recv() {
-                    write(line);
-                }
-            })
-            .expect("the keyremap trace writer thread must start");
-        Self { lines }
-    }
-
-    pub(crate) fn offer(&self, line: String) {
-        let _ = self.lines.try_send(line);
-    }
-}
-
-fn trace_sink() -> &'static TraceSink {
+fn tap_trace() -> &'static TraceSink {
     static SINK: OnceLock<TraceSink> = OnceLock::new();
-    SINK.get_or_init(|| TraceSink::spawn(TRACE_QUEUE_DEPTH, |line| eprintln!("{line}")))
+    SINK.get_or_init(|| {
+        TraceSink::spawn("keyremap-tap-trace", QUEUE_DEPTH, |line| {
+            eprintln!("{line}")
+        })
+    })
 }
 
 fn handle_key_event(
@@ -375,7 +354,7 @@ fn handle_key_event(
     if cfg!(debug_assertions)
         && (!matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id))
     {
-        trace_sink().offer(format!(
+        tap_trace().offer(format!(
             "[keyremap:dbg] target_pid={} app={} key=0x{:02X}({}) mods={:?} -> {:?}",
             target_pid,
             bundle_id,
@@ -529,37 +508,4 @@ fn build_flags(original: CGEventFlags, from: Modifiers, to: Modifiers) -> CGEven
     }
 
     flags
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{TraceSink, TRACE_QUEUE_DEPTH};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn a_stalled_trace_writer_never_blocks_the_caller() {
-        let (release, blocked) = mpsc::channel::<()>();
-        let (wrote, written) = mpsc::channel::<String>();
-        let sink = TraceSink::spawn(TRACE_QUEUE_DEPTH, move |line| {
-            let _ = blocked.recv();
-            let _ = wrote.send(line);
-        });
-
-        let started = Instant::now();
-        for index in 0..TRACE_QUEUE_DEPTH * 4 {
-            sink.offer(format!("line {index}"));
-        }
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "the event tap thread must outrun a wedged writer, or macOS kills the tap and the keyboard freezes: {elapsed:?}"
-        );
-        drop(release);
-        assert!(
-            written.recv_timeout(Duration::from_secs(5)).is_ok(),
-            "lines that fit the queue still reach the writer once it drains"
-        );
-    }
 }
