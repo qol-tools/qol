@@ -58,7 +58,7 @@ impl DiskScan {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct DiskReport {
     pub(super) rows: Vec<DiskRow>,
 }
@@ -80,7 +80,7 @@ impl DiskReport {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct DiskRow {
     pub(super) label: String,
     pub(super) detail: String,
@@ -169,12 +169,47 @@ fn lower_worker_priority() {
 pub(super) fn apply_disk_outcome(dash: &mut Dash, outcome: Result<DiskReport, String>) {
     match outcome {
         Ok(report) => {
+            let at_ms = now_unix_ms();
+            persist_report(&dash.running_worktree, &report, at_ms);
             dash.disk.last = Some(report);
-            dash.disk.last_at_ms = Some(now_unix_ms());
+            dash.disk.last_at_ms = Some(at_ms);
             dash.disk.error = None;
         }
         Err(error) => dash.disk.error = Some(error),
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedDiskReport {
+    scanned_at_ms: u64,
+    rows: Vec<DiskRow>,
+}
+
+fn cache_path(running: &Path) -> PathBuf {
+    running
+        .join("target")
+        .join("qol-dev")
+        .join("disk-report.json")
+}
+
+pub(super) fn persist_report(running: &Path, report: &DiskReport, at_ms: u64) {
+    let Ok(serialized) = serde_json::to_string(&CachedDiskReport {
+        scanned_at_ms: at_ms,
+        rows: report.rows.clone(),
+    }) else {
+        return;
+    };
+    let path = cache_path(running);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, serialized);
+}
+
+pub(super) fn load_cached_report(running: &Path) -> Option<(DiskReport, u64)> {
+    let serialized = std::fs::read_to_string(cache_path(running)).ok()?;
+    let cached: CachedDiskReport = serde_json::from_str(&serialized).ok()?;
+    Some((DiskReport { rows: cached.rows }, cached.scanned_at_ms))
 }
 
 fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
@@ -595,6 +630,26 @@ mod tests {
         assert!(
             !partial.detail.contains("could not be removed"),
             "the bare failure count is replaced by reasons"
+        );
+    }
+
+    #[test]
+    fn apply_disk_outcome_persists_a_cache_that_loads_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        let expected = report(vec![row("target", Some(5 * 1024 * 1024))]);
+
+        apply_disk_outcome(&mut dash, Ok(expected.clone()));
+
+        assert_eq!(dash.disk.last, Some(expected.clone()));
+        let (cached, at_ms) = load_cached_report(dir.path()).expect("cache file written");
+        assert_eq!(cached, expected, "the persisted report must round-trip");
+        assert!(at_ms > 0, "the cached timestamp is the scan time");
+        assert_eq!(
+            dash.disk.last_at_ms,
+            Some(at_ms),
+            "the panel timestamp matches the persisted one"
         );
     }
 

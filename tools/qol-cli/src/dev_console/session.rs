@@ -23,7 +23,8 @@ use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
 use super::disk::{
-    apply_disk_outcome, disk_view_lines, open_disk, start_disk_cleanup, start_disk_scan,
+    apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, start_disk_cleanup,
+    start_disk_scan,
 };
 use super::doctor::{
     apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
@@ -929,7 +930,13 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
         dash.pokes.doctor = true;
         if dash.disk_scan_pending {
             dash.disk_scan_pending = false;
-            start_disk_scan(dash);
+            if let Some((report, at_ms)) = load_cached_report(&dash.running_worktree) {
+                dash.disk.last = Some(report);
+                dash.disk.last_at_ms = Some(at_ms);
+                dash.disk.error = None;
+            } else {
+                start_disk_scan(dash);
+            }
         }
     }
 }
@@ -958,7 +965,7 @@ pub(super) fn act_plugin(dash: &mut Dash) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev_console::disk::DiskScan;
+    use crate::dev_console::disk::{persist_report, DiskReport, DiskRow, DiskScan};
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
 
@@ -981,6 +988,10 @@ mod tests {
         dash.running_worktree = dir.path().to_path_buf();
         dash.disk_scan_pending = true;
 
+        assert!(
+            load_cached_report(dir.path()).is_none(),
+            "a fresh tempdir must have no cached report"
+        );
         assert!(dash.disk.scan.is_none(), "no scan before health is up");
         apply_health(
             &mut dash,
@@ -1024,6 +1035,50 @@ mod tests {
             std::ptr::eq(first, dash.disk.scan.as_ref().expect("scan")),
             "a later flip must not spawn another scan"
         );
+    }
+
+    #[test]
+    fn cached_disk_report_serves_the_boot_scan_without_spawning_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = dir.path().to_path_buf();
+        dash.disk_scan_pending = true;
+        let at_ms = 987_654;
+        persist_report(
+            dir.path(),
+            &DiskReport {
+                rows: vec![DiskRow {
+                    label: "target".to_string(),
+                    detail: "cached".to_string(),
+                    bytes: Some(4096),
+                    cleanable: false,
+                }],
+            },
+            at_ms,
+        );
+
+        apply_health(
+            &mut dash,
+            HealthSnapshot {
+                api: true,
+                web: true,
+            },
+        );
+
+        assert!(
+            dash.disk.scan.is_none(),
+            "a cached report must not spawn a scan"
+        );
+        assert_eq!(
+            dash.disk.last_at_ms,
+            Some(at_ms),
+            "the panel shows the cached timestamp"
+        );
+        assert_eq!(
+            dash.disk.last.as_ref().map(|r| r.target_total()),
+            Some(Some(4096))
+        );
+        assert!(!dash.disk_scan_pending, "the deferral fires exactly once");
     }
 
     #[test]
