@@ -109,7 +109,7 @@ pub fn resolve_dir_by_children(
     deep: &mut dyn FnMut(&Path) -> u64,
 ) -> (u64, bool) {
     let prefix = path.to_string_lossy().into_owned();
-    let prefix_sep = format!("{}/", prefix);
+    let prefix_sep = format!("{}{}", prefix, std::path::MAIN_SEPARATOR);
     let mut total = 0u64;
     let mut rescanned = false;
     let mut live_children = BTreeMap::new();
@@ -137,7 +137,10 @@ pub fn resolve_dir_by_children(
         let Some(rest) = key.strip_prefix(&prefix_sep) else {
             return true;
         };
-        let child = rest.split('/').next().unwrap_or_default();
+        let child = rest
+            .split(std::path::MAIN_SEPARATOR)
+            .next()
+            .unwrap_or_default();
         live_children.contains_key(&format!("{}{}", prefix_sep, child))
     });
     (total, rescanned)
