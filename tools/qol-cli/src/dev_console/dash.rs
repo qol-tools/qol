@@ -505,6 +505,12 @@ impl Dash {
                         .scan
                         .as_ref()
                         .map(|scan| scan.activity(now_unix_ms()))
+                })
+                .or_else(|| {
+                    self.disk
+                        .verify
+                        .as_ref()
+                        .map(|verify| verify.activity(now_unix_ms()))
                 }),
         }
     }

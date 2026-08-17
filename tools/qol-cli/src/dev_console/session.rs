@@ -23,8 +23,8 @@ use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
 use super::disk::{
-    apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, start_disk_cleanup,
-    start_disk_scan,
+    apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, spawn_disk_worker,
+    start_disk_cleanup, start_disk_scan, verify_disk_usage,
 };
 use super::doctor::{
     apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
@@ -299,6 +299,15 @@ pub(super) fn tui_session(
             .and_then(|scan| scan.rx.try_recv().ok());
         if let Some(outcome) = disk_outcome {
             dash.disk.scan = None;
+            apply_disk_outcome(dash, outcome);
+        }
+        let verify_outcome = dash
+            .disk
+            .verify
+            .as_ref()
+            .and_then(|verify| verify.rx.try_recv().ok());
+        if let Some(outcome) = verify_outcome {
+            dash.disk.verify = None;
             apply_disk_outcome(dash, outcome);
         }
         dash.trace.drain_rated(
@@ -930,10 +939,14 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
         dash.pokes.doctor = true;
         if dash.disk_scan_pending {
             dash.disk_scan_pending = false;
-            if let Some((report, at_ms)) = load_cached_report(&dash.running_worktree) {
+            if let Some((report, at_ms, ledger)) = load_cached_report(&dash.running_worktree) {
                 dash.disk.last = Some(report);
                 dash.disk.last_at_ms = Some(at_ms);
                 dash.disk.error = None;
+                let running = dash.running_worktree.clone();
+                dash.disk.verify = Some(spawn_disk_worker("verifying", move |progress| {
+                    verify_disk_usage(&running, ledger, progress)
+                }));
             } else {
                 start_disk_scan(dash);
             }
@@ -965,7 +978,7 @@ pub(super) fn act_plugin(dash: &mut Dash) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev_console::disk::{persist_report, DiskReport, DiskRow, DiskScan};
+    use crate::dev_console::disk::{persist_report, DiskReport, DiskRow, DiskScan, ScanLedger};
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
 
@@ -1038,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_disk_report_serves_the_boot_scan_without_spawning_one() {
+    fn cached_disk_report_serves_immediately_and_verifies_in_background() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut dash = Dash::new(Vec::new());
         dash.running_worktree = dir.path().to_path_buf();
@@ -1054,6 +1067,7 @@ mod tests {
                     cleanable: false,
                 }],
             },
+            &ScanLedger::new(),
             at_ms,
         );
 
@@ -1067,7 +1081,11 @@ mod tests {
 
         assert!(
             dash.disk.scan.is_none(),
-            "a cached report must not spawn a scan"
+            "a cached report must not spawn a full scan"
+        );
+        assert!(
+            dash.disk.verify.is_some(),
+            "a cached report spawns a background verify"
         );
         assert_eq!(
             dash.disk.last_at_ms,
