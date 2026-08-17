@@ -6383,16 +6383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qol-courier"
-version = "1.0.0"
-dependencies = [
- "qol-build-identity",
- "qol-conventions",
- "qol-plugin-api",
- "qol-runtime",
-]
-
-[[package]]
 name = "qol-dev-build"
 version = "1.0.0"
 dependencies = [
