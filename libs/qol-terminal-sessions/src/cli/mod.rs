@@ -5,6 +5,7 @@ mod interpreter;
 mod model;
 mod screen;
 mod subscription;
+mod tail;
 
 use std::sync::Arc;
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::cli::CliActivityEvidence;
+use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
@@ -20,6 +20,7 @@ pub(super) struct ClaudeMetadata {
     pub custom_title: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub runtime: CliRuntimeState,
     pub activity: CliActivityEvidence,
 }
 
@@ -78,10 +79,15 @@ impl ClaudeMetadataResolver {
                 file_quiet_secs: quiet_secs(facts.signature.modified),
             })
             .unwrap_or_default();
+        let runtime = location
+            .as_ref()
+            .map(|location| tail_runtime(&location.transcript_path))
+            .unwrap_or(CliRuntimeState::Unknown);
         ClaudeMetadata {
             custom_title: facts.as_ref().and_then(|facts| facts.title.clone()),
             external_id: location.map(|location| location.external_id),
             has_activity: activity.combined(),
+            runtime,
             activity,
         }
     }
@@ -139,7 +145,7 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
             let has_message = entry.has_message || any_message_since(path, entry.scanned_length);
             let facts = CachedFacts {
                 signature,
-                scanned_length: complete_length(path, signature.length),
+                scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
                 title,
                 has_message,
             };
@@ -149,7 +155,7 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
     }
     let facts = CachedFacts {
         signature,
-        scanned_length: complete_length(path, signature.length),
+        scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
         title: latest_custom_title(path),
         has_message: any_message(path),
     };
@@ -242,21 +248,16 @@ fn latest_custom_title_since(path: &Path, offset: u64) -> Option<String> {
         .next_back()
 }
 
-fn complete_length(path: &Path, length: u64) -> u64 {
-    if length == 0 {
-        return 0;
-    }
-    let Ok(mut file) = fs::File::open(path) else {
-        return 0;
+fn tail_runtime(path: &Path) -> CliRuntimeState {
+    let Some(line) = tail::last_complete_line(path) else {
+        return CliRuntimeState::Ready;
     };
-    if file.seek(SeekFrom::Start(length - 1)).is_err() {
-        return 0;
-    }
-    let mut final_byte = [0];
-    if file.read_exact(&mut final_byte).is_ok() && final_byte[0] == b'\n' {
-        length
-    } else {
-        0
+    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
+        return CliRuntimeState::Working;
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("system" | "last-prompt" | "mode" | "permission-mode") => CliRuntimeState::Ready,
+        _ => CliRuntimeState::Working,
     }
 }
 

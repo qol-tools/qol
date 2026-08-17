@@ -19,6 +19,14 @@ impl ClaudeEnvironment for FakeEnvironment {
     }
 }
 
+struct EmptyEnvironment;
+
+impl ClaudeEnvironment for EmptyEnvironment {
+    fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
+        None
+    }
+}
+
 #[test]
 fn transcript_title_changes_refresh_semantic_identity() {
     let root = TempDir::new().unwrap();
@@ -117,6 +125,105 @@ fn missing_transcript_has_no_activity_hint() {
 
     let descriptor = strategy.describe(&session());
     assert_eq!(descriptor.has_activity, None);
+}
+
+#[test]
+fn transcript_tail_type_drives_the_runtime() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript.clone(),
+        },
+    }));
+
+    let cases = [
+        ("{\"type\":\"permission-mode\"}\n", CliRuntimeState::Ready),
+        ("{\"type\":\"mode\"}\n", CliRuntimeState::Ready),
+        ("{\"type\":\"last-prompt\"}\n", CliRuntimeState::Ready),
+        (
+            "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
+            CliRuntimeState::Ready,
+        ),
+        ("{\"type\":\"user\"}\n", CliRuntimeState::Working),
+        ("{\"type\":\"assistant\"}\n", CliRuntimeState::Working),
+        ("{\"type\":\"attachment\"}\n", CliRuntimeState::Working),
+    ];
+    for (content, runtime) in cases {
+        std::fs::write(&transcript, content).unwrap();
+        assert_eq!(
+            strategy.describe(&session()).evidence.runtime,
+            runtime,
+            "tail: {content}"
+        );
+    }
+}
+
+#[test]
+fn an_unresolved_transcript_location_reads_unknown_not_ready() {
+    let strategy = ClaudeStrategy::with_environment(Arc::new(EmptyEnvironment));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Unknown
+    );
+}
+
+#[test]
+fn a_missing_transcript_reads_ready_like_a_fresh_session() {
+    let root = TempDir::new().unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: root.path().join("missing.jsonl"),
+        },
+    }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
+
+#[test]
+fn an_empty_transcript_reads_ready() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
+
+#[test]
+fn a_trailing_partial_line_does_not_change_the_runtime() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!("{\"type\":\"permission-mode\"}\n", "{\"type\":\"us"),
+    )
+    .unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
 }
 
 #[test]

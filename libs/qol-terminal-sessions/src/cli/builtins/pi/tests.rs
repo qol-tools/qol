@@ -116,6 +116,105 @@ fn session_info_names_are_picked_up_incrementally() {
     assert_eq!(named.display_name.as_deref(), Some("Refactor auth module"));
 }
 
+fn message_entry(role: &str, stop_reason: Option<&str>) -> String {
+    let stop = stop_reason
+        .map(|reason| format!(",\"stopReason\":\"{reason}\""))
+        .unwrap_or_default();
+    format!(
+        "{{\"type\":\"message\",\"id\":\"x\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{{\"role\":\"{role}\",\"content\":[]{stop}}}}}"
+    )
+}
+
+#[test]
+fn transcript_tail_drives_the_runtime() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment {
+        session_file: file.clone(),
+    }));
+
+    let cases = [
+        (
+            message_entry("assistant", Some("stop")),
+            CliRuntimeState::Ready,
+        ),
+        (
+            message_entry("assistant", Some("error")),
+            CliRuntimeState::Ready,
+        ),
+        (
+            message_entry("assistant", Some("aborted")),
+            CliRuntimeState::Ready,
+        ),
+        (
+            message_entry("assistant", Some("toolUse")),
+            CliRuntimeState::Working,
+        ),
+        (message_entry("user", None), CliRuntimeState::Working),
+        (
+            message_entry("toolResult", None),
+            CliRuntimeState::Working,
+        ),
+        (
+            "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}".to_owned(),
+            CliRuntimeState::Working,
+        ),
+    ];
+    for (content, runtime) in cases {
+        std::fs::write(&file, format!("{content}\n")).unwrap();
+        assert_eq!(
+            strategy.describe(&session()).evidence.runtime,
+            runtime,
+            "tail: {content}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_transcript_reads_ready() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(&file, "").unwrap();
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment { session_file: file }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
+
+#[test]
+fn a_trailing_partial_line_does_not_change_the_runtime() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    let complete = message_entry("assistant", Some("stop"));
+    std::fs::write(&file, format!("{complete}\n{{\"type\":\"mess")).unwrap();
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment { session_file: file }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
+
+#[test]
+fn an_unresolved_session_file_reads_unknown() {
+    let strategy = PiStrategy::with_environment(Arc::new(PerPidEnvironment {
+        session_files: std::collections::HashMap::new(),
+    }));
+
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Unknown
+    );
+}
+
 #[test]
 fn display_name_falls_back_to_the_terminal_title() {
     let root = TempDir::new().unwrap();

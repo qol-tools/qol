@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::cli::{model::normalize_display_name, CliActivityEvidence, CliRuntimeState};
+use crate::cli::{model::normalize_display_name, tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::CodexEnvironment;
@@ -86,7 +86,10 @@ impl CodexMetadataResolver {
             thread_name: indexed_name.or(title_name),
             external_id,
             has_activity: title_activity(&session.title).or_else(|| activity.combined()),
-            runtime: title_runtime(&session.title).unwrap_or_default(),
+            runtime: rollout
+                .as_deref()
+                .map(tail_runtime)
+                .unwrap_or_else(|| title_runtime(&session.title).unwrap_or_default()),
             activity,
         }
     }
@@ -182,6 +185,27 @@ fn load_index(path: PathBuf, signature: FileSignature) -> Option<SessionIndex> {
         signature,
         names,
     })
+}
+
+fn tail_runtime(path: &Path) -> CliRuntimeState {
+    let Some(line) = tail::last_complete_line(path) else {
+        return CliRuntimeState::Ready;
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
+        return CliRuntimeState::Working;
+    };
+    let entry_type = value.get("type").and_then(Value::as_str);
+    let event_type = match entry_type {
+        Some("event_msg") => value
+            .get("payload")
+            .and_then(|payload| payload.get("type"))
+            .and_then(Value::as_str),
+        other => other,
+    };
+    match event_type {
+        Some("task_complete" | "turn_aborted") => CliRuntimeState::Ready,
+        _ => CliRuntimeState::Working,
+    }
 }
 
 fn title_items(title: &str) -> Option<Vec<&str>> {

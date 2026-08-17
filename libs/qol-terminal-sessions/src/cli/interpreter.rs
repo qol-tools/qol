@@ -307,7 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_evidence_carries_strong_codex_runtime_and_stays_unknown_for_others() {
+    fn descriptor_evidence_carries_strong_codex_runtime_and_claude_stays_unknown_without_a_transcript(
+    ) {
         let interpreter = CliSessionInterpreter::system();
 
         let mut working = session(&["zsh", "codex"]);
@@ -340,7 +341,13 @@ mod tests {
         let claude = interpreter.describe(&session(&["zsh", "claude"]));
         assert_eq!(claude.evidence.runtime, CliRuntimeState::Unknown);
         assert_eq!(claude.evidence.activity, CliActivityEvidence::default());
-        assert_eq!(claude.evidence, CliSessionEvidence::default());
+        assert_eq!(
+            claude.evidence,
+            CliSessionEvidence {
+                runtime: CliRuntimeState::Unknown,
+                activity: CliActivityEvidence::default(),
+            }
+        );
     }
 
     #[test]

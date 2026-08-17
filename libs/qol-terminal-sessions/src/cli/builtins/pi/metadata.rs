@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::cli::CliActivityEvidence;
+use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::PiEnvironment;
@@ -20,6 +20,7 @@ pub(super) struct PiMetadata {
     pub session_name: Option<String>,
     pub external_id: Option<String>,
     pub has_activity: Option<bool>,
+    pub runtime: CliRuntimeState,
     pub activity: CliActivityEvidence,
 }
 
@@ -81,6 +82,10 @@ impl PiMetadataResolver {
             session_name,
             external_id,
             has_activity: activity.combined(),
+            runtime: path
+                .as_deref()
+                .map(tail_runtime)
+                .unwrap_or(CliRuntimeState::Unknown),
             activity,
         }
     }
@@ -140,7 +145,7 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
             let (name, message) = scan_appended(path, entry.scanned_length);
             let facts = CachedFacts {
                 signature,
-                scanned_length: complete_length(path, signature.length),
+                scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
                 session_name: name.or_else(|| entry.session_name.clone()),
                 has_message: entry.has_message || message,
             };
@@ -150,7 +155,7 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
     }
     let facts = CachedFacts {
         signature,
-        scanned_length: complete_length(path, signature.length),
+        scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
         session_name: latest_session_name(path),
         has_message: any_message(path),
     };
@@ -173,24 +178,6 @@ fn file_signature(path: &Path) -> Option<FileSignature> {
         modified: metadata.modified().ok(),
         length: metadata.len(),
     })
-}
-
-fn complete_length(path: &Path, length: u64) -> u64 {
-    if length == 0 {
-        return 0;
-    }
-    let Ok(mut file) = fs::File::open(path) else {
-        return 0;
-    };
-    if file.seek(SeekFrom::Start(length - 1)).is_err() {
-        return 0;
-    }
-    let mut final_byte = [0];
-    if file.read_exact(&mut final_byte).is_ok() && final_byte[0] == b'\n' {
-        length
-    } else {
-        0
-    }
 }
 
 fn scan_appended(path: &Path, offset: u64) -> (Option<String>, bool) {
@@ -274,4 +261,29 @@ fn memchr_contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+fn tail_runtime(path: &Path) -> CliRuntimeState {
+    let Some(line) = tail::last_complete_line(path) else {
+        return CliRuntimeState::Ready;
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
+        return CliRuntimeState::Working;
+    };
+    let terminal = value.get("type").and_then(Value::as_str) == Some("message")
+        && value
+            .get("message")
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("assistant")
+        && value
+            .get("message")
+            .and_then(|message| message.get("stopReason"))
+            .and_then(Value::as_str)
+            .is_some_and(|reason| reason != "toolUse");
+    if terminal {
+        CliRuntimeState::Ready
+    } else {
+        CliRuntimeState::Working
+    }
 }

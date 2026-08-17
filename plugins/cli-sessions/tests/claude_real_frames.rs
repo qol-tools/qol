@@ -47,9 +47,10 @@ fn a_spinner_above_the_session_footer_still_reads_as_live_work() {
 }
 
 #[test]
-fn a_working_turn_stays_working_while_the_transcript_is_fresh() {
+fn a_missing_transcript_is_not_an_authoritative_ready_and_the_screen_verdict_holds() {
     let evidence = evidence_for(WORKING_WITH_TASKLIST, Some(true), false);
     assert_eq!(evidence.screen_runtime, CliRuntimeState::Working);
+    assert_eq!(evidence.descriptor_runtime, CliRuntimeState::Unknown);
     let prev = Attention {
         status: Status::Working,
         working_since: Some(0),
@@ -59,7 +60,7 @@ fn a_working_turn_stays_working_while_the_transcript_is_fresh() {
     assert_eq!(
         out.attention.status,
         Status::Working,
-        "a fresh transcript keeps the turn working"
+        "without a transcript the screen's working verdict holds instead of settling"
     );
 }
 

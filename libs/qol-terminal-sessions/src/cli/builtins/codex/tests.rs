@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
-use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence, CliViewportState,
-};
+use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::CodexEnvironment;
@@ -23,6 +21,18 @@ impl CodexEnvironment for FakeEnvironment {
 
     fn session_index_path(&self) -> Option<std::path::PathBuf> {
         Some(self.index.clone())
+    }
+}
+
+struct NoRolloutEnvironment;
+
+impl CodexEnvironment for NoRolloutEnvironment {
+    fn open_rollout(&self, _pid: i32) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn session_index_path(&self) -> Option<std::path::PathBuf> {
+        None
     }
 }
 
@@ -228,15 +238,119 @@ fn rollout_fallback_activity_goes_idle_when_the_rollout_stops_being_written() {
 }
 
 #[test]
-fn descriptor_evidence_derives_strong_runtime_from_title_markers_only() {
+fn runtime_comes_from_the_rollout_tail_before_the_title() {
     let root = TempDir::new().unwrap();
     let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
     let rollout = root.path().join(format!("rollout-{id}.jsonl"));
-    std::fs::write(&rollout, "first\nsecond\n").unwrap();
+    std::fs::write(
+        &rollout,
+        "{\"timestamp\":\"t\",\"ordinal\":0,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\"}}\n",
+    )
+    .unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment {
+        rollout: rollout.clone(),
+        index,
+    }));
+    let mut facts = session();
+    facts.title = "qol-tts | Working | fix the queue".to_owned();
+    assert_eq!(
+        strategy.describe(&facts).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+
+    std::fs::write(
+        &rollout,
+        concat!(
+            "{\"timestamp\":\"t\",\"ordinal\":0,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\"}}\n",
+            "{\"timestamp\":\"t\",\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"t\"}}\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        strategy.describe(&facts).evidence.runtime,
+        CliRuntimeState::Working
+    );
+}
+
+#[test]
+fn turn_aborted_is_terminal_and_response_items_are_not() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(
+        &rollout,
+        "{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t\"}}\n",
+    )
+    .unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment {
+        rollout: rollout.clone(),
+        index,
+    }));
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+
+    std::fs::write(
+        &rollout,
+        concat!(
+            "{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t\"}}\n",
+            "{\"timestamp\":\"t\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\"}}\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Working
+    );
+}
+
+#[test]
+fn a_zero_line_rollout_reads_ready() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(&rollout, "").unwrap();
     let index = root.path().join("session_index.jsonl");
     std::fs::write(&index, "").unwrap();
     let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+    let mut facts = session();
+    facts.title = "qol-tts | Working | fix the queue".to_owned();
+    assert_eq!(
+        strategy.describe(&facts).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
 
+#[test]
+fn a_trailing_partial_line_does_not_change_the_runtime() {
+    let root = TempDir::new().unwrap();
+    let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
+    let rollout = root.path().join(format!("rollout-{id}.jsonl"));
+    std::fs::write(
+        &rollout,
+        concat!(
+            "{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\"}}\n",
+            "{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task"
+        ),
+    )
+    .unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+    assert_eq!(
+        strategy.describe(&session()).evidence.runtime,
+        CliRuntimeState::Ready
+    );
+}
+
+#[test]
+fn a_missing_rollout_falls_back_to_the_title_runtime() {
+    let strategy = CodexStrategy::with_environment(Arc::new(NoRolloutEnvironment));
     let cases = [
         (
             "qol-tts | Working | fix the queue",
@@ -247,33 +361,14 @@ fn descriptor_evidence_derives_strong_runtime_from_title_markers_only() {
             CliRuntimeState::Working,
         ),
         ("qol-tts | Ready | qol-tts", CliRuntimeState::Ready),
-        (
-            "qol-tts | Action Required | qol-tts",
-            CliRuntimeState::Unknown,
-        ),
-        (
-            "qol-tts | Action Required | Ready | gpt-5.6-luna max",
-            CliRuntimeState::Ready,
-        ),
         ("qol-tts", CliRuntimeState::Unknown),
     ];
     for (title, runtime) in cases {
         let mut facts = session();
         facts.title = title.to_owned();
-        let evidence = strategy.describe(&facts).evidence;
-        assert_eq!(evidence.runtime, runtime, "title: {title}");
-        assert_eq!(evidence.activity.file_fresh, Some(true), "title: {title}");
         assert_eq!(
-            evidence.activity.file_has_work,
-            Some(true),
-            "title: {title}"
-        );
-        assert_eq!(
-            evidence,
-            CliSessionEvidence {
-                runtime,
-                activity: evidence.activity,
-            },
+            strategy.describe(&facts).evidence.runtime,
+            runtime,
             "title: {title}"
         );
     }
@@ -295,7 +390,11 @@ fn metadata_attachment_never_proves_live_and_weak_evidence_stays_out_of_runtime(
     facts.title = "some unrelated title".to_owned();
     let descriptor = strategy.describe(&facts);
     assert_eq!(descriptor.external_id.as_deref(), Some(id));
-    assert_eq!(descriptor.evidence.runtime, CliRuntimeState::Unknown);
+    assert_eq!(
+        descriptor.evidence.runtime,
+        CliRuntimeState::Working,
+        "the non-json tail is not a terminal event, so it reads busy"
+    );
 
     let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     std::fs::File::options()
@@ -308,7 +407,7 @@ fn metadata_attachment_never_proves_live_and_weak_evidence_stays_out_of_runtime(
     assert_eq!(evidence.activity.file_fresh, Some(false));
     assert_eq!(evidence.activity.file_has_work, Some(true));
     assert_eq!(evidence.activity.combined(), Some(false));
-    assert_eq!(evidence.runtime, CliRuntimeState::Unknown);
+    assert_eq!(evidence.runtime, CliRuntimeState::Working);
 }
 
 #[test]

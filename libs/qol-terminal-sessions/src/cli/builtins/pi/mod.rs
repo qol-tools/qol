@@ -63,7 +63,7 @@ impl CliSessionStrategy for PiStrategy {
             external_id: metadata.external_id,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
-                runtime: CliRuntimeState::Unknown,
+                runtime: metadata.runtime,
                 activity: metadata.activity,
             },
         }
