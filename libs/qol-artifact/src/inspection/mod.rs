@@ -1,6 +1,15 @@
-use object::read::macho::{FatArch, MachOFatFile32, MachOFatFile64};
-use object::read::FileKind;
-use object::{BinaryFormat, Object, ObjectSection};
+use object::elf;
+use object::macho;
+use object::pe;
+use object::read::coff::CoffHeader;
+use object::read::elf::{FileHeader as ElfFileHeader, SectionHeader as ElfSectionHeader};
+use object::read::macho::{
+    FatArch, MachHeader, MachOFatFile, MachOFatFile32, MachOFatFile64, Section as MachOSection,
+    Segment as MachOSegment,
+};
+use object::read::pe::ImageNtHeaders;
+use object::read::{FileKind, ReadCache, ReadRef, StringTable};
+use object::{BinaryFormat, Endianness};
 use qol_conventions::artifact::{
     decode_frame, BuildIdentity, DecodeError, ELF_SECTION_NAME, MACHO_SECTION_NAME, PE_SECTION_NAME,
 };
@@ -169,25 +178,31 @@ impl From<object::Error> for InspectionError {
 }
 
 pub fn inspect_path(path: impl AsRef<Path>) -> Result<InspectedArtifact, InspectionError> {
-    inspect_bytes(&std::fs::read(path)?)
+    let file = std::fs::File::open(path)?;
+    inspect_data(&ReadCache::new(file))
 }
 
 pub fn inspect_bytes(bytes: &[u8]) -> Result<InspectedArtifact, InspectionError> {
-    let kind = FileKind::parse(bytes)?;
-    if kind == FileKind::MachOFat32 {
-        return inspect_universal(MachOFatFile32::parse(bytes)?, bytes);
-    }
-    if kind == FileKind::MachOFat64 {
-        return inspect_universal(MachOFatFile64::parse(bytes)?, bytes);
-    }
-    inspect_thin(bytes)
+    inspect_data(bytes)
 }
 
-fn inspect_universal<Fat>(
-    universal: object::read::macho::MachOFatFile<'_, Fat>,
-    bytes: &[u8],
+fn inspect_data<'data, R: ReadRef<'data>>(data: R) -> Result<InspectedArtifact, InspectionError> {
+    let kind = FileKind::parse(data)?;
+    if kind == FileKind::MachOFat32 {
+        return inspect_universal(MachOFatFile32::parse(data)?, data);
+    }
+    if kind == FileKind::MachOFat64 {
+        return inspect_universal(MachOFatFile64::parse(data)?, data);
+    }
+    inspect_thin(data)
+}
+
+fn inspect_universal<'data, R, Fat>(
+    universal: MachOFatFile<'data, Fat>,
+    data: R,
 ) -> Result<InspectedArtifact, InspectionError>
 where
+    R: ReadRef<'data>,
     Fat: FatArch,
 {
     let mut slices = Vec::<InspectedSlice>::with_capacity(universal.arches().len());
@@ -199,7 +214,7 @@ where
                     source: Box::new(source),
                 }
             })?;
-        let slice = architecture.data(bytes)?;
+        let slice = architecture.data(data)?;
         let inspected =
             inspect_thin(slice).map_err(|source| InspectionError::InvalidUniversalSlice {
                 index,
@@ -239,22 +254,54 @@ where
     })
 }
 
-fn inspect_thin(bytes: &[u8]) -> Result<InspectedArtifact, InspectionError> {
-    let file = object::File::parse(bytes)?;
-    let format = artifact_format(file.format())?;
-    let architecture = artifact_architecture(file.architecture())?;
-    let section_name = section_name(format);
-    let mut sections = Vec::new();
-    for section in file.sections() {
-        if section.name()? != section_name {
+fn inspect_thin<'data, R: ReadRef<'data>>(data: R) -> Result<InspectedArtifact, InspectionError> {
+    match FileKind::parse(data)? {
+        FileKind::Elf32 => inspect_elf::<_, elf::FileHeader32<Endianness>>(data),
+        FileKind::Elf64 => inspect_elf::<_, elf::FileHeader64<Endianness>>(data),
+        FileKind::MachO32 => inspect_macho::<_, macho::MachHeader32<Endianness>>(data),
+        FileKind::MachO64 => inspect_macho::<_, macho::MachHeader64<Endianness>>(data),
+        FileKind::Pe32 => inspect_pe::<_, pe::ImageNtHeaders32>(data),
+        FileKind::Pe64 => inspect_pe::<_, pe::ImageNtHeaders64>(data),
+        FileKind::Coff => inspect_coff(data),
+        other => Err(InspectionError::UnsupportedFormat(binary_format_of(other))),
+    }
+}
+
+fn binary_format_of(kind: FileKind) -> BinaryFormat {
+    match kind {
+        FileKind::Coff | FileKind::CoffBig | FileKind::CoffImport => BinaryFormat::Coff,
+        FileKind::Elf32 | FileKind::Elf64 => BinaryFormat::Elf,
+        FileKind::DyldCache
+        | FileKind::MachO32
+        | FileKind::MachO64
+        | FileKind::MachOFat32
+        | FileKind::MachOFat64 => BinaryFormat::MachO,
+        FileKind::Pe32 | FileKind::Pe64 => BinaryFormat::Pe,
+        _ => BinaryFormat::Coff,
+    }
+}
+
+fn inspect_elf<'data, R, Elf>(data: R) -> Result<InspectedArtifact, InspectionError>
+where
+    R: ReadRef<'data>,
+    Elf: ElfFileHeader,
+{
+    let header = Elf::parse(data)?;
+    let endian = header.endian()?;
+    let architecture = elf_architecture(header.e_machine(endian))?;
+    let sections = header.sections(endian, data)?;
+    let strings = header.section_strings(endian, data, sections.iter().as_slice())?;
+    let mut found = Vec::new();
+    for section in sections.iter() {
+        if section.name(endian, strings)? != ELF_SECTION_NAME.as_bytes() {
             continue;
         }
-        sections.push(section.data()?);
+        found.push(section.data(endian, data)?);
     }
-    let identity = inspect_sections(&sections)?;
-    ensure_target_contract(format, architecture, &identity.target)?;
+    let identity = inspect_sections(&found)?;
+    ensure_target_contract(ArtifactFormat::Elf, architecture, &identity.target)?;
     Ok(InspectedArtifact {
-        format,
+        format: ArtifactFormat::Elf,
         slices: vec![InspectedSlice {
             architecture,
             identity,
@@ -262,29 +309,172 @@ fn inspect_thin(bytes: &[u8]) -> Result<InspectedArtifact, InspectionError> {
     })
 }
 
-fn binary_format(bytes: &[u8]) -> Result<BinaryFormat, InspectionError> {
-    Ok(object::File::parse(bytes)?.format())
+fn inspect_macho<'data, R, Mach>(data: R) -> Result<InspectedArtifact, InspectionError>
+where
+    R: ReadRef<'data>,
+    Mach: MachHeader,
+{
+    let header = Mach::parse(data, 0)?;
+    let endian = header.endian()?;
+    let architecture = macho_architecture(header.cputype(endian))?;
+    let mut found = Vec::new();
+    let mut commands = header.load_commands(endian, data, 0)?;
+    while let Some(command) = commands.next()? {
+        if let Some((segment, section_data)) = Mach::Segment::from_command(command)? {
+            for section in segment.sections(endian, section_data)? {
+                if section.name() != MACHO_SECTION_NAME.as_bytes() {
+                    continue;
+                }
+                match section.data(endian, data) {
+                    Ok(bytes) => found.push(bytes),
+                    Err(()) => {
+                        return Err(InspectionError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "invalid Mach-O section size or offset",
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    let identity = inspect_sections(&found)?;
+    ensure_target_contract(ArtifactFormat::MachO, architecture, &identity.target)?;
+    Ok(InspectedArtifact {
+        format: ArtifactFormat::MachO,
+        slices: vec![InspectedSlice {
+            architecture,
+            identity,
+        }],
+    })
 }
 
-fn artifact_format(format: BinaryFormat) -> Result<ArtifactFormat, InspectionError> {
-    if format == BinaryFormat::Elf {
-        return Ok(ArtifactFormat::Elf);
-    }
-    if format == BinaryFormat::MachO {
-        return Ok(ArtifactFormat::MachO);
-    }
-    if matches!(format, BinaryFormat::Pe | BinaryFormat::Coff) {
-        return Ok(ArtifactFormat::Pe);
-    }
-    Err(InspectionError::UnsupportedFormat(format))
+fn inspect_pe<'data, R, Pe>(data: R) -> Result<InspectedArtifact, InspectionError>
+where
+    R: ReadRef<'data>,
+    Pe: ImageNtHeaders,
+{
+    let dos_header = pe::ImageDosHeader::parse(data)?;
+    let mut offset = dos_header.nt_headers_offset().into();
+    let (headers, _) = Pe::parse(data, &mut offset)?;
+    inspect_coff_data(data, headers.file_header(), offset)
 }
 
-fn section_name(format: ArtifactFormat) -> &'static str {
-    match format {
-        ArtifactFormat::Elf => ELF_SECTION_NAME,
-        ArtifactFormat::MachO | ArtifactFormat::MachOUniversal => MACHO_SECTION_NAME,
-        ArtifactFormat::Pe => PE_SECTION_NAME,
+fn inspect_coff<'data, R: ReadRef<'data>>(data: R) -> Result<InspectedArtifact, InspectionError> {
+    let mut offset = 0;
+    let header = pe::ImageFileHeader::parse(data, &mut offset)?;
+    inspect_coff_data(data, header, offset)
+}
+
+fn inspect_coff_data<'data, R, Coff>(
+    data: R,
+    header: &Coff,
+    offset: u64,
+) -> Result<InspectedArtifact, InspectionError>
+where
+    R: ReadRef<'data>,
+    Coff: CoffHeader,
+{
+    let architecture = pe_architecture(header.machine())?;
+    let sections = object::read::coff::SectionTable::parse(header, data, offset)?;
+    let strings = coff_string_table(data, header);
+    let mut found = Vec::new();
+    for section in sections.iter() {
+        if section.name(strings)? != PE_SECTION_NAME.as_bytes() {
+            continue;
+        }
+        match section.coff_data(data) {
+            Ok(bytes) => found.push(bytes),
+            Err(()) => {
+                return Err(InspectionError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid PE section size or offset",
+                )));
+            }
+        }
     }
+    let identity = inspect_sections(&found)?;
+    ensure_target_contract(ArtifactFormat::Pe, architecture, &identity.target)?;
+    Ok(InspectedArtifact {
+        format: ArtifactFormat::Pe,
+        slices: vec![InspectedSlice {
+            architecture,
+            identity,
+        }],
+    })
+}
+
+fn coff_string_table<'data, R: ReadRef<'data>>(
+    data: R,
+    header: &impl CoffHeader,
+) -> StringTable<'data, R> {
+    let offset = u64::from(header.pointer_to_symbol_table());
+    if offset == 0 {
+        return StringTable::default();
+    }
+    let end = offset
+        + u64::from(header.number_of_symbols()) * std::mem::size_of::<pe::ImageSymbol>() as u64;
+    match data.len() {
+        Ok(len) => StringTable::new(data, end, len),
+        Err(()) => StringTable::default(),
+    }
+}
+
+fn elf_architecture(machine: u16) -> Result<ArtifactArchitecture, InspectionError> {
+    if machine == elf::EM_AARCH64 {
+        return Ok(ArtifactArchitecture::Aarch64);
+    }
+    if machine == elf::EM_ARM {
+        return Ok(ArtifactArchitecture::Arm);
+    }
+    if machine == elf::EM_386 {
+        return Ok(ArtifactArchitecture::I386);
+    }
+    if machine == elf::EM_X86_64 {
+        return Ok(ArtifactArchitecture::X86_64);
+    }
+    Err(InspectionError::UnsupportedArchitecture(format!(
+        "{machine:#x}"
+    )))
+}
+
+fn macho_architecture(cputype: u32) -> Result<ArtifactArchitecture, InspectionError> {
+    if cputype == macho::CPU_TYPE_X86_64 {
+        return Ok(ArtifactArchitecture::X86_64);
+    }
+    if cputype == macho::CPU_TYPE_ARM64 {
+        return Ok(ArtifactArchitecture::Aarch64);
+    }
+    if cputype == macho::CPU_TYPE_X86 {
+        return Ok(ArtifactArchitecture::I386);
+    }
+    if cputype == macho::CPU_TYPE_ARM {
+        return Ok(ArtifactArchitecture::Arm);
+    }
+    Err(InspectionError::UnsupportedArchitecture(format!(
+        "{cputype:#x}"
+    )))
+}
+
+fn pe_architecture(machine: u16) -> Result<ArtifactArchitecture, InspectionError> {
+    if machine == pe::IMAGE_FILE_MACHINE_AMD64 {
+        return Ok(ArtifactArchitecture::X86_64);
+    }
+    if machine == pe::IMAGE_FILE_MACHINE_ARM64 {
+        return Ok(ArtifactArchitecture::Aarch64);
+    }
+    if machine == pe::IMAGE_FILE_MACHINE_I386 {
+        return Ok(ArtifactArchitecture::I386);
+    }
+    if machine == pe::IMAGE_FILE_MACHINE_ARM {
+        return Ok(ArtifactArchitecture::Arm);
+    }
+    Err(InspectionError::UnsupportedArchitecture(format!(
+        "{machine:#x}"
+    )))
+}
+
+fn binary_format<'data, R: ReadRef<'data>>(data: R) -> Result<BinaryFormat, InspectionError> {
+    Ok(object::File::parse(data)?.format())
 }
 
 fn artifact_architecture(
@@ -388,7 +578,8 @@ fn trim_padding(section: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_bytes, inspect_sections, ArtifactFormat, InspectionError};
+    use super::{inspect_bytes, inspect_data, inspect_sections, ArtifactFormat, InspectionError};
+    use object::read::{ReadCache, ReadCacheOps, ReadRef};
     use object::write::{Object, Symbol, SymbolSection};
     use object::{
         Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
@@ -397,6 +588,8 @@ mod tests {
         BuildFlavor, BuildIdentity, BuildIntent, BuildProfile, BuildRole, CompilerFacts,
         SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
     };
+    use std::cell::Cell;
+    use std::ops::Range;
 
     fn frame(target: &str) -> Vec<u8> {
         let identity = BuildIdentity {
@@ -702,5 +895,59 @@ mod tests {
             inspect_bytes(&mixed_platforms),
             Err(InspectionError::UniversalIdentityMismatch(1))
         ));
+    }
+
+    struct CountingRef<'data, R: ReadCacheOps> {
+        cache: &'data ReadCache<R>,
+        served: &'data Cell<u64>,
+    }
+
+    impl<'data, R: ReadCacheOps> Clone for CountingRef<'data, R> {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<'data, R: ReadCacheOps> Copy for CountingRef<'data, R> {}
+
+    impl<'data, R: ReadCacheOps> ReadRef<'data> for CountingRef<'data, R> {
+        fn len(self) -> Result<u64, ()> {
+            self.cache.len()
+        }
+
+        fn read_bytes_at(self, offset: u64, size: u64) -> Result<&'data [u8], ()> {
+            self.served.set(self.served.get() + size);
+            self.cache.read_bytes_at(offset, size)
+        }
+
+        fn read_bytes_at_until(self, range: Range<u64>, delimiter: u8) -> Result<&'data [u8], ()> {
+            let bytes = self.cache.read_bytes_at_until(range, delimiter)?;
+            self.served.set(self.served.get() + bytes.len() as u64);
+            Ok(bytes)
+        }
+    }
+
+    #[test]
+    fn path_inspection_reads_only_headers_and_identity_note() {
+        let path = std::env::current_exe().unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let cache = ReadCache::new(file);
+        let served = Cell::new(0);
+        let counting = CountingRef {
+            cache: &cache,
+            served: &served,
+        };
+        match inspect_data(counting) {
+            Ok(_) | Err(InspectionError::MissingIdentity) => {}
+            Err(other) => panic!("unexpected inspection error: {other}"),
+        }
+        let file_size = path.metadata().unwrap().len();
+        let served = served.get();
+        let percent = served * 100 / file_size;
+        assert!(
+            served * 20 < file_size,
+            "inspection read {served} bytes ({percent}%) of a {file_size}-byte binary; \
+             the doctor polls this on a ~100 MB tray binary"
+        );
     }
 }
