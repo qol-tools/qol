@@ -1,6 +1,6 @@
 use qol_config::contract::{
     interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction,
-    RowActionSpec,
+    RowActionSpec, RowSliderSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -29,6 +29,18 @@ impl ListItem {
     pub(super) fn effective_badge_tone(&self) -> StatusTone {
         self.badge_tone.or(self.accent).unwrap_or(StatusTone::Muted)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SliderHold {
+    pub(super) value: f64,
+    pub(super) until: std::time::Instant,
+}
+
+#[derive(Debug)]
+pub(super) struct ListSlider {
+    pub(super) spec: RowSliderSpec,
+    pub(super) values: std::collections::HashMap<String, SliderHold>,
 }
 
 #[derive(Debug)]
@@ -120,6 +132,7 @@ pub(super) enum RowControl {
         row_label: String,
         row_subtitle: Option<String>,
         actions: Box<ListActions>,
+        slider: Option<Box<ListSlider>>,
         empty_message: String,
         items: Vec<ListItem>,
         list: ScrollList,
@@ -448,6 +461,12 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 actions: Box::new(ListActions {
                     primary: field.row_action.clone(),
                     additional: field.row_actions.clone(),
+                }),
+                slider: field.row_slider.clone().map(|spec| {
+                    Box::new(ListSlider {
+                        spec,
+                        values: std::collections::HashMap::new(),
+                    })
                 }),
                 empty_message: field
                     .empty_message
@@ -839,13 +858,21 @@ pub(super) fn apply_runtime_query(
                 row_subtitle,
                 items,
                 list,
+                slider,
                 error,
                 ..
             } => {
                 if row_query == query {
                     match &result {
                         Ok(value) => {
-                            *items = list_items(value, row_label, row_subtitle.as_deref());
+                            let refreshed = list_items(value, row_label, row_subtitle.as_deref());
+                            let now = std::time::Instant::now();
+                            if let Some(slider) = slider {
+                                slider.values.retain(|id, hold| {
+                                    hold.until > now && refreshed.iter().any(|item| &item.id == id)
+                                });
+                            }
+                            *items = refreshed;
                             list.sync(items.len());
                             *error = None;
                         }
@@ -1005,6 +1032,22 @@ fn list_item_tone(row: &serde_json::Value, key: &str) -> Option<StatusTone> {
         .and_then(StatusTone::from_contract)
 }
 
+pub(super) fn list_slider_value(
+    slider: &RowSliderSpec,
+    slider_values: &std::collections::HashMap<String, SliderHold>,
+    item: &ListItem,
+) -> f64 {
+    if let Some(hold) = slider_values.get(&item.id) {
+        if hold.until > std::time::Instant::now() {
+            return hold.value;
+        }
+    }
+    item.data
+        .get(&slider.value_from)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(slider.min)
+}
+
 pub(super) fn primary_list_item_action(
     actions: &ListActions,
     item: &ListItem,
@@ -1139,11 +1182,11 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 mod tests {
     use super::{
         apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
-        list_item_actions, list_items, merged_config, option_accent, primary_list_item_action,
-        row_action, row_is_visible, row_streams, row_value_json, rows_from_resolved,
-        runtime_query_names, section_label_for, sections_from_resolved, set_config_value,
-        stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig,
-        Row, RowControl, SelectOption,
+        list_item_actions, list_items, list_slider_value, merged_config, option_accent,
+        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
+        rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
+        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
+        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2014,6 +2057,112 @@ input = { address = "{address}" }
             }
             other => panic!("expected list, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn slider_holds_keep_local_values_over_query_refreshes_until_expiry() {
+        const SLIDER_SPEC: &str = r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "volumes"
+row_label = "{name}"
+
+[field.volumes.row_slider]
+value_from = "volume"
+min = 0
+max = 100
+step = 5
+action = "set_volume"
+input = { id = "{id}", value = "{value}" }
+"#;
+        let spec = qol_config::contract::parse_spec_str(SLIDER_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+        apply_runtime_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 30 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+        );
+        let RowControl::List { slider, items, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        let slider = slider.as_mut().unwrap();
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[0]),
+            30.0
+        );
+        assert_eq!(
+            list_slider_value(&slider.spec, &slider.values, &items[1]),
+            0.0,
+            "missing value_from falls back to min"
+        );
+        slider.values.insert(
+            "kbd".into(),
+            SliderHold {
+                value: 42.0,
+                until: std::time::Instant::now() + std::time::Duration::from_secs(1),
+            },
+        );
+        apply_runtime_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [
+                    { "id": "kbd", "name": "Keyboard", "volume": 10 },
+                    { "id": "speaker", "name": "Speaker" }
+                ]
+            })),
+        );
+        {
+            let RowControl::List { slider, items, .. } = &rows[0].control else {
+                unreachable!();
+            };
+            let slider = slider.as_ref().unwrap();
+            assert_eq!(
+                list_slider_value(&slider.spec, &slider.values, &items[0]),
+                42.0,
+                "unexpired hold wins over query data"
+            );
+        }
+        {
+            let RowControl::List { slider, items, .. } = &mut rows[0].control else {
+                unreachable!();
+            };
+            let slider = slider.as_mut().unwrap();
+            slider.values.insert(
+                "kbd".into(),
+                SliderHold {
+                    value: 42.0,
+                    until: std::time::Instant::now() - std::time::Duration::from_secs(1),
+                },
+            );
+            assert_eq!(
+                list_slider_value(&slider.spec, &slider.values, &items[0]),
+                10.0
+            );
+        }
+        apply_runtime_query(
+            &mut rows,
+            "volumes",
+            Ok(serde_json::json!({
+                "items": [{ "id": "kbd", "name": "Keyboard", "volume": 10 }]
+            })),
+        );
+        let RowControl::List { slider, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        assert!(
+            slider.as_ref().unwrap().values.is_empty(),
+            "expired holds are pruned on the next refresh"
+        );
     }
 
     #[test]

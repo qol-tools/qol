@@ -96,6 +96,8 @@ pub struct FieldSpec {
     #[serde(default)]
     pub row_actions: Vec<RowActionSpec>,
     #[serde(default)]
+    pub row_slider: Option<RowSliderSpec>,
+    #[serde(default)]
     pub search: Option<bool>,
     #[serde(default)]
     pub empty_message: Option<String>,
@@ -146,6 +148,32 @@ pub struct RowActionSpec {
     pub key: Option<String>,
     #[serde(default)]
     pub when: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RowSliderSpec {
+    pub value_from: String,
+    #[serde(default = "default_slider_min")]
+    pub min: f64,
+    #[serde(default = "default_slider_max")]
+    pub max: f64,
+    #[serde(default = "default_slider_step")]
+    pub step: f64,
+    pub action: String,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+}
+
+fn default_slider_min() -> f64 {
+    0.0
+}
+
+fn default_slider_max() -> f64 {
+    100.0
+}
+
+fn default_slider_step() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -404,6 +432,100 @@ when = "fixable"
         assert_eq!(row_action.action, "apply_fixes", "action");
         assert_eq!(row_action.label.as_deref(), Some("Fix"), "label");
         assert_eq!(row_action.when.as_deref(), Some("fixable"), "when");
+    }
+
+    #[test]
+    fn parses_list_row_slider_with_default_range() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+row_label = "{name}"
+
+[field.volumes.row_slider]
+value_from = "volume"
+action = "set_volume"
+input = { id = "{id}", value = "{value}" }
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("volumes").expect("field present");
+        let slider = field.row_slider.as_ref().expect("row_slider present");
+        assert_eq!(slider.value_from, "volume", "value_from");
+        assert_eq!(slider.min, 0.0, "default min");
+        assert_eq!(slider.max, 100.0, "default max");
+        assert_eq!(slider.step, 1.0, "default step");
+        assert_eq!(slider.action, "set_volume", "action");
+        assert_eq!(
+            slider.input.as_ref().unwrap()["value"],
+            "{value}",
+            "input template"
+        );
+    }
+
+    #[test]
+    fn parses_list_row_slider_with_explicit_range() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.brightness]
+type = "list"
+query = "list_displays"
+
+[field.brightness.row_slider]
+value_from = "level"
+min = 5
+max = 250
+step = 5
+action = "set_brightness"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("brightness").expect("field present");
+        let slider = field.row_slider.as_ref().expect("row_slider present");
+        assert_eq!(slider.value_from, "level");
+        assert_eq!(slider.min, 5.0);
+        assert_eq!(slider.max, 250.0);
+        assert_eq!(slider.step, 5.0);
+        assert_eq!(slider.action, "set_brightness");
+        assert!(slider.input.is_none());
+    }
+
+    #[test]
+    fn rejects_list_row_slider_missing_required_keys() {
+        let missing_value_from = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+action = "set_volume"
+"#,
+        );
+        assert!(
+            missing_value_from.is_err(),
+            "value_from is required: {missing_value_from:?}"
+        );
+
+        let missing_action = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+"#,
+        );
+        assert!(
+            missing_action.is_err(),
+            "action is required: {missing_action:?}"
+        );
     }
 
     #[test]

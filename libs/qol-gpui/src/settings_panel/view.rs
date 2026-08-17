@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_config::contract::ResolvedRowAction;
+use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
 use super::object_array_row::{
@@ -13,9 +13,9 @@ use super::object_array_row::{
 use super::persistence::save_values;
 use super::rows::{
     apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
-    list_item_actions, merged_config, primary_list_item_action, query_flag_value, row_action,
-    row_streams, runtime_query_names, section_label_for, stream_gated, Row, RowControl, RowSection,
-    SelectOption,
+    list_item_actions, list_slider_value, merged_config, primary_list_item_action,
+    query_flag_value, row_action, row_streams, runtime_query_names, section_label_for,
+    stream_gated, Row, RowControl, RowSection, SelectOption, SliderHold,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
@@ -32,6 +32,8 @@ type SampledQueryResults =
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
 const ROW_CHROME: f32 = 28.0;
+const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
 
 use std::sync::PoisonError;
 
@@ -91,6 +93,8 @@ pub(super) struct SettingsPanelView {
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
     runtime_poll_generation: u64,
+    slider_dispatch_generation: u64,
+    slider_drag: Option<(usize, String)>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
     frame_pump_armed: bool,
@@ -168,6 +172,8 @@ impl SettingsPanelView {
             row_bounds,
             wheel_generation: 0,
             runtime_poll_generation: 0,
+            slider_dispatch_generation: 0,
+            slider_drag: None,
             frame_paced_samples: None,
             applied_query_payloads: std::collections::HashMap::new(),
             frame_pump_armed: false,
@@ -700,6 +706,12 @@ impl SettingsPanelView {
             cx.notify();
             return;
         }
+        if let Some(direction) = horizontal_step_direction(key) {
+            if self.step_selected_list_slider(direction, cx) {
+                cx.notify();
+                return;
+            }
+        }
         let Some(intent) = list_intent(key) else {
             return;
         };
@@ -1150,6 +1162,139 @@ impl SettingsPanelView {
         };
         item.pending = false;
         item.error = Some(error);
+    }
+
+    fn step_selected_list_slider(&mut self, direction: f64, cx: &mut Context<Self>) -> bool {
+        let row_index = self.selected;
+        let Some(RowControl::List {
+            slider,
+            items,
+            list,
+            ..
+        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return false;
+        };
+        let Some(slider) = slider else {
+            return false;
+        };
+        let Some(item) = items.get(list.selected) else {
+            return false;
+        };
+        let current = list_slider_value(&slider.spec, &slider.values, item);
+        let next = stepped_slider_value(
+            current,
+            direction,
+            slider.spec.min,
+            slider.spec.max,
+            slider.spec.step,
+        );
+        slider.values.insert(
+            item.id.clone(),
+            SliderHold {
+                value: next,
+                until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
+            },
+        );
+        let item_id = item.id.clone();
+        self.schedule_slider_dispatch(row_index, &item_id, cx);
+        true
+    }
+
+    fn set_list_slider_value(
+        &mut self,
+        row_index: usize,
+        item_id: &str,
+        fraction: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(RowControl::List { slider, items, .. }) =
+            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let Some(slider) = slider else {
+            return;
+        };
+        if !items.iter().any(|item| item.id == item_id) {
+            return;
+        }
+        let value = slider_value_from_fraction(
+            slider.spec.min,
+            slider.spec.max,
+            slider.spec.step,
+            fraction,
+        );
+        slider.values.insert(
+            item_id.to_string(),
+            SliderHold {
+                value,
+                until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
+            },
+        );
+        self.schedule_slider_dispatch(row_index, item_id, cx);
+    }
+
+    fn schedule_slider_dispatch(
+        &mut self,
+        row_index: usize,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.slider_dispatch_generation += 1;
+        let generation = self.slider_dispatch_generation;
+        let item_id = item_id.to_string();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(SLIDER_DISPATCH_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if this.slider_dispatch_generation != generation {
+                        return;
+                    }
+                    this.dispatch_list_slider(row_index, &item_id, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
+        let Some(RowControl::List { slider, items, .. }) =
+            self.rows.get(row_index).map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(slider) = slider else {
+            return;
+        };
+        let Some(item) = items.iter().find(|item| item.id == item_id) else {
+            return;
+        };
+        let value = list_slider_value(&slider.spec, &slider.values, item);
+        let action = resolve_slider_action(&slider.spec, &item.data, value);
+        let item_id = item.id.clone();
+        let runtime = self.runtime.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(
+                        async move { runtime.run_action(&action.action, action.input) },
+                    )
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Err(error) = result {
+                        this.set_list_action_error(row_index, &item_id, error);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn begin_edit(&mut self) {
@@ -2810,6 +2955,13 @@ impl SettingsPanelView {
                 rgb(status_tone_color(self.palette, item.effective_badge_tone())),
             )
         });
+        let has_slider = matches!(
+            &self.rows[index].control,
+            RowControl::List {
+                slider: Some(_),
+                ..
+            }
+        );
         div()
             .flex()
             .flex_row()
@@ -2836,7 +2988,122 @@ impl SettingsPanelView {
                     .items_center()
                     .gap_2()
                     .children(badge)
-                    .child(self.render_list_action(index, item_index, slot, item, action, cx)),
+                    .child(self.render_list_action(index, item_index, slot, item, action, cx))
+                    .when(has_slider, |cell| {
+                        cell.child(self.render_list_slider(index, item, cx))
+                    }),
+            )
+    }
+
+    fn render_list_slider(
+        &self,
+        index: usize,
+        item: &super::rows::ListItem,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let RowControl::List { slider, .. } = &self.rows[index].control else {
+            return div();
+        };
+        let Some(slider) = slider else {
+            return div();
+        };
+        let value = list_slider_value(&slider.spec, &slider.values, item);
+        let fill = slider_fraction(value, Some(slider.spec.min), Some(slider.spec.max)) * 72.0;
+        let percent = slider_percent_label(slider.spec.min, slider.spec.max, value);
+        let item_id = item.id.clone();
+        let track_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+        let bounds_for_down = track_bounds.clone();
+        let bounds_for_move = track_bounds.clone();
+        let id_for_down = item_id.clone();
+        let id_for_move = item_id.clone();
+        let id_for_up = item_id.clone();
+        let id_for_up_out = item_id;
+        div()
+            .flex()
+            .flex_none()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                div()
+                    .relative()
+                    .w(px(72.))
+                    .h(px(4.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(rgb(self.palette.panel_border))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .h_full()
+                            .w(px(fill))
+                            .rounded_full()
+                            .bg(rgb(self.palette.row_border_selected)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(percent),
+            )
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, _, _| track_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    let Some(bounds) = bounds_for_down.get() else {
+                        return;
+                    };
+                    let fraction = (((event.position.x - bounds.left()).to_f64()
+                        / bounds.size.width.to_f64())
+                    .clamp(0.0, 1.0)) as f32;
+                    this.slider_drag = Some((index, id_for_down.clone()));
+                    this.set_list_slider_value(index, &id_for_down, fraction, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if !event.dragging()
+                    || this.slider_drag.as_ref() != Some(&(index, id_for_move.clone()))
+                {
+                    return;
+                }
+                let Some(bounds) = bounds_for_move.get() else {
+                    return;
+                };
+                let fraction = (((event.position.x - bounds.left()).to_f64()
+                    / bounds.size.width.to_f64())
+                .clamp(0.0, 1.0)) as f32;
+                this.set_list_slider_value(index, &id_for_move, fraction, cx);
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseUpEvent, _, _| {
+                    if this.slider_drag.as_ref() == Some(&(index, id_for_up.clone())) {
+                        this.slider_drag = None;
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseUpEvent, _, _| {
+                    if this.slider_drag.as_ref() == Some(&(index, id_for_up_out.clone())) {
+                        this.slider_drag = None;
+                    }
+                }),
             )
     }
 
@@ -3199,6 +3466,25 @@ fn slider_fraction(value: f64, min: Option<f64>, max: Option<f64>) -> f32 {
     ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
 }
 
+fn stepped_slider_value(current: f64, direction: f64, min: f64, max: f64, step: f64) -> f64 {
+    let next = round_to_step_precision(current + direction * step, step);
+    next.clamp(min, max)
+}
+
+fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
+    let value = min + f64::from(fraction) * (max - min);
+    align_to_step(value, Some(min), Some(max), step)
+}
+
+fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
+    let fraction = if max > min {
+        (value - min) / (max - min)
+    } else {
+        0.0
+    };
+    format!("{:.0}%", fraction * 100.0)
+}
+
 fn binary_state_label(active: bool) -> &'static str {
     if active {
         "On"
@@ -3541,8 +3827,9 @@ mod tests {
         binary_state_label, color_display, description_wrap_lines, format_number,
         horizontal_step_direction, initial_active_section, intent, list_action_affordance,
         list_intent, number_preview, number_unit, parsed_color, parsed_number, row_body_height,
-        scroll_offset_for, slider_fraction, stepped_number, text_or_placeholder,
-        visible_row_window, Intent, ListIntent, Row, RowControl,
+        scroll_offset_for, slider_fraction, slider_percent_label, slider_value_from_fraction,
+        stepped_number, stepped_slider_value, text_or_placeholder, visible_row_window, Intent,
+        ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -3699,6 +3986,7 @@ mod tests {
                     primary: None,
                     additional: Vec::new(),
                 }),
+                slider: None,
                 empty_message: "No items".into(),
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
@@ -4050,6 +4338,62 @@ default = "visible"
                 slider_fraction(value, min, max),
                 expected,
                 "value={value} min={min:?} max={max:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_slider_steps_align_and_clamp_to_the_contract_range() {
+        let cases = [
+            (50.0, 1.0, 0.0, 100.0, 10.0, 60.0),
+            (50.0, -1.0, 0.0, 100.0, 10.0, 40.0),
+            (95.0, 1.0, 0.0, 100.0, 10.0, 100.0),
+            (5.0, -1.0, 0.0, 100.0, 10.0, 0.0),
+            (0.0, -1.0, 0.0, 100.0, 10.0, 0.0),
+            (0.25, 1.0, 0.0, 1.0, 0.1, 0.4),
+            (0.99, 1.0, 0.0, 1.0, 0.1, 1.0),
+        ];
+        for (current, direction, min, max, step, expected) in cases {
+            assert_eq!(
+                stepped_slider_value(current, direction, min, max, step),
+                expected,
+                "current={current} direction={direction} range={min}..{max} step={step}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_slider_click_fractions_map_to_aligned_values_and_percents() {
+        let value_cases = [
+            (0.0, 100.0, 10.0, 0.5, 50.0),
+            (0.0, 100.0, 10.0, 0.33, 30.0),
+            (0.0, 100.0, 10.0, 0.67, 70.0),
+            (0.0, 100.0, 10.0, 0.0, 0.0),
+            (0.0, 100.0, 10.0, 1.0, 100.0),
+            (5.0, 250.0, 5.0, 0.4, 105.0),
+            (5.0, 250.0, 5.0, 0.0, 5.0),
+        ];
+        for (min, max, step, fraction, expected) in value_cases {
+            assert_eq!(
+                slider_value_from_fraction(min, max, step, fraction),
+                expected,
+                "min={min} max={max} step={step} fraction={fraction}"
+            );
+        }
+
+        let percent_cases = [
+            (0.0, 100.0, 42.0, "42%"),
+            (0.0, 100.0, 0.0, "0%"),
+            (0.0, 100.0, 100.0, "100%"),
+            (5.0, 250.0, 105.0, "41%"),
+            (5.0, 250.0, 5.0, "0%"),
+            (0.0, 1.0, 0.25, "25%"),
+        ];
+        for (min, max, value, expected) in percent_cases {
+            assert_eq!(
+                slider_percent_label(min, max, value),
+                expected,
+                "min={min} max={max} value={value}"
             );
         }
     }

@@ -101,6 +101,7 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_field_options(id, field, errors);
         validate_entry_fields(id, field, errors);
         validate_number_constraints(id, field, errors);
+        validate_row_slider(id, field, errors);
         validate_show_when(id, field, spec, errors);
     }
     validate_config_key_collisions(spec, errors);
@@ -355,6 +356,31 @@ fn validate_number_step(id: &str, step: Option<f64>, errors: &mut Vec<Validation
     ));
 }
 
+fn validate_row_slider(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    let Some(slider) = field.row_slider.as_ref() else {
+        return;
+    };
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_slider"),
+            "row_slider is only supported for list fields",
+        ));
+        return;
+    }
+    if slider.min >= slider.max {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_slider"),
+            "min cannot be greater than or equal to max",
+        ));
+    }
+    if slider.step <= 0.0 {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_slider.step"),
+            "step must be greater than 0",
+        ));
+    }
+}
+
 fn validate_show_when(
     id: &str,
     field: &FieldSpec,
@@ -580,6 +606,93 @@ fn valid_config_key(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::contract::parse_spec_str;
+
+    #[test]
+    fn row_slider_requires_list_kind_and_a_valid_range() {
+        let valid = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+action = "set_volume"
+"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+
+        let inverted = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+min = 100
+max = 0
+action = "set_volume"
+"#,
+        );
+        assert_has_error(&inverted, "field.volumes.row_slider", "min");
+
+        let equal = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+min = 50
+max = 50
+action = "set_volume"
+"#,
+        );
+        assert_has_error(&equal, "field.volumes.row_slider", "min");
+
+        let bad_step = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+step = 0
+action = "set_volume"
+"#,
+        );
+        assert_has_error(&bad_step, "field.volumes.row_slider.step", "step");
+
+        let non_list = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 1
+
+[field.volume.row_slider]
+value_from = "volume"
+action = "set_volume"
+"#,
+        );
+        assert_has_error(
+            &non_list,
+            "field.volume.row_slider",
+            "only supported for list fields",
+        );
+    }
 
     #[test]
     fn config_key_prefix_collision_is_symmetric_and_segment_aware() {

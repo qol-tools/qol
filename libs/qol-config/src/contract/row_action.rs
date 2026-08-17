@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::RowActionSpec;
+use super::{RowActionSpec, RowSliderSpec};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRowAction {
@@ -21,9 +21,30 @@ pub fn resolve_row_actions(
         .map(|spec| ResolvedRowAction {
             action: spec.action.clone(),
             label: spec.label.clone().unwrap_or_else(|| "Run".into()),
-            input: resolve_input(spec, row),
+            input: resolve_input(spec.input.as_ref(), row),
         })
         .collect()
+}
+
+pub fn resolve_slider_action(slider: &RowSliderSpec, row: &Value, value: f64) -> ResolvedRowAction {
+    let mut merged = row.clone();
+    if !merged.is_object() {
+        merged = serde_json::json!({});
+    }
+    merged["value"] = slider_value_json(value);
+    ResolvedRowAction {
+        action: slider.action.clone(),
+        label: "Run".into(),
+        input: resolve_input(slider.input.as_ref(), &merged),
+    }
+}
+
+fn slider_value_json(value: f64) -> Value {
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
 }
 
 fn row_action_is_visible(action: &RowActionSpec, row: &Value) -> bool {
@@ -43,10 +64,9 @@ fn value_is_truthy(value: &Value) -> bool {
     }
 }
 
-fn resolve_input(action: &RowActionSpec, row: &Value) -> Value {
-    let input = action
-        .input
-        .iter()
+fn resolve_input(input: Option<&indexmap::IndexMap<String, String>>, row: &Value) -> Value {
+    let input = input
+        .into_iter()
         .flatten()
         .map(|(key, template)| (key.clone(), interpolate_row_value(template, row)))
         .collect::<Map<_, _>>();
@@ -111,7 +131,10 @@ fn row_value_text(value: &Value) -> String {
 mod tests {
     use indexmap::IndexMap;
 
-    use super::{interpolate_row_template, resolve_row_actions, RowActionSpec};
+    use super::{
+        interpolate_row_template, resolve_row_actions, resolve_slider_action, RowActionSpec,
+        RowSliderSpec,
+    };
 
     fn action(name: &str, label: Option<&str>, when: Option<&str>) -> RowActionSpec {
         RowActionSpec {
@@ -214,6 +237,57 @@ mod tests {
                 "{label}: template {template:?}"
             );
         }
+    }
+
+    #[test]
+    fn resolves_slider_action_with_merged_value_and_interpolated_input() {
+        let slider = RowSliderSpec {
+            value_from: "volume".into(),
+            min: 0.0,
+            max: 100.0,
+            step: 1.0,
+            action: "set_volume".into(),
+            input: Some(indexmap::IndexMap::from([
+                ("id".into(), "{id}".into()),
+                ("volume".into(), "{value}".into()),
+                ("message".into(), "set {name} to {value}".into()),
+            ])),
+        };
+        let row = serde_json::json!({
+            "id": "kbd",
+            "name": "Keyboard",
+            "volume": 30,
+        });
+
+        let resolved = resolve_slider_action(&slider, &row, 42.0);
+
+        assert_eq!(resolved.action, "set_volume");
+        assert_eq!(resolved.input["id"], serde_json::json!("kbd"));
+        assert_eq!(resolved.input["volume"], serde_json::json!(42));
+        assert_eq!(
+            resolved.input["message"],
+            serde_json::json!("set Keyboard to 42")
+        );
+    }
+
+    #[test]
+    fn slider_dispatch_merges_value_over_any_row_value() {
+        let slider = RowSliderSpec {
+            value_from: "volume".into(),
+            min: 0.0,
+            max: 100.0,
+            step: 1.0,
+            action: "set_volume".into(),
+            input: Some(indexmap::IndexMap::from([(
+                "value".into(),
+                "{value}".into(),
+            )])),
+        };
+        let row = serde_json::json!({"id": "speaker", "value": 99});
+
+        let resolved = resolve_slider_action(&slider, &row, 7.0);
+
+        assert_eq!(resolved.input["value"], serde_json::json!(7));
     }
 
     #[test]

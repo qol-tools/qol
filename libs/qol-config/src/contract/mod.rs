@@ -5,12 +5,15 @@ mod v1;
 
 pub use cross_validate::validate_contracts;
 pub use indexmap::IndexMap;
-pub use row_action::{interpolate_row_template, resolve_row_actions, ResolvedRowAction};
+pub use row_action::{
+    interpolate_row_template, resolve_row_actions, resolve_slider_action, ResolvedRowAction,
+};
 pub use runtime::{
     parse_runtime_spec, parse_runtime_spec_str, ActionSpec, ParseRuntimeSpecError, QuerySpec,
     RuntimeSpec, StreamSpec,
 };
 pub use v1::{
     parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldAlign, FieldDefault, FieldKind,
-    FieldSpec, ItemSpec, NumberConstraints, ParseSpecError, RowActionSpec, SectionSpec,
+    FieldSpec, ItemSpec, NumberConstraints, ParseSpecError, RowActionSpec, RowSliderSpec,
+    SectionSpec,
 };

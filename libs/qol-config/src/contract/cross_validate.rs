@@ -205,7 +205,7 @@ fn validate_row_action_ref(
         .iter()
         .chain(field.row_actions.iter())
         .collect::<Vec<_>>();
-    if actions.is_empty() {
+    if actions.is_empty() && field.row_slider.is_none() {
         return;
     }
     let Some(rt) = runtime else {
@@ -228,6 +228,14 @@ fn validate_row_action_ref(
             path,
             format!("references undeclared action: {}", action.action),
         ));
+    }
+    if let Some(slider) = field.row_slider.as_ref() {
+        if !rt.actions.contains_key(slider.action.as_str()) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.row_slider.action"),
+                format!("references undeclared action: {}", slider.action),
+            ));
+        }
     }
 }
 
@@ -546,6 +554,47 @@ throttle_ms = 100
         .expect("parse runtime");
         let result = validate_contracts(&config, Some(&runtime));
         assert!(result.is_err(), "string field with stream should fail");
+    }
+
+    #[test]
+    fn rejects_row_slider_with_dangling_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+action = "nonexistent"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.list_volumes]
+description = "test"
+poll_interval_ms = 1000
+
+[action.set_volume]
+description = "Set volume"
+"#,
+        )
+        .expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "dangling row_slider should fail");
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|error| {
+                error.path == "field.volumes.row_slider.action"
+                    && error.message.contains("nonexistent")
+            }),
+            "{errors:?}"
+        );
     }
 
     #[test]
