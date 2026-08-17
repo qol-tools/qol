@@ -7,6 +7,7 @@ pub mod freshness;
 pub mod planning;
 mod platform;
 pub mod registry;
+pub mod scan_ledger;
 mod service;
 pub mod target_cache;
 pub mod tray;
