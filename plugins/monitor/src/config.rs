@@ -8,6 +8,7 @@ use crate::monitor::BrightnessPolicy;
 
 pub const DEVICE_NAMESPACE: &str = "monitor";
 pub const DEVICE_CONFIG_FILE: &str = "config.json";
+pub const PREFERRED_FILE: &str = "preferred.json";
 pub const SESSION_SUBDIR: &str = "session";
 const PREFERRED_MAX: u8 = 100;
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
@@ -111,6 +112,10 @@ pub fn legacy_config_path(config_root: &Path) -> Result<PathBuf> {
     device_dir(config_root).map(|dir| dir.join(DEVICE_CONFIG_FILE))
 }
 
+pub fn preferred_path(config_root: &Path) -> Result<PathBuf> {
+    device_dir(config_root).map(|dir| dir.join(PREFERRED_FILE))
+}
+
 pub fn materialized_config_path() -> Option<PathBuf> {
     qol_config::config_dir().map(|dir| dir.join("plugins").join(PLUGIN_ID).join(DEVICE_CONFIG_FILE))
 }
@@ -201,12 +206,69 @@ fn parse_store(json: &serde_json::Value) -> Result<DeviceConfig> {
     Ok(config.validated())
 }
 
-pub fn save(config: &DeviceConfig) -> Result<()> {
-    if qol_runtime::plugin_config::save(config) {
-        Ok(())
-    } else {
-        anyhow::bail!("{PLUGIN_ID}: failed to persist config over the runtime socket")
+pub fn load_preferred(config_root: Option<&Path>) -> BTreeMap<String, u8> {
+    let Some(root) = config_root else {
+        return BTreeMap::new();
+    };
+    let Ok(path) = preferred_path(root) else {
+        return BTreeMap::new();
+    };
+    load_preferred_file(&path, || load_with_origin(Some(root)).0)
+}
+
+pub(crate) fn load_preferred_file(
+    path: &Path,
+    device: impl FnOnce() -> DeviceConfig,
+) -> BTreeMap<String, u8> {
+    if let Some(preferred) = read_preferred(path) {
+        return preferred;
     }
+    let device = device();
+    if device.preferred_brightness.is_empty() {
+        return BTreeMap::new();
+    }
+    let preferred = device
+        .preferred_brightness
+        .into_iter()
+        .map(|(id, preference)| (id, preference.brightness))
+        .collect();
+    if let Err(error) = write_preferred(path, &preferred) {
+        eprintln!("[plugin-monitor] failed to adopt legacy preferred brightness: {error:#}");
+    }
+    preferred
+}
+
+fn read_preferred(path: &Path) -> Option<BTreeMap<String, u8>> {
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read(path).ok()?;
+    let preferred: BTreeMap<String, u8> = serde_json::from_slice(&content).ok()?;
+    Some(
+        preferred
+            .into_iter()
+            .filter(|(_, value)| *value <= PREFERRED_MAX)
+            .collect(),
+    )
+}
+
+pub fn save_preferred(config_root: Option<&Path>, preferred: &BTreeMap<String, u8>) -> Result<()> {
+    let root =
+        config_root.ok_or_else(|| anyhow::anyhow!("no config root for preferred brightness"))?;
+    let path = preferred_path(root)?;
+    write_preferred(&path, preferred)
+}
+
+fn write_preferred(path: &Path, preferred: &BTreeMap<String, u8>) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("preferred brightness path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create device dir {}", parent.display()))?;
+    let content =
+        serde_json::to_vec(preferred).context("failed to serialize preferred brightness")?;
+    qol_fs::atomic_write_durable_mode(path, &content, 0o600)
+        .with_context(|| format!("failed to commit preferred brightness {}", path.display()))
 }
 
 #[cfg(test)]
@@ -257,6 +319,96 @@ mod tests {
         assert_eq!(
             session_dir(&config_root).unwrap(),
             device.join(SESSION_SUBDIR)
+        );
+        assert_eq!(
+            preferred_path(&config_root).unwrap(),
+            device.join(PREFERRED_FILE)
+        );
+    }
+
+    #[test]
+    fn preferred_round_trips_through_the_device_file() {
+        let (_dir, config_root) = root();
+        let preferred = BTreeMap::from([("id-a".to_string(), 80), ("id-b".to_string(), 45)]);
+        save_preferred(Some(&config_root), &preferred).unwrap();
+        assert_eq!(load_preferred(Some(&config_root)), preferred);
+    }
+
+    #[test]
+    fn preferred_loads_empty_without_a_file_or_legacy_entries() {
+        let (_dir, config_root) = root();
+        assert_eq!(
+            load_preferred_file(&preferred_path(&config_root).unwrap(), || {
+                DeviceConfig::default()
+            }),
+            BTreeMap::new()
+        );
+        assert_eq!(load_preferred(None), BTreeMap::new());
+    }
+
+    #[test]
+    fn preferred_read_drops_out_of_range_values() {
+        let (_dir, config_root) = root();
+        save_preferred(
+            Some(&config_root),
+            &BTreeMap::from([("id-a".to_string(), 101), ("id-b".to_string(), 77)]),
+        )
+        .unwrap();
+        assert_eq!(
+            load_preferred(Some(&config_root)),
+            BTreeMap::from([("id-b".to_string(), 77)])
+        );
+    }
+
+    #[test]
+    fn preferred_adopts_legacy_config_entries_once() {
+        let (_dir, config_root) = root();
+        let legacy = legacy_config_path(&config_root).unwrap();
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            serde_json::json!({
+                "preferred_brightness": { "id-a": 80, "id-b": 101 },
+                "policy": { "id-a": "gamma" },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let adopted = load_preferred_file(&preferred_path(&config_root).unwrap(), || {
+            load_from(None, None, Some(&config_root)).0
+        });
+        assert_eq!(
+            adopted,
+            BTreeMap::from([("id-a".to_string(), 80)]),
+            "out-of-range legacy values are dropped"
+        );
+        assert!(preferred_path(&config_root).unwrap().exists());
+        assert_eq!(
+            load_preferred_file(&preferred_path(&config_root).unwrap(), || {
+                load_from(None, None, Some(&config_root)).0
+            }),
+            adopted,
+            "the seeded file is authoritative on later loads"
+        );
+    }
+
+    #[test]
+    fn preferred_adoption_never_overwrites_an_existing_file() {
+        let (_dir, config_root) = root();
+        let existing = BTreeMap::from([("id-keep".to_string(), 99)]);
+        save_preferred(Some(&config_root), &existing).unwrap();
+        let legacy = legacy_config_path(&config_root).unwrap();
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            serde_json::json!({ "preferred_brightness": { "id-a": 80 } }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(load_preferred(Some(&config_root)), existing);
+        assert_eq!(
+            std::fs::read_to_string(preferred_path(&config_root).unwrap()).unwrap(),
+            serde_json::to_string(&existing).unwrap(),
+            "the on-disk file is byte-identical after a load"
         );
     }
 

@@ -130,17 +130,24 @@ fn live_query(name: &str) -> ReadResult<Command> {
         return ReadResult::Error("monitor daemon state is poisoned".into());
     };
     let control = Arc::clone(runtime.session().control());
+    let preferred = runtime.preferred.clone();
     let payload = match name {
-        "displays" => displays_payload(&*control, &runtime.config(), &mut runtime.brightness_cache),
+        "displays" => displays_payload(&*control, &preferred, &mut runtime.brightness_cache),
         "status" => status_payload(&*control, &mut runtime.brightness_cache),
         _ => unreachable!("live_query only handles declared queries"),
     };
     ReadResult::HandledWithData(payload)
 }
 
+fn policy_config(config: &DeviceConfig) -> DeviceConfig {
+    let mut policy_only = config.clone();
+    policy_only.preferred_brightness.clear();
+    policy_only
+}
+
 pub(crate) fn displays_payload(
     control: &dyn MonitorControl,
-    config: &DeviceConfig,
+    preferred: &BTreeMap<String, u8>,
     cache: &mut BTreeMap<String, BrightnessState>,
 ) -> serde_json::Value {
     let handles = control.enumerate().unwrap_or_default();
@@ -149,7 +156,7 @@ pub(crate) fn displays_payload(
         .map(|handle| {
             let id = handle.id().to_string();
             let policy = control.selection(handle.id()).label();
-            let preferred = config.preferred_for(&id);
+            let preferred = preferred.get(&id).copied();
             let (brightness, source, detail) = match cache.get(handle.id()).copied() {
                 Some(state) => (
                     serde_json::Value::from(state.value),
@@ -275,10 +282,14 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     stop_requested: bool,
     notify: Notify,
     config: Arc<Mutex<DeviceConfig>>,
+    preferred: BTreeMap<String, u8>,
+    config_root: Option<PathBuf>,
+    preferred_save: PreferredSave,
     brightness_cache: BTreeMap<String, BrightnessState>,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
+type PreferredSave = Arc<dyn Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync>;
 
 impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
     pub fn new(
@@ -286,6 +297,8 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         store: SessionStore,
         lut: Arc<dyn LutProvider>,
         notify: impl Fn(&str, &str) + Send + Sync + 'static,
+        config_root: Option<PathBuf>,
+        preferred_save: impl Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
             session: Session::new(control, store, lut),
@@ -293,6 +306,9 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             stop_requested: false,
             notify: Arc::new(notify),
             config: Arc::new(Mutex::new(DeviceConfig::default())),
+            preferred: BTreeMap::new(),
+            config_root,
+            preferred_save: Arc::new(preferred_save),
             brightness_cache: BTreeMap::new(),
         }
     }
@@ -326,19 +342,18 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
         let recovery = self.session.restore_all(RestoreMode::Recovery);
         self.surface_gamma_warnings(&recovery);
-        *self.config.lock().unwrap() = config.clone();
-        self.apply_preferred(&config.preferred_brightness);
+        *self.config.lock().unwrap() = policy_config(config);
+        self.preferred = config::load_preferred(self.config_root.as_deref());
+        self.apply_preferred_map();
         recovery
     }
 
+    #[cfg(test)]
     pub fn config(&self) -> DeviceConfig {
         self.config.lock().unwrap().clone()
     }
 
-    fn apply_preferred(
-        &mut self,
-        preferred: &BTreeMap<String, config::BrightnessPreference>,
-    ) -> usize {
+    fn apply_preferred_map(&mut self) -> usize {
         let Ok(handles) = self.session.control().enumerate() else {
             return 0;
         };
@@ -347,11 +362,11 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             if handle.identity_unstable() {
                 continue;
             }
-            let Some(preference) = preferred.get(handle.id()) else {
+            let Some(value) = self.preferred.get(handle.id()) else {
                 continue;
             };
-            if self.session.mutate(handle, preference.brightness).is_ok() {
-                self.remember_brightness(handle, preference.brightness);
+            if self.session.mutate(handle, *value).is_ok() {
+                self.remember_brightness(handle, *value);
                 applied += 1;
             }
         }
@@ -389,15 +404,10 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     );
                     return true;
                 }
-                let mut next = self.config();
                 for id in &applied {
-                    next.preferred_brightness.insert(
-                        id.clone(),
-                        config::BrightnessPreference { brightness: value },
-                    );
+                    self.preferred.insert(id.clone(), value);
                 }
-                *self.config.lock().unwrap() = next.clone();
-                if let Err(error) = config::save(&next) {
+                if let Err(error) = (self.preferred_save)(&self.preferred) {
                     eprintln!("[plugin-monitor] failed to persist preferred brightness: {error:#}");
                 }
                 (self.notify)("Monitor", &format!("Brightness {value}%"));
@@ -412,8 +422,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 true
             }
             Command::ApplyPreferred => {
-                let config = self.config();
-                let applied = self.apply_preferred(&config.preferred_brightness);
+                self.preferred = config::load_preferred(self.config_root.as_deref());
+                let applied = self.apply_preferred_map();
                 self.notify_applied(applied);
                 true
             }
@@ -422,8 +432,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     eprintln!("[plugin-monitor] config reload failed: {error:#}");
                     DeviceConfig::default()
                 });
-                let applied = self.reload_config(&next);
-                self.notify_applied(applied);
+                self.preferred = config::load_preferred(self.config_root.as_deref());
+                self.reload_config(&next);
                 true
             }
             Command::Kill => {
@@ -435,7 +445,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 
     pub fn reload_config(&mut self, next: &DeviceConfig) -> usize {
-        let previous = std::mem::replace(&mut *self.config.lock().unwrap(), next.clone());
+        let previous = std::mem::replace(&mut *self.config.lock().unwrap(), policy_config(next));
         let stable_ids: HashSet<String> = self
             .session
             .control()
@@ -445,36 +455,16 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             .filter(|handle| !handle.identity_unstable())
             .map(|handle| handle.id().to_string())
             .collect();
+        let mut changed = 0;
         for display_id in stable_ids {
-            self.session
-                .control()
-                .select(&display_id, next.policy_for(&display_id));
-        }
-        self.apply_preferred_deltas(&previous, next)
-    }
-
-    fn apply_preferred_deltas(&mut self, previous: &DeviceConfig, next: &DeviceConfig) -> usize {
-        let Ok(handles) = self.session.control().enumerate() else {
-            return 0;
-        };
-        let mut applied = 0;
-        for handle in &handles {
-            if handle.identity_unstable() {
+            let policy = next.policy_for(&display_id);
+            if previous.policy_for(&display_id) == policy {
                 continue;
             }
-            let old = previous.preferred_for(handle.id());
-            let new = next.preferred_for(handle.id());
-            if new == old {
-                continue;
-            }
-            if let Some(value) = new {
-                if self.session.mutate(handle, value).is_ok() {
-                    self.remember_brightness(handle, value);
-                    applied += 1;
-                }
-            }
+            self.session.control().select(&display_id, policy);
+            changed += 1;
         }
-        applied
+        changed
     }
 
     fn notify_applied(&self, applied: usize) {
@@ -676,7 +666,11 @@ fn build_runtime(
     crate::platform::apply_configured_policies(&control, device);
     let store = session_store_for(config_root.as_deref());
     let lut: Arc<dyn LutProvider> = control.gamma_backend();
-    Runtime::new(control, store, lut, notify)
+    let preferred_save = {
+        let root = config_root.clone();
+        move |preferred: &BTreeMap<String, u8>| config::save_preferred(root.as_deref(), preferred)
+    };
+    Runtime::new(control, store, lut, notify, config_root, preferred_save)
 }
 
 fn session_store_for(config_root: Option<&std::path::Path>) -> SessionStore {
@@ -715,7 +709,7 @@ fn trace_startup(recovery: &crate::session::RestoreReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BrightnessPreference, PolicySelection};
+    use crate::config::{self, BrightnessPreference, PolicySelection};
     use crate::monitor::{
         BrightnessPolicy, BrightnessSource, DisplayCapabilities, DisplayMode, GammaState, HdrState,
         RestoreOutcome,
@@ -1032,7 +1026,14 @@ mod tests {
     }
 
     fn runtime_with(control: Arc<FakeControl>, store: SessionStore) -> Runtime<FakeControl> {
-        Runtime::new(control, store, Arc::new(NoLutProvider), |_title, _body| {})
+        Runtime::new(
+            control,
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            None,
+            |_preferred| Ok(()),
+        )
     }
 
     type Toasts = Arc<StdMutex<Vec<String>>>;
@@ -1050,8 +1051,36 @@ mod tests {
             move |_title, body| {
                 sink.lock().unwrap().push(body.to_string());
             },
+            None,
+            |_preferred| Ok(()),
         );
         (runtime, toasts)
+    }
+
+    fn runtime_with_root(
+        control: Arc<FakeControl>,
+        store: SessionStore,
+        config_root: Option<PathBuf>,
+    ) -> Runtime<FakeControl> {
+        Runtime::new(
+            control,
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            config_root,
+            |_preferred| Ok(()),
+        )
+    }
+
+    fn preferred_root() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("config").join("qol-tray");
+        std::fs::create_dir_all(config_root.join("profile").join("default")).unwrap();
+        (dir, config_root)
+    }
+
+    fn write_preferred(config_root: &std::path::Path, preferred: BTreeMap<String, u8>) {
+        config::save_preferred(Some(config_root), &preferred).unwrap();
     }
 
     fn runtime_store() -> (tempfile::TempDir, SessionStore) {
@@ -1139,25 +1168,44 @@ mod tests {
     }
 
     #[test]
-    fn set_brightness_writes_one_display_or_every_display() {
+    fn set_brightness_persists_preferred_to_the_device_file() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
         let control = Arc::new(FakeControl::new(
             vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
             60,
             BrightnessSource::Ddc,
         ));
-        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        let saves = Arc::new(AtomicUsize::new(0));
+        let saved = saves.clone();
+        let saved_root = config_root.clone();
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            Some(config_root.clone()),
+            move |preferred: &BTreeMap<String, u8>| {
+                saved.fetch_add(1, Ordering::SeqCst);
+                config::save_preferred(Some(&saved_root), preferred)
+            },
+        );
         runtime.handle(Command::SetBrightness {
             display: "id-2".into(),
             value: 25,
         });
         assert_eq!(control.calls(), vec![("id-2".to_string(), 25)]);
         assert_eq!(
-            runtime.config().preferred_for("id-2"),
-            Some(25),
-            "a single-id set persists preferred brightness for exactly that id"
+            config::load_preferred(Some(&config_root)),
+            BTreeMap::from([("id-2".to_string(), 25)]),
+            "the daemon-owned preferred file carries exactly the written id"
         );
-        assert_eq!(runtime.config().preferred_for("id-1"), None);
+        assert_eq!(
+            runtime.config().preferred_for("id-2"),
+            None,
+            "the tray-facing config never learns about preferred"
+        );
+        assert_eq!(saves.load(Ordering::SeqCst), 1);
         control.calls.lock().unwrap().clear();
         runtime.handle(Command::SetBrightness {
             display: "all".into(),
@@ -1168,31 +1216,44 @@ mod tests {
             vec![("id-1".to_string(), 80), ("id-2".to_string(), 80)],
             "id all writes every connected display"
         );
-        assert_eq!(runtime.config().preferred_for("id-1"), Some(80));
-        assert_eq!(runtime.config().preferred_for("id-2"), Some(80));
         assert_eq!(
-            toasts.lock().unwrap().as_slice(),
-            ["Brightness 25%", "Brightness 80%"]
+            config::load_preferred(Some(&config_root)),
+            BTreeMap::from([("id-1".to_string(), 80), ("id-2".to_string(), 80)])
         );
+        assert_eq!(saves.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn set_brightness_reports_an_unknown_display_instead_of_failing_silently() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
         let control = Arc::new(FakeControl::new(
             vec![handle("id-1", "card0-DP-1")],
             60,
             BrightnessSource::Ddc,
         ));
-        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        let toasts: Toasts = Arc::new(StdMutex::new(Vec::new()));
+        let sink = toasts.clone();
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            move |_title, body| {
+                sink.lock().unwrap().push(body.to_string());
+            },
+            Some(config_root.clone()),
+            |_preferred| Ok(()),
+        );
         runtime.handle(Command::SetBrightness {
             display: "id-gone".into(),
             value: 25,
         });
         assert_eq!(control.calls(), Vec::<(String, u8)>::new());
         assert_eq!(
-            runtime.config().preferred_for("id-gone"),
-            None,
+            config::load_preferred_file(&config::preferred_path(&config_root).unwrap(), || {
+                DeviceConfig::default()
+            }),
+            BTreeMap::new(),
             "an unknown display is never persisted"
         );
         assert_eq!(
@@ -1204,6 +1265,8 @@ mod tests {
     #[test]
     fn start_restores_stale_snapshots_before_applying_preferred() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
             vec![display.clone()],
@@ -1213,15 +1276,8 @@ mod tests {
         store
             .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 100, 60))
             .unwrap();
-        let mut runtime = runtime_with(control.clone(), store);
-        let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
-            ..DeviceConfig::default()
-        };
-        runtime.start(&preferred);
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
             vec![("id-1".to_string(), 100), ("id-1".to_string(), 80),],
@@ -1243,21 +1299,16 @@ mod tests {
     #[test]
     fn exit_restores_after_preferred_and_is_idempotent() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
             vec![display.clone()],
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store);
-        let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
-            ..DeviceConfig::default()
-        };
-        runtime.start(&preferred);
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
         control.calls.lock().unwrap().clear();
         assert!(!runtime.handle(Command::Kill), "kill stops the loop");
         assert_eq!(
@@ -1284,6 +1335,8 @@ mod tests {
     #[test]
     fn config_never_overrides_restore() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 20)]));
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
             vec![display.clone()],
@@ -1293,15 +1346,8 @@ mod tests {
         store
             .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 50, 60))
             .unwrap();
-        let mut runtime = runtime_with(control.clone(), store);
-        let preferred = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 20 },
-            )]),
-            ..DeviceConfig::default()
-        };
-        runtime.start(&preferred);
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
             vec![("id-1".to_string(), 50), ("id-1".to_string(), 20),],
@@ -1327,28 +1373,23 @@ mod tests {
     #[test]
     fn apply_preferred_command_applies_every_configured_display() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 85)]));
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
             vec![display.clone()],
             60,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with(control.clone(), store);
-        let config = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 85 },
-            )]),
-            ..DeviceConfig::default()
-        };
-        runtime.start(&config);
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
         control.calls.lock().unwrap().clear();
         assert!(runtime.handle(Command::ApplyPreferred));
         assert_eq!(control.calls(), vec![("id-1".to_string(), 85)]);
     }
 
     #[test]
-    fn reload_config_applies_policy_and_preferred_deltas_only() {
+    fn reload_config_applies_policy_and_never_preferred() {
         let (_dir, store) = runtime_store();
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
@@ -1358,16 +1399,13 @@ mod tests {
         ));
         let mut runtime = runtime_with(control.clone(), store);
         let initial = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
             policy: BTreeMap::from([(
                 "id-1".to_string(),
                 PolicySelection {
                     policy: "ddc".into(),
                 },
             )]),
+            ..DeviceConfig::default()
         };
         runtime.start(&initial);
         control.calls.lock().unwrap().clear();
@@ -1384,9 +1422,13 @@ mod tests {
             )]),
         };
         assert_eq!(runtime.reload_config(&next), 1);
-        assert_eq!(control.calls(), vec![("id-1".to_string(), 90)]);
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "preferred deltas from the tray config are ignored"
+        );
         assert_eq!(control.selection("id-1"), BrightnessPolicy::Gamma);
-        assert_eq!(runtime.config().preferred_for("id-1"), Some(90));
+        assert_eq!(runtime.config().preferred_for("id-1"), None);
         control.calls.lock().unwrap().clear();
         assert_eq!(
             runtime.reload_config(&next),
@@ -1407,20 +1449,17 @@ mod tests {
         ));
         let mut runtime = runtime_with(control.clone(), store);
         let initial = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
             policy: BTreeMap::from([(
                 "id-1".to_string(),
                 PolicySelection {
                     policy: "off".into(),
                 },
             )]),
+            ..DeviceConfig::default()
         };
         runtime.start(&initial);
         control.calls.lock().unwrap().clear();
-        assert_eq!(runtime.reload_config(&DeviceConfig::default()), 0);
+        assert_eq!(runtime.reload_config(&DeviceConfig::default()), 1);
         assert_eq!(
             control.calls(),
             Vec::<(String, u8)>::new(),
@@ -1441,14 +1480,8 @@ mod tests {
             BrightnessSource::Ddc,
         );
         control.select("id-1", BrightnessPolicy::Gamma);
-        let config = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
-            ..DeviceConfig::default()
-        };
-        let payload = displays_payload(&control, &config, &mut BTreeMap::new());
+        let preferred = BTreeMap::from([("id-1".to_string(), 80)]);
+        let payload = displays_payload(&control, &preferred, &mut BTreeMap::new());
         assert_eq!(
             payload,
             serde_json::json!([
@@ -1474,7 +1507,7 @@ mod tests {
             BrightnessSource::Ddc,
         );
         control.refuse_get = true;
-        let payload = displays_payload(&control, &DeviceConfig::default(), &mut BTreeMap::new());
+        let payload = displays_payload(&control, &BTreeMap::new(), &mut BTreeMap::new());
         assert_eq!(payload[0]["brightness"], serde_json::Value::Null);
         assert_eq!(payload[0]["source"], "unavailable");
         assert_eq!(payload[0]["detail"], "control is off for this display");
@@ -1529,7 +1562,8 @@ mod tests {
             value: 25,
         });
         let gets_after_write = control.gets.load(Ordering::SeqCst);
-        let payload = displays_payload(&*control, &runtime.config(), &mut runtime.brightness_cache);
+        let payload =
+            displays_payload(&*control, &runtime.preferred, &mut runtime.brightness_cache);
         assert_eq!(payload[0]["brightness"], 25);
         assert_eq!(payload[0]["detail"], "25% via ddc");
         assert_eq!(
@@ -1547,10 +1581,10 @@ mod tests {
             BrightnessSource::Ddc,
         );
         let mut cache = BTreeMap::new();
-        let first = displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        let first = displays_payload(&control, &BTreeMap::new(), &mut cache);
         assert_eq!(first[0]["brightness"], 42);
         assert_eq!(control.gets.load(Ordering::SeqCst), 1);
-        let second = displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        let second = displays_payload(&control, &BTreeMap::new(), &mut cache);
         assert_eq!(second[0]["brightness"], 42);
         assert_eq!(
             control.gets.load(Ordering::SeqCst),
@@ -1574,7 +1608,7 @@ mod tests {
                 source: BrightnessSource::Ddc,
             },
         )]);
-        displays_payload(&control, &DeviceConfig::default(), &mut cache);
+        displays_payload(&control, &BTreeMap::new(), &mut cache);
         assert!(
             !cache.contains_key("id-gone"),
             "a display that left the topology must leave the cache"
@@ -1616,26 +1650,23 @@ mod tests {
     #[test]
     fn routes_queries_from_live_state_with_data() {
         let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
             vec![display.clone()],
             42,
             BrightnessSource::Ddc,
         ));
-        let config = DeviceConfig {
-            preferred_brightness: BTreeMap::from([(
-                "id-1".to_string(),
-                BrightnessPreference { brightness: 80 },
-            )]),
-            ..DeviceConfig::default()
-        };
         let mut runtime: Runtime<dyn MonitorControl> = Runtime::new(
             control.clone(),
             store,
             Arc::new(NoLutProvider),
             |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
         );
-        runtime.start(&config);
+        runtime.start(&DeviceConfig::default());
         set_live_state(Arc::new(Mutex::new(runtime)));
 
         let ReadResult::HandledWithData(payload) =
@@ -1852,7 +1883,14 @@ mod tests {
             let notified = notified.clone();
             move |_title: &str, body: &str| notified.lock().unwrap().push(body.to_string())
         };
-        let mut runtime = Runtime::new(control, store.clone(), Arc::new(NoLutProvider), notify);
+        let mut runtime = Runtime::new(
+            control,
+            store.clone(),
+            Arc::new(NoLutProvider),
+            notify,
+            None,
+            |_preferred| Ok(()),
+        );
         store
             .write_snapshot(&crate::session::Snapshot {
                 source: "gamma".into(),
@@ -1889,7 +1927,14 @@ mod tests {
             let notified = notified.clone();
             move |_title: &str, _body: &str| *notified.lock().unwrap() += 1
         };
-        let mut runtime = Runtime::new(control, store, Arc::new(NoLutProvider), notify);
+        let mut runtime = Runtime::new(
+            control,
+            store,
+            Arc::new(NoLutProvider),
+            notify,
+            None,
+            |_preferred| Ok(()),
+        );
         runtime.session().mutate(&display, 60).unwrap();
         runtime.handle(Command::Kill);
         assert_eq!(
