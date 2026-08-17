@@ -1,13 +1,43 @@
 use std::fs;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 const PROTECTED_TARGET_ROOTS: [&str; 3] = ["debug", "qol-dev", "qol-env"];
 const REMOVED_DEBUG_DIRS: [&str; 2] = ["incremental", "examples"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
 pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
 
-pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
+const PACE_BATCH: usize = 1000;
+const PACE_SLEEP: Duration = Duration::from_millis(50);
+
+pub(crate) struct Pacer {
+    visited: u64,
+    sleep: fn(Duration),
+}
+
+impl Pacer {
+    pub(crate) fn new() -> Self {
+        Self {
+            visited: 0,
+            sleep: std::thread::sleep,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_sleep(sleep: fn(Duration)) -> Self {
+        Self { visited: 0, sleep }
+    }
+
+    pub(crate) fn tick(&mut self) {
+        self.visited += 1;
+        if self.visited.is_multiple_of(PACE_BATCH as u64) {
+            (self.sleep)(PACE_SLEEP);
+        }
+    }
+}
+
+fn dir_size_paced(path: &Path, pacer: &mut Pacer) -> Result<Option<u64>, String> {
+    pacer.tick();
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -20,14 +50,15 @@ pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
     let mut total = 0;
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
-        if let Some(bytes) = dir_size(&entry.path())? {
+        if let Some(bytes) = dir_size_paced(&entry.path(), pacer)? {
             total += bytes;
         }
     }
     Ok(Some(total))
 }
 
-pub fn path_bytes(path: &Path) -> u64 {
+fn path_bytes_paced(path: &Path, pacer: &mut Pacer) -> u64 {
+    pacer.tick();
     let Ok(metadata) = path.symlink_metadata() else {
         return 0;
     };
@@ -39,8 +70,16 @@ pub fn path_bytes(path: &Path) -> u64 {
     };
     entries
         .flatten()
-        .map(|entry| path_bytes(&entry.path()))
+        .map(|entry| path_bytes_paced(&entry.path(), pacer))
         .sum()
+}
+
+pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
+    dir_size_paced(path, &mut Pacer::new())
+}
+
+pub fn path_bytes(path: &Path) -> u64 {
+    path_bytes_paced(path, &mut Pacer::new())
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -179,7 +218,41 @@ fn try_remove_target_path(path: &Path, failures: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn pacer_sleeps_once_per_batch() {
+        static SLEEPS: AtomicU32 = AtomicU32::new(0);
+        fn fake_sleep(_: Duration) {
+            SLEEPS.fetch_add(1, Ordering::SeqCst);
+        }
+        let mut pacer = Pacer::new_with_sleep(fake_sleep);
+        for _ in 0..PACE_BATCH {
+            pacer.tick();
+        }
+        assert_eq!(
+            SLEEPS.load(Ordering::SeqCst),
+            1,
+            "exactly one sleep per batch"
+        );
+        for _ in 0..(PACE_BATCH / 2) {
+            pacer.tick();
+        }
+        assert_eq!(
+            SLEEPS.load(Ordering::SeqCst),
+            1,
+            "a partial batch must not sleep"
+        );
+        for _ in 0..(PACE_BATCH / 2) {
+            pacer.tick();
+        }
+        assert_eq!(
+            SLEEPS.load(Ordering::SeqCst),
+            2,
+            "floor(N / PACE_BATCH) sleeps for N ticks"
+        );
+    }
 
     #[test]
     fn dir_size_sums_nested_files() {

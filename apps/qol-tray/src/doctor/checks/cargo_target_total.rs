@@ -1,6 +1,7 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::workspace_root;
+use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{
     dir_size, format_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
@@ -35,11 +36,10 @@ impl DoctorCheck for CargoTargetTotalCheck {
         let Some(root) = workspace_root() else {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
-        let path = root.join("target");
         let (size, prunable) = self.sizes.get_or_compute(CACHE_TTL, || {
-            (target_size(&path), prunable_target_bytes(&path))
+            compute_total(&root, dir_size, prunable_target_bytes)
         });
-        report_for(size, prunable, path)
+        report_for(size, prunable, root.join("target"))
     }
 }
 
@@ -50,12 +50,53 @@ enum TargetSize {
     Unreadable(String),
 }
 
-fn target_size(path: &Path) -> TargetSize {
-    match dir_size(path) {
+impl From<StoredSize> for TargetSize {
+    fn from(size: StoredSize) -> Self {
+        match size {
+            StoredSize::Missing => TargetSize::Missing,
+            StoredSize::Bytes(bytes) => TargetSize::Bytes(bytes),
+            StoredSize::Unreadable(reason) => TargetSize::Unreadable(reason),
+        }
+    }
+}
+
+impl From<&TargetSize> for StoredSize {
+    fn from(size: &TargetSize) -> Self {
+        match size {
+            TargetSize::Missing => StoredSize::Missing,
+            TargetSize::Bytes(bytes) => StoredSize::Bytes(*bytes),
+            TargetSize::Unreadable(reason) => StoredSize::Unreadable(reason.clone()),
+        }
+    }
+}
+
+fn compute_total(
+    root: &Path,
+    walk_total: impl FnOnce(&Path) -> Result<Option<u64>, String>,
+    walk_prunable: impl FnOnce(&Path) -> u64,
+) -> (TargetSize, u64) {
+    let target = root.join("target");
+    let now = doctor_sizes::now_ms();
+    let path = doctor_sizes::path_for(root);
+    if let Some(stored) = doctor_sizes::load(&path) {
+        if stored.fresh(now, CACHE_TTL) {
+            if let Some(total) = stored.total {
+                return (total.into(), stored.prunable);
+            }
+        }
+    }
+    let size = match walk_total(&target) {
         Ok(Some(bytes)) => TargetSize::Bytes(bytes),
         Ok(None) => TargetSize::Missing,
-        Err(error) => TargetSize::Unreadable(error),
-    }
+        Err(reason) => TargetSize::Unreadable(reason),
+    };
+    let prunable = walk_prunable(&target);
+    let mut sizes = doctor_sizes::load(&path).unwrap_or_default();
+    sizes.scanned_at_ms = now;
+    sizes.total = Some((&size).into());
+    sizes.prunable = prunable;
+    doctor_sizes::save(&path, &sizes);
+    (size, prunable)
 }
 
 fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
@@ -122,5 +163,81 @@ mod tests {
         assert!(report
             .summary
             .contains("oldest debug artifacts over the 48.0 GiB ceiling"));
+    }
+
+    #[test]
+    fn fresh_cached_file_skips_both_walks() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        doctor_sizes::save(
+            &doctor_sizes::path_for(root),
+            &doctor_sizes::DoctorSizes {
+                scanned_at_ms: doctor_sizes::now_ms(),
+                total: Some(StoredSize::Bytes(4321)),
+                prunable: 99,
+                ..doctor_sizes::DoctorSizes::default()
+            },
+        );
+        let mut total_walks = 0;
+        let mut prunable_walks = 0;
+        let total_walk = |_: &Path| {
+            total_walks += 1;
+            Ok(Some(1))
+        };
+        let prunable_walk = |_: &Path| {
+            prunable_walks += 1;
+            2
+        };
+
+        let (size, prunable) = compute_total(root, total_walk, prunable_walk);
+
+        assert_eq!(size, TargetSize::Bytes(4321));
+        assert_eq!(prunable, 99);
+        assert_eq!(
+            total_walks, 0,
+            "a fresh cached file must skip the size walk"
+        );
+        assert_eq!(
+            prunable_walks, 0,
+            "a fresh cached file must skip the prunable walk"
+        );
+    }
+
+    #[test]
+    fn stale_cached_file_rewalks_and_refreshes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        doctor_sizes::save(
+            &doctor_sizes::path_for(root),
+            &doctor_sizes::DoctorSizes {
+                scanned_at_ms: doctor_sizes::now_ms()
+                    .saturating_sub(CACHE_TTL.as_millis() as u64 + 1_000),
+                total: Some(StoredSize::Bytes(4321)),
+                prunable: 99,
+                ..doctor_sizes::DoctorSizes::default()
+            },
+        );
+        let mut total_walks = 0;
+        let mut prunable_walks = 0;
+        let total_walk = |path: &Path| {
+            total_walks += 1;
+            assert!(path.ends_with("target"));
+            Ok(Some(7))
+        };
+        let prunable_walk = |_: &Path| {
+            prunable_walks += 1;
+            8
+        };
+
+        let (size, prunable) = compute_total(root, total_walk, prunable_walk);
+
+        assert_eq!(size, TargetSize::Bytes(7));
+        assert_eq!(prunable, 8);
+        assert_eq!(total_walks, 1, "a stale cached file must walk again");
+        assert_eq!(prunable_walks, 1);
+        let stored = doctor_sizes::load(&doctor_sizes::path_for(root)).expect("stored");
+        assert_eq!(stored.total, Some(StoredSize::Bytes(7)));
+        assert_eq!(stored.prunable, 8);
+        assert!(stored.fresh(doctor_sizes::now_ms(), CACHE_TTL));
     }
 }

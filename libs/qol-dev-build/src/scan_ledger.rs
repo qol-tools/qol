@@ -152,12 +152,17 @@ mod tests {
 
     fn deep_size(path: &Path, deep_calls: &std::cell::Cell<u32>) -> u64 {
         deep_calls.set(deep_calls.get() + 1);
+        let mut pacer = crate::target_cache::Pacer::new();
         walkdir::WalkDir::new(path)
             .into_iter()
             .flatten()
-            .filter(|entry| entry.file_type().is_file())
-            .filter_map(|entry| entry.metadata().ok())
-            .map(|meta| meta.len())
+            .filter_map(|entry| {
+                pacer.tick();
+                entry
+                    .file_type()
+                    .is_file()
+                    .then(|| entry.metadata().ok().map_or(0, |meta| meta.len()))
+            })
             .sum()
     }
 

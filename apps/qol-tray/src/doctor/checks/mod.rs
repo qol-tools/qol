@@ -10,6 +10,8 @@ mod config_parse_failures;
 #[cfg(feature = "dev")]
 mod dev_link_paths;
 #[cfg(feature = "dev")]
+mod doctor_sizes;
+#[cfg(feature = "dev")]
 mod fingerprint_health;
 mod gpu_driver_sync;
 mod hotkey_capture_backend;
