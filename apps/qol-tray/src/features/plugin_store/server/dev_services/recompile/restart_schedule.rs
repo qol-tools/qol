@@ -43,16 +43,6 @@ pub(super) fn schedule_self_restart_after_idle(
                 return;
             }
         };
-        let courier_binary = restart.courier_binary_at(&repo_root);
-        if let Err(message) = restart.stage_courier_binary(&staging_root, &staged, &courier_binary)
-        {
-            events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
-                message: message.clone(),
-            });
-            log::error!("Self recompile courier staging failed: {message}");
-            runtime.clear_restart_pending();
-            return;
-        }
         exec_restart_after_cleanup(
             plugin_manager,
             runtime.as_ref(),

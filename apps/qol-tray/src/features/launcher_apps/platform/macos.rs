@@ -1,10 +1,10 @@
-use super::super::{LauncherEntry, ResolvedEntry};
+use super::super::LauncherEntry;
 use crate::shortcuts::model::{AppRef, ShortcutAction};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub(super) fn sync(entries: &[ResolvedEntry]) -> Result<()> {
+pub(super) fn sync(entries: &[LauncherEntry], target: &Path) -> Result<()> {
     let dir = apps_dir().context("Could not determine home directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
@@ -12,12 +12,12 @@ pub(super) fn sync(entries: &[ResolvedEntry]) -> Result<()> {
     let app_names = app_dirnames(entries);
     let expected: HashSet<String> = app_names.values().cloned().collect();
 
-    for resolved in entries {
-        let Some(app_name) = app_names.get(&resolved.entry.file_stem) else {
+    for entry in entries {
+        let Some(app_name) = app_names.get(&entry.file_stem) else {
             continue;
         };
         let app_dir = dir.join(app_name);
-        write_app_bundle(&app_dir, resolved)?;
+        write_app_bundle(&app_dir, entry, target)?;
     }
 
     clean_stale(&dir, &expected)?;
@@ -38,11 +38,8 @@ pub(super) fn publish_synced() {
     crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
 }
 
-fn app_dirnames(entries: &[ResolvedEntry]) -> HashMap<String, String> {
-    let sanitized: Vec<String> = entries
-        .iter()
-        .map(|resolved| sanitized_display_name(&resolved.entry))
-        .collect();
+fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
+    let sanitized: Vec<String> = entries.iter().map(sanitized_display_name).collect();
 
     let mut counts = HashMap::new();
     for name in &sanitized {
@@ -50,8 +47,7 @@ fn app_dirnames(entries: &[ResolvedEntry]) -> HashMap<String, String> {
     }
 
     let mut names = HashMap::new();
-    for (resolved, base) in entries.iter().zip(&sanitized) {
-        let entry = &resolved.entry;
+    for (entry, base) in entries.iter().zip(&sanitized) {
         let app_name = if counts.get(base.as_str()).copied().unwrap_or(0) <= 1 {
             format!("{}.app", base)
         } else {
@@ -80,17 +76,16 @@ fn sanitized_display_name(entry: &LauncherEntry) -> String {
     entry.file_stem.clone()
 }
 
-fn write_app_bundle(app_dir: &Path, resolved: &ResolvedEntry) -> Result<()> {
-    let entry = &resolved.entry;
+fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, target: &Path) -> Result<()> {
     if build_shortcut_script(entry).is_none() {
-        super::verify_target(resolved)?;
+        super::verify_target(entry, target)?;
     }
     let contents_dir = app_dir.join("Contents");
     let macos_dir = contents_dir.join("MacOS");
     let run_path = macos_dir.join("run");
     let plist_path = contents_dir.join("Info.plist");
 
-    let expected_script = build_script(&resolved.target, entry);
+    let expected_script = build_script(target, entry);
     let expected_plist = build_info_plist(entry);
 
     if file_matches(&run_path, &expected_script)
@@ -282,16 +277,9 @@ mod tests {
         }
     }
 
-    fn res(entry: LauncherEntry) -> ResolvedEntry {
-        ResolvedEntry {
-            entry,
-            target: PathBuf::from("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
-        }
-    }
-
     #[test]
     fn app_dirnames_preserve_friendly_names() {
-        let names = app_dirnames(&[res(entry("shortcut-browser", "Open Browser"))]);
+        let names = app_dirnames(&[entry("shortcut-browser", "Open Browser")]);
 
         assert_eq!(
             names.get("shortcut-browser"),
@@ -301,7 +289,7 @@ mod tests {
 
     #[test]
     fn app_dirnames_sanitize_unsafe_display_names() {
-        let names = app_dirnames(&[res(entry("shortcut-docs", "Docs:/Team\nPortal"))]);
+        let names = app_dirnames(&[entry("shortcut-docs", "Docs:/Team\nPortal")]);
 
         assert_eq!(
             names.get("shortcut-docs"),
@@ -311,7 +299,7 @@ mod tests {
 
     #[test]
     fn app_dirnames_fallback_to_file_stem_when_name_is_empty_after_sanitize() {
-        let names = app_dirnames(&[res(entry("shortcut-empty", "/:\n\r\t"))]);
+        let names = app_dirnames(&[entry("shortcut-empty", "/:\n\r\t")]);
 
         assert_eq!(
             names.get("shortcut-empty"),
@@ -322,8 +310,8 @@ mod tests {
     #[test]
     fn app_dirnames_disambiguate_duplicates() {
         let names = app_dirnames(&[
-            res(entry("shortcut-a", "Open Browser")),
-            res(entry("shortcut-b", "Open Browser")),
+            entry("shortcut-a", "Open Browser"),
+            entry("shortcut-b", "Open Browser"),
         ]);
 
         assert_eq!(
@@ -409,20 +397,20 @@ mod tests {
     #[test]
     fn build_script_falls_back_to_qol_tray_exec_without_shortcut_action() {
         let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
             &fallback_entry(),
         );
 
         assert_eq!(
             script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'shortcut' 'browser'\n"
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
         );
     }
 
     #[test]
     fn build_script_falls_back_to_qol_tray_exec_for_plugin_action_shortcuts() {
         let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
             &shortcut_entry(ShortcutAction::PluginAction {
                 plugin_id: "plugin-cli-sessions".to_string(),
                 action: "open".to_string(),
@@ -431,7 +419,7 @@ mod tests {
 
         assert_eq!(
             script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'shortcut' 'browser'\n"
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
         );
     }
 
@@ -453,48 +441,6 @@ mod tests {
         assert_eq!(
             script,
             "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'open' 'shortcuts/add'\n"
-        );
-    }
-
-    #[test]
-    fn build_script_falls_back_to_qol_tray_when_the_courier_is_absent() {
-        let entry = LauncherEntry {
-            file_stem: "plugin-settings-monitor".to_string(),
-            display_name: "Monitor Settings".to_string(),
-            description: String::new(),
-            bundle_id: String::new(),
-            exec_args: vec!["exec".into(), "plugin-monitor".into(), "settings".into()],
-            shortcut_action: None,
-        };
-        let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
-            &entry,
-        );
-
-        assert_eq!(
-            script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'plugin-monitor' 'settings'\n"
-        );
-    }
-
-    #[test]
-    fn build_script_uses_courier_for_plugin_settings_entries() {
-        let entry = LauncherEntry {
-            file_stem: "plugin-settings-monitor".to_string(),
-            display_name: "Monitor Settings".to_string(),
-            description: String::new(),
-            bundle_id: String::new(),
-            exec_args: vec!["exec".into(), "plugin-monitor".into(), "settings".into()],
-            shortcut_action: None,
-        };
-        let script = build_script(
-            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-courier"),
-            &entry,
-        );
-
-        assert_eq!(
-            script,
-            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'plugin-monitor' 'settings'\n"
         );
     }
 
@@ -531,10 +477,8 @@ mod tests {
 
         let error = write_app_bundle(
             tmp.path(),
-            &ResolvedEntry {
-                entry: entry("command-shortcuts-add", "Add Shortcut"),
-                target: binary.clone(),
-            },
+            &entry("command-shortcuts-add", "Add Shortcut"),
+            &binary,
         )
         .unwrap_err();
 
@@ -552,13 +496,11 @@ mod tests {
 
         write_app_bundle(
             tmp.path(),
-            &ResolvedEntry {
-                entry: shortcut_entry(ShortcutAction::OpenUrl {
-                    url: "https://example.com".to_string(),
-                    browser_override: None,
-                }),
-                target: binary.clone(),
-            },
+            &shortcut_entry(ShortcutAction::OpenUrl {
+                url: "https://example.com".to_string(),
+                browser_override: None,
+            }),
+            &binary,
         )
         .unwrap();
 

@@ -241,9 +241,6 @@ fn hand_off_to_prebuilt(
     let built_binary = crate::commands::dev::dev_binary_path(&target.root);
     let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(|error| anyhow::anyhow!("tray runtime staging failed: {error}"))?;
-    let courier = qol_dev_build::tray::courier_debug_binary_path(&target.root);
-    qol_dev_build::tray::stage_courier(&root, &runtime, &courier)
-        .map_err(|error| anyhow::anyhow!("courier staging failed: {error}"))?;
     let run_root = crate::commands::dev::dev_run_root(&target.root);
     let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, dash)?;
     let mut next = TrayHandle::Owned(next);

@@ -93,7 +93,6 @@ jobs:
           BUNDLE="qol-tray-linux-${ARCH}"
           mkdir -p "${BUNDLE}"
           cp target/release/qol-tray "${BUNDLE}/"
-          cp target/release/qol-courier "${BUNDLE}/"
           tar czf "${BUNDLE}.tar.gz" "${BUNDLE}"
           cp "${BUNDLE}.tar.gz" dist/
           ls -lh dist/
@@ -155,12 +154,6 @@ jobs:
             -output "${MACOS_DIR}/qol-tray"
 
           chmod +x "${MACOS_DIR}/qol-tray"
-          lipo -create \
-            target/aarch64-apple-darwin/release/qol-courier \
-            target/x86_64-apple-darwin/release/qol-courier \
-            -output "${MACOS_DIR}/qol-courier"
-
-          chmod +x "${MACOS_DIR}/qol-courier"
           cp apps/qol-tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
 
           cat > "${CONTENTS_DIR}/Info.plist" <<EOF

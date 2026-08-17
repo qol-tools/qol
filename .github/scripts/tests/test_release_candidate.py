@@ -473,7 +473,6 @@ class BuildNodeTests(unittest.TestCase):
                 None,
                 None,
                 [
-                    ["cargo", "build", "--release", "--locked", "-p", "qol-courier"],
                     ["cargo", "deb", "-p", "qol-tray", "--locked"],
                     [
                         "cargo",
@@ -514,26 +513,6 @@ class BuildNodeTests(unittest.TestCase):
                         "x86_64-apple-darwin",
                         "--bin",
                         "qol-tray",
-                    ],
-                    [
-                        "cargo",
-                        "build",
-                        "--release",
-                        "--locked",
-                        "--target",
-                        "aarch64-apple-darwin",
-                        "--bin",
-                        "qol-courier",
-                    ],
-                    [
-                        "cargo",
-                        "build",
-                        "--release",
-                        "--locked",
-                        "--target",
-                        "x86_64-apple-darwin",
-                        "--bin",
-                        "qol-courier",
                     ],
                     [
                         "cargo",

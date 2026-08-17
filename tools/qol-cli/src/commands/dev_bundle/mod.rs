@@ -45,11 +45,7 @@ impl DevBundleDescriptor {
         let descriptor: Self = serde_json::from_slice(&content)
             .with_context(|| format!("invalid development bundle {}", path.display()))?;
         descriptor.validate()?;
-        for relative in [
-            Path::new("bin/qol"),
-            Path::new("bin/qol-tray"),
-            Path::new("bin/qol-courier"),
-        ] {
+        for relative in [Path::new("bin/qol"), Path::new("bin/qol-tray")] {
             require_bundle_file(root, relative)?;
         }
         for plugin in &descriptor.plugins {
@@ -130,7 +126,6 @@ fn collect_bundle_files(
     let mut files = vec![
         executable(&target, "qol", "bin/qol"),
         executable(&target, "qol-tray", "bin/qol-tray"),
-        executable(&target, "qol-courier", "bin/qol-courier"),
         PayloadFileSpec {
             source: worktree.join("flows/envs/linux-mint-cinnamon/qol-sandbox-payload"),
             relative_path: PathBuf::from("installer/qol-sandbox-payload"),
@@ -182,7 +177,6 @@ fn bundle_build_commands(worktree: &Path, buildable: &[BuildablePlugin]) -> Vec<
         .arg(&target_dir)
         .args(["-p", "qol", "--bin", "qol"])
         .args(["-p", "qol-tray", "--bin", "qol-tray"])
-        .args(["-p", "qol-courier", "--bin", "qol-courier"])
         .args([
             "--features",
             "qol-tray/dev,qol-tray/linux_evdev,qol-tray/embedded-ui",

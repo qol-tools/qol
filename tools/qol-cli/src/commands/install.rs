@@ -65,31 +65,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         Some(tray)
     };
 
-    let courier = if dev {
-        None
-    } else {
-        let courier = qol_dev_build::cargo_build::select_binary_executable(
-            &artifacts,
-            &root
-                .join("apps")
-                .join(qol_conventions::artifact::COURIER_PACKAGE_NAME)
-                .join("Cargo.toml"),
-            qol_conventions::artifact::COURIER_BINARY_NAME,
-        )?;
-        qol_artifact::verify_path(
-            &courier,
-            &qol_artifact::ArtifactExpectation::production(
-                qol_conventions::artifact::COURIER_BINARY_NAME,
-                qol_conventions::artifact::COURIER_PACKAGE_NAME,
-                qol_conventions::artifact::BuildRole::Courier,
-            )
-            .with_exact_source(build_identity.source()),
-        )?;
-        Some(courier)
-    };
-
     let installer_display = installer.display().to_string();
-    let mut command = install_command(&installer, &root, tray.as_deref(), courier.as_deref(), dev);
+    let mut command = install_command(&installer, &root, tray.as_deref(), dev);
     run_step(
         "install",
         StepKind::Pending,
@@ -120,9 +97,6 @@ fn build_command(root: &Path, buildable: &[BuildablePlugin], dev: bool) -> Resul
     command
         .current_dir(root)
         .args(["build", "--release", "--locked", "-p", "qol-tray"]);
-    if !dev {
-        command.arg("-p").arg("qol-courier");
-    }
     if dev {
         command.args(["--features", "dev,linux_evdev"]);
     } else {
@@ -169,22 +143,13 @@ fn installer_expectation(dev: bool) -> qol_artifact::ArtifactExpectation {
     }
 }
 
-fn install_command(
-    installer: &Path,
-    root: &Path,
-    tray: Option<&Path>,
-    courier: Option<&Path>,
-    dev: bool,
-) -> Command {
+fn install_command(installer: &Path, root: &Path, tray: Option<&Path>, dev: bool) -> Command {
     let mut command = Command::new(installer);
     if dev {
         command.arg("--dev");
     }
     if let Some(tray) = tray {
         command.arg("--source").arg(tray);
-    }
-    if let Some(courier) = courier {
-        command.arg("--source-courier").arg(courier);
     }
     command.arg("--workspace").arg(root);
     command
@@ -237,28 +202,13 @@ mod tests {
         let root = Path::new("/a/b/ws");
         let installer = Path::new("/a/b/ws/target/release/qol-tray-install");
         let tray = Path::new("/a/b/ws/target/release/qol-tray");
-        let courier = Path::new("/a/b/ws/target/release/qol-courier");
-        let production = install_command(installer, root, Some(tray), Some(courier), false);
+        let production = install_command(installer, root, Some(tray), false);
         assert!(args_of(&production).contains("--source"));
-        assert!(args_of(&production).contains("--source-courier"));
         assert!(!args_of(&production).contains("--dev"));
-        let dev = install_command(installer, root, None, None, true);
+        let dev = install_command(installer, root, None, true);
         let dev_args = args_of(&dev);
         assert!(dev_args.contains("--dev"));
         assert!(!dev_args.contains("--source"));
         assert!(dev_args.contains("--workspace"));
-    }
-
-    #[test]
-    fn build_command_adds_courier_to_production_only() {
-        let root = Path::new("/a/b/ws");
-        let production = build_command(root, &[], false).unwrap();
-        assert!(args_of(&production).contains("-p"));
-        assert!(args_of(&production).contains("qol-courier"));
-        let dev = build_command(root, &[], true).unwrap();
-        assert!(
-            !args_of(&dev).contains("qol-courier"),
-            "the dev installer builds the courier from the source tree itself"
-        );
     }
 }

@@ -58,7 +58,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let args = source::parse_args(args)?;
     run_install(
         args.source.as_deref(),
-        args.courier_source.as_deref(),
         args.workspace.as_deref(),
         args.dev_mode,
     )
@@ -72,7 +71,6 @@ pub fn check_platform_paths() -> Result<()> {
 
 fn run_install(
     source_override: Option<&Path>,
-    courier_source_override: Option<&Path>,
     workspace_root: Option<&Path>,
     dev_mode: bool,
 ) -> Result<()> {
@@ -84,12 +82,6 @@ fn run_install(
     println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
     let source = source::resolve_source_binary(&repo_root, source_override, dev_mode)?;
-    let courier_source = source::resolve_courier_source(
-        &repo_root,
-        courier_source_override,
-        dev_mode,
-        &source.path,
-    )?;
     let mut expectation = if dev_mode {
         qol_artifact::ArtifactExpectation::development_release(
             qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
@@ -122,35 +114,9 @@ fn run_install(
     })?;
     platform::remove_legacy_install();
     let installed_binary = install_dir.join(platform::binary_filename());
-    let installed_courier = install_dir.join(platform::courier_filename());
     platform::stop_running(&installed_binary)?;
     install_binary_atomically(&source.path, &installed_binary)?;
     platform::set_executable_permissions(&installed_binary)?;
-    let mut courier_expectation = if dev_mode {
-        qol_artifact::ArtifactExpectation::development_release(
-            qol_conventions::artifact::COURIER_BINARY_NAME,
-            qol_conventions::artifact::COURIER_PACKAGE_NAME,
-            qol_conventions::artifact::BuildRole::Courier,
-            false,
-        )
-    } else {
-        qol_artifact::ArtifactExpectation::production(
-            qol_conventions::artifact::COURIER_BINARY_NAME,
-            qol_conventions::artifact::COURIER_PACKAGE_NAME,
-            qol_conventions::artifact::BuildRole::Courier,
-        )
-    };
-    if let Some(exact_source) = &courier_source.exact_source {
-        courier_expectation = courier_expectation.with_exact_source(exact_source);
-    }
-    qol_artifact::verify_path(&courier_source.path, &courier_expectation).with_context(|| {
-        format!(
-            "Refusing to install unverified courier {}",
-            courier_source.path.display()
-        )
-    })?;
-    install_binary_atomically(&courier_source.path, &installed_courier)?;
-    platform::set_executable_permissions(&installed_courier)?;
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;
     install_workspace_plugins(workspace_root, &plugins_dir)?;

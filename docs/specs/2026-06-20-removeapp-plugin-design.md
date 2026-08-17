@@ -267,8 +267,7 @@ No new direct dependency is added without checking `qol-shared-libs` first.
   makes qol-tray materialize a real OS application for `open` -
   `~/Applications/QoL/Remove App.app` on macOS (Spotlight / Raycast discover it),
   a `.desktop` entry under `~/.local/share/applications/` on Linux. Launching it
-  runs `qol-courier exec shortcut open`, which forwards to the running tray's
-  `/api/shortcuts/open/execute` endpoint and routes back to the plugin's `open`
+  runs `qol-tray exec shortcut open`, which routes back to the plugin's `open`
   action. Same path cli-sessions uses; no extra code in removeapp.
 - **Persistence.** removeapp persists nothing in v1. There is no general plugin
   data dir - the only blessed per-plugin store is `config.json` via a

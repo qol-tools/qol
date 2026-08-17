@@ -19,8 +19,6 @@ pub const TRAY_INSTALLER_BINARY_NAME: &str = "qol-tray-install";
 pub const TRAY_DOCTOR_BINARY_NAME: &str = "qol-tray-doctor";
 pub const TRAY_MIGRATOR_BINARY_NAME: &str = "qol-tray-migrate";
 pub const TRAY_RESIDENT_POLICY_BINARY_NAME: &str = "qol-resident-policy";
-pub const COURIER_PACKAGE_NAME: &str = "qol-courier";
-pub const COURIER_BINARY_NAME: &str = "qol-courier";
 
 pub const ENV_BUILD_INTENT: &str = "QOL_BUILD_INTENT";
 pub const ENV_SOURCE_COMMIT: &str = "QOL_BUILD_SOURCE_COMMIT";
@@ -83,7 +81,6 @@ pub enum BuildRole {
     Plugin,
     GuestRunner,
     ResidentPolicy,
-    Courier,
 }
 
 pub fn tray_binary_role(binary: &str) -> Option<BuildRole> {
@@ -433,9 +430,6 @@ macro_rules! declare_build_identity {
     };
     (ResidentPolicy) => {
         $crate::declare_build_identity!(@emit "resident_policy");
-    };
-    (Courier) => {
-        $crate::declare_build_identity!(@emit "courier");
     };
     (@emit $role:literal) => {
         const QOL_BUILD_IDENTITY_FRAME: &str = concat!(

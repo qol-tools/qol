@@ -4,25 +4,14 @@ use qol_dev_build::BuildResult;
 
 pub fn build_qol_tray_self_with_progress<F>(repo_root: Option<&Path>, on_progress: F) -> BuildResult
 where
-    F: FnMut(u8, String) + Clone,
-{
-    let repo_root = resolve_qol_tray_self_root(repo_root);
-    let tray = qol_dev_build::tray::build_tray(
-        &repo_root,
-        &qol_dev_build::tray::DEV_TRAY_BINARIES,
-        scale_progress(on_progress.clone(), 0),
-    );
-    if !tray.success {
-        return tray;
-    }
-    qol_dev_build::tray::build_courier(&repo_root, scale_progress(on_progress, 50))
-}
-
-fn scale_progress<F>(mut on_progress: F, offset: u8) -> impl FnMut(u8, String)
-where
     F: FnMut(u8, String),
 {
-    move |percent, phase| on_progress(offset + percent / 2, phase)
+    let repo_root = resolve_qol_tray_self_root(repo_root);
+    qol_dev_build::tray::build_tray(
+        &repo_root,
+        &qol_dev_build::tray::DEV_TRAY_BINARIES,
+        on_progress,
+    )
 }
 
 pub fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> PathBuf {

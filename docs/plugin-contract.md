@@ -345,8 +345,8 @@ The same transport carries config **queries**.
 ### 4.3 Entry points and gotchas
 
 - Hotkey (kernel capture closure or fallback listener), dashboard click
-  (`POST /api/plugins/{id}/actions/{action}`), and launcher (`qol-courier exec`
-  forwarding to the daemon HTTP) all reach `try_execute_action`.
+  (`POST /api/plugins/{id}/actions/{action}`), and launcher (`qol-tray exec shortcut
+  <id>` to the daemon HTTP) all reach `try_execute_action`.
 - The **native tray menu does NOT list plugin actions** - it shows "Open Dashboard",
   the Mode (dev/prod) toggle, an Update item when one is available, and Quit. Plugin
   actions live in the web dashboard.
@@ -358,13 +358,7 @@ The same transport carries config **queries**.
   live config.
 - Launcher export (`export_to_launcher`) is a third concept, orthogonal to hotkeys
   and to shortcuts: it writes a macOS `.app` / Linux `.desktop` that runs
-  `qol-courier exec` for plugin settings and shortcut entries, and `qol-tray open
-  <route>` for command entries (Windows no-op, honoring "leave host as found").
-  The courier is a minimal binary installed beside `qol-tray` that forwards the
-  request to the running tray's HTTP API, so launcher launches never cold-start
-  the tray host. `qol-tray exec <plugin-id> <action-id>` remains the direct CLI
-  entry point and shares its dispatch with the courier via
-  `qol_plugin_api::host_exec::run_exec`.
+  `qol-tray exec shortcut <id>` (Windows no-op, honoring "leave host as found").
 
 ### 4.4 Worked trace: `plugin-cli-sessions` `open`
 

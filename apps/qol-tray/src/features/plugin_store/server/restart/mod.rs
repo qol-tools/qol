@@ -17,17 +17,6 @@ pub(super) trait RestartPort: Send + Sync {
     ) -> Result<qol_dev_build::tray::StagedRuntimeGeneration, String> {
         qol_dev_build::tray::stage_runtime_generation(root, binary)
     }
-    fn courier_binary_at(&self, dir: &Path) -> PathBuf {
-        qol_dev_build::tray::courier_debug_binary_path(dir)
-    }
-    fn stage_courier_binary(
-        &self,
-        root: &Path,
-        generation: &qol_dev_build::tray::StagedRuntimeGeneration,
-        courier: &Path,
-    ) -> Result<PathBuf, String> {
-        qol_dev_build::tray::stage_courier(root, generation, courier)
-    }
     fn exec_restart(&self, binary: &Path) -> Result<(), String>;
 }
 
