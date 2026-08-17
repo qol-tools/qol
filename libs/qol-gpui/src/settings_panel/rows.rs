@@ -1114,6 +1114,16 @@ pub(super) fn filtered_list_items(
         .collect()
 }
 
+pub(super) fn selected_list_item<'a>(
+    actions: &ListActions,
+    items: &'a [ListItem],
+    filter: &str,
+    slot: usize,
+) -> Option<&'a ListItem> {
+    let index = *filtered_list_items(actions, items, filter).get(slot)?;
+    items.get(index)
+}
+
 pub(super) fn list_matches_filter(actions: &ListActions, item: &ListItem, filter: &str) -> bool {
     let filter = filter.to_lowercase();
     if item.label.to_lowercase().contains(&filter) {
@@ -1211,8 +1221,9 @@ mod tests {
         filtered_list_items, list_item_actions, list_items, list_slider_value, merged_config,
         option_accent, primary_list_item_action, row_action, row_is_visible, row_streams,
         row_value_json, rows_from_resolved, runtime_query_names, section_label_for,
-        sections_from_resolved, set_config_value, stream_gated, visible_row_indices, FieldDefault,
-        ListActions, ListItem, ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
+        sections_from_resolved, selected_list_item, set_config_value, stream_gated,
+        visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig, Row, RowControl,
+        SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2965,6 +2976,39 @@ default = 5
 
         apply_list_filter(&actions, &items, &mut list, &mut filter, String::new());
         assert_eq!((list.selected, list.scroll_offset), (0, 0));
+    }
+
+    #[test]
+    fn selected_list_item_resolves_the_slot_through_the_filter() {
+        let actions = ListActions {
+            primary: None,
+            additional: Vec::new(),
+        };
+        let items = vec![
+            filter_item("Keyboard", None, true),
+            filter_item("Mouse", None, true),
+            filter_item("Headphones", None, true),
+        ];
+
+        assert_eq!(filtered_list_items(&actions, &items, "head"), [2]);
+        assert_eq!(
+            items[0].label, "Keyboard",
+            "indexing items with the slot would dispatch against this one"
+        );
+        assert_eq!(
+            selected_list_item(&actions, &items, "head", 0).map(|item| item.label.as_str()),
+            Some("Headphones"),
+            "slot 0 is the highlighted item, not items[0]"
+        );
+        assert!(
+            selected_list_item(&actions, &items, "head", 1).is_none(),
+            "a slot past the filtered length resolves to nothing"
+        );
+        assert_eq!(
+            selected_list_item(&actions, &items, "", 1).map(|item| item.label.as_str()),
+            Some("Mouse"),
+            "an empty filter keeps slot and index aligned"
+        );
     }
 
     #[test]

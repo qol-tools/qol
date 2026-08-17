@@ -15,7 +15,7 @@ use super::rows::{
     apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
     list_item_actions, list_slider_value, merged_config, primary_list_item_action,
     query_flag_value, row_action, row_streams, runtime_query_names, section_label_for,
-    stream_gated, Row, RowControl, RowSection, SelectOption, SliderHold,
+    selected_list_item, stream_gated, Row, RowControl, RowSection, SelectOption, SliderHold,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
@@ -827,12 +827,12 @@ impl SettingsPanelView {
                 next
             }
             _ => match key_char {
-                Some(character) => {
+                Some(character) if is_filter_text(character) => {
                     let mut next = filter.clone();
                     next.push_str(character);
                     next
                 }
-                None => return false,
+                _ => return false,
             },
         };
         self.set_list_filter(next);
@@ -1082,12 +1082,13 @@ impl SettingsPanelView {
             actions,
             items,
             list,
+            filter,
             ..
         }) = self.rows.get(row_index).map(|row| &row.control)
         else {
             return;
         };
-        let Some(item) = items.get(list.selected) else {
+        let Some(item) = selected_list_item(actions, items, filter, list.selected) else {
             return;
         };
         let Some(action) = primary_list_item_action(actions, item) else {
@@ -1125,12 +1126,15 @@ impl SettingsPanelView {
             actions,
             items,
             list,
+            filter,
             ..
         }) = self.rows.get(row_index).map(|row| &row.control)
         else {
             return;
         };
-        let Some(item) = items.get(list.selected).filter(|item| !item.pending) else {
+        let Some(item) =
+            selected_list_item(actions, items, filter, list.selected).filter(|item| !item.pending)
+        else {
             return;
         };
         let resolved = list_item_actions(actions, item);
@@ -1217,9 +1221,11 @@ impl SettingsPanelView {
     fn step_selected_list_slider(&mut self, direction: f64, cx: &mut Context<Self>) -> bool {
         let row_index = self.selected;
         let Some(RowControl::List {
+            actions,
             slider,
             items,
             list,
+            filter,
             ..
         }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
         else {
@@ -1228,7 +1234,7 @@ impl SettingsPanelView {
         let Some(slider) = slider else {
             return false;
         };
-        let Some(item) = items.get(list.selected) else {
+        let Some(item) = selected_list_item(actions, items, filter, list.selected) else {
             return false;
         };
         let current = list_slider_value(&slider.spec, &slider.values, item);
@@ -3639,6 +3645,10 @@ fn list_intent(key: &str) -> Option<ListIntent> {
     }
 }
 
+fn is_filter_text(character: &str) -> bool {
+    !character.is_empty() && !character.chars().any(char::is_control)
+}
+
 fn entry_id(index: usize, entry: usize) -> u64 {
     ((index as u64) << 32) | (entry as u32) as u64
 }
@@ -3884,11 +3894,11 @@ mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
         binary_state_label, color_display, description_wrap_lines, format_number,
-        horizontal_step_direction, initial_active_section, intent, list_action_affordance,
-        list_intent, number_preview, number_unit, parsed_color, parsed_number, row_body_height,
-        scroll_offset_for, slider_fraction, slider_percent_label, slider_value_from_fraction,
-        stepped_number, stepped_slider_value, text_or_placeholder, visible_row_window, Intent,
-        ListIntent, Row, RowControl,
+        horizontal_step_direction, initial_active_section, intent, is_filter_text,
+        list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
+        parsed_number, row_body_height, scroll_offset_for, slider_fraction, slider_percent_label,
+        slider_value_from_fraction, stepped_number, stepped_slider_value, text_or_placeholder,
+        visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
@@ -4497,6 +4507,26 @@ default = "visible"
         for (text, expected) in cases {
             assert_eq!(parsed_color(text), expected, "text: {text:?}");
         }
+    }
+
+    #[test]
+    fn control_characters_never_reach_the_list_filter() {
+        for (character, expected, label) in [
+            ("\n", false, "macOS reports enter as a newline key_char"),
+            ("\r", false, "carriage return is the same activation key"),
+            ("\t", false, "tab moves focus and is not filter text"),
+            ("\u{1b}", false, "escape closes the list"),
+            ("", false, "an empty key_char adds nothing"),
+            ("a", true, "a letter is filter text"),
+            (" ", true, "a space is filter text once the filter is open"),
+            ("ä", true, "non-ascii text is filter text"),
+        ] {
+            assert_eq!(is_filter_text(character), expected, "{label}");
+        }
+        assert!(
+            matches!(list_intent("enter"), Some(super::ListIntent::Activate)),
+            "enter stays the activation intent once the filter declines it"
+        );
     }
 
     #[test]
