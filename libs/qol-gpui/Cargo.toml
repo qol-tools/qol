@@ -14,6 +14,7 @@ qrcode = { version = "0.14", default-features = false }
 smallvec = "1.13"
 tungstenite = "0.26"
 qol-config.workspace = true
+qol-color.workspace = true
 qol-conventions.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true

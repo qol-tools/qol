@@ -110,11 +110,11 @@ impl LauncherView {
 
     pub(crate) fn reset_for_show(&mut self) {
         #[cfg(debug_assertions)]
-        if self.state.selected != 0 || !self.state.query.is_empty() {
+        if self.state.scroll_list.selected != 0 || !self.state.query.is_empty() {
             qol_runtime::probe!(
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_for_show was={} q=\"{}\" title={}",
-                self.state.selected,
+                self.state.scroll_list.selected,
                 self.state.query,
                 self.window_title,
             );

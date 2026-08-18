@@ -96,7 +96,7 @@ pub(super) fn input(
             view.state.cursor,
             selection_label(view),
             selected_before,
-            view.state.selected,
+            view.state.scroll_list.selected,
             result_count,
             view.state.mode.label(),
             view.state.fuzziness.label(),
@@ -125,7 +125,7 @@ pub(super) fn launch(
     {
         let selected_name = view
             .store
-            .get(view.state.selected)
+            .get(view.state.scroll_list.selected)
             .map(|scored| view.store.name(scored))
             .unwrap_or("");
         qol_runtime::probe!(
@@ -146,7 +146,7 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
     {
         let selected_name = view
             .store
-            .get(view.state.selected)
+            .get(view.state.scroll_list.selected)
             .map(|scored| view.store.name(scored))
             .unwrap_or("");
         qol_runtime::probe!(
@@ -156,7 +156,7 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
             qol_runtime::probe::quoted(&view.state.query, 120),
             view.state.query_len(),
             view.store.result_count(),
-            view.state.selected,
+            view.state.scroll_list.selected,
             qol_runtime::probe::quoted(selected_name, 120),
         );
     }
@@ -207,7 +207,7 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
         fuzziness: view.state.fuzziness.label(),
         result_count: sample.result_count,
         visible_rows: sample.visible_rows,
-        selected: view.state.selected,
+        selected: view.state.scroll_list.selected,
         scroll_offset: sample.scroll_offset,
         hidden_above: sample.hidden_above,
         hidden_below: sample.hidden_below,

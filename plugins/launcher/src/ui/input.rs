@@ -117,15 +117,15 @@ impl LauncherState {
     }
 
     fn move_up(&mut self) {
-        if self.selected == 0 {
+        if self.scroll_list.selected == 0 {
             self.previous_selected = None;
             self.register_nav(NavDirection::Up);
             self.edge_hit = Some(EdgeHit::Top);
             return;
         }
 
-        self.previous_selected = Some(self.selected);
-        self.selected -= 1;
+        self.previous_selected = Some(self.scroll_list.selected);
+        self.scroll_list.move_up();
         self.register_nav(NavDirection::Up);
         self.edge_hit = None;
     }
@@ -136,15 +136,15 @@ impl LauncherState {
         }
 
         let max = result_count.saturating_sub(1);
-        if self.selected >= max {
+        if self.scroll_list.selected >= max {
             self.previous_selected = None;
             self.register_nav(NavDirection::Down);
             self.edge_hit = Some(EdgeHit::Bottom);
             return;
         }
 
-        self.previous_selected = Some(self.selected);
-        self.selected += 1;
+        self.previous_selected = Some(self.scroll_list.selected);
+        self.scroll_list.move_down(result_count);
         self.register_nav(NavDirection::Down);
         self.edge_hit = None;
     }
@@ -307,14 +307,17 @@ mod tests {
             state.apply_key("down", false, false, false, false, 7),
             InputEffect::Navigate
         );
-        assert_eq!(state.selected, 1);
+        assert_eq!(state.scroll_list.selected, 1);
 
         assert_eq!(
             state.apply_key("up", false, false, false, false, 7),
             InputEffect::Ignore,
             "an up arriving within the phantom window must not move"
         );
-        assert_eq!(state.selected, 1, "selection holds against the phantom up");
+        assert_eq!(
+            state.scroll_list.selected, 1,
+            "selection holds against the phantom up"
+        );
     }
 
     #[test]
@@ -323,7 +326,7 @@ mod tests {
 
         let mut state = LauncherState::new();
         state.apply_key("down", false, false, false, false, 7);
-        assert_eq!(state.selected, 1);
+        assert_eq!(state.scroll_list.selected, 1);
 
         state.last_nav_at = Some(Instant::now() - Duration::from_millis(250));
         assert_eq!(
@@ -331,7 +334,7 @@ mod tests {
             InputEffect::Navigate,
             "a human-paced reversal is real navigation"
         );
-        assert_eq!(state.selected, 0);
+        assert_eq!(state.scroll_list.selected, 0);
     }
 
     #[test]
@@ -344,7 +347,10 @@ mod tests {
                 InputEffect::Navigate,
                 "down #{expected} must navigate"
             );
-            assert_eq!(state.selected, expected, "down #{expected} advances");
+            assert_eq!(
+                state.scroll_list.selected, expected,
+                "down #{expected} advances"
+            );
         }
     }
 
@@ -389,7 +395,7 @@ mod tests {
         let effect = state.apply_key("down", false, false, false, false, result_count);
         assert_eq!(effect, InputEffect::Navigate);
         assert_eq!(
-            state.selected, 1,
+            state.scroll_list.selected, 1,
             "down advances once navigation reads the live count, not the stale 0"
         );
     }

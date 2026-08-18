@@ -46,14 +46,13 @@ pub struct LauncherState {
     pub query: String,
     pub cursor: usize,
     pub selection_anchor: Option<usize>,
-    pub selected: usize,
+    pub scroll_list: qol_gpui::scroll_list::ScrollList,
     pub previous_selected: Option<usize>,
     pub edge_hit: Option<EdgeHit>,
     pub nav_direction: Option<NavDirection>,
     pub nav_momentum: u8,
     pub nav_decay_step: Duration,
     pub last_nav_at: Option<Instant>,
-    pub scroll_offset: usize,
     pub boost_adjusting: bool,
     pub launch_error: Option<String>,
 }
@@ -66,14 +65,13 @@ impl LauncherState {
             query: String::new(),
             cursor: 0,
             selection_anchor: None,
-            selected: 0,
+            scroll_list: qol_gpui::scroll_list::ScrollList::new(MAX_VISIBLE),
             previous_selected: None,
             edge_hit: None,
             nav_direction: None,
             nav_momentum: 0,
             nav_decay_step: NAV_DECAY_STEP_SLOW,
             last_nav_at: None,
-            scroll_offset: 0,
             boost_adjusting: false,
             launch_error: None,
         }
@@ -170,40 +168,34 @@ impl LauncherState {
 
     pub fn reset_results_position(&mut self) {
         #[cfg(debug_assertions)]
-        if self.selected != 0 {
+        if self.scroll_list.selected != 0 {
             qol_runtime::probe!(
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_position was={} q=\"{}\"",
-                self.selected,
+                self.scroll_list.selected,
                 self.query,
             );
         }
-        self.selected = 0;
+        self.scroll_list.reset();
         self.previous_selected = None;
         self.edge_hit = None;
         self.nav_direction = None;
         self.nav_momentum = 0;
         self.nav_decay_step = NAV_DECAY_STEP_SLOW;
         self.last_nav_at = None;
-        self.scroll_offset = 0;
     }
 
     pub fn sync_result_window(&mut self, result_count: usize) {
         #[cfg(debug_assertions)]
-        let before = self.selected;
-        qol_gpui::scroll_list::clamp_into_view(
-            &mut self.selected,
-            &mut self.scroll_offset,
-            result_count,
-            MAX_VISIBLE,
-        );
+        let before = self.scroll_list.selected;
+        self.scroll_list.sync(result_count);
         #[cfg(debug_assertions)]
-        if before != self.selected {
+        if before != self.scroll_list.selected {
             qol_runtime::probe!(
                 "LAUNCHER_SEL_CLAMP",
                 "before={} after={} count={} q=\"{}\"",
                 before,
-                self.selected,
+                self.scroll_list.selected,
                 result_count,
                 self.query,
             );
@@ -230,7 +222,7 @@ impl LauncherState {
                 self.last_nav_at
                     .map(|last| Instant::now().duration_since(last).as_millis())
                     .unwrap_or(0),
-                self.selected,
+                self.scroll_list.selected,
             );
         }
         phantom
@@ -308,7 +300,10 @@ impl LauncherState {
             return 0;
         }
         let max_offset = result_count.saturating_sub(visible);
-        self.selected.saturating_sub(visible / 2).min(max_offset)
+        self.scroll_list
+            .selected
+            .saturating_sub(visible / 2)
+            .min(max_offset)
     }
 }
 

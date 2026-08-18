@@ -29,7 +29,7 @@ impl LauncherView {
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let result_count = self.store.result_count();
-        let selected_before = self.state.selected;
+        let selected_before = self.state.scroll_list.selected;
         let effect = self
             .state
             .apply_key(key, secondary, control, shift, alt, result_count);
@@ -139,7 +139,7 @@ impl LauncherView {
     }
 
     fn adjust_selected_boost(&mut self, delta: i32) {
-        let Some(scored) = self.store.get(self.state.selected) else {
+        let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
             return;
         };
         if !matches!(scored.source, crate::discovery::search::ResultSource::App) {
@@ -157,16 +157,16 @@ impl LauncherView {
         trace::launch(self, "start", started);
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
-        let Some(scored) = self.store.get(self.state.selected) else {
+        let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
             eprintln!(
                 "[controller] launch_selected: no scored item at index {}",
-                self.state.selected
+                self.state.scroll_list.selected
             );
             return;
         };
         eprintln!(
             "[controller] launch_selected: index={} source={:?} name={:?}",
-            self.state.selected,
+            self.state.scroll_list.selected,
             scored.source,
             self.store.name(scored)
         );

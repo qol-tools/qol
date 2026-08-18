@@ -1,6 +1,6 @@
 use gpui::*;
 use launcher::open_window_with_focus;
-use std::collections::HashMap;
+use qol_frecency::{FrequencyData, FrequencyEntry};
 
 actions!(test, [Quit]);
 
@@ -8,17 +8,6 @@ const SECS_PER_DAY: u64 = 86400;
 const NOW: u64 = 1_000_000_000;
 const HALF_LIFE_DAYS: f64 = 7.0;
 const FREQUENCY_BONUS: i32 = 500;
-
-struct FrequencyEntry {
-    count: u32,
-    last_accessed: u64,
-}
-
-fn effective_count(entry: &FrequencyEntry, half_life_days: f64) -> f64 {
-    let days_elapsed = NOW.saturating_sub(entry.last_accessed) as f64 / SECS_PER_DAY as f64;
-    let decay = (-days_elapsed * 0.693 / half_life_days).exp();
-    entry.count as f64 * decay
-}
 
 struct ScoredItem {
     name: String,
@@ -28,7 +17,7 @@ struct ScoredItem {
 struct FrecencyView {
     query: String,
     items: Vec<String>,
-    frequency: HashMap<String, FrequencyEntry>,
+    frequency: FrequencyData,
     selected: usize,
     focus_handle: FocusHandle,
 }
@@ -51,29 +40,29 @@ impl FrecencyView {
         .map(String::from)
         .collect();
 
-        let mut frequency = HashMap::new();
-        frequency.insert(
+        let mut frequency = FrequencyData::default();
+        frequency.entries.insert(
             "Terminal".into(),
             FrequencyEntry {
                 count: 20,
                 last_accessed: NOW,
             },
         );
-        frequency.insert(
+        frequency.entries.insert(
             "Firefox".into(),
             FrequencyEntry {
                 count: 15,
                 last_accessed: NOW,
             },
         );
-        frequency.insert(
+        frequency.entries.insert(
             "VS Code".into(),
             FrequencyEntry {
                 count: 10,
                 last_accessed: NOW - 3 * SECS_PER_DAY,
             },
         );
-        frequency.insert(
+        frequency.entries.insert(
             "Slack".into(),
             FrequencyEntry {
                 count: 5,
@@ -106,11 +95,13 @@ impl FrecencyView {
 
         let length_penalty = name.len() as i32;
 
-        let frequency_bonus = self
-            .frequency
-            .get(name)
-            .map(|e| (effective_count(e, HALF_LIFE_DAYS) * FREQUENCY_BONUS as f64) as i32)
-            .unwrap_or(0);
+        let frequency_bonus = qol_frecency::frequency_bonus(
+            name,
+            &self.frequency,
+            NOW,
+            HALF_LIFE_DAYS,
+            FREQUENCY_BONUS,
+        );
 
         match_penalty + length_penalty - frequency_bonus
     }
@@ -139,12 +130,7 @@ impl FrecencyView {
         let ranked = self.ranked_items();
         if let Some(item) = ranked.get(self.selected) {
             let name = item.name.clone();
-            let entry = self.frequency.entry(name).or_insert(FrequencyEntry {
-                count: 0,
-                last_accessed: NOW,
-            });
-            entry.count += 1;
-            entry.last_accessed = NOW;
+            qol_frecency::record(&mut self.frequency, name, NOW);
         }
     }
 }

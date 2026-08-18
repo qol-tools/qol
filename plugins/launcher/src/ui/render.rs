@@ -114,12 +114,13 @@ impl Render for LauncherView {
 
         let result_count = self.store.result_count();
         self.state.sync_result_window(result_count);
-        let visible = result_count.min(MAX_VISIBLE);
+        let visible_range = self.state.scroll_list.visible_range(result_count);
+        let visible = visible_range.len();
+        let scroll_offset = visible_range.start;
         let nav_cues = self.state.nav_cues();
         self.apply_focus_gravity_if_idle(result_count, visible, nav_cues.decayed_momentum, cx);
-        let scroll_offset = self.state.scroll_offset;
-        let hidden_above = scroll_offset;
-        let hidden_below = result_count.saturating_sub(scroll_offset + visible);
+        let hidden_above = visible_range.start;
+        let hidden_below = result_count.saturating_sub(visible_range.end);
         if nav_cues.decayed_momentum > 0 {
             self.ensure_trail_decay_tick(cx);
         }
@@ -144,7 +145,7 @@ impl Render for LauncherView {
         #[cfg(debug_assertions)]
         let selected_name = self
             .store
-            .get(self.state.selected)
+            .get(self.state.scroll_list.selected)
             .map(|scored| self.store.name(scored))
             .unwrap_or("")
             .to_string();
@@ -221,7 +222,7 @@ impl Render for LauncherView {
                 self.state.launch_error.as_deref(),
                 self.state.cursor,
                 self.state.selected_range(),
-                self.state.selected,
+                self.state.scroll_list.selected,
                 result_count,
                 scroll_offset,
                 visible,
@@ -258,11 +259,12 @@ impl LauncherView {
         }
 
         let target = self.state.focus_gravity_target(result_count, visible);
-        let Some(next_offset) = Self::step_toward(self.state.scroll_offset, target) else {
+        let Some(next_offset) = Self::step_toward(self.state.scroll_list.scroll_offset, target)
+        else {
             return;
         };
 
-        self.state.scroll_offset = next_offset;
+        self.state.scroll_list.scroll_offset = next_offset;
         cx.notify();
     }
 
@@ -291,7 +293,7 @@ impl LauncherView {
     ) -> Vec<Div> {
         let mut rows = Vec::with_capacity(visible);
         let mut prev_score: Option<i32> = None;
-        let selected = self.state.selected;
+        let selected = self.state.scroll_list.selected;
 
         for (i, scored) in self
             .store

@@ -460,11 +460,8 @@ pub fn set_unmap_hide(_enabled: bool) {}
 
 #[cfg(debug_assertions)]
 fn parse_hex_rgb(hex: &str) -> Option<u32> {
-    let hex = hex.trim().trim_start_matches('#');
-    if hex.len() != 6 {
-        return None;
-    }
-    u32::from_str_radix(hex, 16).ok()
+    let (red, green, blue) = qol_color::parse_hex_color(hex.trim())?;
+    Some(qol_color::rgb24(red, green, blue))
 }
 
 #[cfg(debug_assertions)]
