@@ -1,4 +1,6 @@
 pub mod platform;
+#[cfg(target_os = "linux")]
+mod session;
 
 use anyhow::Result;
 
@@ -39,4 +41,9 @@ pub fn toggle() -> Result<ColorScheme> {
     let target = platform.current_scheme()?.opposite();
     platform.apply_scheme(target)?;
     Ok(target)
+}
+
+#[cfg(target_os = "linux")]
+pub fn restore(mode: crate::session::RestoreMode, report: &mut crate::session::RestoreReport) {
+    platform::restore_linux(mode, report);
 }

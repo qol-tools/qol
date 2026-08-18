@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::theme::ColorScheme;
 
-use super::super::gsettings;
+use super::super::{gsettings, snapshot_key};
 use super::{installed_themes, naming, DesktopBackend};
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
@@ -24,6 +24,7 @@ impl DesktopBackend for Gnome {
             ColorScheme::Light => "default",
             ColorScheme::Dark => "prefer-dark",
         };
+        snapshot_key(INTERFACE_SCHEMA, "color-scheme")?;
         gsettings::set(INTERFACE_SCHEMA, "color-scheme", color_scheme)?;
         apply_gtk_theme(target);
         Ok(())
@@ -37,7 +38,9 @@ fn apply_gtk_theme(target: ColorScheme) {
     let resolved = naming::resolve(&current, target, &installed_themes());
     match resolved {
         Ok(name) => {
-            if let Err(error) = gsettings::set(INTERFACE_SCHEMA, "gtk-theme", &name) {
+            if let Err(error) = snapshot_key(INTERFACE_SCHEMA, "gtk-theme") {
+                eprintln!("[os-themes] gtk theme not updated: {error:#}");
+            } else if let Err(error) = gsettings::set(INTERFACE_SCHEMA, "gtk-theme", &name) {
                 eprintln!("[os-themes] gtk theme not updated: {error:#}");
             }
         }

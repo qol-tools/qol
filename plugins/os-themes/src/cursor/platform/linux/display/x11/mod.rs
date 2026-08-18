@@ -69,4 +69,4 @@ mod sampling;
 mod session;
 mod source;
 
-pub(crate) use session::CursorSession;
+pub(crate) use session::{recover_scale, CursorSession};

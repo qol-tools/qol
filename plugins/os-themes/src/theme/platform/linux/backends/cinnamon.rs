@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::theme::ColorScheme;
 
-use super::super::gsettings;
+use super::super::{gsettings, snapshot_key};
 use super::{installed_themes, naming, DesktopBackend};
 
 const INTERFACE_SCHEMA: &str = "org.cinnamon.desktop.interface";
@@ -22,6 +22,7 @@ impl DesktopBackend for Cinnamon {
         let installed = installed_themes();
         let current = gsettings::get(INTERFACE_SCHEMA, "gtk-theme")?;
         let gtk_theme = naming::resolve(&current, target, &installed)?;
+        snapshot_key(INTERFACE_SCHEMA, "gtk-theme")?;
         gsettings::set(INTERFACE_SCHEMA, "gtk-theme", &gtk_theme)?;
         apply_shell_theme(target, &installed);
         Ok(())
@@ -35,7 +36,9 @@ fn apply_shell_theme(target: ColorScheme, installed: &[String]) {
     let resolved = naming::resolve(&current, target, installed);
     match resolved {
         Ok(name) => {
-            if let Err(error) = gsettings::set(SHELL_SCHEMA, "name", &name) {
+            if let Err(error) = snapshot_key(SHELL_SCHEMA, "name") {
+                eprintln!("[os-themes] shell theme not updated: {error:#}");
+            } else if let Err(error) = gsettings::set(SHELL_SCHEMA, "name", &name) {
                 eprintln!("[os-themes] shell theme not updated: {error:#}");
             }
         }

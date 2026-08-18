@@ -60,6 +60,7 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             self.capture_live_cursors();
             self.tree = collect_tree(self.display, self.root);
+            crate::cursor::journal::journal_scaled(self.root, &window_ids(&self.tree));
         }
         let scaled = self.grow_cursor.as_ref().and_then(|grow_cursor| {
             scale_cursor_for_display(self.display, self.root, grow_cursor, scale)
@@ -153,6 +154,7 @@ impl CursorSession {
         self.applied_cursor = None;
         self.grow_cursor = None;
         self.tree = Vec::new();
+        crate::cursor::journal::clear_journal();
     }
 
     fn flush(&self) {
@@ -272,6 +274,32 @@ impl Drop for CursorSession {
         self.restore();
         unsafe { xlib::XCloseDisplay(self.display) };
     }
+}
+
+fn window_ids(windows: &[xlib::Window]) -> Vec<u64> {
+    windows.iter().map(|window| *window as u64).collect()
+}
+
+pub(super) fn recover_scale(root: u64, windows: &[u64]) {
+    unsafe { xlib::XSetErrorHandler(Some(log_x_error)) };
+    let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
+    if display.is_null() {
+        return;
+    }
+    for window in windows {
+        if *window == root {
+            continue;
+        }
+        unsafe { xlib::XUndefineCursor(display, *window as xlib::Window) };
+    }
+    let themed = unsafe { xcursor::XcursorLibraryLoadCursor(display, c"left_ptr".as_ptr()) };
+    if themed != 0 {
+        unsafe { xlib::XDefineCursor(display, root as xlib::Window, themed) };
+        unsafe { xlib::XFreeCursor(display, themed) };
+    }
+    sync(display);
+    unsafe { xlib::XCloseDisplay(display) };
+    eprintln!("[os-themes] recovered cursors left scaled after an abnormal exit");
 }
 
 pub(super) fn collect_tree(display: *mut xlib::Display, root: xlib::Window) -> Vec<xlib::Window> {

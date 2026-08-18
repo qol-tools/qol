@@ -3,6 +3,8 @@ mod cli;
 mod config;
 mod cursor;
 mod doctor;
+#[cfg(target_os = "linux")]
+mod session;
 mod settings;
 mod theme;
 

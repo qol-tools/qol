@@ -12,6 +12,9 @@ pub fn run() -> Result<()> {
 
     Platform.install_signal_handlers();
 
+    #[cfg(target_os = "linux")]
+    crate::session::recover();
+
     let control = Arc::new(RunState::new());
     let (tx, rx) = mpsc::channel();
     ensure!(
@@ -22,7 +25,12 @@ pub fn run() -> Result<()> {
     let listener_control = Arc::clone(&control);
     std::thread::spawn(move || handle_daemon_commands(rx, listener_control));
 
-    supervise_effect(control)
+    let result = supervise_effect(control);
+
+    #[cfg(target_os = "linux")]
+    crate::session::restore_exit();
+
+    result
 }
 
 fn supervise_effect(control: Arc<RunState>) -> Result<()> {
