@@ -42,6 +42,27 @@ pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
 
 pub mod artifact;
 
+pub mod api_routes {
+    pub const HOTKEYS: &str = "/api/hotkeys";
+    pub const HOTKEY_ERRORS: &str = "/api/hotkeys/errors";
+    pub const SHORTCUTS: &str = "/api/shortcuts";
+    pub const BUILD_INFO: &str = "/api/build-info";
+    pub const AUTH_HEALTH: &str = "/api/auth/health";
+    pub const CONFIG: &str = "/api/config";
+
+    pub fn shortcut(id: &str) -> String {
+        format!("{SHORTCUTS}/{id}")
+    }
+
+    pub fn plugin_action(plugin_id: &str, action: &str) -> String {
+        format!("/api/plugins/{plugin_id}/actions/{action}")
+    }
+
+    pub fn plugin_query(plugin_id: &str, query: &str) -> String {
+        format!("/api/plugins/{plugin_id}/queries/{query}")
+    }
+}
+
 pub mod dev_routes {
     pub const ENABLED: &str = "/dev/enabled";
     pub const RELOAD: &str = "/dev/reload";
