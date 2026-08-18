@@ -329,7 +329,7 @@ impl TerminalSessionService {
             } else {
                 self.read_screen_relaxed(binding)?
             };
-            let matched = screen.contains(marker);
+            let matched = screen_contains_ignoring_whitespace(&screen, marker);
             if matched && previous.as_deref() == Some(screen.as_str()) {
                 return Ok(WaitOutcome {
                     completed: true,
@@ -392,6 +392,14 @@ impl TerminalSessionService {
 
 fn next_backoff(backoff: Duration, cap: Duration) -> Duration {
     backoff.saturating_mul(2).min(cap)
+}
+
+pub fn screen_contains_ignoring_whitespace(screen: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let stripped: String = screen.chars().filter(|ch| !ch.is_whitespace()).collect();
+    stripped.contains(needle)
 }
 
 fn stall_if_quiet(
@@ -704,6 +712,91 @@ mod tests {
             ],
             "the sleep must double from the base until it caps"
         );
+    }
+
+    #[test]
+    fn wrapped_marker_with_inserted_whitespace_is_matched() {
+        let screens = vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_ a".to_owned()];
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (rx, _stop) = ticker();
+
+        let outcome = terminals
+            .wait_for_completion(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(60),
+                rx,
+                true,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+            )
+            .unwrap();
+
+        assert!(outcome.completed, "outcome: {outcome:?}");
+        assert!(!outcome.stalled);
+    }
+
+    #[test]
+    fn wrapped_marker_is_never_pushed_to_stalled() {
+        let screens = vec![
+            "idle".to_owned(),
+            "idle\nreport lines...\nQOL_BRIDGE_DONE_ a".to_owned(),
+        ];
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend.clone());
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        drop(tx);
+        let mut requested = Vec::new();
+
+        let outcome = terminals
+            .wait_for_completion_with_backoff(
+                &binding(),
+                "QOL_BRIDGE_DONE_a",
+                Duration::from_secs(60),
+                rx,
+                false,
+                true,
+                &|| None,
+                Duration::from_secs(2),
+                WaitBackoff {
+                    base: Duration::from_millis(1),
+                    cap: Duration::from_millis(2),
+                },
+                &mut |duration| {
+                    requested.push(duration);
+                    std::thread::sleep(duration);
+                },
+            )
+            .unwrap();
+
+        assert!(outcome.completed, "must complete against a visible marker");
+        assert!(!outcome.stalled, "a visible marker must never stall");
+        assert!(
+            !requested.is_empty(),
+            "waited through the poll cadence before completing"
+        );
+    }
+
+    #[test]
+    fn match_resumes_from_a_partial_mismatch_without_skipping_the_current_char() {
+        assert!(screen_contains_ignoring_whitespace("aaab", "aab"));
+    }
+
+    #[test]
+    fn match_survives_a_prior_partial_echo_before_the_marker() {
+        let screen = "Completion fragments: `QOL_BRIDGE_DONE_` and `abc123`.".to_owned()
+            + "QOL_BRIDGE_DONE_abc123";
+        assert!(screen_contains_ignoring_whitespace(
+            &screen,
+            "QOL_BRIDGE_DONE_abc123"
+        ));
+    }
+
+    #[test]
+    fn empty_needle_never_matches() {
+        assert!(!screen_contains_ignoring_whitespace("any screen", ""));
     }
 
     #[test]

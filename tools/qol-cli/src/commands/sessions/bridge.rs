@@ -11,8 +11,8 @@ use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionInventory,
-    TerminalSessionService, TextInput,
+    screen_contains_ignoring_whitespace, DeliveryMode, ScreenReader, SessionBinding, SessionFacts,
+    SessionInventory, TerminalSessionService, TextInput,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1016,7 +1016,10 @@ pub(super) fn delivery_observed(
         let screen = terminals
             .read_screen_relaxed(binding)
             .context("bridge screen read failed")?;
-        if screen.contains(fragment) || screen != pre_screen || liveness() == Some(true) {
+        if screen_contains_ignoring_whitespace(&screen, fragment)
+            || screen != pre_screen
+            || liveness() == Some(true)
+        {
             return Ok(true);
         }
         if Instant::now() >= deadline {
