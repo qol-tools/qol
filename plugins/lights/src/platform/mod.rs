@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -13,6 +15,11 @@ mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(crate) use fallback::{
+    candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
+    enumerate_serial_metadata, inspect_serial_access,
+};
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,

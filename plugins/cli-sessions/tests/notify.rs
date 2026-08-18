@@ -1,6 +1,6 @@
 use plugin_cli_sessions::notify::{announces_attention, Notice};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::Tool;
+use qol_terminal_sessions::cli::{claude_tool, generic_tool};
 
 #[test]
 fn announces_only_on_transition_into_attention() {
@@ -26,10 +26,10 @@ fn announces_only_on_transition_into_attention() {
 
 #[test]
 fn notice_prefixes_body_with_tool_only_for_agents() {
-    let claude = Notice::new(Tool::Claude, "improve-logging".to_string(), "needs you");
+    let claude = Notice::new(&claude_tool(), "improve-logging".to_string(), "needs you");
     assert_eq!(claude.title, "improve-logging");
     assert_eq!(claude.body, "Claude \u{00B7} needs you");
 
-    let generic = Notice::new(Tool::Generic, "qol dev".to_string(), "your turn");
+    let generic = Notice::new(&generic_tool(), "qol dev".to_string(), "your turn");
     assert_eq!(generic.body, "your turn", "generic carries no tool prefix");
 }

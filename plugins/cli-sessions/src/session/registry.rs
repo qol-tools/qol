@@ -4,7 +4,7 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 use serde::{Deserialize, Serialize};
 
 use crate::session::status::Status;
-use crate::session::tool::Tool;
+use crate::session::tool::{is_generic, Tool};
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
@@ -51,12 +51,15 @@ pub fn meaningful_name(value: Option<&str>) -> Option<&str> {
     Some(value)
 }
 
-pub fn summary_for(status: Status, tool: Tool) -> String {
+pub fn summary_for(status: Status, tool: &Tool) -> String {
     match status {
-        Status::Working => match tool {
-            Tool::Generic => "running",
-            Tool::Claude | Tool::Codex | Tool::Kimi | Tool::Pi => "working",
-        },
+        Status::Working => {
+            if is_generic(tool) {
+                "running"
+            } else {
+                "working"
+            }
+        }
         Status::Service => "live",
         Status::YourTurn => "your turn",
         Status::NeedsYou => "needs you",
@@ -119,5 +122,5 @@ fn rank(state: &SessionState) -> (u8, u8) {
         Status::Unknown => 6,
     };
     let status = if state.bridged { status.min(3) } else { status };
-    (status, u8::from(state.tool == Tool::Generic))
+    (status, u8::from(is_generic(&state.tool)))
 }

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::session::tool::Tool;
+use qol_terminal_sessions::cli::{CliTool, KIMI_TOOL_ID, PI_TOOL_ID};
 
 pub fn screen_hash(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
@@ -10,12 +10,33 @@ pub fn screen_hash(text: &str) -> u64 {
     h.finish()
 }
 
-pub fn stable_screen<'a>(text: &'a str, tool: Tool) -> Cow<'a, str> {
-    match tool {
-        Tool::Pi => pi_stable(text),
-        Tool::Kimi => kimi_stable(text),
-        Tool::Claude | Tool::Codex | Tool::Generic => Cow::Borrowed(text),
+struct ScreenStabilizer {
+    apply: fn(&str) -> Cow<'_, str>,
+}
+
+impl ScreenStabilizer {
+    fn stabilize<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        (self.apply)(text)
     }
+}
+
+const PI: ScreenStabilizer = ScreenStabilizer { apply: pi_stable };
+const KIMI: ScreenStabilizer = ScreenStabilizer { apply: kimi_stable };
+const IDENTITY: ScreenStabilizer = ScreenStabilizer {
+    apply: identity_stable,
+};
+
+fn identity_stable(text: &str) -> Cow<'_, str> {
+    Cow::Borrowed(text)
+}
+
+pub fn stable_screen<'a>(text: &'a str, tool: &CliTool) -> Cow<'a, str> {
+    let stabilizer = match tool.id.as_str() {
+        PI_TOOL_ID => &PI,
+        KIMI_TOOL_ID => &KIMI,
+        _ => &IDENTITY,
+    };
+    stabilizer.stabilize(text)
 }
 
 fn pi_stable(text: &str) -> Cow<'_, str> {
@@ -59,7 +80,7 @@ fn kimi_stable(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{screen_hash, stable_screen};
-    use crate::session::tool::Tool;
+    use qol_terminal_sessions::cli::{claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool};
 
     #[test]
     fn screen_hash_changes_with_content_and_is_stable_for_equal_text() {
@@ -79,7 +100,7 @@ mod tests {
         let content = format!(
             "new output arrived\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
         );
-        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Pi).as_ref());
+        let hash = |text: &str| screen_hash(stable_screen(text, &pi_tool()).as_ref());
         assert_eq!(
             hash(&base),
             hash(&footer),
@@ -101,7 +122,7 @@ mod tests {
         let b = format!(
             "streamed output\n{rule}\nchanging line B\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
         );
-        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Pi).as_ref());
+        let hash = |text: &str| screen_hash(stable_screen(text, &pi_tool()).as_ref());
         assert_ne!(
             hash(&a),
             hash(&b),
@@ -121,7 +142,7 @@ mod tests {
         let content = format!(
             "new output arrived\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
         );
-        let hash = |text: &str| screen_hash(stable_screen(text, Tool::Kimi).as_ref());
+        let hash = |text: &str| screen_hash(stable_screen(text, &kimi_tool()).as_ref());
         assert_eq!(
             hash(&base),
             hash(&status),
@@ -137,8 +158,8 @@ mod tests {
     #[test]
     fn non_tool_screens_are_never_normalized() {
         let text = "plain output stays as-is";
-        assert_eq!(stable_screen(text, Tool::Claude).as_ref(), text);
-        assert_eq!(stable_screen(text, Tool::Codex).as_ref(), text);
-        assert_eq!(stable_screen(text, Tool::Generic).as_ref(), text);
+        assert_eq!(stable_screen(text, &claude_tool()).as_ref(), text);
+        assert_eq!(stable_screen(text, &codex_tool()).as_ref(), text);
+        assert_eq!(stable_screen(text, &generic_tool()).as_ref(), text);
     }
 }

@@ -11,7 +11,7 @@ use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::{meaningful_name, SessionState};
 use crate::session::status::Status;
-use crate::session::tool::Tool;
+use crate::session::tool::is_generic;
 use crate::ui::SessionsView;
 
 const HIDE_BUTTON_REASON: &str = "hide-button";
@@ -292,13 +292,14 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
     let branch = s.branch.clone().unwrap_or_default();
     let label = meaningful_name(s.name.as_deref())
         .or_else(|| meaningful_name(Some(&s.project)))
-        .unwrap_or(s.tool.label())
+        .unwrap_or(&s.tool.label)
         .to_owned();
-    let tool_tag = match s.tool {
-        Tool::Claude | Tool::Codex | Tool::Kimi | Tool::Pi => s.tool.label(),
-        Tool::Generic => "",
+    let tool_tag = if is_generic(&s.tool) {
+        String::new()
+    } else {
+        s.tool.label.clone()
     };
-    let tool_color = s.tool.accent().rgb24();
+    let tool_color = s.tool.accent.rgb24();
 
     div()
         .flex()

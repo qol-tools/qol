@@ -13,7 +13,7 @@ use crate::session::git;
 use crate::session::registry::{meaningful_name, summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
-use crate::session::tool::Tool;
+use crate::session::tool::{from_cli_session, is_generic, Tool};
 use crate::signal::screen::{screen_hash, stable_screen};
 use crate::storage::{paths, persist};
 use crate::ui::notify::{self, Notice};
@@ -106,7 +106,7 @@ pub fn tick_with_caches(
         let cli_session = cli_interpreter.describe(pane);
         #[cfg(debug_assertions)]
         let cli_tool = cli_session.tool.id.to_string();
-        let tool = Tool::from_cli_session(&cli_session);
+        let tool = from_cli_session(&cli_session);
         let wants_screen = !pane.at_prompt;
         let (prev, prev_hash) = snapshot(registry, &pane.id);
         let refresh_active = matches!(prev.status, Status::Working | Status::NeedsYou);
@@ -126,7 +126,7 @@ pub fn tick_with_caches(
         };
         let new_hash = screen
             .as_deref()
-            .map(|text| screen_hash(stable_screen(text, tool).as_ref()));
+            .map(|text| screen_hash(stable_screen(text, &tool).as_ref()));
 
         let screen_changed = match (new_hash, prev_hash) {
             (Some(new_hash), Some(prev_hash)) => new_hash != prev_hash,
@@ -134,7 +134,7 @@ pub fn tick_with_caches(
             (None, _) => false,
         };
 
-        let is_service = tool == Tool::Generic && !pane.at_prompt && service_probe.is_service(pane);
+        let is_service = is_generic(&tool) && !pane.at_prompt && service_probe.is_service(pane);
         let screen_evidence = screen
             .as_deref()
             .map(|text| cli_interpreter.classify_screen(pane, text))
@@ -147,7 +147,7 @@ pub fn tick_with_caches(
             file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
             screen_changed,
             at_prompt: pane.at_prompt,
-            is_generic: tool == Tool::Generic,
+            is_generic: is_generic(&tool),
             is_service,
         };
 
@@ -259,7 +259,7 @@ pub fn transition_line(
 fn attention_notice(
     prev: Status,
     new: Status,
-    tool: Tool,
+    tool: &Tool,
     label: Option<&str>,
     cwd: &str,
     summary: &str,
@@ -505,11 +505,11 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         );
     }
     let status = input.reduction.attention.status;
-    let summary = summary_for(status, input.tool);
+    let summary = summary_for(status, &input.tool);
     let notice = attention_notice(
         prev_status,
         status,
-        input.tool,
+        &input.tool,
         name.as_deref(),
         &input.pane.cwd,
         &summary,
@@ -531,7 +531,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
             "phase=transition {}",
             transition_line(
                 &pane_id.to_string(),
-                tool_id(input.tool),
+                tool_id(&input.tool),
                 prev_status,
                 status,
                 reason,
@@ -588,12 +588,6 @@ fn live_bridge_sessions() -> qol_terminal_sessions::bridge::LiveBridges {
         .unwrap_or_default()
 }
 
-fn tool_id(tool: Tool) -> &'static str {
-    match tool {
-        Tool::Claude => "claude",
-        Tool::Codex => "codex",
-        Tool::Kimi => "kimi",
-        Tool::Pi => "pi",
-        Tool::Generic => "generic",
-    }
+fn tool_id(tool: &Tool) -> &str {
+    tool.id.as_str()
 }

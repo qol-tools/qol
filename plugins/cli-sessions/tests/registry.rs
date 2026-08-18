@@ -1,17 +1,17 @@
 use plugin_cli_sessions::host::kitty_session_id;
 use plugin_cli_sessions::registry::{meaningful_name, summary_for, Registry, SessionState};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::Tool;
+use qol_terminal_sessions::cli::{claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool};
 use qol_terminal_sessions::SessionId;
 
 #[test]
 fn working_summary_is_tool_aware() {
     let cases = [
-        (Tool::Generic, "running"),
-        (Tool::Claude, "working"),
-        (Tool::Codex, "working"),
-        (Tool::Kimi, "working"),
-        (Tool::Pi, "working"),
+        (&generic_tool(), "running"),
+        (&claude_tool(), "working"),
+        (&codex_tool(), "working"),
+        (&kimi_tool(), "working"),
+        (&pi_tool(), "working"),
     ];
     for (tool, expected) in cases {
         assert_eq!(
@@ -20,7 +20,7 @@ fn working_summary_is_tool_aware() {
             "tool: {tool:?}"
         );
     }
-    assert_eq!(summary_for(Status::YourTurn, Tool::Generic), "your turn");
+    assert_eq!(summary_for(Status::YourTurn, &generic_tool()), "your turn");
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         name: None,
         cwd: "/a/b/proj".into(),
         branch: None,
-        tool: Tool::Generic,
+        tool: generic_tool(),
         status,
         summary: "x".into(),
         last_activity: last,
@@ -124,7 +124,7 @@ fn agent_working_sorts_above_generic_running() {
     let mut r = Registry::default();
     r.upsert(state(10, Status::Working, 1));
     let mut agent = state(11, Status::Working, 1);
-    agent.tool = Tool::Claude;
+    agent.tool = claude_tool();
     r.upsert(agent);
     let ids: Vec<_> = r
         .sorted()

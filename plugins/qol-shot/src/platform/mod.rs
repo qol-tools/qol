@@ -19,7 +19,17 @@ pub use macos::*;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
-pub const CAPTURE_LOG: &str = "/tmp/record-region.log";
+macro_rules! record_region_base {
+    () => {
+        "record-region"
+    };
+}
+pub const RECORD_REGION_BASE: &str = record_region_base!();
+pub const CAPTURE_LOG: &str = concat!("/tmp/", record_region_base!(), ".log");
+
+pub fn capture_state_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{RECORD_REGION_BASE}.pid"))
+}
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AudioDevice {

@@ -2,8 +2,10 @@ use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::signal::screen::{screen_hash, stable_screen};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::Tool;
-use qol_terminal_sessions::cli::{CliRuntimeState as RT, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{
+    claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, CliRuntimeState as RT,
+    CliSessionInterpreter,
+};
 
 #[test]
 fn screen_hash_changes_with_content_and_is_stable_for_equal_text() {
@@ -18,8 +20,8 @@ fn screen_hash_changes_with_content_and_is_stable_for_equal_text() {
 #[test]
 fn non_tool_screens_pass_through_unchanged() {
     let text = "plain output stays as-is";
-    for tool in [Tool::Claude, Tool::Codex, Tool::Generic] {
-        assert_eq!(stable_screen(text, tool).as_ref(), text, "tool: {tool:?}");
+    for tool in [claude_tool(), codex_tool(), generic_tool()] {
+        assert_eq!(stable_screen(text, &tool).as_ref(), text, "tool: {tool:?}");
     }
 }
 
@@ -35,7 +37,7 @@ fn pi_footer_counter_changes_do_not_count_as_movement() {
     let content = format!(
         "new output arrived\n\u{280B} Working...\n\n{rule}\n\n{rule}\n/tmp\n$0.000 (sub) 0.0%/262k (auto)"
     );
-    let hash = |text: &str| screen_hash(stable_screen(text, Tool::Pi).as_ref());
+    let hash = |text: &str| screen_hash(stable_screen(text, &pi_tool()).as_ref());
     assert_eq!(
         hash(&base),
         hash(&footer),
@@ -60,7 +62,7 @@ fn kimi_status_bar_changes_do_not_count_as_movement() {
     let content = format!(
         "new output arrived\n{boxed}\nyolo  K3-256k thinking: low  \u{2026}/qol-monorepo  main [\u{00B1}]\ncontext: 17% (41.1k/256k)"
     );
-    let hash = |text: &str| screen_hash(stable_screen(text, Tool::Kimi).as_ref());
+    let hash = |text: &str| screen_hash(stable_screen(text, &kimi_tool()).as_ref());
     assert_eq!(
         hash(&base),
         hash(&status),

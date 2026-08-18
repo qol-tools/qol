@@ -1,46 +1,11 @@
-use qol_terminal_sessions::cli::{
-    CliSessionDescriptor, CliToolColor, CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT,
-    CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, KIMI_TOOL_ACCENT, KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
-};
-use serde::{Deserialize, Serialize};
+use qol_terminal_sessions::cli::{CliSessionDescriptor, CliTool, GENERIC_TOOL_ID};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum Tool {
-    Claude,
-    Codex,
-    Kimi,
-    Pi,
-    Generic,
+pub type Tool = CliTool;
+
+pub fn from_cli_session(session: &CliSessionDescriptor) -> Tool {
+    session.tool.clone()
 }
 
-impl Tool {
-    pub fn from_cli_session(session: &CliSessionDescriptor) -> Self {
-        match session.tool.id.as_str() {
-            CODEX_TOOL_ID => Self::Codex,
-            CLAUDE_TOOL_ID => Self::Claude,
-            KIMI_TOOL_ID => Self::Kimi,
-            PI_TOOL_ID => Self::Pi,
-            _ => Self::Generic,
-        }
-    }
-
-    pub fn accent(self) -> CliToolColor {
-        match self {
-            Self::Claude => CLAUDE_TOOL_ACCENT,
-            Self::Codex => CODEX_TOOL_ACCENT,
-            Self::Kimi => KIMI_TOOL_ACCENT,
-            Self::Pi => PI_TOOL_ACCENT,
-            Self::Generic => GENERIC_TOOL_ACCENT,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude",
-            Self::Codex => "Codex",
-            Self::Kimi => "Kimi",
-            Self::Pi => "Pi",
-            Self::Generic => "CLI",
-        }
-    }
+pub fn is_generic(tool: &Tool) -> bool {
+    tool.id.as_str() == GENERIC_TOOL_ID
 }

@@ -1,6 +1,8 @@
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
-use plugin_cli_sessions::tool::Tool;
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use plugin_cli_sessions::tool::from_cli_session;
+use qol_terminal_sessions::cli::{
+    claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, CliSessionInterpreter,
+};
 use qol_terminal_sessions::SessionCapabilities;
 
 #[test]
@@ -8,19 +10,22 @@ fn classify_picks_agent_from_process_group() {
     let cases = [
         (
             vec!["zsh".to_string(), "claude".to_string(), "node".to_string()],
-            Tool::Claude,
+            &claude_tool(),
         ),
-        (vec!["zsh".to_string(), "codex".to_string()], Tool::Codex),
-        (vec!["zsh".to_string(), "pi".to_string()], Tool::Pi),
-        (vec!["zsh".to_string(), "kimi-code".to_string()], Tool::Kimi),
-        (vec!["zsh".to_string(), "kimi".to_string()], Tool::Kimi),
+        (vec!["zsh".to_string(), "codex".to_string()], &codex_tool()),
+        (vec!["zsh".to_string(), "pi".to_string()], &pi_tool()),
+        (
+            vec!["zsh".to_string(), "kimi-code".to_string()],
+            &kimi_tool(),
+        ),
+        (vec!["zsh".to_string(), "kimi".to_string()], &kimi_tool()),
         (
             vec!["zsh".to_string(), "codex".to_string(), "claude".to_string()],
-            Tool::Codex,
+            &codex_tool(),
         ),
-        (vec!["zsh".to_string(), "npm".to_string()], Tool::Generic),
-        (vec!["zsh".to_string()], Tool::Generic),
-        (vec![], Tool::Generic),
+        (vec!["zsh".to_string(), "npm".to_string()], &generic_tool()),
+        (vec!["zsh".to_string()], &generic_tool()),
+        (vec![], &generic_tool()),
     ];
     for (names, want) in cases {
         let pane = Pane {
@@ -36,10 +41,6 @@ fn classify_picks_agent_from_process_group() {
             spawn_identity: None,
         };
         let descriptor = CliSessionInterpreter::system().describe(&pane);
-        assert_eq!(
-            Tool::from_cli_session(&descriptor),
-            want,
-            "names: {names:?}"
-        );
+        assert_eq!(from_cli_session(&descriptor), *want, "names: {names:?}");
     }
 }

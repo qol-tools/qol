@@ -5,7 +5,7 @@ use serde::Deserialize;
 use plugin_cli_sessions::attention::{reduce, Attention, Evidence};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::registry::summary_for;
-use plugin_cli_sessions::tool::Tool;
+use plugin_cli_sessions::tool::{from_cli_session, is_generic};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 #[derive(Deserialize)]
@@ -42,7 +42,7 @@ fn main() {
 
     let interpreter = CliSessionInterpreter::system();
     let cli_session = interpreter.describe(&pane);
-    let tool = Tool::from_cli_session(&cli_session);
+    let tool = from_cli_session(&cli_session);
     let screen_evidence = interpreter.classify_screen(&pane, &frame.screen);
     let evidence = Evidence {
         descriptor_runtime: cli_session.evidence.runtime,
@@ -52,7 +52,7 @@ fn main() {
         file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
         screen_changed: true,
         at_prompt: frame.at_prompt,
-        is_generic: tool == Tool::Generic,
+        is_generic: is_generic(&tool),
         is_service: false,
     };
     let reduction = reduce(&Attention::default(), &evidence, 0);
@@ -62,7 +62,7 @@ fn main() {
         tool,
         reduction.phase,
         status,
-        summary_for(status, tool),
+        summary_for(status, &tool),
         cli_session.display_name,
     );
 }

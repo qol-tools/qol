@@ -1,13 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::capture::geometry::{self, monitor_label, rect_label};
 use crate::{platform, Config, Rect};
 
-const STATE_FILE_NAME: &str = "record-region.pid";
 const CAPTURE_STATE_VERSION: u32 = 1;
 const MIN_RECORDING_DIMENSION_PX: i32 = 16;
 
@@ -284,7 +282,7 @@ fn write_capture_state(session: &platform::CaptureSession) -> Result<()> {
         CAPTURE_STATE_VERSION,
         session.pid_list(),
         session.segments.len(),
-        STATE_FILE_NAME
+        platform::RECORD_REGION_BASE
     );
     fs::write(state_file_path(), format!("{content}\n")).context("failed to write capture state")
 }
@@ -292,13 +290,14 @@ fn write_capture_state(session: &platform::CaptureSession) -> Result<()> {
 fn remove_state_file() {
     qol_runtime::probe!(
         "SHOT_RECORD_STATE_FILE",
-        "action=remove file={STATE_FILE_NAME}"
+        "action=remove file={}",
+        platform::RECORD_REGION_BASE
     );
     let _ = fs::remove_file(state_file_path());
 }
 
 fn state_file_path() -> PathBuf {
-    env::temp_dir().join(STATE_FILE_NAME)
+    platform::capture_state_path()
 }
 
 fn trace_record_config(source: &'static str, config: &Config) {

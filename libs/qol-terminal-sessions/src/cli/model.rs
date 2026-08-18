@@ -29,7 +29,7 @@ impl Display for CliToolId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CliTool {
     pub id: CliToolId,
     pub label: String,

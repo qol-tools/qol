@@ -6,7 +6,7 @@ use serde::Deserialize;
 use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::Tool;
+use plugin_cli_sessions::tool::{from_cli_session, is_generic};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 #[derive(Deserialize)]
@@ -48,7 +48,7 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
     };
     let interpreter = CliSessionInterpreter::system();
     let cli_session = interpreter.describe(&pane);
-    let tool = Tool::from_cli_session(&cli_session);
+    let tool = from_cli_session(&cli_session);
     let screen_evidence = interpreter.classify_screen(&pane, screen);
     let prev_status = meta
         .prev
@@ -68,7 +68,7 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         file_quiet_secs: cli_session.evidence.activity.file_quiet_secs,
         screen_changed: meta.screen_changed,
         at_prompt: meta.at_prompt,
-        is_generic: tool == Tool::Generic,
+        is_generic: is_generic(&tool),
         is_service: false,
     };
     reduce(&prev, &evidence, GRACE_SECS + 1).attention.status

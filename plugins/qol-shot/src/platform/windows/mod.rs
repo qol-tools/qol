@@ -93,19 +93,13 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {
-    show_notification("Recording started", "Press your hotkey to stop", 1200);
-}
+pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {}
 
-pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<std::path::PathBuf> {
-    let output_file = session.output_file.clone()?;
-    crate::capture::completion::background_saved(
-        "Recording saved",
-        "Saved to Videos",
-        &output_file,
-        config.capture.open_folder_after_save,
-    );
-    Some(output_file)
+pub fn recording_stopped(
+    _session: &CaptureSession,
+    _config: &Config,
+) -> Option<std::path::PathBuf> {
+    None
 }
 
 pub fn stop_capture(_session: &CaptureSession) -> Result<()> {
@@ -184,9 +178,9 @@ pub fn configure_pin_window(_title: String, _origin: (f64, f64), source_preview:
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         "platform_supported",
-        "Windows capture is not implemented for qol-shot.",
+        "QoL Shot has no Windows capture backend: region selection, screen recording, and clipboard image capture are unsupported.",
     )
-    .with_fix("Use the Linux or macOS backend until a Windows recorder is added.")
+    .with_fix("Run QoL Shot on Linux or macOS until a Windows recorder is added.")
 }
 
 pub fn required_binaries_check() -> DoctorCheckResult {

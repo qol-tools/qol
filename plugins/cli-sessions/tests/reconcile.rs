@@ -9,11 +9,10 @@ use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use plugin_cli_sessions::registry::{Registry, SessionState};
 use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::Tool;
 use qol_terminal_sessions::cli::{
-    codex_tool, CliActivityEvidence, CliRuntimeState, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter, CliSessionStrategy,
-    CliSessionSubscription, CliTool, CliViewportState,
+    codex_tool, generic_tool, kimi_tool, CliActivityEvidence, CliRuntimeState,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter,
+    CliSessionStrategy, CliSessionSubscription, CliTool, CliViewportState,
 };
 use qol_terminal_sessions::SessionBinding;
 
@@ -214,7 +213,7 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         name: None,
         cwd: "/a/proj".into(),
         branch: None,
-        tool: Tool::Codex,
+        tool: codex_tool(),
         status,
         summary: "x".into(),
         last_activity: 1,
@@ -1050,7 +1049,7 @@ fn tick_refreshes_restored_identity_fields() {
         name: None,
         cwd: "/stale".into(),
         branch: None,
-        tool: Tool::Generic,
+        tool: generic_tool(),
         status: Status::Unknown,
         summary: "idle".into(),
         last_activity: 1,
@@ -1264,7 +1263,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         name: None,
         cwd: "/a/proj".into(),
         branch: None,
-        tool: Tool::Kimi,
+        tool: kimi_tool(),
         status: Status::Working,
         summary: "working".into(),
         last_activity: 100,

@@ -6,7 +6,7 @@ use qol_terminal_sessions::SessionId;
 
 use crate::host::TerminalHost;
 use crate::session::status::Status;
-use crate::session::tool::Tool;
+use crate::session::tool::from_cli_session;
 
 pub fn capture_all(
     host: &dyn TerminalHost,
@@ -45,7 +45,7 @@ pub fn capture_all(
             "session_id": pane.id,
             "file": file,
             "title": pane.title,
-            "tool": format!("{:?}", Tool::from_cli_session(&cli_session)),
+            "tool": from_cli_session(&cli_session).label,
             "cli_tool": cli_session.tool.id.as_str(),
             "panel_status": panel_status,
         }));

@@ -1,5 +1,5 @@
 use crate::session::status::Status;
-use crate::session::tool::Tool;
+use crate::session::tool::{is_generic, Tool};
 use qol_runtime::protocol::NotificationLayout;
 
 pub struct Notice {
@@ -8,13 +8,11 @@ pub struct Notice {
 }
 
 impl Notice {
-    pub fn new(tool: Tool, label: String, summary: &str) -> Self {
-        let prefix = match tool {
-            Tool::Claude => "Claude \u{00B7} ",
-            Tool::Codex => "Codex \u{00B7} ",
-            Tool::Kimi => "Kimi \u{00B7} ",
-            Tool::Pi => "Pi \u{00B7} ",
-            Tool::Generic => "",
+    pub fn new(tool: &Tool, label: String, summary: &str) -> Self {
+        let prefix = if is_generic(tool) {
+            String::new()
+        } else {
+            format!("{} \u{00B7} ", tool.label)
         };
         Self {
             title: label,
