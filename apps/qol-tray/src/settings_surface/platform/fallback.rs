@@ -4,8 +4,8 @@ pub(in crate::settings_surface) fn show_toast(
     _level: &str,
     _action: Option<(&str, &str)>,
     _layout: Option<qol_runtime::protocol::NotificationLayout>,
-) -> bool {
-    false
+) -> anyhow::Result<bool> {
+    Ok(false)
 }
 
 pub(in crate::settings_surface) fn request(_plugin_id: &str) -> anyhow::Result<bool> {

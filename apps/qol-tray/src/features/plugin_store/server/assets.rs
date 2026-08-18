@@ -15,6 +15,9 @@ struct QolConfigAssets;
 
 const QOL_CONFIG_ASSET_PREFIX: &str = "libs/qol-config/js/";
 
+pub(super) const AUTH_FRAGMENT_KEY_PLACEHOLDER: &str =
+    "window.__QOL_AUTH_FRAGMENT_KEY__ = null; /* QOL_AUTH_FRAGMENT_KEY_INJECT */";
+
 pub(super) async fn serve_embedded(Path(path): Path<String>) -> impl IntoResponse {
     serve_embedded_file(&path)
 }
@@ -24,11 +27,20 @@ pub(super) async fn serve_embedded_index() -> impl IntoResponse {
     match UiAssets::get("index.html") {
         Some(content) => {
             let html = String::from_utf8_lossy(&content.data);
-            let injected = html.replacen(
-                super::boot::BOOT_PLACEHOLDER,
-                &format!("window.__QOL_BOOT__ = {};", super::boot::boot_json(dev)),
-                1,
-            );
+            let injected = html
+                .replacen(
+                    super::boot::BOOT_PLACEHOLDER,
+                    &format!("window.__QOL_BOOT__ = {};", super::boot::boot_json(dev)),
+                    1,
+                )
+                .replacen(
+                    AUTH_FRAGMENT_KEY_PLACEHOLDER,
+                    &format!(
+                        "window.__QOL_AUTH_FRAGMENT_KEY__ = '{}';",
+                        qol_conventions::HTTP_AUTH_FRAGMENT_KEY
+                    ),
+                    1,
+                );
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],

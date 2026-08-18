@@ -17,7 +17,8 @@ pub fn show_plugin_notification(
             notification_level_name(level),
             action,
             layout,
-        );
+        )
+        .unwrap_or(false);
     if !toast_shown {
         native_notifications::show_plugin_notification(title, body, level, action);
     }

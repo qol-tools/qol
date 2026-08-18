@@ -8,25 +8,27 @@
     <style>html.qol-bootstrapping-dive #app{visibility:hidden!important}</style>
     <script>
         try {
+            var authFragmentKey = window.__QOL_AUTH_FRAGMENT_KEY__ || 'qol_token';
             var rawHash = location.hash.replace(/^#/, '');
             var queryStart = rawHash.indexOf('?');
             var hashRoute = queryStart >= 0 ? rawHash.slice(0, queryStart) : rawHash;
             var hashParams = new URLSearchParams(queryStart >= 0 ? rawHash.slice(queryStart + 1) : '');
-            var fragmentToken = hashParams.get('qol_token');
+            var fragmentToken = hashParams.get(authFragmentKey);
             if (fragmentToken && /^[A-Za-z0-9_-]{43}$/.test(fragmentToken)) {
                 sessionStorage.setItem('qol:http-token', fragmentToken);
-                hashParams.delete('qol_token');
+                hashParams.delete(authFragmentKey);
                 var remaining = hashParams.toString();
                 history.replaceState(null, '', location.pathname + location.search + '#' + hashRoute + (remaining ? '?' + remaining : ''));
             }
             var httpToken = sessionStorage.getItem('qol:http-token');
             if (httpToken) {
-                document.cookie = 'qol_token=' + httpToken + '; SameSite=Strict; Path=/';
+                document.cookie = authFragmentKey + '=' + httpToken + '; SameSite=Strict; Path=/';
                 window.__QOL_HTTP_TOKEN__ = httpToken;
             }
         } catch (e) {}
     </script>
     <script>window.__QOL_BOOT__ = null; /* QOL_BOOT_INJECT */</script>
+    <script>window.__QOL_AUTH_FRAGMENT_KEY__ = null; /* QOL_AUTH_FRAGMENT_KEY_INJECT */</script>
     <script>
         try {
             if (localStorage.getItem('qoltray.activePlugin')) {

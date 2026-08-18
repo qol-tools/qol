@@ -25,28 +25,20 @@ pub(super) fn active_install_id_path() -> Result<PathBuf> {
 pub(super) fn read_install_id_file(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     let trimmed = content.trim();
-    if valid_install_id(trimmed) {
+    if qol_config::valid_install_id(trimmed) {
         return Some(trimmed.to_string());
     }
     None
 }
 
 pub(super) fn write_install_id_file(path: &Path, install_id: &str) -> Result<()> {
-    if !valid_install_id(install_id) {
+    if !qol_config::valid_install_id(install_id) {
         anyhow::bail!("invalid install id");
     }
 
     file_io::ensure_parent_dir(path)?;
     fs::write(path, format!("{}\n", install_id))
         .with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn valid_install_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 #[cfg(test)]

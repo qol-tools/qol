@@ -1,8 +1,6 @@
 use tokio::sync::broadcast;
 
-use super::ConfigKind;
-
-const CHANNEL_CAPACITY: usize = 64;
+use super::{ConfigKind, BROADCAST_CAPACITY};
 
 pub struct ConfigBus {
     tx: broadcast::Sender<ConfigKind>,
@@ -10,7 +8,7 @@ pub struct ConfigBus {
 
 impl ConfigBus {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self { tx }
     }
 

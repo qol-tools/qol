@@ -273,6 +273,15 @@ mod tests {
     }
 
     #[test]
+    fn served_index_still_contains_auth_fragment_key_placeholder() {
+        let index = super::super::assets::index_html_for_test();
+        assert!(
+            index.contains(super::super::assets::AUTH_FRAGMENT_KEY_PLACEHOLDER),
+            "index.html lost the auth fragment key placeholder; the fragment key would be injected"
+        );
+    }
+
+    #[test]
     fn served_index_does_not_use_world_settings_as_accent_source() {
         let index = super::super::assets::index_html_for_test();
         assert!(

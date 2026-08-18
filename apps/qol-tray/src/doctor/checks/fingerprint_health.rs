@@ -10,7 +10,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 const ID: &str = "fingerprint_health";
-const FINGERPRINTS_REL_PATH: &str = "dev/build-fingerprints.json";
 
 pub(super) struct FingerprintHealthCheck;
 
@@ -22,7 +21,7 @@ impl DoctorCheck for FingerprintHealthCheck {
     }
 
     fn run(&self, ctx: &DoctorContext) -> CheckReport {
-        let path = ctx.config_dir().join(FINGERPRINTS_REL_PATH);
+        let path = ctx.config_dir().join(qol_dev_build::DEV_BUILD_STATE_FILE);
         match file_state(&path) {
             FileState::Absent => CheckReport::ok("no build fingerprints recorded yet"),
             FileState::Corrupt(reason) => corrupt_report(&path, &reason),

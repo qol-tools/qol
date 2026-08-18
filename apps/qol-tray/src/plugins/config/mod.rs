@@ -13,7 +13,6 @@ mod tests;
 
 use crate::features::profile::scope_store::PluginConfigSlicePaths;
 use crate::features::profile::ProfileScopeStore;
-use crate::paths;
 use crate::paths::is_safe_path_component;
 use crate::plugins::manifest::PluginUid;
 use crate::plugins::paths as plugin_paths;
@@ -436,7 +435,9 @@ impl PluginConfigManager {
         if !is_safe_path_component(plugin_id) {
             anyhow::bail!("Invalid plugin ID: {}", plugin_id);
         }
-        Ok(paths::plugins_dir()?.join(plugin_id).join("config.json"))
+        Ok(crate::paths::plugins_dir()?
+            .join(plugin_id)
+            .join("config.json"))
     }
 
     pub fn load_configs(&self) -> Result<PluginConfigs> {

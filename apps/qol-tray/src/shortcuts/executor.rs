@@ -98,7 +98,7 @@ fn launch_app(app: &AppRef) -> Result<()> {
 }
 
 fn run_plugin_action(plugin_id: &str, action: &str) -> Result<()> {
-    let path = format!("/api/plugins/{plugin_id}/actions/{action}");
+    let path = qol_conventions::api_routes::plugin_action(plugin_id, action);
     match qol_plugin_api::host_exec::post_to_daemon(&path, "") {
         Ok((status, _)) if (200..300).contains(&status) => Ok(()),
         Ok((status, body)) if body.is_empty() => {

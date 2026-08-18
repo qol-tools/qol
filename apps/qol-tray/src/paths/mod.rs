@@ -109,17 +109,9 @@ pub fn installs_dir() -> Result<PathBuf> {
     base_data_dir().map(|p| p.join("installs"))
 }
 
-fn valid_install_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 fn validated_install_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
-    valid_install_id(trimmed).then(|| trimmed.to_string())
+    qol_config::valid_install_id(trimmed).then(|| trimmed.to_string())
 }
 
 fn active_install_id_path() -> Result<PathBuf> {
@@ -131,7 +123,7 @@ fn install_id_from_active_file() -> Option<String> {
 }
 
 pub fn set_active_install_id(install_id: &str) -> Result<()> {
-    if !valid_install_id(install_id) {
+    if !qol_config::valid_install_id(install_id) {
         return Err(anyhow!("invalid install id"));
     }
     let path = active_install_id_path()?;

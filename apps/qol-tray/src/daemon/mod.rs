@@ -2,6 +2,8 @@ mod config_bus;
 mod events;
 pub mod reconcile;
 
+pub(crate) const BROADCAST_CAPACITY: usize = 64;
+
 pub use config_bus::ConfigBus;
 pub use events::EventBus;
 

@@ -7,15 +7,11 @@ use crate::paths::{self, is_safe_path_component};
 use crate::plugins::config::{classify_os_bucket, resolve_plugin_config, PluginConfigResolution};
 use crate::plugins::manifest::{ConfigScope, PluginManifest, PluginUid};
 
-pub(crate) const CORE_SUBDIR: &str = "core";
-pub(crate) const OS_SUBDIR: &str = "os";
-pub(crate) const DEVICE_SUBDIR: &str = "device";
-pub(crate) const SYNC_SUBDIR: &str = "sync";
-pub(crate) const BACKUPS_SUBDIR: &str = "backups";
-pub(crate) const PLUGIN_CONFIGS_SUBDIR: &str = "plugin-configs";
+pub(crate) use qol_profile_sync::scope::{
+    BACKUPS_SUBDIR, CORE_SUBDIR, DEVICE_SUBDIR, MANIFEST_FILE, OS_SUBDIR, PLUGINS_LOCK_FILE,
+    PLUGIN_CONFIGS_SUBDIR, SYNC_SUBDIR,
+};
 
-pub(crate) const MANIFEST_FILE: &str = "manifest.json";
-pub(crate) const PLUGINS_LOCK_FILE: &str = "plugins.lock.json";
 pub(crate) const HOTKEYS_FILE: &str = "hotkeys.json";
 pub(crate) const SHORTCUTS_FILE: &str = "shortcuts.json";
 pub(crate) const TASK_RUNNER_FILE: &str = "task-runner.json";

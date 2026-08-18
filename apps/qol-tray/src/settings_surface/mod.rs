@@ -41,7 +41,7 @@ pub fn show_toast(
     level: &str,
     action: Option<(&str, &str)>,
     layout: Option<NotificationLayout>,
-) -> bool {
+) -> anyhow::Result<bool> {
     platform::show_toast(title, body, level, action, layout)
 }
 

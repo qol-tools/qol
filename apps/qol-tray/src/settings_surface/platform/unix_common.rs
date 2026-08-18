@@ -562,11 +562,11 @@ pub(in crate::settings_surface) fn show_toast(
     level: &str,
     action: Option<(&str, &str)>,
     layout: Option<NotificationLayout>,
-) -> bool {
+) -> anyhow::Result<bool> {
     let config = config();
     let action =
         action.map(|(label, payload)| serde_json::json!({ "label": label, "payload": payload }));
-    matches!(
+    Ok(matches!(
         core_daemon::send_request(
             &config,
             "toast",
@@ -580,7 +580,7 @@ pub(in crate::settings_surface) fn show_toast(
             Duration::from_millis(500),
         ),
         Ok(DaemonResponse::Handled { .. })
-    )
+    ))
 }
 
 fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {

@@ -68,8 +68,9 @@ enum RunningHostQueryError {
 }
 
 fn running_host_build_info() -> Result<RunningBuildInfo, RunningHostQueryError> {
-    let (status, body) = qol_plugin_api::host_exec::get_from_daemon("/api/build-info")
-        .map_err(|error| RunningHostQueryError::Unavailable(error.to_string()))?;
+    let (status, body) =
+        qol_plugin_api::host_exec::get_from_daemon(qol_conventions::api_routes::BUILD_INFO)
+            .map_err(|error| RunningHostQueryError::Unavailable(error.to_string()))?;
     parse_running_host_response(status, &body)
 }
 

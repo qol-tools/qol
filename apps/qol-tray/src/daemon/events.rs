@@ -2,9 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::broadcast;
 
-use super::DaemonEvent;
-
-const CHANNEL_CAPACITY: usize = 64;
+use super::{DaemonEvent, BROADCAST_CAPACITY};
 
 pub struct EventBus {
     tx: broadcast::Sender<DaemonEvent>,
@@ -13,7 +11,7 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             tx,
             plugins_revision: AtomicU64::new(0),
