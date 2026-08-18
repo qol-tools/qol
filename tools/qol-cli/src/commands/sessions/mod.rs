@@ -21,6 +21,8 @@ mod spawn;
 mod watch;
 mod watch_owner;
 
+pub(crate) use contract::tool_names;
+
 pub(crate) struct SessionSubcommand {
     pub(crate) name: &'static str,
     run: fn(&[OsString], OutputFormat) -> Result<()>,
@@ -122,8 +124,9 @@ pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> 
     }
 }
 
-pub(crate) fn help_text() -> &'static str {
-    r#"qol sessions
+pub(crate) fn help_text() -> String {
+    format!(
+        r#"qol sessions
 
 Bridge work between independent terminal sessions.
 
@@ -221,14 +224,15 @@ Details:
   tokens it watches every pending round in the checkpoint store and takes a
   spawn lock so two watchers do not double-poll; explicit tokens need no
   lock. It is not an agent tool.
-  The MCP and generated agent surfaces expose sessions_list, session_spawn,
-  session_bridge, session_loop_close, and session_close. The remaining
+  The MCP and generated agent surfaces expose {tool_names}. The remaining
   commands are human diagnostics.
 
 Exit:
   Exits non-zero on discovery, identity, capability, validation, or delivery
   failures. A bridge timeout is a successful JSON result with completed=false.
-"#
+"#,
+        tool_names = contract::tool_names()
+    )
 }
 
 fn service() -> Result<TerminalSessionService> {

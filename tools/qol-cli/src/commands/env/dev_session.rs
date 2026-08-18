@@ -18,7 +18,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const PAYLOAD_INSTALLER: &str = "/run/qol-payload/installer/qol-sandbox-payload";
 const PAYLOAD_ROOT: &str = "/run/qol-payload";
-const HTTP_TOKEN_PATH: &str = "/home/qol/.config/qol-tray/.http-token";
+fn http_token_path() -> String {
+    format!(
+        "/home/qol/.config/{}/{}",
+        qol_config::NAMESPACE,
+        qol_conventions::HTTP_AUTH_TOKEN_FILE
+    )
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -232,7 +238,7 @@ fn http_auth_token(
     let outcome = process(
         guest,
         RequestAction::Exec {
-            command: command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
+            command: command("/usr/bin/cat", &[&http_token_path()]),
             timeout_ms: duration_millis(REQUEST_TIMEOUT)?,
         },
         REQUEST_TIMEOUT + Duration::from_secs(1),

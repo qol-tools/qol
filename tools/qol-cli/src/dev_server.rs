@@ -56,7 +56,7 @@ fn plugin_health_url() -> String {
     api_dev_url(qol_conventions::dev_routes::PLUGIN_HEALTH)
 }
 fn auth_health_url() -> String {
-    api_url("/api/auth/health")
+    api_url(qol_conventions::api_routes::AUTH_HEALTH)
 }
 fn logs_health_url() -> String {
     api_url("/api/logs/entries")

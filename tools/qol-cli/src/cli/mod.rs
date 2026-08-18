@@ -243,9 +243,9 @@ mod tests {
                 .join("|")
         );
         assert!(execution.stdout.contains(&usage));
-        assert!(execution.stdout.contains(
-            "sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close"
-        ));
+        assert!(execution
+            .stdout
+            .contains(&crate::commands::sessions::tool_names()));
         assert!(execution
             .stdout
             .contains("read, send, wait, and focus remain human diagnostics"));

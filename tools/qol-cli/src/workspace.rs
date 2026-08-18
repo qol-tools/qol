@@ -25,7 +25,7 @@ pub(crate) fn doctor_binary_path(root: &Path) -> PathBuf {
     }
     root.join("target")
         .join("debug")
-        .join(exe_name("qol-tray-doctor"))
+        .join(exe_name(qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME))
 }
 
 pub(crate) fn cargo_build_command(root: &Path, args: &[&str]) -> Command {
@@ -509,7 +509,7 @@ mod tests {
             tmp.path()
                 .join("target")
                 .join("debug")
-                .join(exe_name("qol-tray-doctor"))
+                .join(exe_name(qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME))
         );
     }
 }

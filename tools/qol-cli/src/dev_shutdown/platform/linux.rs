@@ -75,7 +75,12 @@ fn is_host_executable(executable: &Path) -> bool {
         return false;
     };
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
-    matches!(name, "qol" | "qol-tray" | "qol-tray-doctor")
+    matches!(
+        name,
+        "qol"
+            | qol_conventions::artifact::TRAY_HOST_BINARY_NAME
+            | qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME
+    )
 }
 
 fn managed_roots() -> &'static [PathBuf] {

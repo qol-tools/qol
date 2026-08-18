@@ -63,7 +63,13 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut auth = start_tray_and_wait_plugin(&mut guest, "plugin-launcher")?;
     let backend = hotkey_backend(&mut guest)?;
     let baseline = require_status(
-        request(&mut guest, &auth, "GET", "/api/hotkeys", None)?,
+        request(
+            &mut guest,
+            &auth,
+            "GET",
+            qol_conventions::api_routes::HOTKEYS,
+            None,
+        )?,
         200,
     )?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, Duration::from_secs(10), &vm.run_id)?;
@@ -71,8 +77,14 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 
     let storm = run_storm(&mut guest, &mut qmp, &mut auth, &backend);
     let restore = set_hotkeys(&mut guest, &auth, &baseline);
-    let final_config = request(&mut guest, &auth, "GET", "/api/hotkeys", None)
-        .and_then(|response| require_status(response, 200));
+    let final_config = request(
+        &mut guest,
+        &auth,
+        "GET",
+        qol_conventions::api_routes::HOTKEYS,
+        None,
+    )
+    .and_then(|response| require_status(response, 200));
     let evidence = match (storm, restore, final_config) {
         (Ok(evidence), Ok(()), Ok(final_config)) => {
             require_json_equal(&baseline, &final_config, "hotkey baseline restoration")?;
@@ -353,8 +365,26 @@ fn require_launcher_window_after_key(
 }
 
 fn test_rejections_leave_state_untouched(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let before = require_status(request(guest, auth, "GET", "/api/hotkeys", None)?, 200)?;
-    require_status(request(guest, auth, "PUT", "/api/hotkeys", Some("{"))?, 400)?;
+    let before = require_status(
+        request(
+            guest,
+            auth,
+            "GET",
+            qol_conventions::api_routes::HOTKEYS,
+            None,
+        )?,
+        200,
+    )?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "PUT",
+            qol_conventions::api_routes::HOTKEYS,
+            Some("{"),
+        )?,
+        400,
+    )?;
     let duplicate = serde_json::json!({
         "hotkeys": [
             binding("duplicate-first", "F12", "open", true),
@@ -362,7 +392,13 @@ fn test_rejections_leave_state_untouched(guest: &mut GuestControlClient, auth: &
         ]
     })
     .to_string();
-    let response = request(guest, auth, "PUT", "/api/hotkeys", Some(&duplicate))?;
+    let response = request(
+        guest,
+        auth,
+        "PUT",
+        qol_conventions::api_routes::HOTKEYS,
+        Some(&duplicate),
+    )?;
     if response.status != 400 || !response.body.contains("Duplicate enabled hotkey chord") {
         bail!(
             "duplicate chord was not rejected precisely: HTTP {} {}",
@@ -370,7 +406,16 @@ fn test_rejections_leave_state_untouched(guest: &mut GuestControlClient, auth: &
             response.body
         );
     }
-    let after = require_status(request(guest, auth, "GET", "/api/hotkeys", None)?, 200)?;
+    let after = require_status(
+        request(
+            guest,
+            auth,
+            "GET",
+            qol_conventions::api_routes::HOTKEYS,
+            None,
+        )?,
+        200,
+    )?;
     require_json_equal(&before, &after, "rejected hotkey writes")?;
     Ok(())
 }
@@ -491,7 +536,13 @@ fn wait_for_binding_reload(
 
 fn set_hotkeys(guest: &mut GuestControlClient, auth: &str, body: &str) -> Result<()> {
     require_status(
-        request(guest, auth, "PUT", "/api/hotkeys", Some(body))?,
+        request(
+            guest,
+            auth,
+            "PUT",
+            qol_conventions::api_routes::HOTKEYS,
+            Some(body),
+        )?,
         200,
     )?;
     Ok(())
@@ -499,7 +550,13 @@ fn set_hotkeys(guest: &mut GuestControlClient, auth: &str, body: &str) -> Result
 
 fn require_no_registration_errors(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     let body = require_status(
-        request(guest, auth, "GET", "/api/hotkeys/errors", None)?,
+        request(
+            guest,
+            auth,
+            "GET",
+            qol_conventions::api_routes::HOTKEY_ERRORS,
+            None,
+        )?,
         200,
     )?;
     let errors: Vec<serde_json::Value> =

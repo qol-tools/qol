@@ -87,6 +87,7 @@ fn render_general_help() -> String {
 }
 
 fn app() -> HeadlessApp {
+    let agent_tools = sessions::tool_names();
     HeadlessApp::new("qol", "qol")
         .about("Build, inspect, diagnose, and run the qol-tools workspace.")
         .command(command(
@@ -201,7 +202,7 @@ fn app() -> HeadlessApp {
                 "Session rows or bridge JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
             )
-            .detail("The agent surface is sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close.")
+            .detail(format!("The agent surface is {agent_tools}."))
             .detail("spawn launches a tagged harness for a registered tool or reuses its live match under the same key.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
             .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
@@ -284,7 +285,7 @@ fn app() -> HeadlessApp {
                     "mcp",
                     "Serve the session tools over stdio as a Model Context Protocol server.",
                     "qol sessions mcp",
-                    "One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are sessions_list, session_spawn, session_submit, session_bridge, and session_loop_close. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition. The round envelope is generated server-side from the target's durable role record (lane marker written at spawn; absent means architect): bridging a non-lane session is an architect-receiver round - the receiver may accept the request into its own loop or decline with a reason, and returns the completion fragments either way. The caller never chooses the receiver's role.",
+                    &format!("One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are {agent_tools}. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition. The round envelope is generated server-side from the target's durable role record (lane marker written at spawn; absent means architect): bridging a non-lane session is an architect-receiver round - the receiver may accept the request into its own loop or decline with a reason, and returns the completion fragments either way. The caller never chooses the receiver's role."),
                     "Protocol responses on stdout.",
                     "Exits zero on EOF.",
                 )

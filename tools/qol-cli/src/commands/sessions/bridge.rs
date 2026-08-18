@@ -917,6 +917,9 @@ fn resume_owned(
             }
             Err(error) => return Err(error).context("bridge screen read failed"),
         };
+        if round.autoclose {
+            super::watch::close_lane_terminal(terminals, binding);
+        }
         return Ok(outcome(
             true,
             false,
@@ -998,6 +1001,9 @@ fn resume_owned(
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
         super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
+        if round.autoclose {
+            super::watch::close_lane_terminal(terminals, binding);
+        }
     }
     drop(subscription);
     Ok(outcome)

@@ -541,7 +541,7 @@ fn next_poll_interval(current: Duration, cap: Duration) -> Duration {
     current.saturating_mul(2).min(cap)
 }
 
-fn close_lane_terminal(terminals: &TerminalSessionService, binding: &SessionBinding) {
+pub(super) fn close_lane_terminal(terminals: &TerminalSessionService, binding: &SessionBinding) {
     if session_gone(terminals, binding) {
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
