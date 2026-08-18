@@ -122,11 +122,7 @@ impl ImageImportWorkerRequest {
 }
 
 fn validate_plan_fingerprint(fingerprint: &str, context: &str) -> Result<()> {
-    if fingerprint.len() == 64
-        && fingerprint
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if qol_fs::is_lowercase_sha256_digest(fingerprint) {
         return Ok(());
     }
     bail!("{context} plan fingerprint must be a lowercase SHA-256 digest")

@@ -207,10 +207,10 @@ fn scan_with_branch_resolver<F>(anchor: &Path, resolve_branch: F) -> Vec<Worktre
 where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    let Some(root) = find_dir_in_ancestors(anchor, "worktrees") else {
+    let Some(worktrees) = qol_workspace::worktrees_dir(anchor) else {
         return vec![];
     };
-    collect_feature_grouped(&root.join("worktrees"), resolve_branch)
+    collect_feature_grouped(&worktrees, resolve_branch)
 }
 
 fn collect_feature_grouped<F>(worktrees_dir: &Path, resolve_branch: F) -> Vec<WorktreeInfo>
@@ -247,13 +247,6 @@ where
         }
         frontier = next;
     }
-}
-
-fn find_dir_in_ancestors(start: &Path, dir_name: &str) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|d| d.join(dir_name).is_dir())
-        .map(Path::to_path_buf)
 }
 
 fn read_child_dirs(dir: &Path) -> Vec<PathBuf> {

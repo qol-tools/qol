@@ -8,6 +8,7 @@ description = "Typed durable development-environment worker orchestration for qo
 [dependencies]
 anyhow = "1.0"
 qol-dev-env.workspace = true
+qol-fs.workspace = true
 qol-process.workspace = true
 serde.workspace = true
 serde_json.workspace = true

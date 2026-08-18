@@ -16,6 +16,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom.workspace = true
 log = "0.4"
+qol-config.workspace = true
 qol-fs.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true

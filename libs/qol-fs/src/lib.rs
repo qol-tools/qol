@@ -5,6 +5,13 @@ use std::io::{self, Write};
 use std::path::Path;
 use tempfile::Builder;
 
+pub fn is_lowercase_sha256_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
 pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
     atomic_write_inner(path, content, false, false, None)
 }

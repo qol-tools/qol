@@ -6435,6 +6435,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "qol-dev-env",
+ "qol-fs",
  "qol-process",
  "serde",
  "serde_json",
@@ -6472,6 +6473,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "proptest",
+ "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-runtime",
@@ -6538,6 +6540,7 @@ dependencies = [
  "chrono",
  "getrandom 0.3.4",
  "log",
+ "qol-config",
  "qol-fs",
  "reqwest",
  "serde",
@@ -6804,6 +6807,8 @@ dependencies = [
 name = "qol-windowing"
 version = "1.0.0"
 dependencies = [
+ "objc2",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "sha2",

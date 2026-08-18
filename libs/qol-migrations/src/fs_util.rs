@@ -87,12 +87,7 @@ pub(crate) fn is_safe_path_component(name: &str) -> bool {
 }
 
 pub(crate) fn is_safe_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && !value.starts_with('-')
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    qol_config::valid_install_id(value) && !value.starts_with('-')
 }
 
 pub(crate) fn legacy_sidecar_path(src: &Path) -> PathBuf {

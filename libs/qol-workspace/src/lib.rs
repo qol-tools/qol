@@ -69,6 +69,12 @@ pub fn monorepo_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+pub fn worktrees_dir(root: &Path) -> Option<PathBuf> {
+    root.ancestors()
+        .find(|dir| dir.join("worktrees").is_dir())
+        .map(|dir| dir.join("worktrees"))
+}
+
 pub fn workspace_parent(repo: &Path) -> Result<PathBuf> {
     for path in repo.ancestors() {
         if path.file_name().and_then(|name| name.to_str()) == Some("worktrees") {

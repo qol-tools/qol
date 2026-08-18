@@ -362,12 +362,7 @@ fn validate_verified_registration(
     if registration.size_bytes == 0 {
         bail!("verified image `{environment_id}` size must be greater than zero");
     }
-    if registration.sha256.len() != 64
-        || !registration
-            .sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
+    if !qol_fs::is_lowercase_sha256_digest(&registration.sha256) {
         bail!("verified image `{environment_id}` has an invalid SHA-256 digest");
     }
     Ok(())
@@ -402,11 +397,7 @@ pub fn managed_verification_report_path(image_root: &Path, run_id: &str) -> Resu
 }
 
 fn validate_sha256(value: &str, context: &str) -> Result<()> {
-    if value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
+    if qol_fs::is_lowercase_sha256_digest(value) {
         return Ok(());
     }
     bail!("{context} has an invalid SHA-256 digest")
@@ -711,9 +702,7 @@ fn is_managed_image_name(path: &Path) -> bool {
         && path
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .is_some_and(|stem| {
-                stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
+            .is_some_and(qol_fs::is_lowercase_sha256_digest)
 }
 
 fn remove_managed_image(path: &Path) -> Result<()> {
