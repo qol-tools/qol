@@ -134,16 +134,16 @@ impl WindowOps for MacWindowSystem {
     fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
         self.focus_window(window_id)
     }
-}
 
-impl WindowSystem for MacWindowSystem {
     fn active_window_id(&self) -> Result<Option<WindowId>, String> {
         let Some(pid) = ax::find_normal_window_pid().filter(|p| *p > 0) else {
             return Ok(None);
         };
         Ok(WindowId::parse(&format!("pid:{pid}")))
     }
+}
 
+impl WindowSystem for MacWindowSystem {
     fn is_excluded_window_type(&self, window_id: &WindowId) -> Result<bool, String> {
         let Some(pid) = parse_pid(window_id.as_str()) else {
             return Ok(true);

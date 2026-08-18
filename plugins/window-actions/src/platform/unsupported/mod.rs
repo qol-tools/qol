@@ -86,13 +86,13 @@ impl WindowOps for UnsupportedWindowSystem {
     fn restore_window(&self, _window_id: &WindowId) -> Result<bool, String> {
         Err(unsupported("window restore"))
     }
-}
 
-impl WindowSystem for UnsupportedWindowSystem {
     fn active_window_id(&self) -> Result<Option<WindowId>, String> {
         Err(unsupported("active window lookup"))
     }
+}
 
+impl WindowSystem for UnsupportedWindowSystem {
     fn is_excluded_window_type(&self, _window_id: &WindowId) -> Result<bool, String> {
         Err(unsupported("window type lookup"))
     }

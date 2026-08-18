@@ -28,7 +28,6 @@ pub(crate) trait MinimizedStateStore {
 /// contract. Window identity and the common operations (geometry, focus,
 /// minimize) come from the shared trait; restore-only policy lives here.
 pub(crate) trait WindowSystem: WindowOps {
-    fn active_window_id(&self) -> Result<Option<WindowId>, String>;
     fn is_excluded_window_type(&self, window_id: &WindowId) -> Result<bool, String>;
     fn is_hidden_window(&self, window_id: &WindowId) -> Result<bool, String>;
     fn is_launcher_window(&self, window_id: &WindowId) -> bool;
@@ -295,13 +294,13 @@ mod tests {
         fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
             self.focus_window(window_id)
         }
-    }
 
-    impl WindowSystem for FakeWindowSystem {
         fn active_window_id(&self) -> Result<Option<WindowId>, String> {
             Ok(Some(window_id()))
         }
+    }
 
+    impl WindowSystem for FakeWindowSystem {
         fn is_excluded_window_type(&self, _window_id: &WindowId) -> Result<bool, String> {
             Ok(false)
         }

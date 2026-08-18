@@ -51,4 +51,8 @@ pub trait WindowOps {
     /// Restore a minimized window. Returns `Ok(false)` when the window could
     /// not be restored.
     fn restore_window(&self, window_id: &WindowId) -> Result<bool, String>;
+
+    fn active_window_id(&self) -> Result<Option<WindowId>, String> {
+        Ok(None)
+    }
 }

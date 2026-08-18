@@ -60,9 +60,7 @@ impl WindowOps for X11WindowSystem {
     fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
         wait_for_window_activation(self, window_id)
     }
-}
 
-impl WindowSystem for X11WindowSystem {
     fn active_window_id(&self) -> Result<Option<WindowId>, String> {
         let output = Command::new("xdotool")
             .arg("getactivewindow")
@@ -80,7 +78,9 @@ impl WindowSystem for X11WindowSystem {
 
         Ok(WindowId::parse(&window_id))
     }
+}
 
+impl WindowSystem for X11WindowSystem {
     fn is_excluded_window_type(&self, window_id: &WindowId) -> Result<bool, String> {
         let output = run_output("xprop", &["-id", window_id.as_str(), "_NET_WM_WINDOW_TYPE"])?;
         Ok(output.contains("_NET_WM_WINDOW_TYPE_DESKTOP")
