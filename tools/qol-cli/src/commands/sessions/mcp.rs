@@ -18,7 +18,7 @@ const ERROR_METHOD_NOT_FOUND: i64 = -32601;
 const ERROR_INVALID_PARAMS: i64 = -32602;
 
 #[cfg(test)]
-const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(1_000);
+const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(250);
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub(super) const WAIT_TIMEOUT_MIN_MS: u64 = 1_000;
@@ -414,7 +414,14 @@ impl McpSessionServer {
                 )
                 .map_err(|error| error.to_string())?;
                 if !siblings.is_empty() {
-                    let terse = tersify_sibling_lanes(&siblings, &self.reports_dir)
+                    let labels = self
+                        .pending
+                        .pending_rounds()
+                        .map_err(|error| error.to_string())?
+                        .into_iter()
+                        .map(|round| (round.session, round.label))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    let terse = tersify_sibling_lanes(&siblings, &self.reports_dir, &labels)
                         .map_err(|error| error.to_string())?;
                     receipt["sibling_lanes"] = json!(terse);
                 }
@@ -447,6 +454,7 @@ const TRUNCATE_MARKER: &str = "...";
 fn tersify_sibling_lanes(
     siblings: &[super::close::SiblingLaneClose],
     reports_dir: &std::path::Path,
+    labels: &std::collections::HashMap<String, Option<String>>,
 ) -> Result<Vec<Value>, String> {
     let total = siblings.len();
     let kept = siblings.len().min(MAX_SIBLING_LANES);
@@ -473,7 +481,18 @@ fn tersify_sibling_lanes(
         let dir = reports_dir.join("sibling-reports");
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("failed to create sibling report dir {:?}: {error}", dir))?;
-        let path = dir.join(format!("sibling-report-{}.md", sibling.session));
+        let base = format!("sibling-report-{}.md", sibling.session);
+        let slug = super::watch::label_slug(
+            labels
+                .get(&sibling.session)
+                .and_then(|label| label.as_deref()),
+        );
+        let name = if slug.is_empty() {
+            base
+        } else {
+            format!("{slug}_{base}")
+        };
+        let path = dir.join(name);
         std::fs::write(&path, &sibling.report)
             .map_err(|error| format!("failed to write sibling report {:?}: {error}", path))?;
         entry["report"] = json!(path.display().to_string());
@@ -584,10 +603,11 @@ pub(super) fn poll_until_settled(
             }
         }
         previous = Some(screen.clone());
-        if started.elapsed() >= timeout {
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
             return Ok((false, screen, polls, started));
         }
-        std::thread::sleep(WAIT_POLL_INTERVAL);
+        std::thread::sleep(WAIT_POLL_INTERVAL.min(timeout - elapsed));
     }
 }
 
@@ -925,7 +945,8 @@ mod tests {
         let backend = Arc::new(FakeBackend::new(screens, complete_bridge, fail_send));
         let terminals =
             TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
-                .unwrap();
+                .unwrap()
+                .with_wait_backoff(Duration::from_millis(2), Duration::from_millis(4));
         (
             McpSessionServer::with(terminals, CliSessionInterpreter::system()),
             backend,
@@ -937,7 +958,9 @@ mod tests {
         pending_dir: std::path::PathBuf,
     ) -> McpSessionServer {
         let terminals =
-            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>])
+                .unwrap()
+                .with_wait_backoff(Duration::from_millis(2), Duration::from_millis(4));
         McpSessionServer::with_pending_dir(terminals, CliSessionInterpreter::system(), pending_dir)
     }
 
@@ -1018,7 +1041,9 @@ mod tests {
             false,
         ));
         let terminals =
-            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>])
+                .unwrap()
+                .with_wait_backoff(Duration::from_millis(2), Duration::from_millis(4));
         let binding = qol_terminal_sessions::SessionBinding::from_str(&token()).unwrap();
         let (_tx, rx) = std::sync::mpsc::sync_channel(1);
         let outcome = super::super::bridge::wait_for_completion(
@@ -1041,12 +1066,14 @@ mod tests {
         let (_tx, rx) = std::sync::mpsc::sync_channel(1);
         let backend = Arc::new(FakeBackend::new(vec!["busy".to_owned(); 8], false, false));
         let terminals =
-            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>])
+                .unwrap()
+                .with_wait_backoff(Duration::from_millis(2), Duration::from_millis(4));
         let outcome = super::super::bridge::wait_for_completion(
             &terminals,
             &binding,
             "QOL_BRIDGE_DONE_never",
-            Duration::from_millis(1_500),
+            Duration::from_millis(200),
             rx,
             false,
             true,
@@ -1065,7 +1092,9 @@ mod tests {
         let binding = qol_terminal_sessions::SessionBinding::from_str(&token()).unwrap();
         let quiet = |screens: Vec<String>| {
             let backend = Arc::new(FakeBackend::new(screens, false, false));
-            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap()
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>])
+                .unwrap()
+                .with_wait_backoff(Duration::from_millis(2), Duration::from_millis(4))
         };
         let window = Duration::from_millis(100);
 
@@ -2556,7 +2585,9 @@ mod tests {
                 },
             })
             .collect();
-        let entries = tersify_sibling_lanes(&siblings, root.path()).unwrap();
+        let entries =
+            tersify_sibling_lanes(&siblings, root.path(), &std::collections::HashMap::new())
+                .unwrap();
         assert_eq!(entries.len(), 51, "50 kept lanes plus the dropped note");
         assert_eq!(entries[50]["dropped_sibling_lanes"], 2);
         let first = &entries[0];

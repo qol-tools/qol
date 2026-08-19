@@ -74,9 +74,11 @@ pub(super) struct PendingRound {
     pub(super) driver: String,
     pub(super) completion_marker: String,
     pub(super) completed: bool,
+    pub(super) woken: bool,
     pub(super) screen: Option<String>,
     pub(super) autoclose: bool,
     pub(super) group: Option<String>,
+    pub(super) label: Option<String>,
 }
 
 struct PendingBridgeLock {
@@ -117,6 +119,8 @@ struct StoredCheckpoint {
     wake_event: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -138,9 +142,11 @@ impl From<StoredCheckpoint> for PendingRound {
             driver: stored.driver,
             completion_marker: stored.completion_marker,
             completed: stored.completed,
+            woken: stored.wake_event.is_some(),
             screen: stored.screen,
             autoclose: stored.autoclose,
             group: stored.group,
+            label: stored.label,
         }
     }
 }
@@ -191,6 +197,18 @@ impl PendingBridgeStore {
         autoclose: bool,
         group: Option<&str>,
     ) -> Result<()> {
+        self.start_with_label(binding, marker, driver, autoclose, group, None)
+    }
+
+    pub(super) fn start_with_label(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        driver: &str,
+        autoclose: bool,
+        group: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<()> {
         let _lock = self.lock(binding)?;
         if self
             .load_unlocked(binding)?
@@ -198,7 +216,9 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, driver, false, None, autoclose, None, group)
+        self.write_unlocked(
+            binding, marker, driver, false, None, autoclose, None, group, label, false,
+        )
     }
 
     pub(super) fn observe(
@@ -223,6 +243,8 @@ impl PendingBridgeStore {
             checkpoint.autoclose,
             checkpoint.wake_event.as_deref(),
             checkpoint.group.as_deref(),
+            checkpoint.label.as_deref(),
+            false,
         )
     }
 
@@ -248,6 +270,30 @@ impl PendingBridgeStore {
             checkpoint.autoclose,
             checkpoint.wake_event.as_deref(),
             checkpoint.group.as_deref(),
+            checkpoint.label.as_deref(),
+            false,
+        )
+    }
+
+    pub(super) fn set_label(&self, binding: &SessionBinding, label: Option<&str>) -> Result<()> {
+        let _lock = self.lock(binding)?;
+        let Some(checkpoint) = self.load_unlocked(binding)? else {
+            return Ok(());
+        };
+        if checkpoint.closed {
+            return Ok(());
+        }
+        self.write_unlocked(
+            binding,
+            &checkpoint.completion_marker,
+            &checkpoint.driver,
+            checkpoint.completed,
+            checkpoint.screen.as_deref(),
+            checkpoint.autoclose,
+            checkpoint.wake_event.as_deref(),
+            checkpoint.group.as_deref(),
+            label,
+            false,
         )
     }
 
@@ -256,9 +302,11 @@ impl PendingBridgeStore {
         let Some(checkpoint) = self.load_unlocked(binding)? else {
             return Ok(false);
         };
-        if checkpoint.closed
-            || checkpoint.completed
-            || checkpoint.wake_event.as_deref() == Some(event)
+        if checkpoint.closed || checkpoint.wake_event.as_deref() == Some(event) {
+            return Ok(false);
+        }
+        if checkpoint.completed
+            && (checkpoint.wake_event.is_some() || self.owner_pid(binding).is_some())
         {
             return Ok(false);
         }
@@ -266,11 +314,13 @@ impl PendingBridgeStore {
             binding,
             &checkpoint.completion_marker,
             &checkpoint.driver,
-            false,
+            checkpoint.completed,
             checkpoint.screen.as_deref(),
             checkpoint.autoclose,
             Some(event),
             checkpoint.group.as_deref(),
+            checkpoint.label.as_deref(),
+            false,
         )?;
         Ok(true)
     }
@@ -286,6 +336,8 @@ impl PendingBridgeStore {
         autoclose: bool,
         wake_event: Option<&str>,
         group: Option<&str>,
+        label: Option<&str>,
+        closed: bool,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -295,11 +347,12 @@ impl PendingBridgeStore {
             driver: driver.to_owned(),
             completion_marker: marker.to_owned(),
             completed,
-            closed: false,
+            closed,
             screen: screen.map(str::to_owned),
             autoclose,
             wake_event: wake_event.map(str::to_owned),
             group: group.map(str::to_owned),
+            label: label.map(str::to_owned),
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -338,6 +391,35 @@ impl PendingBridgeStore {
         Ok(checkpoint.into())
     }
 
+    pub(super) fn close_checkpoints_for_session(&self, session_token: &str) -> Result<()> {
+        for checkpoint in self.open_checkpoints(None)? {
+            if checkpoint.session != session_token {
+                continue;
+            }
+            let binding: SessionBinding = session_token.parse().context("invalid session token")?;
+            let _lock = self.lock(&binding)?;
+            let Some(current) = self.load_unlocked(&binding)? else {
+                continue;
+            };
+            if current.closed {
+                continue;
+            }
+            self.write_unlocked(
+                &binding,
+                &current.completion_marker,
+                &current.driver,
+                true,
+                current.screen.as_deref(),
+                current.autoclose,
+                current.wake_event.as_deref(),
+                current.group.as_deref(),
+                current.label.as_deref(),
+                true,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn pending_round(&self, binding: &SessionBinding) -> Result<Option<PendingRound>> {
         Ok(self
             .load(binding)?
@@ -347,15 +429,17 @@ impl PendingBridgeStore {
                 driver: checkpoint.driver,
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
+                woken: checkpoint.wake_event.is_some(),
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
                 group: checkpoint.group,
+                label: checkpoint.label,
             }))
     }
 
     pub(super) fn has_key_history(&self, key: &str) -> Result<bool> {
         let expected = format!("spawn-{key}");
-        for checkpoint in self.open_checkpoints()? {
+        for checkpoint in self.open_checkpoints(None)? {
             let Ok(binding) = checkpoint.session.parse::<SessionBinding>() else {
                 continue;
             };
@@ -391,7 +475,7 @@ impl PendingBridgeStore {
 
     pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
         let mut rounds = self
-            .open_checkpoints()?
+            .open_checkpoints(None)?
             .into_iter()
             .filter(|checkpoint| !checkpoint.session.is_empty())
             .map(|checkpoint| PendingRound {
@@ -399,9 +483,11 @@ impl PendingBridgeStore {
                 driver: checkpoint.driver,
                 completion_marker: checkpoint.completion_marker,
                 completed: checkpoint.completed,
+                woken: checkpoint.wake_event.is_some(),
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
                 group: checkpoint.group,
+                label: checkpoint.label,
             })
             .collect::<Vec<_>>();
         rounds.sort_by(|left, right| left.session.cmp(&right.session));
@@ -410,7 +496,7 @@ impl PendingBridgeStore {
 
     pub(super) fn group_members(&self, group: &str) -> Result<Vec<PendingRound>> {
         let mut members = self
-            .open_checkpoints()?
+            .open_checkpoints(None)?
             .into_iter()
             .filter(|checkpoint| !checkpoint.session.is_empty())
             .filter(|checkpoint| checkpoint.group.as_deref() == Some(group))
@@ -420,8 +506,11 @@ impl PendingBridgeStore {
         Ok(members)
     }
 
-    fn open_checkpoints(&self) -> Result<Vec<StoredCheckpoint>> {
-        self.sweep()?;
+    fn open_checkpoints(
+        &self,
+        live_sessions: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<StoredCheckpoint>> {
+        self.sweep(live_sessions)?;
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -449,7 +538,14 @@ impl PendingBridgeStore {
         Ok(checkpoints)
     }
 
-    fn sweep(&self) -> Result<()> {
+    pub(super) fn retain_live(
+        &self,
+        live_sessions: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        self.sweep(Some(live_sessions))
+    }
+
+    fn sweep(&self, live_sessions: Option<&std::collections::HashSet<String>>) -> Result<()> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
@@ -475,8 +571,19 @@ impl PendingBridgeStore {
                     let Ok(checkpoint) = serde_json::from_str::<StoredCheckpoint>(&encoded) else {
                         continue;
                     };
-                    if checkpoint.closed || checkpoint.session.is_empty() {
+                    let dead_session = live_sessions
+                        .map(|live| !live.contains(&checkpoint.session))
+                        .unwrap_or(false);
+                    if checkpoint.closed || checkpoint.session.is_empty() || dead_session {
                         let _ = fs::remove_file(&path);
+                        if dead_session {
+                            if let Ok(binding) = checkpoint.session.parse::<SessionBinding>() {
+                                let _ = fs::remove_file(self.role_file_for(&binding));
+                                let _ = fs::remove_file(self.role_lock_for(&binding));
+                                let _ = fs::remove_file(self.lock_for(&binding));
+                                let _ = fs::remove_file(self.owner_for(&binding));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -1116,10 +1223,11 @@ pub(super) fn delivery_observed(
         {
             return Ok(true);
         }
-        if Instant::now() >= deadline {
+        let now = Instant::now();
+        if now >= deadline {
             return Ok(false);
         }
-        std::thread::sleep(DELIVERY_VERIFY_INTERVAL);
+        std::thread::sleep(DELIVERY_VERIFY_INTERVAL.min(deadline - now));
     }
 }
 
@@ -2353,6 +2461,37 @@ mod tests {
     }
 
     #[test]
+    fn a_round_completed_without_a_wake_can_still_claim_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:11:1100").unwrap();
+        store
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_late",
+                "v1:fake:8:800",
+                true,
+                None,
+            )
+            .unwrap();
+
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_late", true)
+            .unwrap();
+
+        assert!(
+            store.claim_wake(&binding, "completed").unwrap(),
+            "a round marked completed before any wake was claimed must still wake the architect"
+        );
+        assert!(
+            !store.claim_wake(&binding, "completed").unwrap(),
+            "and only once"
+        );
+        let round = store.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed && round.woken);
+    }
+
+    #[test]
     fn claim_wake_is_exactly_once_per_event_and_preserved_by_later_writes() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
@@ -2409,6 +2548,72 @@ mod tests {
             store.claim_wake(&legacy, "completed").unwrap(),
             "an old-shape checkpoint without the field may still claim a wake"
         );
+    }
+
+    #[test]
+    fn close_checkpoints_for_session_marks_matching_checkpoints_closed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let target = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let other = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&target, "QOL_BRIDGE_DONE_one", "v1:fake:8:800", true, None)
+            .unwrap();
+        store
+            .start(&other, "QOL_BRIDGE_DONE_two", "v1:fake:8:800", true, None)
+            .unwrap();
+
+        store
+            .close_checkpoints_for_session(&target.token())
+            .unwrap();
+
+        assert!(
+            store.pending_round(&target).unwrap().is_none(),
+            "the matching checkpoint must no longer be open"
+        );
+        assert!(
+            store.pending_round(&other).unwrap().is_some(),
+            "an unrelated session checkpoint must stay open"
+        );
+        assert!(
+            store.file_for(&target).exists(),
+            "the closed checkpoint file remains for the sweep to reap"
+        );
+    }
+
+    #[test]
+    fn sweep_removes_dead_session_checkpoints_but_keeps_live_open_ones() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let live = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let dead = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        store
+            .start(&dead, "QOL_BRIDGE_DONE_dead", "v1:fake:8:800", false, None)
+            .unwrap();
+        store.set_role(&dead, Role::Lane).unwrap();
+
+        let mut live_sessions = std::collections::HashSet::new();
+        live_sessions.insert(live.token());
+        store.retain_live(&live_sessions).unwrap();
+
+        assert!(
+            store.pending_round(&live).unwrap().is_some(),
+            "an open checkpoint for a live session must be kept"
+        );
+        assert!(
+            store.pending_round(&dead).unwrap().is_none(),
+            "an open checkpoint for a dead session must be removed"
+        );
+        assert!(!store.file_for(&dead).exists());
+        assert!(store.file_for(&live).exists());
+        assert!(
+            !store.role_file_for(&dead).exists(),
+            "a dead session's role record goes with its checkpoint"
+        );
+        assert!(!store.owner_for(&dead).exists());
     }
 
     #[test]

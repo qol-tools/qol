@@ -715,6 +715,7 @@ pub(super) fn deliver_task(
     outcome.completion_marker = Some(submitted.completion_marker);
     outcome.screen = Some(submitted.screen);
     outcome.next_command = Some(submitted.next_command);
+    pending.set_label(&binding, Some(&outcome.key))?;
     Ok(outcome)
 }
 
@@ -1231,12 +1232,13 @@ fn launch_background(
         .binding()
         .context("spawned session cannot bind to a stable token")?;
     pending.set_role(&binding, super::bridge::Role::Lane)?;
-    pending.start(
+    pending.start_with_label(
         &binding,
         marker,
         &super::bridge::driver_token(terminals),
         autoclose,
         group,
+        Some(identity.key.as_str()),
     )?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
