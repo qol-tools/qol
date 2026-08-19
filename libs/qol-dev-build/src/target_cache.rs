@@ -7,8 +7,7 @@ const REMOVED_DEBUG_DIRS: [&str; 2] = ["incremental", "examples"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
 pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
 
-const PACE_BATCH: usize = 1000;
-const PACE_SLEEP: Duration = Duration::from_millis(50);
+const PACE_BATCH: usize = 2000;
 
 pub(crate) struct Pacer {
     visited: u64,
@@ -23,6 +22,11 @@ impl Pacer {
         }
     }
 
+    fn pace_sleep() -> Duration {
+        use crate::platform::BuildPlatform;
+        crate::platform::Platform.walk_pace_sleep()
+    }
+
     #[cfg(test)]
     fn new_with_sleep(sleep: fn(Duration)) -> Self {
         Self { visited: 0, sleep }
@@ -30,8 +34,12 @@ impl Pacer {
 
     pub(crate) fn tick(&mut self) {
         self.visited += 1;
-        if self.visited.is_multiple_of(PACE_BATCH as u64) {
-            (self.sleep)(PACE_SLEEP);
+        if !self.visited.is_multiple_of(PACE_BATCH as u64) {
+            return;
+        }
+        let pace = Self::pace_sleep();
+        if !pace.is_zero() {
+            (self.sleep)(pace);
         }
     }
 }
@@ -57,29 +65,74 @@ fn dir_size_paced(path: &Path, pacer: &mut Pacer) -> Result<Option<u64>, String>
     Ok(Some(total))
 }
 
-fn path_bytes_paced(path: &Path, pacer: &mut Pacer) -> u64 {
-    pacer.tick();
+pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
+    dir_size_paced(path, &mut Pacer::new())
+}
+
+const WALK_THREADS: usize = 4;
+
+pub fn path_bytes(path: &Path) -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Condvar, Mutex};
     let Ok(metadata) = path.symlink_metadata() else {
         return 0;
     };
     if !metadata.is_dir() {
         return metadata.len();
     }
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| path_bytes_paced(&entry.path(), pacer))
-        .sum()
-}
-
-pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
-    dir_size_paced(path, &mut Pacer::new())
-}
-
-pub fn path_bytes(path: &Path) -> u64 {
-    path_bytes_paced(path, &mut Pacer::new())
+    let queue: Mutex<(Vec<std::path::PathBuf>, usize)> = Mutex::new((vec![path.to_path_buf()], 1));
+    let idle = Condvar::new();
+    let total = AtomicU64::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..WALK_THREADS {
+            scope.spawn(|| {
+                let mut pacer = Pacer::new();
+                loop {
+                    let dir = {
+                        let Ok(mut state) = queue.lock() else {
+                            return;
+                        };
+                        loop {
+                            if let Some(dir) = state.0.pop() {
+                                break dir;
+                            }
+                            if state.1 == 0 {
+                                return;
+                            }
+                            state = match idle.wait(state) {
+                                Ok(state) => state,
+                                Err(_) => return,
+                            };
+                        }
+                    };
+                    let mut local = 0u64;
+                    let mut subdirs = Vec::new();
+                    if let Ok(entries) = fs::read_dir(&dir) {
+                        for entry in entries.flatten() {
+                            pacer.tick();
+                            let child = entry.path();
+                            let Ok(meta) = child.symlink_metadata() else {
+                                continue;
+                            };
+                            if meta.is_dir() {
+                                subdirs.push(child);
+                            } else {
+                                local += meta.len();
+                            }
+                        }
+                    }
+                    total.fetch_add(local, Ordering::Relaxed);
+                    if let Ok(mut state) = queue.lock() {
+                        state.1 += subdirs.len();
+                        state.0.extend(subdirs);
+                        state.1 -= 1;
+                        idle.notify_all();
+                    }
+                }
+            });
+        }
+    });
+    total.load(Ordering::Relaxed)
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -222,26 +275,27 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn pacer_sleeps_once_per_batch() {
+    fn pacer_sleeps_once_per_batch_where_the_platform_paces() {
         static SLEEPS: AtomicU32 = AtomicU32::new(0);
         fn fake_sleep(_: Duration) {
             SLEEPS.fetch_add(1, Ordering::SeqCst);
         }
+        let per_batch = u32::from(!Pacer::pace_sleep().is_zero());
         let mut pacer = Pacer::new_with_sleep(fake_sleep);
         for _ in 0..PACE_BATCH {
             pacer.tick();
         }
         assert_eq!(
             SLEEPS.load(Ordering::SeqCst),
-            1,
-            "exactly one sleep per batch"
+            per_batch,
+            "one sleep per batch, none on a kernel-throttled platform"
         );
         for _ in 0..(PACE_BATCH / 2) {
             pacer.tick();
         }
         assert_eq!(
             SLEEPS.load(Ordering::SeqCst),
-            1,
+            per_batch,
             "a partial batch must not sleep"
         );
         for _ in 0..(PACE_BATCH / 2) {
@@ -249,7 +303,7 @@ mod tests {
         }
         assert_eq!(
             SLEEPS.load(Ordering::SeqCst),
-            2,
+            per_batch * 2,
             "floor(N / PACE_BATCH) sleeps for N ticks"
         );
     }

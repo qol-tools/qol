@@ -23,8 +23,8 @@ use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
 use super::disk::{
-    apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, spawn_disk_worker,
-    start_disk_cleanup, start_disk_scan, verify_disk_usage,
+    apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, probe_cached_report,
+    start_disk_cleanup, start_disk_verify,
 };
 use super::doctor::{
     apply_doctor_outcome, doctor_detail_text, doctor_scroll_len, open_doctor, spawn_doctor_probe,
@@ -46,6 +46,7 @@ use super::picker::PickerMove;
 use super::reload::{
     poll_reload, restart_child_from_prebuilt, start_reload, trigger_rebuild, trigger_reload,
 };
+use super::render_util::now_unix_ms;
 use super::stream_view::{
     endpoints_view_lines, open_current_log_editor, open_current_log_folder, open_trace,
     start_trace, stop_trace, toggle_trace_details, toggle_trace_rate, EndpointsState,
@@ -321,8 +322,14 @@ pub(super) fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            let check = should_self_restart(session_started);
             let handoff = restart_child_from_prebuilt(child, lines, dash);
+            let check = handoff
+                .as_ref()
+                .ok()
+                .map(|_| should_self_restart(session_started))
+                .unwrap_or(Ok(SelfRestartDecision::Skip {
+                    reason: "handoff failed",
+                }));
             match post_handoff(&check, &handoff) {
                 PostHandoff::ExecCli => {
                     persist_if_dirty(dash);
@@ -433,10 +440,7 @@ fn should_self_restart(session_started: SystemTime) -> Result<SelfRestartDecisio
 
 fn rebuilt_cli_path() -> Result<PathBuf> {
     let root = crate::workspace::repo_root()?;
-    Ok(root
-        .join("target")
-        .join("debug")
-        .join(crate::host_facade::exe_name("qol")))
+    Ok(crate::commands::dev::fresh_cli_binary(&root))
 }
 
 pub(super) fn self_restart_decision(
@@ -759,7 +763,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 if modified {
                     start_disk_cleanup(dash);
                 } else {
-                    start_disk_scan(dash);
+                    start_disk_verify(dash);
                 }
             }
             View::Doctor => toggle_doctor_detail(dash),
@@ -891,7 +895,7 @@ pub(super) fn act_row(dash: &mut Dash, modified: bool) {
             if modified {
                 start_disk_cleanup(dash);
             } else {
-                start_disk_scan(dash);
+                start_disk_verify(dash);
             }
         }
         Row::Logs | Row::Trace => {}
@@ -941,16 +945,11 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
         dash.pokes.doctor = true;
         if dash.disk_scan_pending {
             dash.disk_scan_pending = false;
-            if let Some((report, at_ms, ledger)) = load_cached_report(&dash.running_worktree) {
+            if let Some((mut report, at_ms, ledger)) = load_cached_report(&dash.running_worktree) {
+                probe_cached_report(&mut report, &ledger, now_unix_ms());
                 dash.disk.last = Some(report);
                 dash.disk.last_at_ms = Some(at_ms);
                 dash.disk.error = None;
-                let running = dash.running_worktree.clone();
-                dash.disk.verify = Some(spawn_disk_worker("verifying", move |progress| {
-                    verify_disk_usage(&running, ledger, progress)
-                }));
-            } else {
-                start_disk_scan(dash);
             }
         }
     }
@@ -1026,34 +1025,19 @@ mod tests {
                 web: true,
             },
         );
-        let first = dash
-            .disk
-            .scan
-            .as_ref()
-            .expect("up flip starts the deferred scan") as *const DiskScan;
-        assert!(!dash.disk_scan_pending, "the deferral fires exactly once");
-        apply_health(
-            &mut dash,
-            HealthSnapshot {
-                api: false,
-                web: false,
-            },
-        );
-        apply_health(
-            &mut dash,
-            HealthSnapshot {
-                api: true,
-                web: true,
-            },
-        );
         assert!(
-            std::ptr::eq(first, dash.disk.scan.as_ref().expect("scan")),
-            "a later flip must not spawn another scan"
+            dash.disk.scan.is_none() && dash.disk.verify.is_none(),
+            "an up flip without a cached report never walks on its own"
+        );
+        assert!(!dash.disk_scan_pending, "the deferral fires exactly once");
+        assert!(
+            dash.disk.last.is_none(),
+            "the row shows the empty state until an explicit scan"
         );
     }
 
     #[test]
-    fn cached_disk_report_serves_immediately_and_verifies_in_background() {
+    fn cached_disk_report_serves_immediately_and_defers_deep_walks() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut dash = Dash::new(Vec::new());
         dash.running_worktree = dir.path().to_path_buf();
@@ -1068,6 +1052,7 @@ mod tests {
                     bytes: Some(4096),
                     cleanable: false,
                 }],
+                stale: false,
             },
             &ScanLedger::new(),
             at_ms,
@@ -1086,8 +1071,12 @@ mod tests {
             "a cached report must not spawn a full scan"
         );
         assert!(
-            dash.disk.verify.is_some(),
-            "a cached report spawns a background verify"
+            dash.disk.verify.is_none(),
+            "boot must not deep-walk; verify waits for the disk view"
+        );
+        assert!(
+            dash.disk.last.as_ref().is_some_and(|report| report.stale),
+            "an empty ledger marks the cached report stale"
         );
         assert_eq!(
             dash.disk.last_at_ms,
@@ -1118,8 +1107,8 @@ mod tests {
             },
         );
         assert!(
-            dash.disk.scan.is_some() && !dash.disk_scan_pending,
-            "the re-armed scan starts on the next up flip"
+            dash.disk.scan.is_none() && !dash.disk_scan_pending,
+            "the re-armed probe consumes the deferral without walking"
         );
     }
 

@@ -69,6 +69,11 @@ impl CliSessionStrategy for PiStrategy {
         }
     }
 
+    fn transcript_completion(&self, session: &SessionFacts, marker: &str) -> Option<bool> {
+        let path = self.metadata.subscription_path(session)?;
+        metadata::marker_in_terminal_assistant_text(&path, marker)
+    }
+
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
         if !crate::cli::screen::pi_live(screen) {
             return CliScreenEvidence::default();

@@ -831,14 +831,14 @@ mod tests {
 
         let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
 
+        let border = &rows[rows.len() - 2];
         assert!(
-            rows.iter().any(|row| row.contains("┤ doctor ├")),
-            "doctor activity sign title missing"
+            border.contains("┤ doctor"),
+            "doctor activity sign title missing from the bottom border: {border}"
         );
         assert!(
-            rows.iter()
-                .any(|row| row.contains("fixing · check rust_clippy")),
-            "doctor activity step missing from the sign"
+            border.contains("fixing · check rust_clippy"),
+            "doctor activity step missing from the sign: {border}"
         );
         assert!(
             rows.iter().all(|row| !row.contains("no checks reported")),
@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_sign_stacks_above_the_detail_panel_instead_of_overlapping() {
+    fn activity_sign_sits_on_the_border_instead_of_covering_the_detail_panel() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Doctor;
         dash.keys_hidden = true;
@@ -1039,11 +1039,11 @@ mod tests {
             .expect("details title missing");
         let activity_row = rows
             .iter()
-            .position(|row| row.contains("┤ doctor ├"))
+            .position(|row| row.contains("┤ doctor"))
             .expect("activity title missing");
         assert!(
-            activity_row < details_row,
-            "activity must stack above the detail panel"
+            activity_row > details_row,
+            "the activity sign must sit on the bottom border, below the detail panel"
         );
         assert!(
             rows.iter()

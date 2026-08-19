@@ -50,7 +50,9 @@ struct WatchedRound {
     stalled_reported: bool,
     marker_seen: bool,
     external_id_captured: bool,
+    pi_lane: Option<bool>,
     autoclose: bool,
+    vanished_polls: u64,
 }
 
 impl WatchedRound {
@@ -70,7 +72,9 @@ impl WatchedRound {
             stalled_reported: false,
             marker_seen: false,
             external_id_captured: false,
+            pi_lane: None,
             autoclose: round.autoclose,
+            vanished_polls: 0,
         })
     }
 }
@@ -150,6 +154,46 @@ struct RoundPoll {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn lane_is_pi(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> Option<bool> {
+    let facts = terminals
+        .discover()
+        .ok()?
+        .into_iter()
+        .find(|facts| facts.id == *binding.session_id())?;
+    Some(interpreter.describe(&facts).tool.id.as_str() == qol_terminal_sessions::cli::PI_TOOL_ID)
+}
+
+fn lane_transcript_marker(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    round: &WatchedRound,
+) -> Option<bool> {
+    let facts = terminals
+        .discover()
+        .ok()?
+        .into_iter()
+        .find(|facts| facts.id == *round.binding.session_id())?;
+    interpreter.transcript_completion(&facts, &round.marker)
+}
+
+fn marker_present_for_lane(
+    screen: &str,
+    marker: &str,
+    pi_lane: Option<bool>,
+    transcript: Option<bool>,
+) -> bool {
+    if pi_lane == Some(true) {
+        transcript == Some(true)
+    } else {
+        screen.contains(marker)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn poll_round(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -174,6 +218,38 @@ fn poll_round(
             if session_gone(terminals, &round.binding) {
                 if round.marker_seen {
                     if !pending.claim_wake(&round.binding, "completed")? {
+                        if pending.pending_round(&round.binding)?.is_none() {
+                            let last = round.last_screen.clone().unwrap_or_default();
+                            let tail = screen_tail(&last);
+                            let delivery = deliver_wake(
+                                terminals,
+                                trace_dir,
+                                &round.session,
+                                &round.driver,
+                                "completed",
+                                &wake_message(&round.session, "completed", tail, round.autoclose),
+                                sleep,
+                            )?;
+                            qol_runtime::probe!(
+                                "CLI_SESSION_WATCH",
+                                "event=completed session={} source=checkpoint_vanished_after_exit reads={} delivered={}",
+                                round.session,
+                                round.reads,
+                                delivery.delivered
+                            );
+                            emit_completed(
+                                out,
+                                &round.session,
+                                &round.marker,
+                                tail,
+                                round.autoclose,
+                                &delivery,
+                            )?;
+                            return Ok(RoundPoll {
+                                keep: false,
+                                changed: true,
+                            });
+                        }
                         return Ok(RoundPoll {
                             keep: false,
                             changed: false,
@@ -214,6 +290,19 @@ fn poll_round(
                     });
                 }
                 if !pending.claim_wake(&round.binding, "gone")? {
+                    if pending.pending_round(&round.binding)?.is_none() {
+                        qol_runtime::probe!(
+                            "CLI_SESSION_WATCH",
+                            "event=vanished session={} reads={}",
+                            round.session,
+                            round.reads
+                        );
+                        emit_vanished(out, &round.session)?;
+                        return Ok(RoundPoll {
+                            keep: false,
+                            changed: true,
+                        });
+                    }
                     return Ok(RoundPoll {
                         keep: false,
                         changed: false,
@@ -257,12 +346,54 @@ fn poll_round(
             &round.binding,
         );
     }
-    if screen.contains(&round.marker) {
+    if round.pi_lane.is_none() {
+        round.pi_lane = lane_is_pi(terminals, interpreter, &round.binding);
+    }
+    let marker_present = marker_present_for_lane(
+        &screen,
+        &round.marker,
+        round.pi_lane,
+        if round.pi_lane == Some(true) {
+            lane_transcript_marker(terminals, interpreter, round)
+        } else {
+            None
+        },
+    );
+    if marker_present {
         match pending.pending_round(&round.binding)? {
             None => {
+                let tail = screen_tail(&screen);
+                let delivery = deliver_wake(
+                    terminals,
+                    trace_dir,
+                    &round.session,
+                    &round.driver,
+                    "completed",
+                    &wake_message(&round.session, "completed", tail, round.autoclose),
+                    sleep,
+                )?;
+                if round.autoclose && delivery.delivered {
+                    close_lane_terminal(terminals, &round.binding);
+                }
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=completed session={} source=checkpoint_vanished reads={} delivered={} autoclose={}",
+                    round.session,
+                    round.reads,
+                    delivery.delivered,
+                    round.autoclose
+                );
+                emit_completed(
+                    out,
+                    &round.session,
+                    &round.marker,
+                    tail,
+                    round.autoclose,
+                    &delivery,
+                )?;
                 return Ok(RoundPoll {
                     keep: false,
-                    changed: false,
+                    changed: true,
                 });
             }
             Some(current) if current.completed => {
@@ -375,6 +506,19 @@ fn poll_round(
         }
         changed = true;
     }
+    if round.vanished_polls >= 2 {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=vanished session={} reads={}",
+            round.session,
+            round.reads
+        );
+        emit_vanished(out, &round.session)?;
+        return Ok(RoundPoll {
+            keep: false,
+            changed: true,
+        });
+    }
     Ok(RoundPoll {
         keep: true,
         changed,
@@ -385,8 +529,12 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
     let mut remaining = Vec::with_capacity(watched.len());
     for mut round in std::mem::take(watched) {
         match pending.pending_round(&round.binding)? {
-            None => {}
+            None => {
+                round.vanished_polls += 1;
+                remaining.push(round);
+            }
             Some(current) => {
+                round.vanished_polls = 0;
                 if current.completed {
                     qol_runtime::probe!(
                         "CLI_SESSION_WATCH",
@@ -411,27 +559,26 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
     Ok(())
 }
 
-fn prune_stale_tokens(
-    terminals: &TerminalSessionService,
+fn load_orphan_rounds(
     pending: &PendingBridgeStore,
     tokens: &[String],
-) -> Result<Vec<String>> {
-    if tokens.is_empty() {
-        return Ok(tokens.to_vec());
-    }
-    let mut kept = Vec::with_capacity(tokens.len());
+) -> Result<Vec<WatchedRound>> {
+    let mut orphans = Vec::new();
     for token in tokens {
         let binding: SessionBinding = token.parse().context("invalid session token")?;
-        let round_open = pending
-            .pending_round(&binding)?
-            .is_some_and(|round| !round.completed);
-        if round_open || !session_gone(terminals, &binding) {
-            kept.push(token.clone());
-        } else {
-            qol_runtime::probe!("CLI_SESSION_WATCH", "event=pruned_stale session={}", token);
+        if pending.pending_round(&binding)?.is_some() {
+            continue;
         }
+        orphans.push(WatchedRound::new(PendingRound {
+            session: token.clone(),
+            driver: String::new(),
+            completion_marker: "QOL_BRIDGE_DONE_".to_owned(),
+            completed: false,
+            screen: None,
+            autoclose: false,
+        })?);
     }
-    Ok(kept)
+    Ok(orphans)
 }
 
 fn load_rounds(pending: &PendingBridgeStore, tokens: &[String]) -> Result<Vec<PendingRound>> {
@@ -485,14 +632,13 @@ fn watch_loop(
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<()> {
     let explicit = !tokens.is_empty();
-    let tokens = prune_stale_tokens(terminals, pending, tokens)?;
-    if explicit && tokens.is_empty() {
-        return Ok(());
-    }
-    let mut watched = load_rounds(pending, &tokens)?
+    let mut watched = load_rounds(pending, tokens)?
         .into_iter()
         .map(WatchedRound::new)
         .collect::<Result<Vec<_>>>()?;
+    if explicit {
+        watched.extend(load_orphan_rounds(pending, tokens)?);
+    }
     let mut poll_interval = config.poll_base;
     loop {
         if watched.is_empty() {
@@ -857,6 +1003,13 @@ fn emit_stalled(out: &mut dyn Write, session: &str, delivery: &WakeDelivery) -> 
         event["wake_error"] = serde_json::json!(error);
     }
     emit(out, event)
+}
+
+fn emit_vanished(out: &mut dyn Write, session: &str) -> Result<()> {
+    emit(
+        out,
+        serde_json::json!({ "event": "vanished", "session": session }),
+    )
 }
 
 fn emit(out: &mut dyn Write, line: serde_json::Value) -> Result<()> {
@@ -1272,6 +1425,31 @@ mod tests {
     }
 
     #[test]
+    fn pi_lanes_complete_only_from_a_terminal_transcript_match() {
+        let screen = "QOL_BRIDGE_DONE_pi on the visible screen";
+        assert!(
+            !marker_present_for_lane(screen, "QOL_BRIDGE_DONE_pi", Some(true), Some(false)),
+            "thinking-only marker must not complete a pi lane"
+        );
+        assert!(
+            !marker_present_for_lane(screen, "QOL_BRIDGE_DONE_pi", Some(true), None),
+            "an unreadable pi transcript must not complete from the screen"
+        );
+        assert!(
+            marker_present_for_lane(screen, "QOL_BRIDGE_DONE_pi", Some(true), Some(true)),
+            "a terminal transcript match completes the pi lane"
+        );
+        assert!(
+            marker_present_for_lane(screen, "QOL_BRIDGE_DONE_pi", None, Some(true)),
+            "non-pi lanes keep the old screen behavior"
+        );
+        assert!(
+            !marker_present_for_lane("idle screen", "QOL_BRIDGE_DONE_pi", None, None),
+            "non-pi lanes need the marker on screen"
+        );
+    }
+
+    #[test]
     fn autoclose_round_closes_the_lane_terminal_after_completed_and_plain_rounds_stay_open() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
@@ -1654,7 +1832,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_tokens_with_gone_terminals_and_no_open_round_are_pruned_without_events() {
+    fn stale_token_without_an_open_round_emits_vanished_and_keeps_collected_checkpoint() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let absent_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -1690,14 +1868,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            out.is_empty(),
-            "a stale token must not wake its owner: {out:?}"
-        );
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
+        assert_eq!(events[0]["session"], absent_binding.token());
         let round = pending.pending_round(&collected_binding).unwrap().unwrap();
         assert!(
             round.completed,
-            "the collected checkpoint must not be discarded by the prune"
+            "the collected checkpoint must not be discarded by the orphan poll"
         );
     }
 
@@ -1756,7 +1934,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_everything_stays_in_explicit_mode_and_ignores_foreign_rounds() {
+    fn stale_explicit_token_emits_vanished_without_touching_foreign_rounds() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let stale_binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -1786,10 +1964,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            out.is_empty(),
-            "a pruned explicit watch must not flip to all-rounds: {out:?}"
-        );
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
+        assert_eq!(events[0]["session"], stale_binding.token());
         let round = pending.pending_round(&foreign_binding).unwrap().unwrap();
         assert!(
             !round.completed,
@@ -1798,7 +1976,7 @@ mod tests {
     }
 
     #[test]
-    fn live_terminal_without_an_open_round_stays_unwatched() {
+    fn live_terminal_without_an_open_round_emits_vanished_after_two_polls() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -1818,10 +1996,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            out.is_empty(),
-            "a token without an open round must never be watched: {out:?}"
-        );
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
+        assert_eq!(events[0]["session"], binding.token());
     }
 
     #[test]
@@ -1958,7 +2136,10 @@ mod tests {
             fast_config(Duration::from_secs(3600)),
         )
         .unwrap();
-        assert!(out.is_empty());
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
+        assert_eq!(events[0]["session"], "v1:fake:7:100");
     }
 
     #[test]
@@ -1999,7 +2180,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 31);
+        assert_eq!(ls, 32);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -2044,8 +2225,8 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            7,
-            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the completion capture and the delivery re-check each add a discovery"
+            8,
+            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the completion capture and the delivery re-check each add a discovery; the initial pi-lane resolution adds one"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -2496,6 +2677,182 @@ mod tests {
             !lock_path.exists(),
             "a completed watch must leave no lock file behind"
         );
+    }
+
+    #[test]
+    fn vanished_checkpoint_with_marker_present_still_delivers_completed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        let ack_pending = store(&root);
+        let ack_binding = binding.clone();
+        let ack_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            ack_pending
+                .acknowledge(&ack_binding, "QOL_BRIDGE_DONE_round", false)
+                .unwrap();
+        });
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_round".to_owned()],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            WatchConfig {
+                poll_base: Duration::from_millis(50),
+                poll_cap: Duration::from_millis(100),
+                stall_after: Duration::from_secs(3600),
+            },
+        )
+        .unwrap();
+        ack_thread.join().unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(
+            events[0]["screen"], "done\nQOL_BRIDGE_DONE_round",
+            "the vanished completed round must still deliver its report"
+        );
+        assert_eq!(events[0]["delivered"], true);
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            1,
+            "the completed wake must still be typed into the driver"
+        );
+    }
+
+    #[test]
+    fn vanished_checkpoint_without_marker_emits_vanished_and_exits() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        pending
+            .acknowledge(&binding, "QOL_BRIDGE_DONE_round", false)
+            .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]);
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
+        assert_eq!(events[0]["session"], "v1:fake:7:100");
+    }
+
+    #[test]
+    fn gone_session_with_seen_marker_and_vanished_checkpoint_delivers_completed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        let ack_pending = store(&root);
+        let ack_binding = binding.clone();
+        let ack_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(75));
+            ack_pending
+                .acknowledge(&ack_binding, "QOL_BRIDGE_DONE_round", false)
+                .unwrap();
+        });
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["idle".to_owned(), "done\nQOL_BRIDGE_DONE_round".to_owned()],
+        )
+        .die_after_reads(2);
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            WatchConfig {
+                poll_base: Duration::from_millis(50),
+                poll_cap: Duration::from_millis(100),
+                stall_after: Duration::from_secs(3600),
+            },
+        )
+        .unwrap();
+        ack_thread.join().unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+    }
+
+    #[test]
+    fn gone_session_without_marker_and_vanished_checkpoint_emits_vanished() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:7:100", false)
+            .unwrap();
+        let ack_pending = store(&root);
+        let ack_binding = binding.clone();
+        let ack_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            ack_pending
+                .acknowledge(&ack_binding, "QOL_BRIDGE_DONE_round", false)
+                .unwrap();
+        });
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]).die_after_reads(1);
+        let (terminals, _) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            WatchConfig {
+                poll_base: Duration::from_millis(50),
+                poll_cap: Duration::from_millis(100),
+                stall_after: Duration::from_secs(3600),
+            },
+        )
+        .unwrap();
+        ack_thread.join().unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "vanished");
     }
 
     struct FailingWriter;

@@ -227,10 +227,7 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
         }
         dev_console::SessionEnd::SelfRestart { tray_pid } => {
             let root = repo_root()?;
-            let binary = root
-                .join("target")
-                .join("debug")
-                .join(host_facade::exe_name("qol"));
+            let binary = fresh_cli_binary(&root);
             match crate::self_exec::replace_with(&binary, tray_pid) {
                 Ok(()) => Ok(()),
                 Err(error) => {
@@ -390,9 +387,22 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
 
 fn prebuild_via_fresh_cli(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let root = repo_root()?;
+    let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
+    let directive = tray_directive(optional_single_arg(args, &usage)?);
+    let cli_root = match directive {
+        TrayDirective::Branch(branch) => match resolve_tray_target(&root, Some(&branch)) {
+            Ok(target) => cli_workspace_root(&target.root, &root),
+            Err(_) => {
+                eprintln!("qol dev: no worktree for `{branch}`; using base (selection kept)");
+                root.clone()
+            }
+        },
+        TrayDirective::Base => root.clone(),
+        TrayDirective::Follow => fresh_cli_root(&root, current_active_worktree_marker()),
+    };
     dev_reload_progress("build", "qol dev cli");
-    build_qol_cli_debug(&root, verbose)?;
-    let fresh = root
+    build_qol_cli_debug(&cli_root, verbose)?;
+    let fresh = cli_root
         .join("target")
         .join("debug")
         .join(host_facade::exe_name("qol"));
@@ -523,6 +533,30 @@ pub(crate) fn current_active_worktree_marker() -> Option<String> {
     qol_config::config_dir()
         .as_deref()
         .and_then(qol_dev_build::tray::read_active_worktree_marker)
+}
+
+pub(crate) fn fresh_cli_root(root: &Path, marker: Option<String>) -> PathBuf {
+    cli_workspace_root(&marker_tray_target(root, marker).0.root, root)
+}
+
+fn cli_workspace_root(start: &Path, base: &Path) -> PathBuf {
+    let mut dir = start;
+    loop {
+        if dir.join("Cargo.lock").is_file() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return base.to_path_buf(),
+        }
+    }
+}
+
+pub(crate) fn fresh_cli_binary(root: &Path) -> PathBuf {
+    fresh_cli_root(root, current_active_worktree_marker())
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol"))
 }
 
 pub(crate) fn resolve_tray_target(root: &Path, branch: Option<&str>) -> Result<TrayTarget> {
@@ -1340,5 +1374,75 @@ mod tests {
         );
         let note = note.expect("fallback must explain itself");
         assert!(note.contains("feat/gone"), "got: {note}");
+    }
+
+    fn git_worktree(root: &Path, branch: &str) -> PathBuf {
+        let dir = root.join("worktrees").join("main").join(branch);
+        std::fs::create_dir_all(&dir).expect("worktree dir");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q", "-b", branch])
+            .current_dir(&dir)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init for {branch}");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"qol-tray\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("manifest");
+        std::fs::write(dir.join("Cargo.lock"), "").expect("lockfile");
+        let status = std::process::Command::new("git")
+            .args(["add", "Cargo.toml"])
+            .current_dir(&dir)
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add for {branch}");
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@test.local",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ])
+            .current_dir(&dir)
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "git commit for {branch}");
+        dir
+    }
+
+    #[test]
+    fn fresh_cli_root_resolves_worktree_marker_to_the_worktree_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let worktree = git_worktree(root, "feat-x");
+
+        let resolved = fresh_cli_root(root, Some("feat-x".to_string()));
+
+        assert_eq!(resolved, worktree);
+    }
+
+    #[test]
+    fn fresh_cli_root_falls_back_to_base_when_worktree_marker_is_gone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let resolved = fresh_cli_root(root, Some("feat-gone".to_string()));
+
+        assert_eq!(resolved, root.to_path_buf());
+    }
+
+    #[test]
+    fn fresh_cli_root_without_marker_resolves_to_base() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let resolved = fresh_cli_root(root, None);
+
+        assert_eq!(resolved, root.to_path_buf());
     }
 }

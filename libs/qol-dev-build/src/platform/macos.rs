@@ -7,6 +7,10 @@ impl BuildPlatform for Platform {
         "macos"
     }
 
+    fn walk_pace_sleep(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
     fn tray_dev_features(&self) -> &'static str {
         "dev"
     }

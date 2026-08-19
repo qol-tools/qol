@@ -18,6 +18,9 @@ pub(crate) use windows::Platform;
 
 pub(crate) trait BuildPlatform {
     fn name(&self) -> &'static str;
+    fn walk_pace_sleep(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(10)
+    }
     fn tray_dev_features(&self) -> &'static str;
     fn executable_suffix(&self) -> &'static str;
 

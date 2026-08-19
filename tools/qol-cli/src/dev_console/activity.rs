@@ -5,7 +5,7 @@ use ratatui::style::{Color, Stylize};
 use ratatui::text::Line;
 use ratatui::Frame;
 
-use super::render_util::{accent, format_duration, render_compact_bottom_panel};
+use super::render_util::{accent, format_duration, Sign};
 use super::Dash;
 
 pub(super) struct Activity {
@@ -29,6 +29,12 @@ pub(super) fn activity_rows(activity: &Activity) -> Vec<Line<'static>> {
     vec![Line::from(spans)]
 }
 
+pub(super) fn activity_sign(activity: &Activity, accent: Color) -> Line<'static> {
+    let mut spans = vec![activity.title.fg(accent).bold()];
+    spans.extend(activity_rows(activity)[0].spans.clone());
+    Line::from(spans)
+}
+
 pub(super) fn draw_activity(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
     if dash.quit_prompt_active() {
         return;
@@ -36,13 +42,10 @@ pub(super) fn draw_activity(frame: &mut Frame, dash: &Dash, area: Rect, accent: 
     let Some(activity) = dash.activity() else {
         return;
     };
-    render_compact_bottom_panel(
-        frame,
-        area,
-        activity.title,
-        activity_rows(&activity),
-        accent,
-    );
+    Sign {
+        content: activity_sign(&activity, accent),
+    }
+    .render_bottom_right(frame, area, accent);
 }
 
 #[cfg(test)]
@@ -72,5 +75,29 @@ mod tests {
             };
             assert_eq!(row_text(&activity), expected, "phase: {phase}");
         }
+    }
+
+    #[test]
+    fn activity_sign_puts_title_and_row_on_one_line() {
+        let activity = Activity {
+            title: "disk",
+            phase: "build".to_string(),
+            detail: "qol-tray dev".to_string(),
+            elapsed: Duration::from_secs(12),
+        };
+        let line = activity_sign(&activity, Color::Red);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.starts_with("disk"), "signed title: {text}");
+        assert!(text.contains("build"), "signed phase: {text}");
+        assert!(text.contains("qol-tray dev"), "signed detail: {text}");
+        assert!(text.contains("0m12s"), "signed elapsed: {text}");
+        assert!(
+            line.spans[0].style.fg == Some(Color::Red),
+            "title keeps the accent colour"
+        );
     }
 }

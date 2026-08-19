@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 pub(super) use qol_dev_build::scan_ledger::{
-    resolve_bytes, resolve_dir_by_children, ScanLedger, SubtreeRecord,
+    resolve_bytes, resolve_dir_by_children, signature_of, ScanLedger, SubtreeRecord,
 };
 
 use super::activity::Activity;
@@ -67,6 +67,8 @@ impl DiskScan {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct DiskReport {
     pub(super) rows: Vec<DiskRow>,
+    #[serde(default)]
+    pub(super) stale: bool,
 }
 
 impl DiskReport {
@@ -101,14 +103,56 @@ const CLEANABLE_ATTENTION: u64 = 10 * 1024 * 1024 * 1024;
 const PRUNABLE_LEDGER_KEY: &str = "__qol_dev_disk_prunable__";
 const VERIFY_TARGET_MAX_AGE_MS: u64 = 6 * 60 * 60 * 1000;
 const VERIFY_LONG_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
+#[cfg(not(test))]
 const MIN_VISIBLE_DURATION: Duration = Duration::from_millis(700);
+#[cfg(test)]
+const MIN_VISIBLE_DURATION: Duration = Duration::from_millis(0);
 
 pub(super) fn open_disk(dash: &mut Dash) {
     dash.view = View::Disk;
     dash.scroll_offset = 0;
-    if dash.disk.last.is_none() {
+}
+
+pub(super) fn start_disk_verify(dash: &mut Dash) {
+    let Some((_, _, ledger)) = load_cached_report(&dash.running_worktree) else {
         start_disk_scan(dash);
+        return;
+    };
+    let running = dash.running_worktree.clone();
+    dash.disk.verify = Some(spawn_disk_worker("verifying", move |progress| {
+        verify_disk_usage(&running, ledger, progress)
+    }));
+}
+
+pub(super) fn probe_cached_report(report: &mut DiskReport, ledger: &ScanLedger, now_ms: u64) {
+    report.stale = ledger_is_stale(ledger, now_ms);
+}
+
+fn ledger_is_stale(ledger: &ScanLedger, now_ms: u64) -> bool {
+    if ledger.records.is_empty() {
+        return true;
     }
+    ledger.records.iter().any(|(key, record)| {
+        let targetish = key == PRUNABLE_LEDGER_KEY
+            || Path::new(key)
+                .components()
+                .any(|part| part.as_os_str() == "target");
+        let max_age_ms = if targetish {
+            VERIFY_TARGET_MAX_AGE_MS
+        } else {
+            VERIFY_LONG_MAX_AGE_MS
+        };
+        if now_ms.saturating_sub(record.scanned_at_ms) > max_age_ms {
+            return true;
+        }
+        if key == PRUNABLE_LEDGER_KEY {
+            return false;
+        }
+        match signature_of(Path::new(key)) {
+            Some(sig) => record.sig != Some(sig),
+            None => true,
+        }
+    })
 }
 
 pub(super) fn start_disk_scan(dash: &mut Dash) {
@@ -178,7 +222,7 @@ fn lower_worker_priority() {
             ) -> libc::c_int;
         }
         unsafe {
-            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0);
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
             setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE);
         }
     }
@@ -241,7 +285,10 @@ pub(super) fn load_cached_report(running: &Path) -> Option<(DiskReport, u64, Sca
     let serialized = std::fs::read_to_string(cache_path(running)).ok()?;
     let cached: CachedDiskReportOwned = serde_json::from_str(&serialized).ok()?;
     Some((
-        DiskReport { rows: cached.rows },
+        DiskReport {
+            rows: cached.rows,
+            stale: false,
+        },
         cached.scanned_at_ms,
         cached.ledger,
     ))
@@ -257,16 +304,33 @@ fn scan_disk_usage(
     running: &Path,
     progress: &Arc<Mutex<String>>,
 ) -> Result<(DiskReport, ScanLedger), String> {
+    scan_disk_usage_in(running, progress, &HostCaches::detect())
+}
+
+fn scan_disk_usage_in(
+    running: &Path,
+    progress: &Arc<Mutex<String>>,
+    caches: &HostCaches,
+) -> Result<(DiskReport, ScanLedger), String> {
     let now_ms = now_unix_ms();
     let mut ledger = ScanLedger::new();
-    let report = usage_rows(running, &mut ledger, now_ms, 0, 0, progress)?;
+    let report = usage_rows(running, &mut ledger, now_ms, 0, 0, progress, caches)?;
     Ok((report, ledger))
 }
 
 pub(super) fn verify_disk_usage(
     running: &Path,
+    ledger: ScanLedger,
+    progress: &Arc<Mutex<String>>,
+) -> Result<(DiskReport, ScanLedger), String> {
+    verify_disk_usage_in(running, ledger, progress, &HostCaches::detect())
+}
+
+fn verify_disk_usage_in(
+    running: &Path,
     mut ledger: ScanLedger,
     progress: &Arc<Mutex<String>>,
+    caches: &HostCaches,
 ) -> Result<(DiskReport, ScanLedger), String> {
     let now_ms = now_unix_ms();
     let report = usage_rows(
@@ -276,10 +340,12 @@ pub(super) fn verify_disk_usage(
         VERIFY_TARGET_MAX_AGE_MS,
         VERIFY_LONG_MAX_AGE_MS,
         progress,
+        caches,
     )?;
     Ok((report, ledger))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn usage_rows(
     running: &Path,
     ledger: &mut ScanLedger,
@@ -287,6 +353,7 @@ fn usage_rows(
     target_max_age_ms: u64,
     long_max_age_ms: u64,
     progress: &Arc<Mutex<String>>,
+    caches: &HostCaches,
 ) -> Result<DiskReport, String> {
     let target = running.join("target");
     let mut rows = Vec::new();
@@ -296,6 +363,7 @@ fn usage_rows(
     } else {
         (target_root_rows(&target), false)
     };
+    let live_target_total = bucket_rows.first().and_then(|row| row.bytes);
     rows.extend(bucket_rows);
     set_progress(progress, "stale caches");
     let prunable = if any_target_rescan {
@@ -341,9 +409,28 @@ fn usage_rows(
         set_progress(progress, &format!("worktree {}", worktree.branch));
         let live = worktree.path == running;
         let target_path = worktree.path.join("target");
-        let bytes = target_path
-            .exists()
-            .then(|| resolve_bytes(&target_path, ledger, now_ms, target_max_age_ms, &mut deep).0);
+        let bytes = if live {
+            live_target_total
+        } else {
+            target_path.exists().then(|| {
+                resolve_dir_by_children(&target_path, ledger, now_ms, target_max_age_ms, &mut deep)
+                    .0
+            })
+        };
+        if let Some(bytes) = bytes {
+            ledger.records.insert(
+                target_path.to_string_lossy().into_owned(),
+                SubtreeRecord {
+                    bytes,
+                    sig: signature_of(&target_path),
+                    scanned_at_ms: now_ms,
+                },
+            );
+        } else {
+            ledger
+                .records
+                .remove(&target_path.to_string_lossy().into_owned());
+        }
         rows.push(DiskRow {
             label: format!("{WORKTREE_LABEL_PREFIX}{}", worktree.branch),
             detail: format!(
@@ -358,7 +445,7 @@ fn usage_rows(
     set_progress(progress, "sccache");
     rows.push(resolved_optional_row(
         "sccache",
-        sccache_dir(),
+        caches.sccache.clone(),
         ledger,
         now_ms,
         long_max_age_ms,
@@ -367,18 +454,26 @@ fn usage_rows(
     set_progress(progress, "cargo home");
     rows.push(resolved_optional_row(
         "cargo home",
-        cargo_home(),
+        caches.cargo_home.clone(),
         ledger,
         now_ms,
         long_max_age_ms,
         &mut deep,
     ));
-    Ok(DiskReport { rows })
+    Ok(DiskReport { rows, stale: false })
 }
 
 fn cleanup_disk_usage(
     running: &Path,
     progress: &Arc<Mutex<String>>,
+) -> Result<(DiskReport, ScanLedger), String> {
+    cleanup_disk_usage_in(running, progress, &HostCaches::detect())
+}
+
+fn cleanup_disk_usage_in(
+    running: &Path,
+    progress: &Arc<Mutex<String>>,
+    caches: &HostCaches,
 ) -> Result<(DiskReport, ScanLedger), String> {
     let mut freed = 0;
     let mut failures = Vec::new();
@@ -416,7 +511,7 @@ fn cleanup_disk_usage(
             }
         }
     }
-    let (mut report, ledger) = scan_disk_usage(running, progress)?;
+    let (mut report, ledger) = scan_disk_usage_in(running, progress, caches)?;
     report.rows.insert(0, cleanup_row(freed, &failures));
     Ok((report, ledger))
 }
@@ -592,12 +687,37 @@ fn resolved_optional_row(
     }
 }
 
+pub(super) struct HostCaches {
+    sccache: Option<PathBuf>,
+    cargo_home: Option<PathBuf>,
+}
+
+impl HostCaches {
+    #[cfg(not(test))]
+    fn detect() -> Self {
+        Self {
+            sccache: sccache_dir(),
+            cargo_home: cargo_home(),
+        }
+    }
+
+    #[cfg(test)]
+    fn detect() -> Self {
+        Self {
+            sccache: None,
+            cargo_home: None,
+        }
+    }
+}
+
+#[cfg(not(test))]
 fn sccache_dir() -> Option<PathBuf> {
     std::env::var_os("SCCACHE_DIR")
         .map(PathBuf::from)
         .or_else(|| dirs::cache_dir().map(|cache| cache.join("sccache")))
 }
 
+#[cfg(not(test))]
 fn cargo_home() -> Option<PathBuf> {
     std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
@@ -639,6 +759,9 @@ pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'s
     }
     if let Some(at) = panel.last_at_ms {
         value.push(format!(" · {}", relative_age(now_ms, at)).fg(Color::DarkGray));
+    }
+    if report.stale {
+        value.push(" · stale".fg(Color::Yellow));
     }
     (color, value)
 }
@@ -689,12 +812,19 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    fn no_host_caches() -> HostCaches {
+        HostCaches {
+            sccache: None,
+            cargo_home: None,
+        }
+    }
+
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
     }
 
     fn report(rows: Vec<DiskRow>) -> DiskReport {
-        DiskReport { rows }
+        DiskReport { rows, stale: false }
     }
 
     fn row(label: &str, bytes: Option<u64>) -> DiskRow {
@@ -1087,7 +1217,8 @@ mod tests {
         write_tree(&running.join("target"), 4);
         write_tree(&idle.join("target"), 8);
 
-        let (report, ledger) = scan_disk_usage(&running, &progress()).expect("scan");
+        let (report, ledger) =
+            scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("scan");
 
         assert!(!ledger.records.is_empty(), "a full scan seeds the ledger");
         let running_row = row_for(&report, "feat-running");
@@ -1114,7 +1245,8 @@ mod tests {
         write_tree(&running.join("target"), 4);
         write_tree(&idle.join("target"), 8);
 
-        let (report, _) = cleanup_disk_usage(&running, &progress()).expect("cleanup");
+        let (report, _) =
+            cleanup_disk_usage_in(&running, &progress(), &no_host_caches()).expect("cleanup");
 
         assert!(
             running.join("target").exists(),
@@ -1154,7 +1286,8 @@ mod tests {
             .expect("lock perms");
         write_tree(&running.join("target").join("sandbox"), 8);
 
-        let (report, _) = cleanup_disk_usage(&running, &progress()).expect("cleanup");
+        let (report, _) =
+            cleanup_disk_usage_in(&running, &progress(), &no_host_caches()).expect("cleanup");
 
         std::fs::set_permissions(&release, std::fs::Permissions::from_mode(0o755))
             .expect("unlock perms");
@@ -1183,7 +1316,8 @@ mod tests {
         write_tree(&running.join("target/debug"), 4);
         write_tree(&running.join("target/qol-dev"), 8);
 
-        let (seed_report, seed_ledger) = scan_disk_usage(&running, &progress()).expect("seed");
+        let (seed_report, seed_ledger) =
+            scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("seed");
         assert!(
             !seed_ledger.records.is_empty(),
             "the seed scan records every root"
@@ -1195,13 +1329,17 @@ mod tests {
             .collect();
 
         let (verify_report, verify_ledger) =
-            verify_disk_usage(&running, seed_ledger, &progress()).expect("verify");
+            verify_disk_usage_in(&running, seed_ledger, &progress(), &no_host_caches())
+                .expect("verify");
 
         assert_eq!(
             verify_report.rows, seed_report.rows,
             "an unchanged tree verifies to the same rows"
         );
         for (key, record) in &verify_ledger.records {
+            if key.ends_with("/target") {
+                continue;
+            }
             assert_eq!(
                 *before.get(key).expect("verify adds no new records"),
                 record.scanned_at_ms,
@@ -1211,13 +1349,47 @@ mod tests {
     }
 
     #[test]
+    fn probe_flags_staleness_without_deep_walks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let running = git_worktree(root, "feat-running");
+        write_tree(&running.join("target/debug"), 4);
+        write_tree(&running.join("target/qol-dev"), 8);
+        let (mut report, ledger) =
+            scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("seed");
+        let now_ms = ledger
+            .records
+            .values()
+            .map(|record| record.scanned_at_ms)
+            .max()
+            .expect("seeded records");
+
+        probe_cached_report(&mut report, &ledger, now_ms);
+        assert!(!report.stale, "an unchanged tree stays fresh");
+
+        probe_cached_report(&mut report, &ledger, now_ms + VERIFY_TARGET_MAX_AGE_MS + 1);
+        assert!(report.stale, "an aged-out ledger goes stale");
+
+        std::thread::sleep(Duration::from_millis(10));
+        std::fs::write(running.join("target/qol-dev/extra.txt"), b"grow").expect("write");
+        probe_cached_report(&mut report, &ledger, now_ms);
+        assert!(report.stale, "a changed bucket goes stale");
+
+        assert!(
+            ledger_is_stale(&ScanLedger::new(), now_ms),
+            "an empty ledger is always stale"
+        );
+    }
+
+    #[test]
     fn verify_rescans_only_the_changed_bucket() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
         write_tree(&running.join("target/debug"), 4);
         write_tree(&running.join("target/qol-dev"), 8);
-        let (seed_report, seed_ledger) = scan_disk_usage(&running, &progress()).expect("seed");
+        let (seed_report, seed_ledger) =
+            scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("seed");
         let before: BTreeMap<String, (u64, u64)> = seed_ledger
             .records
             .iter()
@@ -1227,7 +1399,8 @@ mod tests {
         write_tree(&running.join("target/debug/extra"), 16);
 
         let (verify_report, verify_ledger) =
-            verify_disk_usage(&running, seed_ledger, &progress()).expect("verify");
+            verify_disk_usage_in(&running, seed_ledger, &progress(), &no_host_caches())
+                .expect("verify");
 
         let mut rescanned = 0;
         for (key, record) in &verify_ledger.records {
@@ -1312,12 +1485,13 @@ mod tests {
     }
 
     #[test]
-    fn cached_boot_starts_a_verify_that_refreshes_and_persists_the_cache() {
+    fn cached_boot_defers_the_deep_verify_to_the_disk_view() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
         write_tree(&running.join("target/debug"), 4);
-        let (report, ledger) = scan_disk_usage(&running, &progress()).expect("seed scan");
+        let (report, ledger) =
+            scan_disk_usage_in(&running, &progress(), &no_host_caches()).expect("seed scan");
         let at_ms = 987_654;
         persist_report(&running, &report, &ledger, at_ms);
 
@@ -1336,17 +1510,32 @@ mod tests {
             dash.disk.scan.is_none(),
             "a cached report must not spawn a full scan"
         );
-        let verify = dash
-            .disk
-            .verify
-            .as_ref()
-            .expect("cached boot spawns a verify");
-        assert_eq!(verify.phase, "verifying");
+        assert!(
+            dash.disk.verify.is_none(),
+            "boot only probes signatures and never deep-walks"
+        );
         assert_eq!(
             dash.disk.last_at_ms,
             Some(at_ms),
             "cached figures show immediately"
         );
+        assert!(
+            dash.disk.last.as_ref().is_some_and(|report| report.stale),
+            "writing the cache into qol-dev marks that bucket stale"
+        );
+
+        open_disk(&mut dash);
+        assert!(
+            dash.disk.verify.is_none(),
+            "opening the disk view never walks on its own"
+        );
+        start_disk_verify(&mut dash);
+        let verify = dash
+            .disk
+            .verify
+            .as_ref()
+            .expect("the explicit request spawns the verify");
+        assert_eq!(verify.phase, "verifying");
 
         let outcome = verify
             .rx

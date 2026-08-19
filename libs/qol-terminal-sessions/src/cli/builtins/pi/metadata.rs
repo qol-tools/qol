@@ -263,6 +263,56 @@ fn memchr_contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
+pub(super) fn marker_in_terminal_assistant_text(path: &Path, marker: &str) -> Option<bool> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut cursor = file.metadata().ok()?.len();
+    let mut suffix = Vec::new();
+    while cursor > 0 {
+        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
+        let length = usize::try_from(cursor - start).ok()?;
+        let mut chunk = vec![0; length];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&suffix);
+        let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        let complete_from = usize::from(start > 0);
+        for line in lines[complete_from..].iter().rev() {
+            if let Some(completed) = assistant_text_marker(line, marker) {
+                return Some(completed);
+            }
+        }
+        suffix = lines.first().copied().unwrap_or_default().to_vec();
+        cursor = start;
+    }
+    assistant_text_marker(&suffix, marker)
+}
+
+fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
+    if !memchr_contains(line, b"\"type\":\"message\"") {
+        return None;
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return None;
+    };
+    let message = value.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let terminal = message
+        .get("stopReason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason != "toolUse");
+    let text_contains = message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .any(|text| text.contains(marker));
+    Some(terminal && text_contains)
+}
+
 fn tail_runtime(path: &Path) -> CliRuntimeState {
     let Some(line) = tail::last_complete_line(path) else {
         return CliRuntimeState::Ready;
@@ -285,5 +335,142 @@ fn tail_runtime(path: &Path) -> CliRuntimeState {
         CliRuntimeState::Ready
     } else {
         CliRuntimeState::Working
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::TempDir;
+
+    use super::marker_in_terminal_assistant_text;
+
+    fn message(role: &str, stop_reason: Option<&str>, blocks: &[(&str, &str)]) -> String {
+        let content = blocks
+            .iter()
+            .map(|(kind, text)| {
+                format!(
+                    "{{\"type\":\"{kind}\",\"text\":{}}}",
+                    serde_json::to_string(text).unwrap()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let stop = stop_reason
+            .map(|reason| format!(",\"stopReason\":\"{reason}\""))
+            .unwrap_or_default();
+        format!(
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"{role}\",\"content\":[{content}]{stop}}}}}\n"
+        )
+    }
+
+    fn write(lines: &[String]) -> (TempDir, std::path::PathBuf) {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let mut file = std::fs::File::create(&path).unwrap();
+        for line in lines {
+            file.write_all(line.as_bytes()).unwrap();
+        }
+        (root, path)
+    }
+
+    #[test]
+    fn marker_in_thinking_block_is_not_a_completion() {
+        let (_root, path) = write(&[
+            message("user", None, &[("text", "finish with QOL_BRIDGE_DONE_x")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[
+                    ("thinking", "reconstruct QOL_BRIDGE_DONE_x now"),
+                    ("text", "done"),
+                ],
+            ),
+        ]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_x"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn marker_in_text_with_tool_use_stop_reason_is_not_a_completion() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("toolUse"),
+            &[
+                ("text", "calling with QOL_BRIDGE_DONE_x"),
+                ("thinking", "plan"),
+            ],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_x"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn marker_in_text_with_terminal_stop_reason_completes() {
+        let (_root, path) = write(&[
+            message("user", None, &[("text", "go")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[
+                    ("thinking", "internal"),
+                    ("text", "finished QOL_BRIDGE_DONE_y"),
+                ],
+            ),
+        ]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_y"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn only_the_latest_assistant_message_counts() {
+        let (_root, path) = write(&[
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[("text", "earlier QOL_BRIDGE_DONE_z")],
+            ),
+            message("user", None, &[("text", "keep going")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[("text", "finished without the marker")],
+            ),
+        ]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_z"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn marker_in_text_without_a_stop_reason_is_not_a_completion() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            None,
+            &[("text", "still writing QOL_BRIDGE_DONE_w")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_w"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn missing_or_empty_transcript_has_no_verdict() {
+        let root = TempDir::new().unwrap();
+        assert_eq!(
+            marker_in_terminal_assistant_text(&root.path().join("absent.jsonl"), "MARKER"),
+            None
+        );
+        let (_root, path) = write(&[]);
+        assert_eq!(marker_in_terminal_assistant_text(&path, "MARKER"), None);
     }
 }

@@ -90,19 +90,6 @@ pub(super) fn render_bottom_panel(
     render_bottom_panel_with_width(frame, area, title, rows, accent, width);
 }
 
-pub(super) fn render_compact_bottom_panel(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    rows: Vec<Line<'static>>,
-    accent: Color,
-) {
-    let content_width = rows.iter().map(Line::width).max().unwrap_or_default() as u16 + 2;
-    let title_width = title.len() as u16 + 4;
-    let width = content_width.max(title_width).min(area.width);
-    render_bottom_panel_with_width(frame, area, title, rows, accent, width);
-}
-
 fn render_bottom_panel_with_width(
     frame: &mut Frame,
     area: Rect,
@@ -160,12 +147,34 @@ impl Sign {
         accent: Color,
         navigation: NavigationOverflow,
     ) {
+        let width = self.sign_width();
+        let x = body.x + (body.width - width) / 2;
+        self.render_bottom_at(frame, body, x, width, accent, navigation);
+    }
+
+    pub(super) fn render_bottom_right(self, frame: &mut Frame, body: Rect, accent: Color) {
+        let width = self.sign_width();
+        let x = body.x + body.width.saturating_sub(width);
+        self.render_bottom_at(frame, body, x, width, accent, NavigationOverflow::default());
+    }
+
+    fn sign_width(&self) -> u16 {
+        self.content.width() as u16 + 4
+    }
+
+    fn render_bottom_at(
+        self,
+        frame: &mut Frame,
+        body: Rect,
+        x: u16,
+        width: u16,
+        accent: Color,
+        navigation: NavigationOverflow,
+    ) {
         let span = self.content.width() as u16 + 2;
-        let width = span + 2;
         if width + 2 > body.width || body.height < 3 {
             return;
         }
-        let x = body.x + (body.width - width) / 2;
         let y = body.y + body.height - 1;
         let bar = "─".repeat(span as usize);
         render_overlay(frame, x, y - 1, Line::from(format!("╭{bar}╮").fg(accent)));

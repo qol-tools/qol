@@ -37,6 +37,10 @@ pub trait CliSessionStrategy: Send + Sync {
 
     fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor;
 
+    fn transcript_completion(&self, _session: &SessionFacts, _marker: &str) -> Option<bool> {
+        None
+    }
+
     fn interrupt_key(&self) -> &'static str {
         "esc"
     }

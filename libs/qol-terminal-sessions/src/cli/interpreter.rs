@@ -76,6 +76,11 @@ impl CliSessionInterpreter {
         descriptor
     }
 
+    pub fn transcript_completion(&self, session: &SessionFacts, marker: &str) -> Option<bool> {
+        self.strategy_for(session)
+            .transcript_completion(session, marker)
+    }
+
     pub fn interrupt_key(&self, session: &SessionFacts) -> &'static str {
         self.strategy_for(session).interrupt_key()
     }

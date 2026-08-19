@@ -43,13 +43,13 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
-    draw_activity(frame, dash, inner, accent);
     draw_quit_prompt(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
     draw_branch_sign(frame, dash, body, navigation);
+    draw_activity(frame, dash, body, accent);
     draw_keys_hud(frame, dash, inner);
 }
 
@@ -1192,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_activity_signbox_renders_above_the_worktree_sign() {
+    fn reload_activity_sign_right_aligns_on_the_bottom_border() {
         let mut dash = Dash::new(Vec::new());
         let child = Command::new("true").spawn().unwrap();
         let (_tx, rx) = channel();
@@ -1208,26 +1208,22 @@ mod tests {
         };
 
         let rows = render_rows_at(&mut dash, 110, 28);
-        let activity_row = rows
-            .iter()
-            .position(|row| row.contains("build · qol-tray dev"))
-            .expect("reload activity row rendered");
-        let branch_row = rows
-            .iter()
-            .position(|row| row.contains("┤ base ├"))
-            .expect("worktree sign rendered");
-
+        let border = &rows[rows.len() - 2];
+        let activity_idx = border
+            .find("┤ reload")
+            .expect("reload sign title missing from the bottom border");
+        let branch_idx = border.find("┤ base ├").expect("worktree sign rendered");
         assert!(
-            rows.iter().any(|row| row.contains("┤ reload ├")),
-            "reload sign title missing"
+            border.contains("build · qol-tray dev"),
+            "reload phase and detail must sit inside the sign"
         );
         assert!(
-            activity_row < branch_row,
-            "reload activity must sit above the worktree sign"
+            activity_idx > branch_idx,
+            "reload sign must right-align after the centered worktree sign: {border}"
         );
         assert!(
             rows.iter().all(|row| !row.contains("keys · ctrl+k")),
-            "the keys HUD must not cover the centered reload sign"
+            "the keys HUD must not cover the reload sign"
         );
         if let Reload::Running { mut child, .. } = dash.reload {
             let _ = child.wait();
