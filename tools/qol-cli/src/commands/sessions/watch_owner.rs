@@ -272,10 +272,10 @@ mod tests {
         let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
         let done: SessionBinding = "v1:fake:8:200".parse().unwrap();
         pending
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false)
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         pending
-            .start(&done, "QOL_BRIDGE_DONE_done", "v1:fake:9:900", false)
+            .start(&done, "QOL_BRIDGE_DONE_done", "v1:fake:9:900", false, None)
             .unwrap();
         pending
             .observe(&done, "QOL_BRIDGE_DONE_done", true)
@@ -298,7 +298,7 @@ mod tests {
         let watcher = ClientWatcher::with_dir(root.path().to_path_buf(), "owner-spawn".to_owned());
         let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false)
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
         let log = root.path().join("wake-debug-owner-spawn.log");
@@ -323,7 +323,7 @@ mod tests {
             ClientWatcher::with_dir(root.path().to_path_buf(), "owner-restart".to_owned());
         let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false)
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
         watcher.stop();
@@ -348,7 +348,7 @@ mod tests {
         let watcher = ClientWatcher::with_dir(root.path().to_path_buf(), "owner-a".to_owned());
         let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false)
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
         watcher.stop();

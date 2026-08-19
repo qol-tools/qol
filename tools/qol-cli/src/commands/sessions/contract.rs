@@ -132,6 +132,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Required bounded first-round task embedded in the launch; the round is open when the call returns and session_bridge (no task) waits for it",
                     },
+                    "group": {
+                        "type": "string",
+                        "description": "Optional group name; registers the lane as a member of a grouped-research set so completed rounds aggregate into one combined wake under the sessions data dir when every member completes",
+                    },
                     "resume": {
                         "type": "boolean",
                         "description": "Force a resume of the harness's persisted session for this key when a new terminal is launched. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); resume: false opts out. The spawn outcome reports resume and resume_detail",

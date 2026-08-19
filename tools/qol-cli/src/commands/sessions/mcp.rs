@@ -36,6 +36,7 @@ pub(crate) struct McpSessionServer {
     spawn_cap: Option<super::spawn::SpawnCapConfig>,
     round_timeout: Duration,
     watcher: super::watch_owner::ClientWatcher,
+    reports_dir: std::path::PathBuf,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
@@ -55,6 +56,8 @@ impl McpSessionServer {
             spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             watcher,
+            reports_dir: qol_config::data_subdir("sessions")
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
             #[cfg(test)]
             _pending_root: None,
         })
@@ -78,6 +81,7 @@ impl McpSessionServer {
                 root.path().join("watch-state"),
                 "test-owner".to_owned(),
             ),
+            reports_dir: root.path().to_path_buf(),
             _pending_root: Some(root),
         }
     }
@@ -102,6 +106,7 @@ impl McpSessionServer {
                 dir.join("watch-state"),
                 "test-owner".to_owned(),
             ),
+            reports_dir: dir.clone(),
             _pending_root: None,
         }
     }
@@ -256,6 +261,15 @@ impl McpSessionServer {
             })
             .transpose()?;
         let task = string_argument(&arguments, "task")?;
+        let group = arguments
+            .get("group")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "session_spawn `group` must be a string".to_owned())
+            })
+            .transpose()?;
         let resume = arguments
             .get("resume")
             .map(|value| {
@@ -284,6 +298,7 @@ impl McpSessionServer {
             true,
             resume,
             Some(task),
+            group.as_deref(),
             &self.pending,
         )
         .map_err(|error| error.to_string())?;
@@ -351,6 +366,7 @@ impl McpSessionServer {
             &self.pending,
             &self.ledger,
             &self.locks,
+            &super::bridge::trace_dir(),
             false,
         )
         .map_err(|error| error.to_string())?;
@@ -398,7 +414,9 @@ impl McpSessionServer {
                 )
                 .map_err(|error| error.to_string())?;
                 if !siblings.is_empty() {
-                    receipt["sibling_lanes"] = json!(siblings);
+                    let terse = tersify_sibling_lanes(&siblings, &self.reports_dir)
+                        .map_err(|error| error.to_string())?;
+                    receipt["sibling_lanes"] = json!(terse);
                 }
             }
         }
@@ -420,6 +438,63 @@ fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<Value, Strin
         "outcome": outcome,
         "final_report": final_report,
     }))
+}
+
+const MAX_SIBLING_LANES: usize = 50;
+const MAX_SIBLING_FIELD_CHARS: usize = 200;
+const TRUNCATE_MARKER: &str = "...";
+
+fn tersify_sibling_lanes(
+    siblings: &[super::close::SiblingLaneClose],
+    reports_dir: &std::path::Path,
+) -> Result<Vec<Value>, String> {
+    let total = siblings.len();
+    let kept = siblings.len().min(MAX_SIBLING_LANES);
+    let mut entries = Vec::with_capacity(kept);
+    for sibling in &siblings[..kept] {
+        let mut entry = json!({
+            "session": sibling.session,
+            "closed": sibling.closed,
+            "terminal_state": sibling.terminal_state,
+        });
+        if let Some(key) = &sibling.key {
+            entry["key"] = json!(cap_string(key));
+        }
+        if let Some(tool) = &sibling.tool {
+            entry["tool"] = json!(cap_string(tool));
+        }
+        if let Some(detail) = &sibling.close_detail {
+            entry["close_detail"] = json!(cap_string(detail));
+        }
+        if sibling.report.trim().is_empty() {
+            entries.push(entry);
+            continue;
+        }
+        let dir = reports_dir.join("sibling-reports");
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| format!("failed to create sibling report dir {:?}: {error}", dir))?;
+        let path = dir.join(format!("sibling-report-{}.md", sibling.session));
+        std::fs::write(&path, &sibling.report)
+            .map_err(|error| format!("failed to write sibling report {:?}: {error}", path))?;
+        entry["report"] = json!(path.display().to_string());
+        entry["report_file"] = json!(path.display().to_string());
+        entries.push(entry);
+    }
+    if total > kept {
+        entries.push(json!({
+            "dropped_sibling_lanes": total - kept,
+        }));
+    }
+    Ok(entries)
+}
+
+fn cap_string(value: &str) -> String {
+    if value.chars().count() <= MAX_SIBLING_FIELD_CHARS {
+        return value.to_owned();
+    }
+    let mut capped: String = value.chars().take(MAX_SIBLING_FIELD_CHARS).collect();
+    capped.push_str(TRUNCATE_MARKER);
+    capped
 }
 
 pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
@@ -452,7 +527,7 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
 }
 
 fn help_text() -> String {
-    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`).\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop and returns their final reports in the receipt's\n  `sibling_lanes` field.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names())
+    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names())
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1453,7 +1528,7 @@ mod tests {
         let binding: SessionBinding = token().parse().unwrap();
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false, None)
             .unwrap();
         server
             .pending
@@ -1482,7 +1557,7 @@ mod tests {
 
         server
             .pending
-            .start(&binding, "QOL_BRIDGE_DONE_final", "", false)
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false, None)
             .unwrap();
         server
             .pending
@@ -1663,7 +1738,13 @@ mod tests {
             .unwrap();
         server
             .pending
-            .start(&sibling_binding, "QOL_BRIDGE_DONE_sib", &initiator, true)
+            .start(
+                &sibling_binding,
+                "QOL_BRIDGE_DONE_sib",
+                &initiator,
+                true,
+                None,
+            )
             .unwrap();
         server
             .pending
@@ -1694,7 +1775,18 @@ mod tests {
         assert_eq!(siblings[0]["tool"], "codex");
         assert_eq!(siblings[0]["terminal_state"], "closed");
         assert_eq!(siblings[0]["closed"], true);
-        assert_eq!(siblings[0]["report"], "sibling final report");
+        let report_file = siblings[0]["report_file"]
+            .as_str()
+            .expect("report_file path");
+        assert!(report_file.ends_with(&format!(
+            "sibling-reports/sibling-report-{}.md",
+            sibling_binding.token()
+        )));
+        assert_eq!(siblings[0]["report"], report_file);
+        assert_eq!(
+            std::fs::read_to_string(report_file).unwrap(),
+            "sibling final report"
+        );
         let closed = backend.closed.lock().unwrap();
         assert_eq!(closed.len(), 2);
         assert!(closed.contains(&named_binding));
@@ -1740,7 +1832,13 @@ mod tests {
             .unwrap();
         server
             .pending
-            .start(&open_binding, "QOL_BRIDGE_DONE_open", &initiator, true)
+            .start(
+                &open_binding,
+                "QOL_BRIDGE_DONE_open",
+                &initiator,
+                true,
+                None,
+            )
             .unwrap();
 
         let mut arguments = close_arguments("accepted");
@@ -2431,6 +2529,54 @@ mod tests {
                 .spawn_count
                 .load(std::sync::atomic::Ordering::Relaxed),
             0
+        );
+    }
+
+    #[test]
+    fn tersify_sibling_lanes_caps_fields_routes_reports_and_drops_overflow() {
+        use super::super::close::{SiblingLaneClose, TerminalCloseState};
+        let root = tempfile::TempDir::new().unwrap();
+        let long_detail = "x".repeat(300);
+        let siblings: Vec<SiblingLaneClose> = (0..52)
+            .map(|index| SiblingLaneClose {
+                session: format!("v1:kitty:lane-{index}:200"),
+                key: Some(format!("lane-{index}")),
+                tool: Some("codex".to_owned()),
+                closed: true,
+                terminal_state: TerminalCloseState::Closed,
+                report: if index == 0 {
+                    "sibling report body".to_owned()
+                } else {
+                    String::new()
+                },
+                close_detail: if index % 2 == 0 {
+                    Some(long_detail.clone())
+                } else {
+                    None
+                },
+            })
+            .collect();
+        let entries = tersify_sibling_lanes(&siblings, root.path()).unwrap();
+        assert_eq!(entries.len(), 51, "50 kept lanes plus the dropped note");
+        assert_eq!(entries[50]["dropped_sibling_lanes"], 2);
+        let first = &entries[0];
+        assert_eq!(first["session"], "v1:kitty:lane-0:200");
+        let report_file = first["report_file"].as_str().unwrap();
+        assert!(report_file.ends_with("sibling-reports/sibling-report-v1:kitty:lane-0:200.md"));
+        assert_eq!(first["report"], report_file);
+        assert_eq!(
+            std::fs::read_to_string(report_file).unwrap(),
+            "sibling report body"
+        );
+        let detail = entries[2]["close_detail"].as_str().unwrap();
+        assert!(detail.ends_with("..."));
+        assert_eq!(
+            detail.chars().count(),
+            MAX_SIBLING_FIELD_CHARS + TRUNCATE_MARKER.len()
+        );
+        assert!(
+            entries[1].get("report").is_none(),
+            "empty reports are dropped"
         );
     }
 }

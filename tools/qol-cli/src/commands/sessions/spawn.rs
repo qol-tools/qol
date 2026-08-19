@@ -684,6 +684,7 @@ fn run_with(
         true,
         parsed.resume,
         parsed.task.as_deref(),
+        parsed.group.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
     )
 }
@@ -760,10 +761,11 @@ struct SpawnArgs {
     task: Option<String>,
     background: bool,
     resume: Option<bool>,
+    group: Option<String>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -773,6 +775,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut task = None;
     let mut background = false;
     let mut resume = None;
+    let mut group = None;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -819,6 +822,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 resume = Some(false);
                 index += 1;
             }
+            "--group" => {
+                group = Some(flag_value(args, index, "--group", usage)?);
+                index += 2;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -834,6 +841,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         task,
         background,
         resume,
+        group,
     })
 }
 
@@ -909,6 +917,7 @@ pub(super) fn spawn_or_reuse(
     autoclose: bool,
     resume: Option<bool>,
     task: Option<&str>,
+    group: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
 ) -> Result<SpawnOutcome> {
     if background && task.is_none() {
@@ -991,6 +1000,7 @@ pub(super) fn spawn_or_reuse(
                         model,
                         &prepared.title,
                         autoclose,
+                        group,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1187,6 +1197,7 @@ fn launch_background(
     model: Option<&str>,
     title: &str,
     autoclose: bool,
+    group: Option<&str>,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1225,6 +1236,7 @@ fn launch_background(
         marker,
         &super::bridge::driver_token(terminals),
         autoclose,
+        group,
     )?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
@@ -1722,6 +1734,7 @@ mod tests {
             autoclose,
             resume,
             task,
+            None,
             pending,
         )
     }
@@ -1745,6 +1758,8 @@ mod tests {
             "implement the fix".into(),
             "--background".into(),
             "--resume".into(),
+            "--group".into(),
+            "research".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -1756,6 +1771,7 @@ mod tests {
         assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
         assert!(parsed.background);
         assert_eq!(parsed.resume, Some(true));
+        assert_eq!(parsed.group.as_deref(), Some("research"));
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -1768,6 +1784,7 @@ mod tests {
         assert_eq!(parsed.task, None);
         assert!(!parsed.background);
         assert_eq!(parsed.resume, None);
+        assert_eq!(parsed.group, None);
 
         let parsed = parse_args(&[
             "--tool".into(),
@@ -2079,7 +2096,7 @@ mod tests {
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
         let dead = SessionBinding::from_str("v1:kitty:spawn-lane-rs:200").unwrap();
         pending
-            .start(&dead, "QOL_BRIDGE_DONE_dead", "v1:kitty:8:800", true)
+            .start(&dead, "QOL_BRIDGE_DONE_dead", "v1:kitty:8:800", true, None)
             .unwrap();
         let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let cwd = fs::canonicalize(root.path())

@@ -39,6 +39,10 @@ pub(super) const TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const TIMEOUT_DEFAULT_MS: u64 = TIMEOUT_MAX_MS;
 pub(super) const TIMEOUT_MAX_MS: u64 = 86_400_000;
 
+pub(super) fn trace_dir() -> std::path::PathBuf {
+    qol_config::data_subdir("sessions").unwrap_or_else(|| ".".into())
+}
+
 static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -72,6 +76,7 @@ pub(super) struct PendingRound {
     pub(super) completed: bool,
     pub(super) screen: Option<String>,
     pub(super) autoclose: bool,
+    pub(super) group: Option<String>,
 }
 
 struct PendingBridgeLock {
@@ -110,6 +115,8 @@ struct StoredCheckpoint {
     autoclose: bool,
     #[serde(default)]
     wake_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -120,6 +127,20 @@ impl From<StoredCheckpoint> for BridgeCheckpoint {
             completion_marker: stored.completion_marker,
             completed: stored.completed,
             closed: stored.closed,
+        }
+    }
+}
+
+impl From<StoredCheckpoint> for PendingRound {
+    fn from(stored: StoredCheckpoint) -> Self {
+        PendingRound {
+            session: stored.session,
+            driver: stored.driver,
+            completion_marker: stored.completion_marker,
+            completed: stored.completed,
+            screen: stored.screen,
+            autoclose: stored.autoclose,
+            group: stored.group,
         }
     }
 }
@@ -168,6 +189,7 @@ impl PendingBridgeStore {
         marker: &str,
         driver: &str,
         autoclose: bool,
+        group: Option<&str>,
     ) -> Result<()> {
         let _lock = self.lock(binding)?;
         if self
@@ -176,7 +198,7 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
-        self.write_unlocked(binding, marker, driver, false, None, autoclose, None)
+        self.write_unlocked(binding, marker, driver, false, None, autoclose, None, group)
     }
 
     pub(super) fn observe(
@@ -200,6 +222,7 @@ impl PendingBridgeStore {
             checkpoint.screen.as_deref(),
             checkpoint.autoclose,
             checkpoint.wake_event.as_deref(),
+            checkpoint.group.as_deref(),
         )
     }
 
@@ -224,6 +247,7 @@ impl PendingBridgeStore {
             Some(screen),
             checkpoint.autoclose,
             checkpoint.wake_event.as_deref(),
+            checkpoint.group.as_deref(),
         )
     }
 
@@ -246,6 +270,7 @@ impl PendingBridgeStore {
             checkpoint.screen.as_deref(),
             checkpoint.autoclose,
             Some(event),
+            checkpoint.group.as_deref(),
         )?;
         Ok(true)
     }
@@ -260,6 +285,7 @@ impl PendingBridgeStore {
         screen: Option<&str>,
         autoclose: bool,
         wake_event: Option<&str>,
+        group: Option<&str>,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -273,6 +299,7 @@ impl PendingBridgeStore {
             screen: screen.map(str::to_owned),
             autoclose,
             wake_event: wake_event.map(str::to_owned),
+            group: group.map(str::to_owned),
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -322,6 +349,7 @@ impl PendingBridgeStore {
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
+                group: checkpoint.group,
             }))
     }
 
@@ -373,10 +401,23 @@ impl PendingBridgeStore {
                 completed: checkpoint.completed,
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
+                group: checkpoint.group,
             })
             .collect::<Vec<_>>();
         rounds.sort_by(|left, right| left.session.cmp(&right.session));
         Ok(rounds)
+    }
+
+    pub(super) fn group_members(&self, group: &str) -> Result<Vec<PendingRound>> {
+        let mut members = self
+            .open_checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| !checkpoint.session.is_empty())
+            .filter(|checkpoint| checkpoint.group.as_deref() == Some(group))
+            .map(PendingRound::from)
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| left.session.cmp(&right.session));
+        Ok(members)
     }
 
     fn open_checkpoints(&self) -> Result<Vec<StoredCheckpoint>> {
@@ -598,6 +639,7 @@ pub(super) fn execute(
     pending: &PendingBridgeStore,
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
+    trace_dir: &std::path::Path,
     acknowledge_marker: Option<&str>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
@@ -634,6 +676,7 @@ pub(super) fn execute(
                 pending,
                 ledger,
                 locks,
+                trace_dir,
                 false,
             );
         }
@@ -659,7 +702,13 @@ pub(super) fn execute(
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
     let prompt = bridge_prompt(task, &marker, role);
-    pending.start(binding, &marker.token, &driver_token(terminals), false)?;
+    pending.start(
+        binding,
+        &marker.token,
+        &driver_token(terminals),
+        false,
+        None,
+    )?;
 
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -783,7 +832,13 @@ pub(super) fn submit(
     } else {
         bridge_prompt(task, &marker, role)
     };
-    pending.start(binding, &marker.token, &driver_token(terminals), autoclose)?;
+    pending.start(
+        binding,
+        &marker.token,
+        &driver_token(terminals),
+        autoclose,
+        None,
+    )?;
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
         .read_screen(binding)
@@ -862,6 +917,7 @@ pub(super) fn resume(
     pending: &PendingBridgeStore,
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
+    trace_dir: &std::path::Path,
     kickstart: bool,
 ) -> Result<BridgeOutcome> {
     let _owner = pending.acquire_owner(binding)?;
@@ -873,6 +929,7 @@ pub(super) fn resume(
         pending,
         ledger,
         locks,
+        trace_dir,
         kickstart,
     )
 }
@@ -886,6 +943,7 @@ fn resume_owned(
     pending: &PendingBridgeStore,
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
+    trace_dir: &std::path::Path,
     kickstart: bool,
 ) -> Result<BridgeOutcome> {
     let round = pending.pending_round(binding)?.ok_or_else(|| {
@@ -1001,12 +1059,42 @@ fn resume_owned(
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
         super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
+        if let Some(group) = round.group.as_deref() {
+            maybe_deliver_group_if_due(
+                terminals,
+                pending,
+                binding,
+                group,
+                &round.driver,
+                trace_dir,
+            )?;
+        }
         if round.autoclose {
             super::watch::close_lane_terminal(terminals, binding);
         }
     }
     drop(subscription);
     Ok(outcome)
+}
+
+fn maybe_deliver_group_if_due(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    binding: &SessionBinding,
+    group: &str,
+    driver: &str,
+    trace_dir: &std::path::Path,
+) -> Result<()> {
+    super::watch::maybe_deliver_group_combined(
+        pending,
+        terminals,
+        trace_dir,
+        group,
+        &binding.token(),
+        driver,
+        &mut |duration| std::thread::sleep(duration),
+    )?;
+    Ok(())
 }
 
 pub(super) fn delivery_observed(
@@ -1604,6 +1692,7 @@ mod tests {
             &pending,
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            root.path(),
             None,
         )
         .unwrap();
@@ -1698,7 +1787,7 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let dead = SessionBinding::from_str("v1:kitty:spawn-lane-x:200").unwrap();
         store
-            .start(&dead, "QOL_BRIDGE_DONE_x", "v1:kitty:8:800", true)
+            .start(&dead, "QOL_BRIDGE_DONE_x", "v1:kitty:8:800", true, None)
             .unwrap();
 
         assert!(
@@ -1852,6 +1941,7 @@ mod tests {
             &pending,
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            root.path(),
             None,
         )
         .unwrap();
@@ -1919,16 +2009,28 @@ mod tests {
         let review = SessionBinding::from_str("v1:fake:2:200").unwrap();
         let closed = SessionBinding::from_str("v1:fake:3:300").unwrap();
         store
-            .start(&waiting, "QOL_BRIDGE_DONE_wait", "v1:fake:8:800", false)
+            .start(
+                &waiting,
+                "QOL_BRIDGE_DONE_wait",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         store
-            .start(&review, "QOL_BRIDGE_DONE_review", "v1:fake:8:800", false)
+            .start(
+                &review,
+                "QOL_BRIDGE_DONE_review",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         store
             .observe(&review, "QOL_BRIDGE_DONE_review", true)
             .unwrap();
         store
-            .start(&closed, "QOL_BRIDGE_DONE_closed", "", false)
+            .start(&closed, "QOL_BRIDGE_DONE_closed", "", false, None)
             .unwrap();
         store
             .acknowledge(&closed, "QOL_BRIDGE_DONE_closed", false)
@@ -1946,6 +2048,62 @@ mod tests {
 
         assert!(store.pending_round(&closed).unwrap().is_none());
         assert!(store.pending_round(&waiting).unwrap().is_some());
+    }
+
+    #[test]
+    fn group_members_filters_by_group_and_sorts_by_session_token() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let late = SessionBinding::from_str("v1:fake:8:200").unwrap();
+        let early = SessionBinding::from_str("v1:fake:7:100").unwrap();
+        let other = SessionBinding::from_str("v1:fake:9:300").unwrap();
+        store
+            .start(
+                &early,
+                "QOL_BRIDGE_DONE_early",
+                "v1:fake:8:800",
+                false,
+                Some("research"),
+            )
+            .unwrap();
+        store
+            .start(
+                &late,
+                "QOL_BRIDGE_DONE_late",
+                "v1:fake:8:800",
+                false,
+                Some("research"),
+            )
+            .unwrap();
+        store
+            .start(
+                &other,
+                "QOL_BRIDGE_DONE_other",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        store
+            .observe(&early, "QOL_BRIDGE_DONE_early", true)
+            .unwrap();
+
+        let members = store.group_members("research").unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].session, early.token());
+        assert_eq!(members[1].session, late.token());
+        assert!(members[0].completed);
+        assert!(!members[1].completed);
+        assert_eq!(members[0].group.as_deref(), Some("research"));
+        assert!(store.group_members("absent").unwrap().is_empty());
+        assert!(
+            store
+                .group_members("research")
+                .unwrap()
+                .iter()
+                .all(|member| member.session != other.token()),
+            "groupless lanes must never appear in a group"
+        );
     }
 
     #[test]
@@ -1978,7 +2136,13 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_old", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_old",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         store
             .acknowledge(&binding, "QOL_BRIDGE_DONE_old", false)
@@ -1996,7 +2160,13 @@ mod tests {
         );
 
         store
-            .start(&binding, "QOL_BRIDGE_DONE_new", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_new",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         store
             .observe(&binding, "QOL_BRIDGE_DONE_old", true)
@@ -2013,7 +2183,13 @@ mod tests {
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_abc123",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         pending
             .observe(&binding, "QOL_BRIDGE_DONE_abc123", true)
@@ -2045,6 +2221,7 @@ mod tests {
             &pending,
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            root.path(),
             false,
         )
         .unwrap();
@@ -2065,7 +2242,13 @@ mod tests {
         let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         pending
-            .start(&binding, "QOL_BRIDGE_DONE_abc123", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_abc123",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         pending
             .observe(&binding, "QOL_BRIDGE_DONE_abc123", true)
@@ -2090,6 +2273,7 @@ mod tests {
             &pending,
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            root.path(),
             false,
         )
         .unwrap_err()
@@ -2129,7 +2313,13 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_auto", "v1:fake:8:800", true)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_auto",
+                "v1:fake:8:800",
+                true,
+                None,
+            )
             .unwrap();
 
         let round = store.pending_round(&binding).unwrap().unwrap();
@@ -2168,7 +2358,13 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_wake", "v1:fake:8:800", true)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_wake",
+                "v1:fake:8:800",
+                true,
+                None,
+            )
             .unwrap();
 
         assert!(
@@ -2221,7 +2417,7 @@ mod tests {
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let open = SessionBinding::from_str("v1:fake:1:100").unwrap();
         store
-            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800", false)
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800", false, None)
             .unwrap();
 
         let stale_tmp = root.path().join("stale.tmp");
@@ -2359,5 +2555,119 @@ mod tests {
         assert!(!fail.passed);
         assert_eq!(fail.reason.as_deref(), Some("exit code 1"));
         assert!(fail.elapsed < Duration::from_secs(30));
+    }
+
+    #[test]
+    fn bridge_collecting_the_final_grouped_member_delivers_one_combined_wake() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let lane_a: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let lane_b: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        let group = "research";
+        pending
+            .start(
+                &lane_a,
+                "QOL_BRIDGE_DONE_a",
+                &lane_a.token(),
+                false,
+                Some(group),
+            )
+            .unwrap();
+        pending
+            .start(
+                &lane_b,
+                "QOL_BRIDGE_DONE_b",
+                &lane_b.token(),
+                false,
+                Some(group),
+            )
+            .unwrap();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::new(TickerStrategy) as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let locks = SpawnLocks::with_dir(root.path().join("spawn-locks"));
+
+        let backend_a = FakeBackend::new(
+            facts(&lane_a),
+            vec![
+                ">>> working".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_a".to_owned(),
+            ],
+        );
+        let terminals_a = TerminalSessionService::from_backends([
+            Arc::clone(&backend_a) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let outcome_a = resume(
+            &terminals_a,
+            &interpreter,
+            &lane_a,
+            Duration::from_secs(10),
+            &pending,
+            &ledger,
+            &locks,
+            root.path(),
+            false,
+        )
+        .unwrap();
+        assert!(outcome_a.completed);
+        assert!(
+            backend_a.sent.lock().unwrap().is_empty(),
+            "the first grouped member must not wake the initiator on its own"
+        );
+
+        let backend_b = FakeBackend::new(
+            facts(&lane_b),
+            vec![
+                ">>> working".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+                "implementation complete\nQOL_BRIDGE_DONE_b".to_owned(),
+            ],
+        );
+        let terminals_b = TerminalSessionService::from_backends([
+            Arc::clone(&backend_b) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let outcome_b = resume(
+            &terminals_b,
+            &interpreter,
+            &lane_b,
+            Duration::from_secs(10),
+            &pending,
+            &ledger,
+            &locks,
+            root.path(),
+            false,
+        )
+        .unwrap();
+        assert!(outcome_b.completed);
+
+        let combined_path = root.path().join("groups").join(group).join("combined.md");
+        assert!(
+            combined_path.exists(),
+            "the combined file must be written when the group completes via the bridge path"
+        );
+        let sent = backend_b.sent.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            1,
+            "exactly one combined wake must reach the initiator when the last member is collected via bridge"
+        );
+        let (_, text, _) = &sent[0];
+        assert!(
+            text.contains(&combined_path.display().to_string()),
+            "the grouped wake must name the combined file path: {text:?}"
+        );
     }
 }

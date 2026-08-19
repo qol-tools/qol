@@ -99,6 +99,35 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 17] = [
     },
 ];
 
+pub(super) fn marker_present(screen: &str, marker: &str) -> bool {
+    let Some(index) = marker.rfind('_') else {
+        return false;
+    };
+    let prefix = &marker[..=index];
+    let token = &marker[index + 1..];
+    if prefix.is_empty() || token.is_empty() {
+        return false;
+    }
+    let mut cursor = 0usize;
+    while let Some(found) = screen[cursor..].find(prefix) {
+        let start = cursor + found;
+        let tail = &screen[start + prefix.len()..];
+        if tail.starts_with(token) {
+            return true;
+        }
+        let spaces = tail
+            .chars()
+            .take(4)
+            .take_while(|ch| ch.is_ascii_whitespace())
+            .count();
+        if (1..=3).contains(&spaces) && tail[spaces..].starts_with(token) {
+            return true;
+        }
+        cursor = start + prefix.len();
+    }
+    false
+}
+
 fn split_subcommand(args: &[OsString]) -> (&str, &[OsString]) {
     let name = args
         .first()
@@ -385,6 +414,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
             &pending,
             &ledger,
             &locks,
+            &bridge::trace_dir(),
             parsed.acknowledge_marker.as_deref(),
         )?,
         None => {
@@ -401,6 +431,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
                 &pending,
                 &ledger,
                 &locks,
+                &bridge::trace_dir(),
                 false,
             )?
         }
@@ -526,6 +557,7 @@ fn run_resume(args: &[OsString]) -> Result<()> {
         &bridge::PendingBridgeStore::system()?,
         &spawn::SpawnLedger::system()?,
         &spawn::SpawnLocks::system()?,
+        &bridge::trace_dir(),
         kickstart,
     )?;
     println!(
@@ -977,7 +1009,13 @@ mod tests {
         let store = test_store(&root);
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         let (terminals, _) = fake_terminals(vec![fake_facts("7", 123)]);
 
@@ -994,7 +1032,13 @@ mod tests {
         let store = test_store(&root);
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         store
-            .start(&binding, "QOL_BRIDGE_DONE_round", "v1:fake:8:800", false)
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         let (terminals, _) = fake_terminals(Vec::new());
 
@@ -1022,11 +1066,17 @@ mod tests {
         let store = test_store(&root);
         let orphan = SessionBinding::from_str("v1:fake:1:100").unwrap();
         store
-            .start(&orphan, "QOL_BRIDGE_DONE_orphan", "v1:fake:8:800", false)
+            .start(
+                &orphan,
+                "QOL_BRIDGE_DONE_orphan",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
             .unwrap();
         let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
         store
-            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false)
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
             .unwrap();
         let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
 
@@ -1250,5 +1300,33 @@ mod tests {
         assert!(parse_submit_args(&["v1:kitty:7:123".into()]).is_err());
         assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--task".into()]).is_err());
         assert!(parse_submit_args(&["v1:kitty:7:123".into(), "--bogus".into()]).is_err());
+    }
+
+    #[test]
+    fn marker_present_accepts_an_exact_join_or_a_short_whitespace_gap() {
+        let marker = "QOL_BRIDGE_DONE_abc123xyz";
+        assert!(marker_present("done\nQOL_BRIDGE_DONE_abc123xyz", marker));
+        assert!(marker_present("done\nQOL_BRIDGE_DONE_ abc123xyz", marker));
+        assert!(marker_present("done\nQOL_BRIDGE_DONE_\nabc123xyz", marker));
+        assert!(marker_present("done\nQOL_BRIDGE_DONE_   abc123xyz", marker));
+    }
+
+    #[test]
+    fn marker_present_rejects_too_wide_and_non_whitespace_separators() {
+        let marker = "QOL_BRIDGE_DONE_abc123xyz";
+        assert!(!marker_present("QOL_BRIDGE_DONE_    abc123xyz", marker));
+        assert!(!marker_present("QOL_BRIDGE_DONE_ and abc123xyz", marker));
+        assert!(!marker_present("QOL_BRIDGE_DONE_ AND abc123xyz", marker));
+        assert!(!marker_present("done\nQOL_BRIDGE_DONE_other987", marker));
+    }
+
+    #[test]
+    fn marker_present_needs_a_token_and_an_underscore() {
+        assert!(!marker_present(
+            "anything QOL_BRIDGE_DONE_",
+            "QOL_BRIDGE_DONE_"
+        ));
+        assert!(!marker_present("QOL_BRIDGE_DONE_abc", "no_underscore"));
+        assert!(!marker_present("abc", "QOL_BRIDGE_DONE_abc"));
     }
 }
