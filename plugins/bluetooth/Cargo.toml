@@ -36,4 +36,5 @@ tokio = { version = "1.35", features = ["process", "rt", "signal", "sync", "time
 qol-conventions.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
 qol-plugin-api.workspace = true

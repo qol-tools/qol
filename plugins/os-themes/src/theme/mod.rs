@@ -1,6 +1,6 @@
 pub mod platform;
 #[cfg(target_os = "linux")]
-mod session;
+pub(crate) mod session;
 
 use anyhow::Result;
 

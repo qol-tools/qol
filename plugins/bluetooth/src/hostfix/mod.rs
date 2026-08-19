@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
+use qol_host_fixes::residency::HostResidency;
 use qol_host_fixes::{elevation, takeover, Finding, FixState, HostFixes};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 mod platform;
@@ -219,11 +220,48 @@ fn manager_claim_state(claim: &takeover::Claim) -> ManagerClaimState {
     })
 }
 
-fn restore_manager(dir: &Path, claim: &takeover::Claim, state: &ManagerClaimState) -> Result<()> {
-    if !platform::process_running(&state.process) {
-        platform::start_process(&state.process)?;
+trait ManagerOps {
+    fn process_running(&self, process: &str) -> bool;
+    fn start_process(&mut self, process: &str) -> Result<()>;
+    fn read_autostart(&self) -> Option<String>;
+    fn write_autostart(&mut self, content: &str) -> Result<()>;
+    fn remove_autostart(&mut self) -> Result<()>;
+}
+
+struct LiveOps;
+
+impl ManagerOps for LiveOps {
+    fn process_running(&self, process: &str) -> bool {
+        platform::process_running(process)
     }
-    restore_autostart(&state.process, &state.autostart)?;
+
+    fn start_process(&mut self, process: &str) -> Result<()> {
+        platform::start_process(process)
+    }
+
+    fn read_autostart(&self) -> Option<String> {
+        platform::read_autostart()
+    }
+
+    fn write_autostart(&mut self, content: &str) -> Result<()> {
+        platform::write_autostart(content)
+    }
+
+    fn remove_autostart(&mut self) -> Result<()> {
+        platform::remove_autostart()
+    }
+}
+
+fn restore_manager(
+    dir: &Path,
+    claim: &takeover::Claim,
+    state: &ManagerClaimState,
+    ops: &mut dyn ManagerOps,
+) -> Result<()> {
+    if !ops.process_running(&state.process) {
+        ops.start_process(&state.process)?;
+    }
+    restore_autostart(&state.process, &state.autostart, ops)?;
     takeover::clear(dir, &claim.component)
 }
 
@@ -259,7 +297,11 @@ fn install_autostart(process: &str, backup: &AutostartBackup) -> Result<()> {
     platform::write_autostart(AUTOSTART_BLOCK)
 }
 
-fn restore_autostart(process: &str, backup: &AutostartBackup) -> Result<()> {
+fn restore_autostart(
+    process: &str,
+    backup: &AutostartBackup,
+    ops: &mut dyn ManagerOps,
+) -> Result<()> {
     if process != BLUEMAN_PROCESS || matches!(backup, AutostartBackup::Unchanged) {
         return Ok(());
     }
@@ -269,14 +311,15 @@ fn restore_autostart(process: &str, backup: &AutostartBackup) -> Result<()> {
         }
         AutostartBackup::Unchanged => return Ok(()),
     };
-    let current = platform::read_autostart()
+    let current = ops
+        .read_autostart()
         .ok_or_else(|| anyhow::anyhow!("failed to reread the Blueman autostart entry"))?;
     if &current != installed {
         bail!("Blueman autostart changed while qol owned it");
     }
     match backup {
-        AutostartBackup::Missing { .. } => platform::remove_autostart(),
-        AutostartBackup::Existing { original, .. } => platform::write_autostart(original),
+        AutostartBackup::Missing { .. } => ops.remove_autostart(),
+        AutostartBackup::Existing { original, .. } => ops.write_autostart(original),
         AutostartBackup::Unchanged => Ok(()),
     }
 }
@@ -303,7 +346,7 @@ fn hidden_override(content: &str) -> bool {
     content.lines().any(|line| line.trim() == "Hidden=true")
 }
 
-fn claims_dir() -> Result<std::path::PathBuf> {
+fn claims_dir() -> Result<PathBuf> {
     match takeover::claims_dir(crate::PLUGIN_ID) {
         Some(dir) => Ok(dir),
         None => bail!("could not resolve the qol data directory for takeover markers"),
@@ -311,16 +354,30 @@ fn claims_dir() -> Result<std::path::PathBuf> {
 }
 
 pub fn restore_claimed_managers() {
-    let Ok(_lock) = HOST_FIX_LOCK.lock() else {
-        return;
-    };
     let Ok(dir) = claims_dir() else {
         return;
     };
-    for claim in takeover::outstanding(&dir) {
+    restore_claimed_managers_in(&dir, true, &mut LiveOps);
+}
+
+pub fn restore_claimed_managers_on_exit() {
+    let Ok(dir) = claims_dir() else {
+        return;
+    };
+    restore_claimed_managers_in(&dir, !HostResidency::current().is_resident(), &mut LiveOps);
+}
+
+fn restore_claimed_managers_in(dir: &Path, should_restore: bool, ops: &mut dyn ManagerOps) {
+    if !should_restore {
+        return;
+    }
+    let Ok(_lock) = HOST_FIX_LOCK.lock() else {
+        return;
+    };
+    for claim in takeover::outstanding(dir) {
         let state = manager_claim_state(&claim);
         let component = state.process.clone();
-        let restored = restore_manager(&dir, &claim, &state);
+        let restored = restore_manager(dir, &claim, &state, ops);
         qol_runtime::probe!(
             "BLUETOOTH_HOST_FIX",
             "stage=restore component={component} outcome={}",
@@ -405,5 +462,86 @@ mod tests {
             manager_for(SERVICE_FIX_ID).is_none(),
             "the service fix must never resolve to a competing manager"
         );
+    }
+
+    #[derive(Default)]
+    struct FakeOps {
+        running: bool,
+        started: Vec<String>,
+        autostart: Option<String>,
+    }
+
+    impl ManagerOps for FakeOps {
+        fn process_running(&self, _process: &str) -> bool {
+            self.running
+        }
+
+        fn start_process(&mut self, process: &str) -> Result<()> {
+            self.started.push(process.to_string());
+            self.running = true;
+            Ok(())
+        }
+
+        fn read_autostart(&self) -> Option<String> {
+            self.autostart.clone()
+        }
+
+        fn write_autostart(&mut self, content: &str) -> Result<()> {
+            self.autostart = Some(content.to_string());
+            Ok(())
+        }
+
+        fn remove_autostart(&mut self) -> Result<()> {
+            self.autostart = None;
+            Ok(())
+        }
+    }
+
+    fn claimed_manager(dir: &Path, process: &str) {
+        let state = ManagerClaimState {
+            process: process.to_string(),
+            autostart: AutostartBackup::Unchanged,
+        };
+        takeover::record(
+            dir,
+            &takeover::Claim {
+                component: process.to_string(),
+                restore_hint: serde_json::to_string(&state).expect("serialize claim state"),
+            },
+        )
+        .expect("record claim");
+    }
+
+    #[test]
+    fn portable_exit_restores_the_claimed_manager_and_clears_the_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        claimed_manager(dir.path(), "blueman-applet");
+        let mut ops = FakeOps {
+            running: false,
+            ..FakeOps::default()
+        };
+
+        restore_claimed_managers_in(dir.path(), true, &mut ops);
+
+        assert_eq!(ops.started, vec!["blueman-applet".to_string()]);
+        assert!(
+            takeover::outstanding(dir.path()).is_empty(),
+            "a portable exit hands Bluetooth back by clearing the takeover marker"
+        );
+    }
+
+    #[test]
+    fn resident_exit_keeps_the_marker_and_never_touches_the_host() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        claimed_manager(dir.path(), "blueman-applet");
+        let mut ops = FakeOps::default();
+
+        restore_claimed_managers_in(dir.path(), false, &mut ops);
+
+        assert!(
+            ops.started.is_empty(),
+            "a resident host keeps qol's Bluetooth takeover"
+        );
+        assert_eq!(takeover::outstanding(dir.path()).len(), 1);
     }
 }

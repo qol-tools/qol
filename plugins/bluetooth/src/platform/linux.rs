@@ -524,7 +524,7 @@ pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
         .context("failed to start Bluetooth command bridge")?;
 
     let outcome = runtime()?.block_on(resilient_daemon_loop(config, command_rx));
-    crate::hostfix::restore_claimed_managers();
+    crate::hostfix::restore_claimed_managers_on_exit();
     outcome
 }
 

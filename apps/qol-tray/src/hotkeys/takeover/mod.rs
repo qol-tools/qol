@@ -4,6 +4,7 @@ mod platform;
 
 pub(crate) use dconf::{BindingEntry, BindingReach, MatchPolicy};
 
+use qol_host_fixes::residency::HostResidency;
 use std::fmt;
 use std::time::SystemTime;
 
@@ -312,6 +313,27 @@ pub fn restore_all() -> RestoreSummary {
     restore_all_in(&root, &mut HostStore, compositor_started_at)
 }
 
+pub fn restore_on_exit() -> RestoreSummary {
+    let Some(root) = ledger::claims_dir() else {
+        return RestoreSummary::default();
+    };
+    let compositor_started_at = platform::compositor().map(|found| found.started_at);
+    let resident = HostResidency::current().is_resident();
+    restore_on_exit_in(&root, &mut HostStore, resident, compositor_started_at)
+}
+
+fn restore_on_exit_in(
+    root: &std::path::Path,
+    store: &mut dyn BindingStore,
+    resident: bool,
+    compositor_started_at: Option<SystemTime>,
+) -> RestoreSummary {
+    if resident {
+        return RestoreSummary::default();
+    }
+    restore_all_in(root, store, compositor_started_at)
+}
+
 fn take_over_in(
     root: &std::path::Path,
     store: &mut dyn BindingStore,
@@ -587,6 +609,47 @@ mod tests {
 
     fn full_key() -> String {
         dconf::full_key(ORPHAN_DIR, "binding")
+    }
+
+    #[test]
+    fn portable_exit_restores_bindings_and_clears_the_ledger() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+
+        let summary = restore_on_exit_in(root.path(), &mut store, false, None);
+        assert_eq!(summary.restored, 1);
+        assert_eq!(
+            store.get(&full_key()),
+            Some(ORIGINAL),
+            "a portable exit hands the desktop bindings back"
+        );
+        assert!(
+            ledger::outstanding(root.path()).is_empty(),
+            "the ledger entry is retired after a portable shutdown"
+        );
+    }
+
+    #[test]
+    fn resident_exit_keeps_the_ledger_and_never_restores_bindings() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+
+        let summary = restore_on_exit_in(root.path(), &mut store, true, None);
+        assert_eq!(summary, RestoreSummary::default());
+        assert_eq!(
+            store.get(&full_key()),
+            Some("@as []"),
+            "a resident host keeps the user's bindings"
+        );
+        assert_eq!(
+            ledger::outstanding(root.path()).len(),
+            1,
+            "the ledger entry survives a resident shutdown so disabling residency can restore it"
+        );
     }
 
     #[test]

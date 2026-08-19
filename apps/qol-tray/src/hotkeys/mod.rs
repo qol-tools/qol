@@ -18,7 +18,10 @@ pub use listener::start_hotkey_listener;
 pub use manager::HotkeyManager;
 pub use registration_status::{get_registration_errors, RegistrationError};
 pub use reload::trigger_reload;
-pub use takeover::{restore_all as restore_desktop_bindings, RestoreSummary};
+pub use takeover::{
+    restore_all as restore_desktop_bindings, restore_on_exit as restore_desktop_bindings_on_exit,
+    RestoreSummary,
+};
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
 use std::collections::HashSet;

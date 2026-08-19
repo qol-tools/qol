@@ -483,7 +483,13 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
     let mut remaining = Vec::with_capacity(watched.len());
     for mut round in std::mem::take(watched) {
         match pending.pending_round(&round.binding)? {
-            None => {}
+            None => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=dropped session={} reason=no_open_checkpoint",
+                    round.session
+                );
+            }
             Some(current) => {
                 if current.completed {
                     qol_runtime::probe!(
@@ -530,6 +536,32 @@ fn prune_stale_tokens(
         }
     }
     Ok(kept)
+}
+
+fn readmit(
+    pending: &PendingBridgeStore,
+    tokens: &[String],
+    watched: Vec<WatchedRound>,
+) -> Result<Vec<WatchedRound>> {
+    let mut watched = watched;
+    for round in load_rounds(pending, tokens)? {
+        if round.completed {
+            continue;
+        }
+        if watched
+            .iter()
+            .any(|current| current.session == round.session)
+        {
+            continue;
+        }
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=readmitted session={}",
+            round.session
+        );
+        watched.push(WatchedRound::new(round)?);
+    }
+    Ok(watched)
 }
 
 fn load_rounds(pending: &PendingBridgeStore, tokens: &[String]) -> Result<Vec<PendingRound>> {
@@ -698,7 +730,7 @@ fn watch_loop(
                 remaining.push(round);
             }
         }
-        watched = remaining;
+        watched = readmit(pending, &tokens, remaining)?;
         let sleep_for = if changed {
             config.poll_base
         } else {
@@ -2582,6 +2614,41 @@ mod tests {
         assert_eq!(
             deferrals, 2,
             "two busy reads must defer the wake twice: {sleeps:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_round_is_readmitted_while_its_checkpoint_is_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:7:100",
+                false,
+                None,
+            )
+            .unwrap();
+        let tokens = vec![binding.token().to_owned()];
+
+        let readmitted = readmit(&pending, &tokens, Vec::new()).unwrap();
+        assert_eq!(
+            readmitted.len(),
+            1,
+            "an open uncompleted round must come back into the watch set"
+        );
+
+        let kept = readmit(&pending, &tokens, readmitted).unwrap();
+        assert_eq!(kept.len(), 1, "a watched round is never duplicated");
+
+        pending
+            .observe(&binding, "QOL_BRIDGE_DONE_round", true)
+            .unwrap();
+        assert!(
+            readmit(&pending, &tokens, Vec::new()).unwrap().is_empty(),
+            "a completed round is not watched again"
         );
     }
 
