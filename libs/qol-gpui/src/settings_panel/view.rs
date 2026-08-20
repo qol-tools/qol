@@ -2249,12 +2249,6 @@ impl SettingsPanelView {
             .map(|section| format!("‹ {}", section.label))
     }
 
-    fn detail_description(&self) -> Option<String> {
-        self.active_section
-            .and_then(|index| self.sections.get(index))
-            .and_then(|section| section.description.clone())
-    }
-
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let RowControl::List {
@@ -3295,7 +3289,6 @@ impl Render for SettingsPanelView {
             .collect()
         };
         let detail_heading = self.detail_heading();
-        let detail_description = self.detail_description();
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
@@ -3327,15 +3320,6 @@ impl Render for SettingsPanelView {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(self.palette.row_border_selected))
                                     .child(detail),
-                            )
-                        })
-                        .when_some(detail_description, |header, description| {
-                            header.child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(rgb(self.palette.label_text))
-                                    .child(description),
                             )
                         }),
                 ),
