@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -7,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionInventory, TerminalSessionService, TextInput,
 };
+use serde::{Deserialize, Serialize};
 
 use super::bridge::{PendingBridgeStore, PendingRound};
 use super::spawn::{SpawnLedger, SpawnLocks};
@@ -207,6 +209,13 @@ fn complete_seen_round(
             tail,
             round.label.as_deref(),
         )?;
+        settle_group_member(
+            trace_dir,
+            group,
+            &round.session,
+            round.label.as_deref(),
+            GroupOutcome::Completed,
+        )?;
         if let Some((combined, delivery)) = maybe_deliver_group_combined(
             pending,
             terminals,
@@ -313,6 +322,32 @@ fn complete_seen_round(
     Ok(RoundPoll::of(false, true))
 }
 
+fn transcript_denies_marker(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    marker: &str,
+) -> bool {
+    let Ok(sessions) = terminals.discover() else {
+        return false;
+    };
+    let Some(facts) = sessions
+        .into_iter()
+        .find(|facts| facts.id == *binding.session_id())
+    else {
+        return false;
+    };
+    if interpreter.transcript_completion(&facts, marker) != Some(false) {
+        return false;
+    }
+    qol_runtime::probe!(
+        "CLI_SESSION_WATCH",
+        "event=marker_denied_by_transcript session={}",
+        binding.token()
+    );
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn poll_round(
     terminals: &TerminalSessionService,
@@ -350,6 +385,13 @@ fn poll_round(
                             tail,
                             round.label.as_deref(),
                         )?;
+                        settle_group_member(
+                            trace_dir,
+                            group,
+                            &round.session,
+                            round.label.as_deref(),
+                            GroupOutcome::Completed,
+                        )?;
                         if let Some((combined, delivery)) = maybe_deliver_group_combined(
                             pending,
                             terminals,
@@ -364,7 +406,7 @@ fn poll_round(
                                 "event=completed_group_after_exit group={} session={} members={} delivered={}",
                                 group,
                                 round.session,
-                                pending.group_members(group)?.len(),
+                                group_roster(pending, trace_dir, group)?.len(),
                                 delivery.delivered
                             );
                             emit_completed(
@@ -436,6 +478,66 @@ fn poll_round(
                     )?;
                     return Ok(RoundPoll::of(false, true));
                 }
+                if let Some(group) = round.group.as_deref() {
+                    let last = round.last_screen.clone().unwrap_or_default();
+                    write_group_fragment(
+                        trace_dir,
+                        group,
+                        &round.session,
+                        &format!(
+                            "the lane terminal exited before it reported a completion marker\n\n{}",
+                            clean_screen(screen_tail(&last))
+                        ),
+                        round.label.as_deref(),
+                    )?;
+                    settle_group_member(
+                        trace_dir,
+                        group,
+                        &round.session,
+                        round.label.as_deref(),
+                        GroupOutcome::Gone,
+                    )?;
+                    let combined = maybe_deliver_group_combined(
+                        pending,
+                        terminals,
+                        trace_dir,
+                        group,
+                        &round.session,
+                        &round.driver,
+                        sleep,
+                    )?;
+                    pending.discard(&round.binding)?;
+                    match combined {
+                        Some((combined, delivery)) => {
+                            qol_runtime::probe!(
+                                "CLI_SESSION_WATCH",
+                                "event=gone_group_completed group={} session={} delivered={}",
+                                group,
+                                round.session,
+                                delivery.delivered
+                            );
+                            emit_completed(
+                                out,
+                                &round.session,
+                                &round.marker,
+                                &combined,
+                                round.autoclose,
+                                &delivery,
+                                true,
+                            )?;
+                        }
+                        None => {
+                            qol_runtime::probe!(
+                                "CLI_SESSION_WATCH",
+                                "event=gone_group_awaiting group={} session={} reads={}",
+                                group,
+                                round.session,
+                                round.reads
+                            );
+                        }
+                    }
+                    return Ok(RoundPoll::of(false, true));
+                }
                 if !pending.claim_wake(&round.binding, "gone")? {
                     return Ok(RoundPoll::of(false, false));
                 }
@@ -479,7 +581,9 @@ fn poll_round(
             &round.binding,
         );
     }
-    if super::marker_present(&screen, &round.marker) {
+    let marker_visible = super::marker_present(&screen, &round.marker)
+        && !transcript_denies_marker(terminals, interpreter, &round.binding, &round.marker);
+    if marker_visible {
         match pending.pending_round(&round.binding)? {
             None => {
                 return Ok(RoundPoll::of(false, false));
@@ -761,6 +865,132 @@ fn write_group_fragment(
     fs::write(&path, tail).context("failed to write group fragment")
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum GroupOutcome {
+    Completed,
+    Gone,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct GroupMember {
+    session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(default)]
+    outcome: Option<GroupOutcome>,
+}
+
+fn member_dir(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
+    group_dir(trace_dir, group).join("members")
+}
+
+fn member_path(trace_dir: &std::path::Path, group: &str, session: &str) -> std::path::PathBuf {
+    member_dir(trace_dir, group).join(format!("{}.json", sanitize_token(session)))
+}
+
+fn write_group_member(
+    trace_dir: &std::path::Path,
+    group: &str,
+    member: &GroupMember,
+) -> Result<()> {
+    let path = member_path(trace_dir, group, &member.session);
+    let dir = path.parent().expect("member path always has a parent");
+    fs::create_dir_all(dir).context("failed to create group member directory")?;
+    let temporary = path.with_extension("tmp");
+    let encoded = serde_json::to_string(member)?;
+    fs::write(&temporary, encoded).context("failed to write group member record")?;
+    fs::rename(&temporary, &path).context("failed to publish group member record")
+}
+
+pub(super) fn register_group_member(
+    trace_dir: &std::path::Path,
+    group: &str,
+    session: &str,
+    label: Option<&str>,
+) -> Result<()> {
+    if member_path(trace_dir, group, session).exists() {
+        return Ok(());
+    }
+    write_group_member(
+        trace_dir,
+        group,
+        &GroupMember {
+            session: session.to_owned(),
+            label: label.map(str::to_owned),
+            outcome: None,
+        },
+    )
+}
+
+fn settle_group_member(
+    trace_dir: &std::path::Path,
+    group: &str,
+    session: &str,
+    label: Option<&str>,
+    outcome: GroupOutcome,
+) -> Result<()> {
+    write_group_member(
+        trace_dir,
+        group,
+        &GroupMember {
+            session: session.to_owned(),
+            label: label.map(str::to_owned),
+            outcome: Some(outcome),
+        },
+    )
+}
+
+fn group_roster(
+    pending: &PendingBridgeStore,
+    trace_dir: &std::path::Path,
+    group: &str,
+) -> Result<Vec<GroupMember>> {
+    let mut members = Vec::new();
+    if let Ok(entries) = fs::read_dir(member_dir(trace_dir, group)) {
+        for entry in entries {
+            let path = entry
+                .context("failed to read group member directory")?
+                .path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let Ok(encoded) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(member) = serde_json::from_str::<GroupMember>(&encoded) else {
+                continue;
+            };
+            members.push(member);
+        }
+    }
+    for round in pending.group_members(group)? {
+        if members.iter().any(|member| member.session == round.session) {
+            continue;
+        }
+        members.push(GroupMember {
+            session: round.session,
+            label: round.label,
+            outcome: round.completed.then_some(GroupOutcome::Completed),
+        });
+    }
+    members.sort_by(|left, right| left.session.cmp(&right.session));
+    Ok(members)
+}
+
+fn claim_group_delivery(dir: &std::path::Path) -> Result<bool> {
+    fs::create_dir_all(dir).context("failed to create group directory")?;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join("combined.claim"))
+    {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error).context("failed to claim the group combined delivery"),
+    }
+}
+
 pub(super) fn maybe_deliver_group_combined(
     pending: &PendingBridgeStore,
     terminals: &TerminalSessionService,
@@ -770,12 +1000,20 @@ pub(super) fn maybe_deliver_group_combined(
     driver: &str,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<Option<(String, WakeDelivery)>> {
-    let members = pending.group_members(group)?;
-    if members.is_empty() || !members.iter().all(|member| member.completed) {
+    let members = group_roster(pending, trace_dir, group)?;
+    if members.is_empty() || !members.iter().all(|member| member.outcome.is_some()) {
         return Ok(None);
     }
     let dir = group_dir(trace_dir, group);
-    fs::create_dir_all(&dir).context("failed to create group directory")?;
+    if !claim_group_delivery(&dir)? {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=group_combined_already_claimed group={} session={}",
+            group,
+            session
+        );
+        return Ok(None);
+    }
     let mut combined = String::new();
     for member in &members {
         combined.push_str(&format!("## {}\n\n", member.session));
@@ -789,7 +1027,12 @@ pub(super) fn maybe_deliver_group_combined(
     fs::write(&combined_path, &combined).context("failed to write group combined report")?;
     let lane_lines: Vec<(String, bool)> = members
         .iter()
-        .map(|member| (member.session.clone(), member.completed))
+        .map(|member| {
+            (
+                member.session.clone(),
+                member.outcome == Some(GroupOutcome::Completed),
+            )
+        })
         .collect();
     let message = grouped_message(group, &lane_lines, &combined_path);
     let delivery = deliver_wake(
@@ -1312,7 +1555,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
-    use qol_terminal_sessions::cli::CliToolId;
+    use qol_terminal_sessions::cli::{CliTool, CliToolId};
     use qol_terminal_sessions::{
         BackendId, DeliveryMode, SessionCapabilities, SessionFacts, SessionFocus, SessionId,
         SpawnIdentity, SpawnKey, SpawnSurface, TerminalBackend, TerminalError, TerminalSnapshot,
@@ -3025,7 +3268,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 31);
+        assert_eq!(ls, 33);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -3076,8 +3319,8 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            7,
-            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the completion capture and the delivery re-check each add a discovery"
+            9,
+            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the transcript gate on each marker sighting, the completion capture and the delivery re-check each add a discovery"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -3631,5 +3874,577 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+    const REASONING_SCREEN: &str = concat!(
+        " Also note: \"Final receipt: at most 3 short lines.\" And end with completion\n",
+        " fragments joined: QOL_BRIDGE_DONE_round - joined with no spaces or punctuation.\n",
+        " So final line: QOL_BRIDGE_DONE_round.\n",
+        "\n",
+        " \u{2826} Working...\n",
+        "0.0%/1.0M (auto)\n"
+    );
+
+    const FINAL_SCREEN: &str = concat!(
+        " Wrote the report to disk.\n",
+        "\n",
+        "QOL_BRIDGE_DONE_round\n"
+    );
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Transcript {
+        Silent,
+        Working,
+        Finished,
+    }
+
+    struct FakeTool {
+        tool: CliTool,
+        transcript: AtomicU64,
+    }
+
+    impl FakeTool {
+        fn new(transcript: Transcript) -> Arc<Self> {
+            let tool = CliTool::new(
+                CliToolId::new("simulated").unwrap(),
+                "Simulated",
+                qol_terminal_sessions::cli::CliToolColor::new(1, 2, 3),
+            );
+            let fake = Arc::new(Self {
+                tool,
+                transcript: AtomicU64::new(0),
+            });
+            fake.set(transcript);
+            fake
+        }
+
+        fn set(&self, transcript: Transcript) {
+            let encoded = match transcript {
+                Transcript::Silent => 0,
+                Transcript::Working => 1,
+                Transcript::Finished => 2,
+            };
+            self.transcript.store(encoded, Ordering::Relaxed);
+        }
+    }
+
+    impl qol_terminal_sessions::cli::CliSessionStrategy for FakeTool {
+        fn tool(&self) -> &CliTool {
+            &self.tool
+        }
+
+        fn priority(&self) -> i32 {
+            1_000
+        }
+
+        fn matches(&self, _session: &SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(
+            &self,
+            _session: &SessionFacts,
+        ) -> qol_terminal_sessions::cli::CliSessionDescriptor {
+            qol_terminal_sessions::cli::CliSessionDescriptor {
+                tool: self.tool.clone(),
+                display_name: None,
+                external_id: None,
+                has_activity: None,
+                evidence: qol_terminal_sessions::cli::CliSessionEvidence::default(),
+            }
+        }
+
+        fn transcript_completion(&self, _session: &SessionFacts, _marker: &str) -> Option<bool> {
+            match self.transcript.load(Ordering::Relaxed) {
+                1 => Some(false),
+                2 => Some(true),
+                _ => None,
+            }
+        }
+    }
+
+    struct SessionSim {
+        root: tempfile::TempDir,
+        pending: PendingBridgeStore,
+        ledger: SpawnLedger,
+        locks: SpawnLocks,
+    }
+
+    impl SessionSim {
+        fn new() -> Self {
+            let root = tempfile::TempDir::new().unwrap();
+            let pending = store(&root);
+            let ledger = ledger(&root);
+            let locks = locks(&root);
+            Self {
+                root,
+                pending,
+                ledger,
+                locks,
+            }
+        }
+
+        fn trace_dir(&self) -> &std::path::Path {
+            self.root.path()
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn lane(
+            &self,
+            native: &str,
+            pid: i32,
+            marker: &str,
+            autoclose: bool,
+            group: Option<&str>,
+            label: Option<&str>,
+            transcript: Transcript,
+            screens: Vec<String>,
+        ) -> LaneSim {
+            let binding: SessionBinding = format!("v1:fake:{native}:{pid}").parse().unwrap();
+            let driver_native = format!("d{native}");
+            let driver: SessionBinding = format!("v1:fake:{driver_native}:{}", pid + 1000)
+                .parse()
+                .unwrap();
+            self.pending
+                .start_with_label(&binding, marker, &driver.token(), autoclose, group, label)
+                .unwrap();
+            if let Some(group) = group {
+                super::register_group_member(self.trace_dir(), group, &binding.token(), label)
+                    .unwrap();
+            }
+            let backend = FakeBackend::new(facts(native, pid), screens)
+                .with_driver(facts(&driver_native, pid + 1000));
+            let (terminals, backend) = harness(backend);
+            let tool = FakeTool::new(transcript);
+            let interpreter = CliSessionInterpreter::from_strategies([
+                Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+            ])
+            .unwrap();
+            let round =
+                WatchedRound::new(self.pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+            LaneSim {
+                binding,
+                terminals,
+                backend,
+                interpreter,
+                tool,
+                round,
+                out: Vec::new(),
+                stall_after: Duration::from_secs(3600),
+            }
+        }
+
+        fn simple_lane(&self, native: &str, pid: i32, screens: Vec<String>) -> LaneSim {
+            self.lane(
+                native,
+                pid,
+                "QOL_BRIDGE_DONE_round",
+                true,
+                None,
+                None,
+                Transcript::Silent,
+                screens,
+            )
+        }
+
+        fn combined(&self, group: &str) -> Option<String> {
+            std::fs::read_to_string(super::group_dir(self.trace_dir(), group).join("combined.md"))
+                .ok()
+        }
+    }
+
+    struct LaneSim {
+        binding: SessionBinding,
+        terminals: TerminalSessionService,
+        backend: Arc<FakeBackend>,
+        interpreter: CliSessionInterpreter,
+        tool: Arc<FakeTool>,
+        round: WatchedRound,
+        out: Vec<u8>,
+        stall_after: Duration,
+    }
+
+    impl LaneSim {
+        fn stall_after(mut self, stall_after: Duration) -> Self {
+            self.stall_after = stall_after;
+            self
+        }
+
+        fn transcript(&self, transcript: Transcript) {
+            self.tool.set(transcript);
+        }
+
+        fn poll(&mut self, sim: &SessionSim) -> RoundPoll {
+            poll_round(
+                &self.terminals,
+                &self.interpreter,
+                &sim.pending,
+                &sim.ledger,
+                &sim.locks,
+                &mut self.round,
+                &mut self.out,
+                sim.trace_dir(),
+                fast_config(self.stall_after),
+                &mut |_| {},
+            )
+            .unwrap()
+        }
+
+        fn poll_times(&mut self, sim: &SessionSim, times: usize) {
+            for _ in 0..times {
+                if !self.poll(sim).keep {
+                    return;
+                }
+            }
+        }
+
+        fn run(&mut self, sim: &SessionSim) {
+            for _ in 0..32 {
+                if !self.poll(sim).keep {
+                    return;
+                }
+            }
+            panic!("the simulated lane never settled");
+        }
+
+        fn events(&self) -> Vec<serde_json::Value> {
+            lines(&self.out)
+        }
+
+        fn wakes(&self) -> Vec<String> {
+            self.backend
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, text, _)| text.clone())
+                .collect()
+        }
+
+        fn closed(&self) -> usize {
+            self.backend.closed.lock().unwrap().len()
+        }
+
+        fn open_round(&self, sim: &SessionSim) -> Option<PendingRound> {
+            sim.pending.pending_round(&self.binding).unwrap()
+        }
+
+        fn settled(&self, sim: &SessionSim) -> bool {
+            self.open_round(sim).is_none_or(|round| round.completed)
+        }
+    }
+
+    #[test]
+    fn sim_a_lane_that_prints_its_marker_completes_and_closes_its_terminal() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec![FINAL_SCREEN.to_owned(); 4]);
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(lane.wakes().len(), 1);
+        assert_eq!(lane.closed(), 1, "an autoclose lane closes its terminal");
+        assert!(lane.settled(&sim));
+        assert!(
+            lane.open_round(&sim).is_none(),
+            "an autoclose lane leaves no open checkpoint"
+        );
+    }
+
+    #[test]
+    fn sim_a_marker_restated_while_the_transcript_still_works_never_completes_the_round() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec![REASONING_SCREEN.to_owned(); 8],
+        );
+
+        lane.poll_times(&sim, 8);
+
+        assert!(
+            super::super::marker_present(REASONING_SCREEN, "QOL_BRIDGE_DONE_round"),
+            "the reasoning screen really does restate the marker"
+        );
+        assert!(
+            lane.events().is_empty(),
+            "a mid-work screen must emit no completion: {:?}",
+            lane.events()
+        );
+        assert!(lane.wakes().is_empty(), "no wake may reach the initiator");
+        assert_eq!(lane.closed(), 0, "the lane terminal must stay open");
+        assert!(
+            !lane.open_round(&sim).unwrap().completed,
+            "the checkpoint must still be open and unfinished"
+        );
+    }
+
+    #[test]
+    fn sim_the_round_completes_once_the_transcript_agrees_the_marker_is_final() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec![REASONING_SCREEN.to_owned(); 4],
+        );
+        lane.poll_times(&sim, 4);
+        assert!(lane.events().is_empty());
+
+        lane.transcript(Transcript::Finished);
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_tool_without_a_transcript_still_completes_on_the_screen_marker_alone() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Silent,
+            vec![REASONING_SCREEN.to_owned(); 4],
+        );
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+    }
+
+    #[test]
+    fn sim_an_idle_lane_completes_markerless_after_the_stall_window() {
+        let sim = SessionSim::new();
+        let mut lane = sim
+            .simple_lane("7", 100, vec!["idle".to_owned(); 4])
+            .stall_after(Duration::from_millis(0));
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_that_exits_after_showing_its_marker_still_completes() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec![FINAL_SCREEN.to_owned(); 2]);
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_that_exits_without_a_marker_reports_gone() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec!["idle".to_owned(); 2]);
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "gone");
+        assert!(
+            sim.pending.pending_round(&lane.binding).unwrap().is_none(),
+            "a gone lane leaves no open checkpoint behind"
+        );
+    }
+
+    #[test]
+    fn sim_grouped_autoclose_lanes_assemble_every_member_into_one_combined_wake() {
+        let sim = SessionSim::new();
+        let group = "staleness-research";
+        let markers = [
+            "QOL_BRIDGE_DONE_a",
+            "QOL_BRIDGE_DONE_b",
+            "QOL_BRIDGE_DONE_c",
+        ];
+        let labels = ["research-a", "research-b", "research-c"];
+        let mut lanes = Vec::new();
+        for (index, (marker, label)) in markers.iter().zip(labels).enumerate() {
+            let native = format!("{}", 7 + index);
+            let screen = format!("report {label}\n{marker}");
+            lanes.push(sim.lane(
+                &native,
+                100 + index as i32,
+                marker,
+                true,
+                Some(group),
+                Some(label),
+                Transcript::Finished,
+                vec![screen; 4],
+            ));
+        }
+
+        for lane in lanes.iter_mut().take(2) {
+            lane.run(&sim);
+            assert!(
+                lane.events().is_empty(),
+                "an early grouped member must stay silent: {:?}",
+                lane.events()
+            );
+            assert!(lane.wakes().is_empty());
+            assert_eq!(lane.closed(), 1, "each finished grouped lane still closes");
+            assert!(
+                sim.combined(group).is_none(),
+                "the combined file waits for every member"
+            );
+        }
+
+        lanes[2].run(&sim);
+
+        let events = lanes[2].events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        let wakes = lanes[2].wakes();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("all 3 lanes finished"),
+            "the combined wake counts every member: {:?}",
+            wakes[0]
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        for label in labels {
+            assert!(
+                combined.contains(&format!("report {label}")),
+                "the combined report must carry {label}: {combined}"
+            );
+        }
+        assert_eq!(
+            combined.matches("## v1:fake:").count(),
+            3,
+            "every member gets a section: {combined}"
+        );
+    }
+
+    #[test]
+    fn sim_a_grouped_lane_that_dies_unreported_still_lets_the_group_finish() {
+        let sim = SessionSim::new();
+        let group = "research";
+        let mut alive = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("research-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        let mut dead = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("research-b"),
+            Transcript::Working,
+            vec!["still thinking".to_owned(); 4],
+        );
+
+        alive.run(&sim);
+        assert!(alive.events().is_empty());
+        assert!(sim.combined(group).is_none());
+
+        dead.poll(&sim);
+        dead.backend.mark_gone();
+        dead.run(&sim);
+
+        let events = dead.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(
+            events[0]["event"], "completed_markerless",
+            "the group closes on a lane that never printed a marker"
+        );
+        let wakes = dead.wakes();
+        assert_eq!(wakes.len(), 1, "one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("(did not complete)"),
+            "the dead lane is named as unfinished: {:?}",
+            wakes[0]
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        assert!(combined.contains("report a"));
+        assert!(
+            combined.contains("exited before it reported a completion marker"),
+            "the dead lane leaves a receipt in the combined report: {combined}"
+        );
+    }
+
+    #[test]
+    fn sim_a_grouped_wake_is_delivered_only_once() {
+        let sim = SessionSim::new();
+        let group = "research";
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            false,
+            Some(group),
+            Some("research-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 8],
+        );
+
+        lane.run(&sim);
+        assert_eq!(lane.wakes().len(), 1);
+
+        let mut again = WatchedRound::new(
+            sim.pending
+                .pending_round(&lane.binding)
+                .unwrap()
+                .expect("the round stays open without autoclose"),
+        )
+        .unwrap();
+        again.marker_seen = true;
+        let mut out = Vec::new();
+        poll_round(
+            &lane.terminals,
+            &lane.interpreter,
+            &sim.pending,
+            &sim.ledger,
+            &sim.locks,
+            &mut again,
+            &mut out,
+            sim.trace_dir(),
+            fast_config(Duration::from_secs(3600)),
+            &mut |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(
+            lane.wakes().len(),
+            1,
+            "a second pass must never repeat the combined wake"
+        );
     }
 }

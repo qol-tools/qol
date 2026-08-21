@@ -1240,6 +1240,14 @@ fn launch_background(
         group,
         Some(identity.key.as_str()),
     )?;
+    if let Some(group) = group {
+        super::watch::register_group_member(
+            &super::bridge::trace_dir(),
+            group,
+            &binding.token(),
+            Some(identity.key.as_str()),
+        )?;
+    }
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
     outcome.background = true;
