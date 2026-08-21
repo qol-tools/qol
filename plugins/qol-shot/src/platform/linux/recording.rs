@@ -660,7 +660,7 @@ pub fn recording_started(_session: &CaptureSession, countdown_completed: bool) {
 }
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
-    show_notification("Recording stopped", "Saving recording...", 1800);
+    show_notification("Recording stopped", "Saving recording\u{2026}", 1800);
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
     if let Err(error) = wait_for_recording_file(session, capture_file) {

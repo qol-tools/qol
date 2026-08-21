@@ -1675,7 +1675,7 @@ impl SettingsPanelView {
                 if error.is_some() {
                     "unavailable".into()
                 } else {
-                    label.clone().unwrap_or_else(|| "loading...".into())
+                    label.clone().unwrap_or_else(|| "loading\u{2026}".into())
                 }
             }
             RowControl::List {
@@ -2559,7 +2559,7 @@ impl SettingsPanelView {
                 let placeholder = row
                     .placeholder
                     .clone()
-                    .unwrap_or_else(|| "Waiting...".into());
+                    .unwrap_or_else(|| "Waiting\u{2026}".into());
                 div()
                     .flex()
                     .flex_none()
@@ -3751,7 +3751,7 @@ fn action_value_label(
     state_labels: &std::collections::BTreeMap<String, String>,
 ) -> String {
     if pending {
-        return "working...".into();
+        return "working\u{2026}".into();
     }
     if failed {
         return "failed".into();
@@ -4278,7 +4278,7 @@ default = "visible"
         let no_labels = std::collections::BTreeMap::new();
         let cases = [
             (false, false, false, false, false, "Run"),
-            (false, true, false, false, false, "working..."),
+            (false, true, false, false, false, "working\u{2026}"),
             (false, false, true, false, false, "failed"),
             (false, false, false, true, true, "Run"),
             (true, false, false, true, true, "Stop"),

@@ -462,7 +462,7 @@ impl RemoveAppView {
             hints.push(("d", "trash/delete"));
         }
         hints.push(("T", "trash anyway"));
-        hints.push(("esc", "back"));
+        hints.push(("Esc", "back"));
         div()
             .flex()
             .flex_col()

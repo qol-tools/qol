@@ -194,7 +194,7 @@ impl Render for AltTabApp {
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
                 s.child(header_bar(
                     "Alt Tab  ·  Live Window Grid",
-                    "↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                    "↑↓←→ navigate  ·  ⏎ switch  ·  Esc close",
                     &snap,
                 ))
             })
