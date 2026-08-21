@@ -704,11 +704,15 @@ fn plugins_needing_build(
         .collect()
 }
 
+fn fingerprint_store_key(plugin_id: &str, plugin_dir: &Path) -> String {
+    format!("{plugin_id}@{}", plugin_dir.display())
+}
+
 fn plugin_is_fresh(plugin: &BuildablePlugin, known: &HashMap<String, String>) -> bool {
     let Some(plugin_id) = read_plugin_source(&plugin.dir).map(|source| source.id) else {
         return false;
     };
-    let Some(known_fingerprint) = known.get(&plugin_id) else {
+    let Some(known_fingerprint) = known.get(&fingerprint_store_key(&plugin_id, &plugin.dir)) else {
         return false;
     };
     qol_dev_build::fingerprint_plugin(&plugin.dir)
@@ -724,7 +728,7 @@ fn persist_batch_fingerprints(config_dir: &Path, plugins: &[BuildablePlugin]) {
         };
         match qol_dev_build::fingerprint_plugin(&plugin.dir) {
             Ok(fingerprint) => {
-                fingerprints.insert(plugin_id, fingerprint);
+                fingerprints.insert(fingerprint_store_key(&plugin_id, &plugin.dir), fingerprint);
             }
             Err(error) => eprintln!(
                 "qol dev: failed to fingerprint {}: {}",
@@ -1118,7 +1122,7 @@ mod tests {
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
         qol_dev_build::save_build_fingerprints(
             &config_dir,
-            &HashMap::from([("plugin-a".to_string(), fingerprint)]),
+            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
         )
         .unwrap();
 
@@ -1158,7 +1162,7 @@ mod tests {
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
         qol_dev_build::save_build_fingerprints(
             &config_dir,
-            &HashMap::from([("plugin-a".to_string(), fingerprint)]),
+            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
         )
         .unwrap();
         std::fs::remove_file(&binary).unwrap();
@@ -1179,7 +1183,7 @@ mod tests {
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
         qol_dev_build::save_build_fingerprints(
             &config_dir,
-            &HashMap::from([("plugin-a".to_string(), fingerprint)]),
+            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
         )
         .unwrap();
         std::fs::write(plugin.dir.join("src/main.rs"), "fn main() { let x = 1; }\n").unwrap();
@@ -1203,11 +1207,13 @@ mod tests {
         )
         .unwrap();
 
-        persist_batch_fingerprints(&config_dir, &[plugin]);
+        persist_batch_fingerprints(&config_dir, std::slice::from_ref(&plugin));
 
         let stored = qol_dev_build::load_build_fingerprints(&config_dir);
         assert_eq!(stored.get("other-plugin").map(String::as_str), Some("kept"));
-        let fingerprint = stored.get("plugin-a").expect("batch plugin recorded");
+        let fingerprint = stored
+            .get(&fingerprint_store_key("plugin-a", &plugin.dir))
+            .expect("batch plugin recorded");
         let current = qol_dev_build::fingerprint_plugin(&repo.join("plugins/plugin-a")).unwrap();
         assert_eq!(*fingerprint, current);
     }
