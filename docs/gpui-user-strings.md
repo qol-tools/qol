@@ -141,17 +141,27 @@ Windows doctor text (plugins/qol-shot/src/platform/windows/mod.rs): full-sentenc
 
 ## Consistency issues worth fixing
 
-1. Ellipsis style mixed: alt-tab `Scanning windows...` (app/render.rs:326) and launcher `Type to search...` (ui/view.rs:116) use ASCII `...`; qol-shot uses real ellipsis `…` (Saving recording…, Checking package manager…). Pick one style.
-2. Key-cap casing mixed: alt-tab hint uses lowercase `esc`, `⏎`, `↑↓←→`; removeapp hints use `Q`, `Enter`, `Esc` capitalized. cli-sessions uses `\u{2191}\u{2193}`, `\u{23CE}`.
-3. `Capture area` literal duplicated in one function (region_selector/mod.rs:1000,1005) - the fallback branch duplicates the match branch default.
-4. `Could not open screenshot editor` twice (preview.rs:895,909) - same toast from two code paths; dedupe the call site.
-5. `Enter to continue · Esc to quit` twice (removeapp ui/mod.rs:590,632) - extract a const.
-6. removeapp footer: `Uninstall with {}` (capitalized) vs detail strings `uninstall with Homebrew` (lowercase) - casing mismatch on the same phrase.
-7. Size formatting differs between crates: qol-shot uses `{:.1} GB`, `{} MB`, `{} KB`; removeapp uses `{:.1} GB`, `{:.1} MB`, `{:.0} KB`, `{bytes} B` (mixed precision, MB/KB precision differs). Two hand-rolled formatters; consider one shared helper.
-8. `QoL Shot Settings` vs `QoL Shot Editor`: plugin title casing follows plugin name (`QoL Shot`), while alt-tab/launcher titles are `Alt Tab Settings`/`Launcher Settings`; qol-tray's generic path produces `{} Settings`. Fine, but keep the pattern when new surfaces appear.
-9. Duplicated key-cap names (`escape`, `left`, `right`, `up`, `down`, `return`, `space`) across color_wheel, dropdown, settings_panel, cli-sessions, removeapp - candidates for shared keycap constants in qol-gpui kit.
-10. `Run QoL Shot on Linux or macOS.` repeated in windows doctor (mod.rs:198,206); `qol-shot: ... is not implemented on Windows` series is mechanical and could be generated from one template.
-11. qol-shot app/mod.rs has bare `screenshot`/`preview`/`record`/`record` (221,411,669) - stage names leaked into trace strings next to user-facing toasts; rename if they surface anywhere.
+Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 193142952).
+
+**Fixed**
+
+1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
+2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: alt-tab's second (debug-overlay) header bar, and removeapp's `("esc", "back")` hint, so the claim that removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
+3. `Capture area` duplication, folded into `CAPTURE_AREA_LABEL`.
+4. `Could not open screenshot editor` duplication, folded into `EDITOR_OPEN_FAILED_TOAST`.
+5. The `Enter to continue` / `Esc to quit` hint duplication, folded into `CONTINUE_OR_QUIT_HINT`.
+7. Size formatting. This was not a precision difference: qol-shot was decimal, removeapp was 1024-based while labelling the result GB/MB/KB, so removeapp reported 90.4 GB for what Finder calls 97.0 GB. Both now call one `qol_gpui::format_bytes`, decimal, which also rolls 999_999 bytes up to `1.0 MB` instead of showing `1000 KB`. `qol-dev-build` has its own binary formatter, correctly labelled GiB/MiB/KiB; that is a different unit system and stays.
+
+**Rejected**
+
+6. Not a mismatch. `Uninstall with {}` is a standalone button label; `uninstall with Homebrew` is a hint description sitting beside `quit app` and `confirm`, which are lowercase too.
+9. Shared key-cap constants. The literals are match-arm patterns across roughly 13 files, no two of which disagree about a key mapping. Replacing them changes nothing the user sees, prevents no bug, and a lowercase const in a pattern silently becomes a catch-all binding rather than a comparison.
+
+**Left alone deliberately**
+
+8. `QoL Shot Settings` versus `Alt Tab Settings`: plugin title casing follows the plugin name, and qol-tray's generic path produces `{} Settings`. Nothing to change; keep the pattern when new surfaces appear.
+10. The repeated `Run QoL Shot on Linux or macOS.` and the mechanical `is not implemented on Windows` series could come from one template, but it is Windows-only text in a plugin that does not run on Windows.
+11. Bare `screenshot` / `preview` / `record` in qol-shot `app/mod.rs` are trace strings, not user-visible.
 
 ## Excluded from inventory
 
