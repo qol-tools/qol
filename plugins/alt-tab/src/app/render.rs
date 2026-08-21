@@ -187,7 +187,7 @@ impl Render for AltTabApp {
             .when(snap.show_hotkey_hints, |s| {
                 s.child(header_bar(
                     "Alt Tab",
-                    "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                    "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  Esc close",
                     &snap,
                 ))
             })
@@ -323,7 +323,7 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
                     div()
                         .text_size(px(TEXT_BODY))
                         .text_color(rgb(context.snap.palette.grid_empty_text))
-                        .child("Scanning windows..."),
+                        .child("Scanning windows\u{2026}"),
                 )
             })
             .children(

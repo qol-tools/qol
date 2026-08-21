@@ -280,7 +280,7 @@ fn footer() -> impl IntoElement {
         .child(key_hint("\u{2190}\u{2192}", "cycle"))
         .child(key_hint("\u{23CE}", "jump"))
         .child(key_hint("a", "ack"))
-        .child(key_hint("esc", "close"))
+        .child(key_hint("Esc", "close"))
 }
 
 fn identity_line(s: &SessionState) -> impl IntoElement {

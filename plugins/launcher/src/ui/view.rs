@@ -113,7 +113,7 @@ fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usiz
     if query.is_empty() {
         return div()
             .text_color(rgb(current_palette().text_muted))
-            .child("Type to search...")
+            .child("Type to search\u{2026}")
             .into_any_element();
     }
 

@@ -32,6 +32,7 @@ const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 const BLUR_GUARD: Duration = Duration::from_millis(400);
 const PARKED_REVEAL_GUARD: Duration = Duration::from_millis(5000);
+const EDITOR_OPEN_FAILED_TOAST: &str = "Could not open screenshot editor";
 pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
 pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
@@ -892,7 +893,7 @@ impl PreviewView {
                         qol_runtime::probe!("SHOT_EDIT", "phase=open result=load-error");
                         eprintln!("[qol-shot] screenshot editor load failed: {error:#}");
                         crate::platform::show_notification(
-                            "Could not open screenshot editor",
+                            EDITOR_OPEN_FAILED_TOAST,
                             &view.path.display().to_string(),
                             1800,
                         );
@@ -906,7 +907,7 @@ impl PreviewView {
                     qol_runtime::probe!("SHOT_EDIT", "phase=open result=window-error");
                     eprintln!("[qol-shot] screenshot editor open failed: {error:#}");
                     crate::platform::show_notification(
-                        "Could not open screenshot editor",
+                        EDITOR_OPEN_FAILED_TOAST,
                         &view.path.display().to_string(),
                         1800,
                     );

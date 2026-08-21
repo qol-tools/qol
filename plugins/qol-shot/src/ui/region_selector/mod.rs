@@ -21,6 +21,7 @@ pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
 const SELECTOR_APP_ID: &str = "qol-tray-shot";
 const LABEL_MIN_W: f32 = 180.0;
 const LABEL_MIN_H: f32 = 80.0;
+const CAPTURE_AREA_LABEL: &str = "Capture area";
 const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = 12.0;
@@ -997,12 +998,12 @@ impl RegionSelector {
     fn selection_label_title(&self) -> &'static str {
         let state = self.state.borrow();
         if manual_selection_global_rect(&state).is_some() {
-            return "Capture area";
+            return CAPTURE_AREA_LABEL;
         }
         state
             .default_target
             .map(DetectedTarget::guide_title)
-            .unwrap_or("Capture area")
+            .unwrap_or(CAPTURE_AREA_LABEL)
     }
 
     fn notify_all(&self, cx: &mut Context<Self>) {

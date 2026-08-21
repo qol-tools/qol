@@ -20,6 +20,7 @@ const SEARCH_H: f32 = 40.0;
 const FOOTER_H: f32 = 34.0;
 const ROW_H: f32 = 38.0;
 const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
+const CONTINUE_OR_QUIT_HINT: &str = "Enter to continue \u{00b7} Esc to quit";
 
 fn current_palette() -> RemoveAppPalette {
     remove_app_runtime()
@@ -587,7 +588,7 @@ impl RemoveAppView {
                     div()
                         .text_color(rgb(palette.text_muted))
                         .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                        .child("Enter to continue \u{00b7} Esc to quit"),
+                        .child(CONTINUE_OR_QUIT_HINT),
                 )
                 .into_any_element();
         }
@@ -629,7 +630,7 @@ impl RemoveAppView {
                 div()
                     .text_color(rgb(palette.text_muted))
                     .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .child("Enter to continue \u{00b7} Esc to quit"),
+                    .child(CONTINUE_OR_QUIT_HINT),
             )
             .into_any_element()
     }
