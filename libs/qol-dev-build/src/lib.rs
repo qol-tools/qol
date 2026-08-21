@@ -9,6 +9,7 @@ mod platform;
 pub mod registry;
 pub mod scan_ledger;
 mod service;
+mod sidecar;
 pub mod target_cache;
 pub mod tray;
 mod types;
@@ -23,6 +24,10 @@ pub use service::{
     build_linked_plugins_with_core_events, build_linked_plugins_with_progress,
     default_build_application_service, linked_plugin_build_timeout, BuildApplicationService,
     MAX_CONCURRENT_PLUGIN_BUILDS,
+};
+pub use sidecar::{
+    binary_is_fresh, daemons_needing_restart, fingerprint_sidecar_path, read_fingerprint_sidecar,
+    write_fingerprint_sidecar,
 };
 pub use types::{
     BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress, DEV_BUILD_STATE_FILE,
