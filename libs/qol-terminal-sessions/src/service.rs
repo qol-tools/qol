@@ -398,7 +398,10 @@ pub fn screen_contains_ignoring_whitespace(screen: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
-    let stripped: String = screen.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let stripped: String = screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '+')
+        .collect();
     stripped.contains(needle)
 }
 
@@ -791,6 +794,15 @@ mod tests {
         assert!(screen_contains_ignoring_whitespace(
             &screen,
             "QOL_BRIDGE_DONE_abc123"
+        ));
+    }
+
+    #[test]
+    fn split_form_with_a_plus_separator_is_matched() {
+        let screen = "QOL_BRIDGE_DONE_ + 12b9c01f3034db9014dd";
+        assert!(screen_contains_ignoring_whitespace(
+            screen,
+            "QOL_BRIDGE_DONE_12b9c01f3034db9014dd"
         ));
     }
 

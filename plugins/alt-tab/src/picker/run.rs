@@ -161,6 +161,14 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     dispatch_settings(&cx, &state).await;
                     LoopFlow::Continue
                 }
+                daemon::Command::Theme { native, accent } => {
+                    qol_gpui::theme::set_runtime_theme_override(
+                        native.as_deref(),
+                        accent.as_deref(),
+                    );
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                    LoopFlow::Continue
+                }
                 daemon::Command::Kill => LoopFlow::Stop,
             }
         }

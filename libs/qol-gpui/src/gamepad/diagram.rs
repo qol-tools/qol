@@ -392,7 +392,7 @@ fn control_label(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(scaled(11.0))
+        .text_size(scaled(11.5))
         .font_weight(FontWeight::BOLD)
         .text_color(rgb(if active {
             palette.text
@@ -409,7 +409,7 @@ fn port(active: bool, palette: GamepadPalette) -> Div {
         .top(scaled(91.0))
         .w(scaled(40.0))
         .h(scaled(6.0))
-        .rounded_full()
+        .rounded_none()
         .bg(rgb(if active {
             palette.accent
         } else {
@@ -421,7 +421,7 @@ fn port(active: bool, palette: GamepadPalette) -> Div {
                 div()
                     .absolute()
                     .inset(px(-4.0))
-                    .rounded_full()
+                    .rounded_none()
                     .bg(rgba(alpha(palette.accent, 0x28))),
             )
         })
@@ -462,7 +462,7 @@ fn stick(
         .top(scaled(knob_origin + axis_y.display * 18.0))
         .w(scaled(knob))
         .h(scaled(knob))
-        .rounded_full()
+        .rounded_none()
         .border_2()
         .border_color(rgb(if active {
             palette.accent
@@ -482,14 +482,14 @@ fn stick(
             div()
                 .absolute()
                 .inset(scaled(8.0))
-                .rounded_full()
+                .rounded_none()
                 .border_1()
                 .border_color(rgba(alpha(palette.text_muted, 0x58))),
         )
         .child(
             div()
                 .relative()
-                .text_size(scaled(11.0))
+                .text_size(scaled(11.5))
                 .font_weight(FontWeight::BOLD)
                 .text_color(rgb(palette.text))
                 .child(label),
@@ -500,7 +500,7 @@ fn stick(
         .top(scaled(center.1 - gate / 2.0))
         .w(scaled(gate))
         .h(scaled(gate))
-        .rounded_full()
+        .rounded_none()
         .border_1()
         .border_color(rgba(alpha(
             palette.accent,
@@ -512,7 +512,7 @@ fn stick(
                 div()
                     .absolute()
                     .inset(px(-5.0))
-                    .rounded_full()
+                    .rounded_none()
                     .border_2()
                     .border_color(rgba(alpha(palette.accent, 0x28))),
             )
@@ -555,7 +555,7 @@ fn dpad_control(
         .top(scaled(center.1 - 58.0))
         .w(scaled(116.0))
         .h(scaled(116.0))
-        .rounded_full()
+        .rounded_none()
         .border_1()
         .border_color(rgba(alpha(palette.accent, 0x38)))
         .bg(rgba(alpha(palette.raised, 0x9e)))
@@ -566,7 +566,7 @@ fn dpad_control(
                 .top(scaled(3.0))
                 .w(scaled(28.0))
                 .h(scaled(110.0))
-                .rounded_md()
+                .rounded_none()
                 .border_1()
                 .border_color(rgb(palette.border))
                 .bg(rgb(palette.raised)),
@@ -578,7 +578,7 @@ fn dpad_control(
                 .top(scaled(44.0))
                 .w(scaled(110.0))
                 .h(scaled(28.0))
-                .rounded_md()
+                .rounded_none()
                 .border_1()
                 .border_color(rgb(palette.border))
                 .bg(rgb(palette.raised)),
@@ -591,7 +591,7 @@ fn dpad_control(
                 .top(scaled(y))
                 .w(scaled(36.0))
                 .h(scaled(36.0))
-                .rounded_md()
+                .rounded_none()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -608,7 +608,7 @@ fn dpad_control(
                         div()
                             .absolute()
                             .inset(px(-4.0))
-                            .rounded_md()
+                            .rounded_none()
                             .border_2()
                             .border_color(rgba(alpha(palette.accent, 0x32))),
                     )
@@ -616,7 +616,7 @@ fn dpad_control(
                 .child(
                     div()
                         .relative()
-                        .text_size(scaled(12.0))
+                        .text_size(scaled(11.5))
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(if active {
                             palette.text
@@ -633,7 +633,7 @@ fn dpad_control(
                 .top(scaled(44.0))
                 .w(scaled(28.0))
                 .h(scaled(28.0))
-                .rounded_full()
+                .rounded_none()
                 .border_1()
                 .border_color(rgba(alpha(palette.text_muted, 0x48)))
                 .bg(rgb(palette.surface)),
@@ -741,7 +741,7 @@ fn round_control(
         .top(scaled(y - radius))
         .w(scaled(radius * 2.0))
         .h(scaled(radius * 2.0))
-        .rounded_full()
+        .rounded_none()
         .border_2()
         .border_color(rgb(if active { tone } else { palette.border }))
         .bg(if active {
@@ -755,7 +755,7 @@ fn round_control(
                 div()
                     .absolute()
                     .inset(px(-5.0))
-                    .rounded_full()
+                    .rounded_none()
                     .border_2()
                     .border_color(rgba(alpha(tone, 0x38))),
             )
@@ -767,7 +767,7 @@ fn round_control(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(scaled(if label.len() > 2 { 8.0 } else { 14.0 }))
+                .text_size(scaled(if label.len() > 2 { 10.0 } else { 13.0 }))
                 .font_weight(FontWeight::BOLD)
                 .text_color(rgb(if active { palette.text } else { tone }))
                 .child(label),

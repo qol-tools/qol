@@ -1,10 +1,48 @@
 use anyhow::{bail, Context, Result};
 use qol_host_fixes::policy::cli::{parse_args, ParsedCommand, ResidentCommand};
+use qol_host_fixes::residency::HostResidency;
 
 mod restore;
 pub use restore::{restore_all, RestoreEntry, RestoreReport};
 
 pub use qol_host_fixes::policy::nvidia::{fragment_path, NVIDIA_POLICY_ID};
+
+pub fn apply_residency(target: HostResidency) -> Result<()> {
+    apply_residency_with(
+        target,
+        HostResidency::current(),
+        HostResidency::set,
+        restore_all,
+    )
+}
+
+fn apply_residency_with(
+    target: HostResidency,
+    previous: HostResidency,
+    set: impl FnOnce(HostResidency) -> Result<()>,
+    restore: impl FnOnce() -> RestoreReport,
+) -> Result<()> {
+    set(target)?;
+    if !previous.is_resident() || target.is_resident() {
+        return Ok(());
+    }
+    let report = restore();
+    let failures: Vec<String> = report
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            RestoreEntry::Failed { policy, error } => Some(format!("{policy}: {error}")),
+            RestoreEntry::Restored { .. } => None,
+        })
+        .collect();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "residency is off but the host was left changed: {}",
+        failures.join("; ")
+    )
+}
 
 trait PhaseRecorder {
     fn on_request(&mut self);
@@ -79,6 +117,28 @@ where
         }
     };
     let command = parsed.command;
+    if let ResidentCommand::Residency { resident } = command {
+        let target = if resident {
+            HostResidency::Resident
+        } else {
+            HostResidency::Portable
+        };
+        let result = apply_residency(target);
+        if let Err(error) = &result {
+            eprintln!("resident-policy: {error:#}");
+        }
+        let code = if result.is_ok() { 0 } else { 1 };
+        let outcome = if result.is_ok() { "ok" } else { "error" };
+        let reason = qol_host_fixes::policy::trace::sanitize_reason(
+            &result
+                .as_ref()
+                .err()
+                .map(|error| format!("{error:#}"))
+                .unwrap_or_default(),
+        );
+        emit_result(args, &carrier, outcome, &reason, recorder);
+        return code;
+    }
     if matches!(command, ResidentCommand::Status | ResidentCommand::Help) {
         let result = qol_host_fixes::policy::nvidia::run_resident_policy_cli(args);
         if let Err(error) = &result {
@@ -402,5 +462,79 @@ mod tests {
         ];
         let command = parse_args(&args).unwrap();
         assert!(matches!(command.command, ResidentCommand::Join { .. }));
+    }
+
+    #[test]
+    fn leaving_residency_restores_the_policies_it_owned() {
+        let mut restored = false;
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || {
+                restored = true;
+                RestoreReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert!(restored, "disabling residency must restore the host");
+    }
+
+    #[test]
+    fn staying_portable_restores_nothing() {
+        let mut restored = false;
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Portable,
+            |_| Ok(()),
+            || {
+                restored = true;
+                RestoreReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert!(!restored, "a portable host has nothing to restore");
+    }
+
+    #[test]
+    fn a_failed_restore_is_reported_to_the_caller() {
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || {
+                RestoreReport::from_entries(vec![RestoreEntry::Failed {
+                    policy: "nvidia",
+                    error: "permission denied".to_string(),
+                }])
+            },
+        );
+        let error = outcome.expect_err("a failed restore must not report success");
+        assert!(format!("{error:#}").contains("nvidia: permission denied"));
+    }
+
+    #[test]
+    fn residency_runs_without_elevation() {
+        let _serial = serialized();
+        std::env::set_var("QOL_RESIDENCY_DEVICE_ID", "test-device");
+        let root = tempfile::tempdir().unwrap();
+        std::env::set_var("QOL_RESIDENCY_CONFIG_DIR", root.path());
+        let mut recorder = CountedPhaseRecorder::default();
+        let resident = vec!["residency".to_string(), "--resident".to_string()];
+        let code = run_cli_with(
+            &resident,
+            |_| panic!("residency must not reach elevation"),
+            &mut recorder,
+        );
+        assert_eq!(code, 0, "the residency toggle succeeds without elevation");
+        let portable = vec!["residency".to_string(), "--portable".to_string()];
+        let code = run_cli_with(
+            &portable,
+            |_| panic!("residency must not reach elevation"),
+            &mut recorder,
+        );
+        assert_eq!(code, 0);
+        std::env::remove_var("QOL_RESIDENCY_DEVICE_ID");
+        std::env::remove_var("QOL_RESIDENCY_CONFIG_DIR");
     }
 }

@@ -61,6 +61,10 @@ pub fn start_window_move(window: &mut gpui::Window) {
     imp::start_window_move(window);
 }
 
+pub fn square_window_corners(window: &mut gpui::Window) {
+    imp::square_window_corners(window);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReassertStep {
     Settled,

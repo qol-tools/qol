@@ -14,6 +14,7 @@ mod tracking;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use resolution::daemon_socket;
 pub(crate) use tracking::ProcessTracker;
 
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -145,6 +146,21 @@ pub fn try_execute_action_with_input_result(
     action_id: &str,
     input: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, ActionExecutionError> {
+    if plugin_id == qol_conventions::CORE_PANEL_ID && action_id == "settings" {
+        return match crate::settings_surface::request(plugin_id) {
+            Ok(true) => {
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin={plugin_id} phase=route outcome=hosted"
+                );
+                Ok(None)
+            }
+            Ok(false) => Err(ActionExecutionError::SpawnFailed(
+                "the native settings host is unavailable on this platform".to_string(),
+            )),
+            Err(error) => Err(ActionExecutionError::SpawnFailed(format!("{error:#}"))),
+        };
+    }
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
     if resolved.hosted_settings {
         match crate::settings_surface::request(plugin_id) {

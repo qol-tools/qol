@@ -5,6 +5,7 @@ mod runtime;
 
 use super::{Plugin, PluginId, PluginIdentityIndex};
 use crate::plugins::action_executor::ProcessTracker;
+use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -243,6 +244,59 @@ impl PluginManager {
             }
         }
         restarted
+    }
+
+    pub fn broadcast_theme_to_running_gpui_daemons(
+        &mut self,
+        native: &str,
+        accent: &str,
+    ) -> Vec<PluginId> {
+        let plugin_ids = self.running_gpui_daemon_ids();
+        let mut reached = Vec::new();
+        for plugin_id in plugin_ids {
+            let socket = self
+                .plugins
+                .get(&plugin_id)
+                .and_then(crate::plugins::action_executor::daemon_socket);
+            let Some(socket) = socket else {
+                log::warn!(
+                    "GPUI daemon {} has no socket, falling back to a restart for the theme broadcast",
+                    plugin_id
+                );
+                match self.restart_running_plugin_daemon(plugin_id.as_str()) {
+                    Ok(()) => reached.push(plugin_id),
+                    Err(error) => {
+                        log::error!(
+                            "Failed to restart GPUI daemon {} after theme change: {}",
+                            plugin_id,
+                            error
+                        );
+                    }
+                }
+                continue;
+            };
+            let dispatch =
+                crate::plugins::action_transport::dispatch_daemon_theme(&socket, native, accent);
+            if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
+                reached.push(plugin_id);
+                continue;
+            }
+            log::warn!(
+                "GPUI daemon {} did not handle the theme broadcast (dispatch: {dispatch:?}), falling back to a restart",
+                plugin_id
+            );
+            match self.restart_running_plugin_daemon(plugin_id.as_str()) {
+                Ok(()) => reached.push(plugin_id),
+                Err(error) => {
+                    log::error!(
+                        "Failed to restart GPUI daemon {} after theme change: {}",
+                        plugin_id,
+                        error
+                    );
+                }
+            }
+        }
+        reached
     }
 
     pub fn running_gpui_daemon_ids(&self) -> Vec<PluginId> {

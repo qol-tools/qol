@@ -132,6 +132,28 @@ pub(crate) fn wait_pid(pid: u32) -> io::Result<ExitStatus> {
     }
 }
 
+pub(crate) fn reload_group(pid: u32, grace: Duration) {
+    let Ok(pid) = pid_t(pid) else {
+        return;
+    };
+    let signal_target = -pid;
+    if !signal_target_alive(signal_target) {
+        std::thread::sleep(REAP_DELAY);
+        let _ = try_wait_pid(pid as u32);
+        return;
+    }
+    let _ = signal(signal_target, libc::SIGHUP);
+    let deadline = Instant::now() + grace;
+    while signal_target_alive(signal_target) && Instant::now() < deadline {
+        std::thread::sleep(WAIT_INTERVAL);
+    }
+    if signal_target_alive(signal_target) {
+        escalate_group(pid, Duration::ZERO);
+    }
+    std::thread::sleep(REAP_DELAY);
+    let _ = try_wait_pid(pid as u32);
+}
+
 pub(crate) fn terminate_pid(pid: u32, grace: Duration) {
     let Ok(pid) = pid_t(pid) else {
         return;

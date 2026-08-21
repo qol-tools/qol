@@ -16,6 +16,9 @@ const BUILD_SCOPE_PATHS: [&str; 7] = [
     "Cargo.lock",
 ];
 
+pub const TRAY_BUILD_SCOPE_PATHS: [&str; 5] =
+    ["apps", "libs", "vendor", "Cargo.toml", "Cargo.lock"];
+
 const GIT_ROUTING_ENVIRONMENT: [&str; 7] = [
     "GIT_INDEX_FILE",
     "GIT_DIR",
@@ -30,6 +33,7 @@ const GIT_ROUTING_ENVIRONMENT: [&str; 7] = [
 pub struct BuildIdentityEnvironment {
     intent: BuildIntent,
     source: SourceIdentity,
+    scope: &'static [&'static str],
 }
 
 #[derive(Debug)]
@@ -113,6 +117,13 @@ impl BuildIdentityEnvironment {
         Self::resolve(repo, BuildIntent::Development, false)
     }
 
+    pub fn development_scoped(
+        repo: &Path,
+        scope: &'static [&'static str],
+    ) -> Result<Self, BuildIdentityEnvironmentError> {
+        Self::resolve_with_scope(repo, BuildIntent::Development, false, scope)
+    }
+
     pub fn sandbox(repo: &Path) -> Result<Self, BuildIdentityEnvironmentError> {
         Self::resolve(repo, BuildIntent::Sandbox, false)
     }
@@ -158,7 +169,7 @@ impl BuildIdentityEnvironment {
         if self.intent == BuildIntent::Unspecified {
             return Err(BuildIdentityEnvironmentError::SourceChanged);
         }
-        let current = Self::resolve(repo, self.intent, false)?;
+        let current = Self::resolve_with_scope(repo, self.intent, false, self.scope)?;
         if &current == self {
             return Ok(());
         }
@@ -170,6 +181,15 @@ impl BuildIdentityEnvironment {
         intent: BuildIntent,
         require_clean: bool,
     ) -> Result<Self, BuildIdentityEnvironmentError> {
+        Self::resolve_with_scope(repo, intent, require_clean, &BUILD_SCOPE_PATHS)
+    }
+
+    fn resolve_with_scope(
+        repo: &Path,
+        intent: BuildIntent,
+        require_clean: bool,
+        scope: &'static [&'static str],
+    ) -> Result<Self, BuildIdentityEnvironmentError> {
         let mut status_args = vec![
             "status",
             "--porcelain=v2",
@@ -178,7 +198,7 @@ impl BuildIdentityEnvironment {
             "--ignore-submodules=none",
             "--",
         ];
-        status_args.extend(BUILD_SCOPE_PATHS);
+        status_args.extend(scope);
         let status = git(repo, &status_args)?;
         let dirty = !status.stdout.is_empty();
         if require_clean && dirty {
@@ -191,7 +211,7 @@ impl BuildIdentityEnvironment {
         let commit = git_value(repo, &["rev-parse", "--verify", "HEAD"], "commit")?;
         let head_tree = git_value(repo, &["rev-parse", "--verify", "HEAD^{tree}"], "HEAD tree")?;
         let working_tree = if dirty {
-            working_tree(repo)?
+            working_tree(repo, scope)?
         } else {
             head_tree.clone()
         };
@@ -202,6 +222,7 @@ impl BuildIdentityEnvironment {
                 head_tree,
                 working_tree,
             },
+            scope,
         })
     }
 }
@@ -222,12 +243,15 @@ fn dirty_submodule(status: &[u8]) -> bool {
     })
 }
 
-fn working_tree(repo: &Path) -> Result<String, BuildIdentityEnvironmentError> {
+fn working_tree(
+    repo: &Path,
+    scope: &'static [&'static str],
+) -> Result<String, BuildIdentityEnvironmentError> {
     let index_dir = tempfile::tempdir().map_err(BuildIdentityEnvironmentError::TemporaryIndex)?;
     let index = index_dir.path().join("index");
     git_with_index(repo, &index, &["read-tree", "HEAD"])?;
     let mut add_args = vec!["add", "-A", "--"];
-    add_args.extend(BUILD_SCOPE_PATHS);
+    add_args.extend(scope);
     git_with_index(repo, &index, &add_args)?;
     git_value_with_index(repo, &index, &["write-tree"], "working tree")
 }
@@ -455,6 +479,91 @@ mod tests {
         assert_eq!(working_tree, &baseline_tree);
 
         std::fs::write(repo.path().join("apps/untracked.txt"), "asset\n").unwrap();
+        let changed = BuildIdentityEnvironment::development(repo.path()).unwrap();
+        let SourceIdentity::Git { working_tree, .. } = changed.source() else {
+            panic!("expected Git identity");
+        };
+        assert_ne!(working_tree, &baseline_tree);
+    }
+
+    #[test]
+    fn scoped_development_identity_ignores_dirty_files_outside_scope() {
+        let repo = repo();
+        std::fs::write(repo.path().join("plugins/dirty.rs"), "plugin edit\n").unwrap();
+        let baseline = BuildIdentityEnvironment::development_scoped(
+            repo.path(),
+            &super::TRAY_BUILD_SCOPE_PATHS,
+        )
+        .unwrap();
+        let SourceIdentity::Git {
+            working_tree: baseline_tree,
+            ..
+        } = baseline.source()
+        else {
+            panic!("expected Git identity");
+        };
+        let baseline_tree = baseline_tree.clone();
+
+        std::fs::write(
+            repo.path().join("plugins/dirty.rs"),
+            "another plugin edit\n",
+        )
+        .unwrap();
+        let unchanged = BuildIdentityEnvironment::development_scoped(
+            repo.path(),
+            &super::TRAY_BUILD_SCOPE_PATHS,
+        )
+        .unwrap();
+        let SourceIdentity::Git { working_tree, .. } = unchanged.source() else {
+            panic!("expected Git identity");
+        };
+        assert_eq!(working_tree, &baseline_tree);
+
+        std::fs::write(repo.path().join("libs/dirty.rs"), "library edit\n").unwrap();
+        let changed = BuildIdentityEnvironment::development_scoped(
+            repo.path(),
+            &super::TRAY_BUILD_SCOPE_PATHS,
+        )
+        .unwrap();
+        let SourceIdentity::Git { working_tree, .. } = changed.source() else {
+            panic!("expected Git identity");
+        };
+        assert_ne!(working_tree, &baseline_tree);
+    }
+
+    #[test]
+    fn scoped_identity_verifies_unchanged_across_out_of_scope_edits() {
+        let repo = repo();
+        let identity = BuildIdentityEnvironment::development_scoped(
+            repo.path(),
+            &super::TRAY_BUILD_SCOPE_PATHS,
+        )
+        .unwrap();
+
+        std::fs::write(repo.path().join("plugins/dirty.rs"), "plugin edit\n").unwrap();
+        identity.verify_unchanged(repo.path()).unwrap();
+
+        std::fs::write(repo.path().join("libs/dirty.rs"), "library edit\n").unwrap();
+        assert!(matches!(
+            identity.verify_unchanged(repo.path()),
+            Err(BuildIdentityEnvironmentError::SourceChanged)
+        ));
+    }
+
+    #[test]
+    fn full_scope_development_identity_still_tracks_plugin_edits() {
+        let repo = repo();
+        let baseline = BuildIdentityEnvironment::development(repo.path()).unwrap();
+        let SourceIdentity::Git {
+            working_tree: baseline_tree,
+            ..
+        } = baseline.source()
+        else {
+            panic!("expected Git identity");
+        };
+        let baseline_tree = baseline_tree.clone();
+
+        std::fs::write(repo.path().join("plugins/dirty.rs"), "plugin edit\n").unwrap();
         let changed = BuildIdentityEnvironment::development(repo.path()).unwrap();
         let SourceIdentity::Git { working_tree, .. } = changed.source() else {
             panic!("expected Git identity");

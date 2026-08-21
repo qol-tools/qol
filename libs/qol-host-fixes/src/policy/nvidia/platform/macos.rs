@@ -53,7 +53,8 @@ impl NvidiaPolicyBackend for MacosNvidia {
             | ResidentCommand::Enable
             | ResidentCommand::Disable { .. }
             | ResidentCommand::Join { .. }
-            | ResidentCommand::Transfer { .. } => Err(PolicyError::PlatformUnsupported {
+            | ResidentCommand::Transfer { .. }
+            | ResidentCommand::Residency { .. } => Err(PolicyError::PlatformUnsupported {
                 policy: NVIDIA_POLICY_ID.to_string(),
             }
             .into()),

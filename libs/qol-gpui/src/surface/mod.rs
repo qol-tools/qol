@@ -366,6 +366,7 @@ impl Surface {
         }
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
+            crate::platform::square_window_corners(window);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription =

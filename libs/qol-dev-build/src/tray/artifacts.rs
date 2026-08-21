@@ -110,7 +110,9 @@ fn read_artifacts(
         let line = line.map_err(|error| format!("Failed to read Cargo output: {error}"))?;
         match crate::cargo_build::parse_cargo_message(&line) {
             Ok(crate::cargo_build::CargoMessage::Artifact(artifact)) => {
-                done += 1;
+                if !artifact.fresh {
+                    done += 1;
+                }
                 let _ = tx.send(Ok((done, artifact)));
             }
             Ok(

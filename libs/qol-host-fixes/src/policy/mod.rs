@@ -42,6 +42,9 @@ pub enum PolicyError {
     UnknownPolicy {
         policy: String,
     },
+    HostIsPortable {
+        policy: String,
+    },
     JournalInvalid {
         policy: String,
         reason: String,
@@ -77,6 +80,12 @@ impl fmt::Display for PolicyError {
             }
             Self::UnknownPolicy { policy } => {
                 write!(formatter, "unknown residency policy `{policy}`")
+            }
+            Self::HostIsPortable { policy } => {
+                write!(
+                    formatter,
+                    "this host is portable, so `{policy}` cannot be enabled; turn on residency for this device first"
+                )
             }
             Self::JournalInvalid { policy, reason } => {
                 write!(
@@ -278,15 +287,19 @@ pub enum ResidentPolicy {
 }
 
 impl ResidentPolicy {
+    pub const ALL: [Self; 2] = [Self::UdevUaccess, Self::NvidiaDriverVersionPin];
+
     pub fn from_id(id: &str) -> Result<Self> {
-        match id {
-            nvidia::NVIDIA_POLICY_ID => Ok(Self::NvidiaDriverVersionPin),
-            crate::udev::UDEV_UACCESS_POLICY_ID => Ok(Self::UdevUaccess),
-            other => Err(PolicyError::UnknownPolicy {
-                policy: other.to_string(),
-            }
-            .into()),
-        }
+        Self::ALL
+            .iter()
+            .find(|policy| policy.id() == id)
+            .cloned()
+            .ok_or_else(|| {
+                PolicyError::UnknownPolicy {
+                    policy: id.to_string(),
+                }
+                .into()
+            })
     }
 
     pub fn nvidia() -> Self {
@@ -305,7 +318,18 @@ impl ResidentPolicy {
     }
 
     pub fn enable(&self, owner: &ResidencyOwnerId) -> Result<()> {
+        self.refuse_unless_resident(crate::residency::HostResidency::current())?;
         nvidia::enable(self, owner)
+    }
+
+    fn refuse_unless_resident(&self, residency: crate::residency::HostResidency) -> Result<()> {
+        if residency.is_resident() {
+            return Ok(());
+        }
+        Err(PolicyError::HostIsPortable {
+            policy: self.id().to_string(),
+        }
+        .into())
     }
 
     pub fn disable(&self, owner: &ResidencyOwnerId) -> Result<()> {
@@ -555,6 +579,33 @@ mod tests {
 
     fn test_journal_dir() -> &'static std::path::Path {
         test_support::test_dir()
+    }
+
+    #[test]
+    fn a_portable_host_refuses_to_enable_any_policy() {
+        use crate::residency::HostResidency;
+
+        for policy in ResidentPolicy::ALL {
+            let error = policy
+                .refuse_unless_resident(HostResidency::Portable)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("this host is portable"),
+                "unexpected error for {}: {error:#}",
+                policy.id()
+            );
+        }
+    }
+
+    #[test]
+    fn a_resident_host_lets_every_policy_through_the_guard() {
+        use crate::residency::HostResidency;
+
+        for policy in ResidentPolicy::ALL {
+            policy
+                .refuse_unless_resident(HostResidency::Resident)
+                .unwrap_or_else(|error| panic!("{} was refused: {error:#}", policy.id()));
+        }
     }
 
     fn serialized_journal_tests() -> std::sync::MutexGuard<'static, ()> {

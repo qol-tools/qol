@@ -17,9 +17,12 @@ use crate::dev_server::{
     health_ok, post_promote_generation, post_recompile_current, post_reload_plugins, post_shutdown,
 };
 use crate::dev_shutdown::{
-    format_daemon_pids, snapshot_runtime_daemon_pids, terminate_daemon_groups,
-    wait_for_daemons_to_exit, TrackedDaemonPid,
+    format_daemon_pids, handoff_daemon_groups, snapshot_runtime_daemon_pids,
+    terminate_daemon_groups, wait_for_daemons_to_exit, TrackedDaemonPid,
 };
+
+const MONITOR_DAEMON_SOCKET_FILE: &str = "qol-plugin-monitor.sock";
+const MONITOR_HANDOFF_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 struct ShadowGenerationReady {
@@ -219,6 +222,40 @@ fn desired_marker(selection: &WorktreeSelection, prior: Option<String>) -> Optio
     }
 }
 
+fn address_monitor_handoff_to_successor(dash: &mut Dash, successor_id: &str) {
+    let Some(runtime) = qol_config::runtime_dir() else {
+        dash.push_log("[qol dev] monitor handoff not addressed: runtime dir unavailable");
+        return;
+    };
+    let socket = runtime.join("sockets").join(MONITOR_DAEMON_SOCKET_FILE);
+    if !socket.exists() {
+        dash.push_log(
+            "[qol dev] monitor handoff not addressed: predecessor monitor socket absent; relying on SIGHUP",
+        );
+        return;
+    }
+    let config = qol_plugin_daemon::daemon::DaemonConfig {
+        socket: qol_plugin_daemon::daemon::SocketSource::Path(socket),
+        support_replace_existing: true,
+    };
+    let delivered = qol_plugin_daemon::daemon::send_request(
+        &config,
+        "handoff",
+        serde_json::json!({ "generation": successor_id }),
+        MONITOR_HANDOFF_TIMEOUT,
+    )
+    .is_ok();
+    if delivered {
+        dash.push_log(format!(
+            "[qol dev] monitor handoff addressed to successor generation {successor_id}"
+        ));
+    } else {
+        dash.push_log(
+            "[qol dev] monitor handoff socket delivery failed; relying on SIGHUP fallback",
+        );
+    }
+}
+
 fn hand_off_to_prebuilt(
     child: &mut TrayHandle,
     lines: &mut Receiver<String>,
@@ -244,6 +281,16 @@ fn hand_off_to_prebuilt(
     let run_root = crate::commands::dev::dev_run_root(&target.root);
     let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, dash)?;
     let mut next = TrayHandle::Owned(next);
+    address_monitor_handoff_to_successor(dash, runtime.id());
+    let remaining = handoff_daemon_groups(predecessor_daemons.clone());
+    if remaining.is_empty() {
+        dash.push_log("[qol dev] predecessor daemons handed off for reload");
+    } else {
+        dash.push_log(format!(
+            "[qol dev] predecessor daemons did not hand off: {}",
+            format_daemon_pids(&remaining)
+        ));
+    }
     if let Err(error) = retire_child_for_handoff(child) {
         terminate_child(&mut next);
         let _ = next.wait();
@@ -747,6 +794,70 @@ mod tests {
         assert_eq!(
             shadow_crash_detail(&recent),
             "\nlast shadow logs:\n[qol dev:shadow] first\n[qol dev:shadow] Error: daemon missing"
+        );
+    }
+
+    #[test]
+    fn monitor_handoff_delivers_over_a_path_addressed_socket_without_env_use() {
+        use std::io::Write as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let socket_path = tmp.path().join("monitor.sock");
+        let listener = qol_runtime::local_ipc::bind_listener(&socket_path).unwrap();
+
+        let successor_id = "handoff-gen-42";
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let observed_for_thread = observed.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let request: qol_runtime::protocol::DaemonRequest = serde_json::from_str(
+                &qol_runtime::local_ipc::read_line(&mut reader)
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            *observed_for_thread.lock().unwrap() = Some(request);
+            let reply = serde_json::to_string(&qol_runtime::protocol::DaemonResponse::Handled {
+                data: None,
+            })
+            .unwrap();
+            stream.write_all(format!("{reply}\n").as_bytes()).unwrap();
+        });
+
+        let config = qol_plugin_daemon::daemon::DaemonConfig {
+            socket: qol_plugin_daemon::daemon::SocketSource::Path(socket_path.clone()),
+            support_replace_existing: true,
+        };
+        assert_eq!(
+            qol_plugin_daemon::daemon::socket_path(&config),
+            Some(socket_path.clone()),
+            "Path config must resolve directly, ignoring the daemon-socket env var"
+        );
+        let prior_daemon_socket = std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET);
+        let delivered = qol_plugin_daemon::daemon::send_request(
+            &config,
+            "handoff",
+            serde_json::json!({ "generation": successor_id }),
+            MONITOR_HANDOFF_TIMEOUT,
+        )
+        .is_ok();
+        server.join().unwrap();
+
+        assert!(
+            delivered,
+            "handoff send over the path-addressed socket must succeed"
+        );
+        let request = observed.lock().unwrap().clone();
+        assert_eq!(request.as_ref().unwrap().action, "handoff");
+        assert_eq!(
+            request.unwrap().input["generation"],
+            serde_json::json!(successor_id)
+        );
+        assert_eq!(
+            std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET),
+            prior_daemon_socket,
+            "the daemon-socket env must be untouched by a path-addressed handoff"
         );
     }
 

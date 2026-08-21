@@ -1,11 +1,7 @@
 use anyhow::{Context, Result};
-use qol_host_fixes::policy::nvidia::NVIDIA_POLICY_ID;
 use qol_host_fixes::policy::{
-    acquire_policy_lock, restore_journal, ResidentPolicy, RestoreOutcome,
+    acquire_policy_lock, restore_journal, PolicyError, ResidentPolicy, RestoreOutcome,
 };
-use qol_host_fixes::udev::UDEV_UACCESS_POLICY_ID;
-
-pub(crate) const RESTORE_ORDER: [&str; 2] = [UDEV_UACCESS_POLICY_ID, NVIDIA_POLICY_ID];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoreEntry {
@@ -29,6 +25,11 @@ impl RestoreReport {
         &self.entries
     }
 
+    #[cfg(test)]
+    pub fn from_entries(entries: Vec<RestoreEntry>) -> Self {
+        Self { entries }
+    }
+
     pub fn succeeded(&self) -> bool {
         self.entries
             .iter()
@@ -37,31 +38,45 @@ impl RestoreReport {
 }
 
 pub fn restore_all() -> RestoreReport {
-    restore_all_with(&RESTORE_ORDER, restore_one)
+    restore_all_with(&ResidentPolicy::ALL, restore_one)
 }
 
-fn restore_one(policy: &'static str) -> Result<RestoreOutcome> {
-    let resident = ResidentPolicy::from_id(policy)?;
-    let _guard = acquire_policy_lock(&resident)?;
-    restore_journal(policy).with_context(|| format!("residency restore failed for `{policy}`"))
+fn restore_one(policy: &ResidentPolicy) -> Result<RestoreOutcome> {
+    let id = policy.id();
+    let attempt = acquire_policy_lock(policy).and_then(|_guard| restore_journal(id));
+    match attempt {
+        Err(error) if is_platform_unsupported(&error) => Ok(RestoreOutcome::NothingToRestore),
+        other => other.with_context(|| format!("residency restore failed for `{id}`")),
+    }
+}
+
+fn is_platform_unsupported(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<PolicyError>(),
+        Some(PolicyError::PlatformUnsupported { .. })
+    )
 }
 
 fn restore_all_with(
-    order: &[&'static str],
-    mut restore: impl FnMut(&'static str) -> Result<RestoreOutcome>,
+    order: &[ResidentPolicy],
+    mut restore: impl FnMut(&ResidentPolicy) -> Result<RestoreOutcome>,
 ) -> RestoreReport {
     let mut entries = Vec::with_capacity(order.len());
-    for &policy in order {
+    for policy in order {
+        let id = policy.id();
         let entry = match restore(policy) {
             Ok(outcome) => {
-                trace_restore(policy, outcome_as_str(outcome), None);
-                RestoreEntry::Restored { policy, outcome }
+                trace_restore(id, outcome_as_str(outcome), None);
+                RestoreEntry::Restored {
+                    policy: id,
+                    outcome,
+                }
             }
             Err(error) => {
                 let reason = qol_runtime::probe::token(&format!("{error:#}"));
-                trace_restore(policy, "failed", Some(&reason));
+                trace_restore(id, "failed", Some(&reason));
                 RestoreEntry::Failed {
-                    policy,
+                    policy: id,
                     error: format!("{error:#}"),
                 }
             }
@@ -101,15 +116,35 @@ fn trace_restore(policy: &str, outcome: &str, reason: Option<&str>) {
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use qol_host_fixes::policy::nvidia::NVIDIA_POLICY_ID;
+    use qol_host_fixes::udev::UDEV_UACCESS_POLICY_ID;
+
+    fn restore_order_ids() -> Vec<&'static str> {
+        ResidentPolicy::ALL
+            .iter()
+            .map(|policy| policy.id())
+            .collect()
+    }
+
+    #[test]
+    fn restore_visits_every_declared_policy_in_order() {
+        let mut calls = Vec::new();
+        restore_all_with(&ResidentPolicy::ALL, |policy| {
+            calls.push(policy.id());
+            Ok(RestoreOutcome::NothingToRestore)
+        });
+        assert_eq!(calls, restore_order_ids());
+        assert_eq!(calls, vec![UDEV_UACCESS_POLICY_ID, NVIDIA_POLICY_ID]);
+    }
 
     #[test]
     fn restore_all_runs_udev_before_nvidia_when_both_journals_are_present() {
         let mut calls = Vec::new();
-        let report = restore_all_with(&RESTORE_ORDER, |policy| {
-            calls.push(policy);
+        let report = restore_all_with(&ResidentPolicy::ALL, |policy| {
+            calls.push(policy.id());
             Ok(RestoreOutcome::Restored)
         });
-        assert_eq!(calls, RESTORE_ORDER.to_vec());
+        assert_eq!(calls, restore_order_ids());
         assert!(report.succeeded());
         assert_eq!(
             report.entries(),
@@ -129,15 +164,15 @@ mod tests {
     #[test]
     fn restore_all_still_runs_nvidia_when_the_udev_restore_fails_first() {
         let mut calls = Vec::new();
-        let report = restore_all_with(&RESTORE_ORDER, |policy| {
-            calls.push(policy);
-            if policy == UDEV_UACCESS_POLICY_ID {
+        let report = restore_all_with(&ResidentPolicy::ALL, |policy| {
+            calls.push(policy.id());
+            if policy.id() == UDEV_UACCESS_POLICY_ID {
                 Err(anyhow!("injected udev restore failure"))
             } else {
                 Ok(RestoreOutcome::Restored)
             }
         });
-        assert_eq!(calls, RESTORE_ORDER.to_vec());
+        assert_eq!(calls, restore_order_ids());
         assert!(!report.succeeded());
         assert_eq!(
             report.entries(),
@@ -157,11 +192,11 @@ mod tests {
     #[test]
     fn restore_all_is_a_noop_when_neither_policy_has_a_journal() {
         let mut calls = Vec::new();
-        let report = restore_all_with(&RESTORE_ORDER, |policy| {
-            calls.push(policy);
+        let report = restore_all_with(&ResidentPolicy::ALL, |policy| {
+            calls.push(policy.id());
             Ok(RestoreOutcome::NothingToRestore)
         });
-        assert_eq!(calls, RESTORE_ORDER.to_vec());
+        assert_eq!(calls, restore_order_ids());
         assert!(report.succeeded());
         assert!(report.entries().iter().all(|entry| matches!(
             entry,
@@ -174,8 +209,8 @@ mod tests {
 
     #[test]
     fn restore_all_reports_each_policy_failure_with_its_own_error() {
-        let report = restore_all_with(&RESTORE_ORDER, |policy| {
-            Err(anyhow!("injected failure for {policy}"))
+        let report = restore_all_with(&ResidentPolicy::ALL, |policy| {
+            Err(anyhow!("injected failure for {}", policy.id()))
         });
         assert!(!report.succeeded());
         assert_eq!(

@@ -73,6 +73,14 @@ fn spawn_command_poll(
                     }
                     LoopFlow::Continue
                 }
+                Command::Theme { native, accent } => {
+                    qol_gpui::theme::set_runtime_theme_override(
+                        native.as_deref(),
+                        accent.as_deref(),
+                    );
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                    LoopFlow::Continue
+                }
                 Command::Kill => LoopFlow::Stop,
             }
         }

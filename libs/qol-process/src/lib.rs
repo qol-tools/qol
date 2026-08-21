@@ -350,6 +350,10 @@ pub fn terminate_group(pid: u32, grace: Duration) {
     platform::terminate_group(pid, grace);
 }
 
+pub fn reload_group(pid: u32, grace: Duration) {
+    platform::reload_group(pid, grace);
+}
+
 pub fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<()> {
     platform::terminate_owned(child, grace)
 }
@@ -582,6 +586,31 @@ mod tests {
         assert!(is_group_alive(pid));
 
         terminate_group(pid, Duration::from_secs(1));
+
+        assert!(!is_group_alive(pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn reload_group_stops_the_leader_on_sighup() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & wait"]);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
+        let pid = child.id();
+        assert!(is_group_alive(pid));
+
+        reload_group(pid, Duration::from_secs(1));
 
         assert!(!is_group_alive(pid));
     }

@@ -8,6 +8,7 @@ description = "Resident-process OS plumbing for qol-tray plugins: unix-socket IP
 [dependencies]
 serde_json.workspace = true
 qol-runtime.workspace = true
+qol-theme.workspace = true
 qol-conventions.workspace = true
 
 [target.'cfg(unix)'.dependencies]

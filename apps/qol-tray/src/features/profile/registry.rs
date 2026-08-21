@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 
+use crate::daemon::Daemon;
 use crate::paths;
 
 pub use qol_profile_sync::SyncTarget;
@@ -23,6 +24,47 @@ pub fn save_sync_target(target: &SyncTarget) -> Result<()> {
 
 pub fn clear_sync_target() -> Result<()> {
     qol_profile_sync::clear_sync_target(&paths::profile_dir()?)
+}
+
+pub fn list_profiles() -> Result<Vec<String>> {
+    let root = paths::profile_dir()?;
+    let mut names = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Ok(names);
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if paths::is_safe_path_component(&name) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+pub fn switch_active_profile(daemon: &Daemon, name: &str) -> Result<()> {
+    if !paths::is_safe_path_component(name) {
+        bail!("invalid profile name: {name}");
+    }
+    let profile_dir = paths::profile_dir()?.join(name);
+    if !profile_dir.is_dir() {
+        bail!(
+            "profile directory does not exist: {}",
+            profile_dir.display()
+        );
+    }
+    let marker = paths::active_profile_marker_path()?;
+    paths::file_io::ensure_parent_dir(&marker)?;
+    std::fs::write(&marker, format!("{name}\n"))?;
+    daemon
+        .config
+        .config_changed(crate::daemon::ConfigKind::Profile);
+    Ok(())
 }
 
 #[cfg(test)]

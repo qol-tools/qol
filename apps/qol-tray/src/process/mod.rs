@@ -17,3 +17,9 @@ pub fn terminate_group(pid: i32, grace: Duration) {
         qol_process::terminate_group(pid, grace);
     }
 }
+
+pub fn reload_group(pid: i32, grace: Duration) {
+    if let Ok(pid) = u32::try_from(pid) {
+        qol_process::reload_group(pid, grace);
+    }
+}

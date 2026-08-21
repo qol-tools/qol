@@ -383,9 +383,13 @@ pub fn print_help() {
     println!("    qol-tray resident-policy disable [--owner <id>] Release this owner's state");
     println!("    qol-tray resident-policy join --owner <id>      Join an active policy");
     println!("    qol-tray resident-policy transfer --owner <id>  Replace the owner set");
+    println!("    qol-tray resident-policy residency --resident   Mark THIS device resident");
+    println!("    qol-tray resident-policy residency --portable   Mark THIS device portable");
     println!();
     println!("Mutations require elevation (pkexec) and root. Status is read-only and");
-    println!("never elevates. Only the fixed nvidia-driver-version-pin policy is known.");
+    println!("never elevates. The residency toggle writes the per-device status into the");
+    println!("active profile and never elevates. Only the fixed nvidia-driver-version-pin");
+    println!("policy is known.");
     println!("Activation succeeds only from a managed install; raw and portable artifacts");
     println!("cannot create resident state.");
 }

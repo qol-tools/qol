@@ -94,6 +94,7 @@ impl Render for LauncherView {
                 .w(px(WINDOW_WIDTH))
                 .h(px(window_height_for_rows(0)))
                 .overflow_hidden()
+                .rounded_none()
                 .bg(view::bg_color());
         }
 
@@ -197,6 +198,8 @@ impl Render for LauncherView {
             .w(px(WINDOW_WIDTH))
             .h(px(target_height))
             .overflow_hidden()
+            .rounded_none()
+            .shadow(qol_gpui::kit::float_shadow(view::palette().text_selected))
             .flex()
             .flex_col()
             .bg(view::bg_color())
@@ -232,12 +235,23 @@ impl Render for LauncherView {
             ))
             .child(
                 div()
+                    .id("launcher-results")
                     .h(px(results_height))
                     .w_full()
                     .overflow_hidden()
                     .flex()
                     .flex_col()
                     .bg(view::bg_color())
+                    .on_scroll_wheel(cx.listener(
+                        move |this: &mut Self,
+                              event: &ScrollWheelEvent,
+                              _window,
+                              cx: &mut Context<Self>| {
+                            let rows = qol_gpui::scroll_list::wheel_rows(&event.delta, ROW_HEIGHT);
+                            this.state.scroll_list.wheel_by(rows, result_count);
+                            cx.notify();
+                        },
+                    ))
                     .children(rows),
             )
     }

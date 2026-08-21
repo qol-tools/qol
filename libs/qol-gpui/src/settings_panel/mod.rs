@@ -16,8 +16,14 @@ use crate::surface::{OpenedSurface, Surface, SurfaceKind};
 use rows::{rows_from_resolved, sections_from_resolved, Row, RowControl, RowSection};
 use view::{SettingsPanelState, SettingsPanelView};
 
+const PANEL_COMPACT_WIDTH: f32 = 420.0;
 const PANEL_WIDTH: f32 = 520.0;
-const PANEL_GAMEPAD_WIDTH: f32 = 820.0;
+const PANEL_WIDE_WIDTH: f32 = 680.0;
+const PANEL_GAMEPAD_WIDTH: f32 = 860.0;
+const PANEL_WIDE_DESCRIPTION_CHARS: usize = 90;
+const PANEL_RAIL_WIDTH: f32 = 190.0;
+const PANEL_RAIL_ITEM_HEIGHT: f32 = 44.0;
+const PANEL_RAIL_MAX_ITEMS: usize = 14;
 const PANEL_ROW_HEIGHT: f32 = 40.0;
 const PANEL_DESCRIBED_ROW_HEIGHT: f32 = 56.0;
 const PANEL_DESCRIPTION_LINE_HEIGHT: f32 = 14.0;
@@ -26,18 +32,21 @@ const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 16.0;
 const PANEL_LIST_ITEM_HEIGHT: f32 = 48.0;
 const PANEL_LIST_GAP: f32 = 4.0;
 const PANEL_LIST_PADDING_Y: f32 = 8.0;
-const PANEL_LIST_HEIGHT: f32 = PANEL_LIST_PADDING_Y
-    + PANEL_LIST_HEADER_HEIGHT
-    + rows::LIST_MAX_VISIBLE as f32 * (PANEL_LIST_ITEM_HEIGHT + PANEL_LIST_GAP);
 const PANEL_OBJECT_ROW_HEIGHT: f32 = 30.0;
 const PANEL_QR_CODE_HEIGHT: f32 = 180.0;
 const PANEL_QR_URL_HEIGHT: f32 = 20.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_COLUMN_GAP: f32 = 4.0;
-const PANEL_SECTION_MENU_ITEM_PADDING_Y: f32 = 8.0;
-const PANEL_SECTION_MENU_LABEL_LINE_HEIGHT: f32 = 23.0;
-const PANEL_SECTION_MENU_DESCRIPTION_LINE_HEIGHT: f32 = 19.0;
-const PANEL_CHROME_HEIGHT: f32 = 62.0;
+const PANEL_BAND_HEIGHT: f32 = 48.0;
+const PANEL_BAND_SINGLE_HEIGHT: f32 = 64.0;
+
+fn chrome_height(sections: &[RowSection]) -> f32 {
+    if sections.len() > 1 {
+        PANEL_BAND_HEIGHT
+    } else {
+        PANEL_BAND_SINGLE_HEIGHT
+    }
+}
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 
 #[derive(Clone)]
@@ -81,7 +90,7 @@ pub struct PreparedSettingsPanel {
     rows: Vec<Row>,
     sections: Vec<RowSection>,
     values: serde_json::Value,
-    path: std::path::PathBuf,
+    path: Option<std::path::PathBuf>,
     runtime: SettingsRuntime,
     daemon_port: Option<u16>,
 }
@@ -225,11 +234,18 @@ impl SettingsRuntime {
 
     pub fn tray(plugin_id: impl Into<String>) -> Self {
         let plugin_id = plugin_id.into();
-        let query_plugin_id = plugin_id.clone();
-        Self::new(move |query| persistence::query(&query_plugin_id, query))
-            .with_input_action_result(move |action, input| {
-                persistence::run_action(&plugin_id, action, &input)
-            })
+        Self::tray_base(persistence::panel_base(&plugin_id))
+    }
+
+    pub fn tray_core() -> Self {
+        Self::tray_base(persistence::panel_base(qol_conventions::CORE_PANEL_ID))
+    }
+
+    fn tray_base(base: String) -> Self {
+        let query_base = base.clone();
+        Self::new(move |query| persistence::query(&query_base, query)).with_input_action_result(
+            move |action, input| persistence::run_action(&base, action, &input),
+        )
     }
 
     pub fn with_input_action(
@@ -388,13 +404,18 @@ fn prepare_panel(
 ) -> anyhow::Result<PreparedSettingsPanel> {
     let spec = qol_config::contract::parse_spec_str(&panel.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
-    let path = persistence::config_path(&panel.plugin_id)?;
-    let values = persistence::load_values(&panel.plugin_id, &path);
+    let base = persistence::panel_base(&panel.plugin_id);
+    let path = if panel.plugin_id == qol_conventions::CORE_PANEL_ID {
+        None
+    } else {
+        Some(persistence::config_path(&panel.plugin_id)?)
+    };
+    let values = persistence::load_values(&base, path.as_deref());
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved);
     let sections = sections_from_resolved(&resolved, &rows);
-    let daemon_port = persistence::daemon_port(&panel.plugin_id);
+    let daemon_port = persistence::daemon_port(&base);
     Ok(PreparedSettingsPanel {
         panel,
         rows,
@@ -415,9 +436,9 @@ fn size_prepared_panel(
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
     let available =
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
-    let height = panel_height(&prepared.rows, &prepared.sections).min(available);
-    let width = panel_width(&prepared.rows);
-    let body_max = available - PANEL_CHROME_HEIGHT;
+    let body_width = panel_width(&prepared.rows);
+    let width = body_width + rail_width(&prepared.sections);
+    let height = panel_height(&prepared.rows, &prepared.sections, body_width).min(available);
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
@@ -425,8 +446,8 @@ fn size_prepared_panel(
             sections: prepared.sections,
             values: prepared.values,
             path: prepared.path,
-            body_max,
             height_cap: available,
+            panel_width: body_width,
             runtime: prepared.runtime,
             daemon_port: prepared.daemon_port,
         },
@@ -463,37 +484,38 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
     }
 }
 
-fn section_menu_item_height(description: Option<&str>) -> f32 {
-    let base = 2.0 * PANEL_SECTION_MENU_ITEM_PADDING_Y + PANEL_SECTION_MENU_LABEL_LINE_HEIGHT;
-    if description.is_some() {
-        base + PANEL_COLUMN_GAP + PANEL_SECTION_MENU_DESCRIPTION_LINE_HEIGHT
-    } else {
-        base
-    }
-}
-
-fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
-    if sections.len() > 1 {
-        let items = sections
-            .iter()
-            .map(|section| section_menu_item_height(section.description.as_deref()))
-            .sum::<f32>();
-        let gaps = (sections.len() - 1) as f32 * PANEL_COLUMN_GAP;
-        return PANEL_CHROME_HEIGHT + items + gaps;
-    }
-    let section_content = sections
+fn panel_height(rows: &[Row], sections: &[RowSection], width: f32) -> f32 {
+    let show_section_headers = sections.len() <= 1;
+    let tallest_section = sections
         .iter()
         .map(|section| {
-            let rows_height = section
+            let visible = section
                 .rows
                 .iter()
-                .map(|index| view::row_height(&rows[*index]))
+                .copied()
+                .filter(|index| rows::row_is_visible(rows, *index))
+                .collect::<Vec<_>>();
+            let rows_height = visible
+                .iter()
+                .map(|index| view::row_height(&rows[*index], width, show_section_headers))
                 .sum::<f32>();
-            let gaps = (section.rows.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
+            let gaps = (visible.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
             rows_height + gaps
         })
         .fold(0.0, f32::max);
-    PANEL_CHROME_HEIGHT + section_content
+    if sections.len() > 1 {
+        let rail = sections.len().min(PANEL_RAIL_MAX_ITEMS) as f32 * PANEL_RAIL_ITEM_HEIGHT;
+        return chrome_height(sections) + rail.max(tallest_section);
+    }
+    chrome_height(sections) + tallest_section
+}
+
+fn rail_width(sections: &[RowSection]) -> f32 {
+    if sections.len() > 1 {
+        PANEL_RAIL_WIDTH
+    } else {
+        0.0
+    }
 }
 
 fn panel_width(rows: &[Row]) -> f32 {
@@ -503,15 +525,43 @@ fn panel_width(rows: &[Row]) -> f32 {
     {
         return PANEL_GAMEPAD_WIDTH;
     }
+    if rows.iter().any(row_wants_a_wide_panel) {
+        return PANEL_WIDE_WIDTH;
+    }
+    if rows.iter().all(row_fits_a_compact_panel) {
+        return PANEL_COMPACT_WIDTH;
+    }
     PANEL_WIDTH
+}
+
+fn row_wants_a_wide_panel(row: &Row) -> bool {
+    if matches!(
+        row.control,
+        RowControl::TextList(_)
+            | RowControl::ObjectArray(_)
+            | RowControl::List { .. }
+            | RowControl::QrCode { .. }
+    ) {
+        return true;
+    }
+    row.description
+        .as_deref()
+        .is_some_and(|text| text.chars().count() > PANEL_WIDE_DESCRIPTION_CHARS)
+}
+
+fn row_fits_a_compact_panel(row: &Row) -> bool {
+    row.description.is_none()
+        && matches!(
+            row.control,
+            RowControl::Toggle(_) | RowControl::Number { .. } | RowControl::Select { .. }
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, panel_height, panel_width, section_menu_item_height,
-        ActivationDecision, Row, RowSection, PANEL_CHROME_HEIGHT, PANEL_GAMEPAD_WIDTH,
-        PANEL_ROW_HEIGHT,
+        activation_decision, panel_height, panel_width, rail_width, ActivationDecision, Row,
+        RowSection, PANEL_BAND_SINGLE_HEIGHT, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::rows::RowControl;
@@ -538,15 +588,15 @@ mod tests {
     fn overlay_controls_do_not_change_parent_panel_height() {
         let toggle = vec![row(RowControl::Toggle(false))];
         let color = vec![row(RowControl::Color("#ffffff".into()))];
-        let expected = PANEL_CHROME_HEIGHT + PANEL_ROW_HEIGHT;
+        let expected = PANEL_BAND_SINGLE_HEIGHT + PANEL_ROW_HEIGHT;
 
         let sections = vec![RowSection {
             label: "General".into(),
             description: None,
             rows: vec![0],
         }];
-        assert_eq!(panel_height(&toggle, &sections), expected);
-        assert_eq!(panel_height(&color, &sections), expected);
+        assert_eq!(panel_height(&toggle, &sections, PANEL_WIDTH), expected);
+        assert_eq!(panel_height(&color, &sections, PANEL_WIDTH), expected);
     }
 
     #[test]
@@ -557,18 +607,27 @@ mod tests {
             monitor: GamepadMonitor::default(),
         })];
 
-        assert_eq!(panel_width(&regular), super::PANEL_WIDTH);
+        assert_eq!(panel_width(&regular), super::PANEL_COMPACT_WIDTH);
         assert_eq!(panel_width(&gamepad), PANEL_GAMEPAD_WIDTH);
     }
 
     #[test]
-    fn section_menu_items_grow_for_descriptions() {
-        assert_eq!(section_menu_item_height(None), 39.0);
-        assert_eq!(section_menu_item_height(Some("desc")), 62.0);
+    fn panel_width_steps_up_for_the_content_it_has_to_hold() {
+        let bare = vec![row(RowControl::Toggle(false))];
+        let mut described = row(RowControl::Toggle(false));
+        described.description = Some("a short one".into());
+        let mut verbose = row(RowControl::Toggle(false));
+        verbose.description = Some("x".repeat(super::PANEL_WIDE_DESCRIPTION_CHARS + 1));
+        let listy = vec![row(RowControl::TextList(Vec::new()))];
+
+        assert_eq!(panel_width(&bare), super::PANEL_COMPACT_WIDTH);
+        assert_eq!(panel_width(&[described]), PANEL_WIDTH);
+        assert_eq!(panel_width(&[verbose]), super::PANEL_WIDE_WIDTH);
+        assert_eq!(panel_width(&listy), super::PANEL_WIDE_WIDTH);
     }
 
     #[test]
-    fn sectioned_panels_size_for_the_section_menu() {
+    fn sectioned_panels_size_for_the_section_rail() {
         let rows = vec![
             row(RowControl::Toggle(false)),
             row(RowControl::Toggle(false)),
@@ -582,16 +641,58 @@ mod tests {
         let sections = vec![
             plain("One", vec![0]),
             plain("Two", vec![1]),
-            RowSection {
-                label: "Three".into(),
-                description: Some("described".into()),
-                rows: vec![2],
-            },
+            plain("Three", vec![2]),
         ];
 
         assert_eq!(
-            panel_height(&rows, &sections),
-            PANEL_CHROME_HEIGHT + 39.0 + 39.0 + 62.0 + 2.0 * 4.0
+            panel_height(&rows, &sections, PANEL_WIDTH),
+            super::chrome_height(&sections) + 3.0 * super::PANEL_RAIL_ITEM_HEIGHT
+        );
+        assert_eq!(rail_width(&sections), super::PANEL_RAIL_WIDTH);
+        assert_eq!(rail_width(&sections[..1]), 0.0);
+    }
+
+    #[test]
+    fn a_long_rail_stops_growing_the_window() {
+        let rows = (0..20)
+            .map(|_| row(RowControl::Toggle(false)))
+            .collect::<Vec<_>>();
+        let sections = (0..20)
+            .map(|index| RowSection {
+                label: format!("Section {index}"),
+                description: None,
+                rows: vec![index],
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            panel_height(&rows, &sections, PANEL_WIDTH),
+            super::chrome_height(&sections)
+                + super::PANEL_RAIL_MAX_ITEMS as f32 * super::PANEL_RAIL_ITEM_HEIGHT
+        );
+    }
+
+    #[test]
+    fn sectioned_panels_size_for_their_tallest_section() {
+        let rows = (0..12)
+            .map(|_| row(RowControl::Toggle(false)))
+            .collect::<Vec<_>>();
+        let plain = |label: &str, rows: Vec<usize>| RowSection {
+            label: label.into(),
+            description: None,
+            rows,
+        };
+        let sections = vec![
+            plain("One", vec![0]),
+            plain("Two", (1..12).collect::<Vec<_>>()),
+        ];
+
+        let menu = 39.0 + 39.0 + 4.0;
+        let tallest = 11.0 * PANEL_ROW_HEIGHT + 10.0 * 4.0;
+        assert!(tallest > menu, "the tall section must outgrow the menu");
+        assert_eq!(
+            panel_height(&rows, &sections, PANEL_WIDTH),
+            super::chrome_height(&sections) + tallest
         );
     }
 
@@ -625,5 +726,117 @@ mod tests {
                 "active={active:?} requested={requested}"
             );
         }
+    }
+
+    #[test]
+    fn settings_body_scroll_region_lets_content_exceed_viewport() {
+        use taffy::geometry::Point;
+        use taffy::style::{Dimension, LengthPercentage, Overflow};
+        use taffy::{AvailableSpace, FlexDirection, NodeId, TaffyTree};
+
+        fn dim(w: f32, h: f32) -> taffy::geometry::Size<Dimension> {
+            taffy::geometry::Size {
+                width: Dimension::length(w),
+                height: Dimension::length(h),
+            }
+        }
+
+        fn wide(h: f32) -> taffy::geometry::Size<Dimension> {
+            taffy::geometry::Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::length(h),
+            }
+        }
+
+        fn gap4() -> taffy::geometry::Size<LengthPercentage> {
+            taffy::geometry::Size {
+                width: LengthPercentage::length(4.0),
+                height: LengthPercentage::length(4.0),
+            }
+        }
+
+        fn layout(rows_in_flex_viewport: bool) -> f32 {
+            let mut tree: TaffyTree<()> = TaffyTree::new();
+            let body = tree
+                .new_leaf(if rows_in_flex_viewport {
+                    taffy::style::Style {
+                        size: wide(400.0),
+                        overflow: Point {
+                            x: Overflow::Visible,
+                            y: Overflow::Scroll,
+                        },
+                        flex_direction: FlexDirection::Column,
+                        gap: gap4(),
+                        ..Default::default()
+                    }
+                } else {
+                    taffy::style::Style {
+                        display: taffy::style::Display::Block,
+                        size: wide(400.0),
+                        overflow: Point {
+                            x: Overflow::Visible,
+                            y: Overflow::Scroll,
+                        },
+                        ..Default::default()
+                    }
+                })
+                .unwrap();
+
+            let row_nodes: Vec<NodeId> = (0..12)
+                .map(|_| {
+                    tree.new_leaf(taffy::style::Style {
+                        size: dim(500.0, 40.0),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                })
+                .collect();
+
+            let list: Vec<NodeId> = if rows_in_flex_viewport {
+                row_nodes
+            } else {
+                let wrapper = tree
+                    .new_leaf(taffy::style::Style {
+                        flex_direction: FlexDirection::Column,
+                        gap: gap4(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                tree.set_children(wrapper, &row_nodes).unwrap();
+                vec![wrapper]
+            };
+            tree.set_children(body, &list).unwrap();
+            let root = tree
+                .new_leaf(taffy::style::Style {
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Default::default()
+                })
+                .unwrap();
+            tree.set_children(root, &[body]).unwrap();
+            tree.compute_layout(
+                root,
+                taffy::geometry::Size {
+                    width: AvailableSpace::Definite(500.0),
+                    height: AvailableSpace::Definite(500.0),
+                },
+            )
+            .unwrap();
+            let layout = tree.layout(body).unwrap();
+            layout.content_size.height - layout.size.height
+        }
+
+        let direct_overflow = layout(true);
+        let wrapped_overflow = layout(false);
+        assert_eq!(
+            direct_overflow, 0.0,
+            "rows attached to a flex_col scroll viewport shrink to fit and lose all scroll room"
+        );
+        assert!(
+            wrapped_overflow > 0.0,
+            "a block scroll viewport over a flex_col wrapper must keep scroll room"
+        );
     }
 }

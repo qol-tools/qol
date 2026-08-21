@@ -11,6 +11,7 @@ qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
+qol-host-session.workspace = true
 qol-hotkeys.workspace = true
 qol-plugin-daemon.workspace = true
 qol-profile-sync.workspace = true

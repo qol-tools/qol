@@ -47,6 +47,24 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
         .collect()
 }
 
+pub fn core_settings_entry() -> LauncherEntry {
+    LauncherEntry {
+        file_stem: format!("plugin-settings-{}", qol_conventions::CORE_PANEL_ID),
+        display_name: format!("{}Settings", crate::commands::QOL_COMMAND_PREFIX),
+        description: "QoL settings".to_string(),
+        bundle_id: format!(
+            "com.qol-tools.plugin-settings.{}",
+            qol_conventions::CORE_PANEL_ID
+        ),
+        exec_args: vec![
+            "exec".into(),
+            qol_conventions::CORE_PANEL_ID.into(),
+            "settings".into(),
+        ],
+        shortcut_action: None,
+    }
+}
+
 pub fn collect_plugin_settings_entries<'a>(
     plugins: impl IntoIterator<Item = &'a Plugin>,
 ) -> Vec<LauncherEntry> {
@@ -114,6 +132,7 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
     };
     let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts);
     entries.extend(collect_command_entries());
+    entries.push(core_settings_entry());
     entries.extend(plugin_settings_entries);
     let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
@@ -138,6 +157,13 @@ mod tests {
 
     fn manifest(toml: &str) -> PluginManifest {
         toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn core_settings_entry_execs_the_reserved_core_panel() {
+        let entry = core_settings_entry();
+        assert_eq!(entry.exec_args, ["exec", "core", "settings"]);
+        assert!(entry.display_name.ends_with("Settings"));
     }
 
     #[test]

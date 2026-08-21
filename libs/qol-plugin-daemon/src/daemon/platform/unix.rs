@@ -518,17 +518,46 @@ where
     }
 
     if let Ok(request) = serde_json::from_str::<DaemonRequest>(trimmed) {
-        return parser(&request);
+        return parse_with_theme_override(&request, &mut parser);
     }
 
     let cmd = match trimmed.strip_prefix("action:") {
         Some(a) => a,
         None => trimmed,
     };
-    parser(&DaemonRequest {
-        action: cmd.to_string(),
-        input: serde_json::Value::Null,
-    })
+    parse_with_theme_override(
+        &DaemonRequest {
+            action: cmd.to_string(),
+            input: serde_json::Value::Null,
+        },
+        &mut parser,
+    )
+}
+
+fn theme_override_args(action: &str) -> Option<(Option<&str>, Option<&str>)> {
+    let rest = if action == "theme" {
+        ""
+    } else {
+        action.strip_prefix("theme ")?
+    };
+    let mut parts = rest.split_whitespace();
+    let native = parts.next().filter(|value| *value != "-");
+    let accent = parts.next().filter(|value| *value != "-");
+    Some((native, accent))
+}
+
+fn parse_with_theme_override<C, F>(request: &DaemonRequest, parser: &mut F) -> ReadResult<C>
+where
+    F: FnMut(&DaemonRequest) -> ReadResult<C>,
+{
+    let Some((native, accent)) = theme_override_args(&request.action) else {
+        return parser(request);
+    };
+    qol_theme::set_runtime_theme_override(native, accent);
+    match parser(request) {
+        ReadResult::Fallback | ReadResult::Error(_) | ReadResult::Ignore => ReadResult::Handled,
+        parsed => parsed,
+    }
 }
 
 fn handle_read_result<C, F>(
@@ -1166,5 +1195,35 @@ mod tests {
         std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
 
         assert_eq!(inherited_primary_port_fd(), None);
+    }
+
+    #[test]
+    fn theme_override_args_parses_theme_lines_only() {
+        assert_eq!(theme_override_args("ping"), None);
+        assert_eq!(theme_override_args("themeX"), None);
+        assert_eq!(theme_override_args("theme"), Some((None, None)));
+        assert_eq!(
+            theme_override_args("theme bone amber"),
+            Some((Some("bone"), Some("amber")))
+        );
+        assert_eq!(
+            theme_override_args("theme - amber"),
+            Some((None, Some("amber")))
+        );
+    }
+
+    #[test]
+    fn theme_requests_are_handled_even_when_the_parser_declines() {
+        let request = DaemonRequest {
+            action: "theme bone amber".to_string(),
+            input: serde_json::Value::Null,
+        };
+        let result = parse_with_theme_override::<(), _>(&request, &mut |_| ReadResult::Fallback);
+        assert!(matches!(result, ReadResult::Handled));
+        let result =
+            parse_with_theme_override::<(), _>(&request, &mut |_| ReadResult::Error("no".into()));
+        assert!(matches!(result, ReadResult::Handled));
+        let result = parse_with_theme_override(&request, &mut |_| ReadResult::Command(7));
+        assert!(matches!(result, ReadResult::Command(7)));
     }
 }

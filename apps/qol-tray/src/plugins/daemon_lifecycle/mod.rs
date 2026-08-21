@@ -24,6 +24,16 @@ pub(super) fn start_daemon_with_context(
         return Ok(None);
     };
 
+    reap_daemon_if_exited(plugin);
+    if let Some(pid) = plugin.daemon_pid() {
+        log::info!(
+            "Daemon for plugin {} is already running as pid {}; not spawning a second one",
+            plugin.id,
+            pid
+        );
+        return Ok(None);
+    }
+
     if let Some(existing) = plugin.daemon_listener.take() {
         plugin.daemon_listener = listener::refresh_for_respawn(existing, plugin, &daemon_config);
     }
@@ -140,6 +150,15 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
 
 fn register_daemon(plugin: &mut Plugin, child: Child) {
     let pid = child.id();
+    if let Some(mut previous) = plugin.daemon_process.take() {
+        log::warn!(
+            "Replacing a live daemon for plugin {}: killing orphaned pid {}",
+            plugin.id,
+            previous.id()
+        );
+        let _ = previous.kill();
+        let _ = previous.wait();
+    }
     plugin.daemon_process = Some(child);
     track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
@@ -217,6 +236,26 @@ items = []
             c
         };
         spawn_quiet(&mut command)
+    }
+
+    #[test]
+    fn registering_a_daemon_kills_the_one_it_replaces() {
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let mut plugin = minimal_plugin();
+        let first = spawn_long_running();
+        let orphan = first.id();
+        register_daemon(&mut plugin, first);
+
+        register_daemon(&mut plugin, spawn_long_running());
+
+        assert!(
+            !crate::process_utils::is_pid_alive(orphan as i32),
+            "the replaced daemon must never be left running"
+        );
+        if let Some(mut child) = plugin.daemon_process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     #[test]

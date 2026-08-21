@@ -93,6 +93,15 @@ pub(crate) fn terminate_daemon_groups(daemons: Vec<TrackedDaemonPid>) -> Vec<Tra
     daemons.into_iter().filter(daemon_group_is_owned).collect()
 }
 
+pub(crate) fn handoff_daemon_groups(daemons: Vec<TrackedDaemonPid>) -> Vec<TrackedDaemonPid> {
+    for daemon in &daemons {
+        if daemon_group_is_owned(daemon) {
+            qol_process::reload_group(daemon.pid, DAEMON_TERM_GRACE);
+        }
+    }
+    daemons.into_iter().filter(daemon_group_is_owned).collect()
+}
+
 pub(crate) fn format_daemon_pids(daemons: &[TrackedDaemonPid]) -> String {
     if daemons.is_empty() {
         return "none".to_string();

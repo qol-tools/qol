@@ -159,6 +159,8 @@ pub(crate) fn wait_pid(_pid: u32) -> io::Result<ExitStatus> {
 
 pub(crate) fn terminate_pid(_pid: u32, _grace: Duration) {}
 
+pub(crate) fn reload_group(_pid: u32, _grace: Duration) {}
+
 pub(crate) fn terminate_group(_pid: u32, _grace: Duration) {}
 
 pub(crate) fn terminate_owned(_child: &mut Child, _grace: Duration) -> io::Result<()> {

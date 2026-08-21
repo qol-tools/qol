@@ -7,13 +7,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
-use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
+use qol_gpui::theme::{runtime_theme, shot_preview_runtime, ShotPreviewPalette, TEXT_CAPTION};
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
 };
@@ -40,6 +41,16 @@ static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_previe
 
 pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE
+}
+
+pub(super) fn surface_shadow() -> Vec<BoxShadow> {
+    let system = runtime_theme().system;
+    vec![BoxShadow {
+        color: rgba((system.text_primary << 8) | 0x1a).into(),
+        offset: point(px(2.0), px(2.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(0.0),
+    }]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1149,7 +1160,10 @@ impl Render for PreviewView {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move))
             .size_full()
             .relative()
-            .bg(rgb(palette.window_bg));
+            .bg(rgb(palette.window_bg))
+            .border_1()
+            .border_color(rgb(palette.thumb_border))
+            .shadow(surface_shadow());
 
         if !self.ready {
             return root;
@@ -1184,7 +1198,6 @@ impl Render for PreviewView {
                     .top(px(MARGIN))
                     .w(px(thumb_w))
                     .h(px(thumb_h))
-                    .rounded_md()
                     .overflow_hidden()
                     .border_1()
                     .border_color(rgb(palette.thumb_border))
@@ -1198,10 +1211,12 @@ impl Render for PreviewView {
                     .right_0()
                     .flex()
                     .justify_center()
+                    .text_size(px(TEXT_CAPTION))
                     .text_color(rgb(palette.label_text))
                     .child(label),
             );
 
+        let system = runtime_theme().system;
         for (index, control) in controls.into_iter().enumerate() {
             let left = start_x + index as f32 * (CIRCLE + CIRCLE_GAP);
             let selected = index == self.selected;
@@ -1213,22 +1228,26 @@ impl Render for PreviewView {
                     .top(px(circle_top))
                     .w(px(CIRCLE))
                     .h(px(CIRCLE))
-                    .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .border_2()
+                    .border_1()
                     .border_color(if selected {
-                        rgb(palette.action_border_selected)
+                        rgb(system.accent)
                     } else {
                         rgb(palette.action_border)
                     })
                     .bg(if selected {
-                        rgb(palette.action_bg_selected)
+                        rgb(system.accent_fill)
                     } else {
                         rgb(palette.action_bg)
                     })
-                    .text_color(rgb(palette.action_glyph))
+                    .text_color(if selected {
+                        rgb(system.accent_ink)
+                    } else {
+                        rgb(palette.action_glyph)
+                    })
+                    .when(selected, |row| row.font_weight(FontWeight::SEMIBOLD))
                     .child(control.glyph())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {

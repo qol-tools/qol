@@ -447,8 +447,9 @@ fn verify_prebuilt_doctor_binary(
     if !binary.is_file() {
         return Err(DOCTOR_PREBUILT_ERROR.to_string());
     }
-    let identity = qol_build_identity::BuildIdentityEnvironment::development(
+    let identity = qol_build_identity::BuildIdentityEnvironment::development_scoped(
         &qol_dev_build::tray::artifact_root(root),
+        &qol_build_identity::TRAY_BUILD_SCOPE_PATHS,
     )
     .map_err(|error| format!("cannot verify prebuilt doctor binary: {error}"))?;
     let expectation = qol_artifact::ArtifactExpectation::development_debug(

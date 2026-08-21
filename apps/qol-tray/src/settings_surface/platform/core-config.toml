@@ -1,0 +1,60 @@
+schema_version = 1
+title = "qol"
+description = "Core qol settings."
+
+[section.appearance]
+label = "Appearance"
+
+[field.native_theme]
+type = "select"
+label = "Desktop theme"
+section = "appearance"
+default = "bone"
+options = ["bone", "slate"]
+
+[field.native_theme.option_labels]
+bone = "Bone"
+slate = "Slate"
+
+[field.theme]
+type = "select"
+label = "Web UI theme"
+section = "appearance"
+default = "slate"
+options = ["slate", "midnight"]
+
+[field.theme.option_labels]
+slate = "Slate"
+midnight = "Midnight"
+
+[field.accent]
+type = "select"
+label = "Accent"
+section = "appearance"
+default = "amber"
+options = ["amber", "green", "cyan", "magenta", "blue", "violet"]
+
+[field.accent.option_labels]
+amber = "Amber"
+green = "Green"
+cyan = "Cyan"
+magenta = "Magenta"
+blue = "Blue"
+violet = "Violet"
+
+[section.host]
+label = "Host"
+
+[field.profile]
+type = "select"
+label = "Profile"
+section = "host"
+query = "profiles"
+default = "default"
+
+[field.residency]
+type = "boolean"
+label = "Resident on this device"
+description = "Keep qol's host policy in place while qol-tray is not running."
+section = "host"
+default = false

@@ -10,9 +10,41 @@ pub struct AccentPreset {
     pub label: &'static str,
     pub rgb: u32,
     pub hover: u32,
+    pub ink: u32,
 }
 
 pub const PROD_ACCENT_KEY: &str = "amber";
+
+pub const THEME_COLOR_SENTINEL: &str = "theme";
+
+pub const TEXT_NANO: f32 = 10.0;
+pub const TEXT_MICRO: f32 = 11.0;
+pub const TEXT_CAPTION: f32 = 12.0;
+pub const TEXT_BODY: f32 = 14.0;
+pub const TEXT_TITLE: f32 = 17.0;
+pub const TEXT_DISPLAY: f32 = 20.0;
+
+pub const TEXT_SCALE: [f32; 5] = [TEXT_NANO, TEXT_CAPTION, TEXT_BODY, TEXT_TITLE, TEXT_DISPLAY];
+
+pub fn font_ui() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "SF Pro Text"
+    } else if cfg!(target_os = "windows") {
+        "Segoe UI"
+    } else {
+        "DejaVu Sans"
+    }
+}
+
+pub fn font_mono() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "SF Mono"
+    } else if cfg!(target_os = "windows") {
+        "Cascadia Mono"
+    } else {
+        "DejaVu Sans Mono"
+    }
+}
 
 pub const DARK_ACCENT_PRESETS: [AccentPreset; 6] = [
     AccentPreset {
@@ -20,36 +52,42 @@ pub const DARK_ACCENT_PRESETS: [AccentPreset; 6] = [
         label: "Amber",
         rgb: DARK_REFERENCE.orange_400,
         hover: 0xffc77a,
+        ink: DARK_REFERENCE.orange_400,
     },
     AccentPreset {
         key: "green",
         label: "Green",
         rgb: 0x46e08a,
         hover: 0x7ff0ab,
+        ink: 0x46e08a,
     },
     AccentPreset {
         key: "cyan",
         label: "Cyan",
         rgb: 0x56d6e0,
         hover: 0x8fe8f0,
+        ink: 0x56d6e0,
     },
     AccentPreset {
         key: "magenta",
         label: "Magenta",
         rgb: 0xe879c6,
         hover: 0xf49ad6,
+        ink: 0xe879c6,
     },
     AccentPreset {
         key: "blue",
         label: "Blue",
         rgb: DARK_TRAY_RAMP.blue_500,
         hover: 0x68b0ff,
+        ink: DARK_TRAY_RAMP.blue_500,
     },
     AccentPreset {
         key: "violet",
         label: "Violet",
         rgb: 0x8a93f7,
         hover: 0xa5afff,
+        ink: 0x8a93f7,
     },
 ];
 
@@ -67,6 +105,7 @@ pub fn dark_accent_preset(key: &str) -> Option<AccentPreset> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMode {
     Dark,
+    Light,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,7 +127,7 @@ impl Theme {
         reference: ReferencePalette,
         system: SystemPalette,
     ) -> Self {
-        let components = ComponentPalettes::new(reference, system);
+        let components = ComponentPalettes::new(mode, reference, system);
         Self {
             mode,
             reference,
@@ -137,6 +176,8 @@ pub struct ReferencePalette {
     pub slate_050: u32,
     pub warm_slate_300: u32,
     pub orange_400: u32,
+    pub accent_ink: u32,
+    pub accent_fill: u32,
     pub blue_400: u32,
     pub green_400: u32,
     pub red_500: u32,
@@ -162,6 +203,8 @@ pub const DARK_REFERENCE: ReferencePalette = ReferencePalette {
     slate_050: 0xf8fbff,
     warm_slate_300: 0xc7d0c9,
     orange_400: 0xffb454,
+    accent_ink: 0xffb454,
+    accent_fill: 0x2b2116,
     blue_400: 0x68b0ff,
     green_400: 0x4ade80,
     red_500: 0xff6b6b,
@@ -180,10 +223,12 @@ pub struct SystemPalette {
     pub text_faint: u32,
     pub border_subtle: u32,
     pub accent: u32,
+    pub accent_ink: u32,
     pub success: u32,
     pub danger: u32,
     pub info: u32,
     pub warning: u32,
+    pub accent_fill: u32,
 }
 
 impl SystemPalette {
@@ -199,19 +244,171 @@ impl SystemPalette {
             text_faint: reference.slate_600,
             border_subtle: reference.slate_750,
             accent: reference.orange_400,
+            accent_ink: reference.accent_ink,
             success: reference.green_400,
             danger: reference.red_500,
             info: reference.blue_400,
             warning: reference.amber_500,
+            accent_fill: reference.accent_fill,
         }
     }
 
     pub const fn with_accent(self, accent: u32) -> Self {
-        Self { accent, ..self }
+        Self {
+            accent,
+            accent_ink: accent,
+            ..self
+        }
+    }
+
+    pub const fn with_accent_pair(self, accent: u32, accent_ink: u32) -> Self {
+        Self {
+            accent,
+            accent_ink,
+            ..self
+        }
     }
 }
 
 pub const DARK_SYSTEM: SystemPalette = SystemPalette::from_reference(DARK_REFERENCE);
+
+pub const LIGHT_ACCENT_PRESETS: [AccentPreset; 6] = [
+    AccentPreset {
+        key: "amber",
+        label: "Harbour",
+        rgb: 0x2f74a0,
+        hover: 0x4785ad,
+        ink: 0x1f5a82,
+    },
+    AccentPreset {
+        key: "green",
+        label: "Moss",
+        rgb: 0x5f8a42,
+        hover: 0x719a54,
+        ink: 0x47692f,
+    },
+    AccentPreset {
+        key: "cyan",
+        label: "Verdigris",
+        rgb: 0x2f8a86,
+        hover: 0x479a96,
+        ink: 0x226662,
+    },
+    AccentPreset {
+        key: "magenta",
+        label: "Clay",
+        rgb: 0xb75f4d,
+        hover: 0xc4735f,
+        ink: 0x94452f,
+    },
+    AccentPreset {
+        key: "blue",
+        label: "Iris",
+        rgb: 0x6f5da8,
+        hover: 0x8070b5,
+        ink: 0x54438a,
+    },
+    AccentPreset {
+        key: "violet",
+        label: "Brass",
+        rgb: 0xa98f1c,
+        hover: 0xb89f33,
+        ink: 0x7f6a10,
+    },
+];
+
+pub fn light_accent_presets() -> &'static [AccentPreset] {
+    &LIGHT_ACCENT_PRESETS
+}
+
+pub fn light_accent_preset(key: &str) -> Option<AccentPreset> {
+    LIGHT_ACCENT_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| preset.key == key)
+}
+
+pub const LIGHT_REFERENCE: ReferencePalette = ReferencePalette {
+    black: 0x000000,
+    white: 0xffffff,
+    night_950: 0xe4dccb,
+    night_900: 0xfaf7f0,
+    night_850: 0xfffdf8,
+    night_800: 0xefe8d9,
+    slate_750: 0xa89a7c,
+    slate_700: 0x6e6556,
+    slate_650: 0x8c8270,
+    slate_600: 0x8c8270,
+    slate_550: 0x6e6556,
+    slate_500: 0x6e6556,
+    slate_300: 0x4a443a,
+    slate_200: 0x4a443a,
+    slate_100: 0x2b2721,
+    slate_050: 0x2b2721,
+    warm_slate_300: 0x4b4334,
+    orange_400: 0x2f74a0,
+    accent_ink: 0x1f5a82,
+    accent_fill: 0xd7e8f3,
+    blue_400: 0x2f7ba6,
+    green_400: 0x3d9150,
+    red_500: 0xc34a32,
+    amber_500: 0xe08a00,
+};
+
+pub const LIGHT_SYSTEM: SystemPalette = SystemPalette::from_reference(LIGHT_REFERENCE);
+
+pub fn light_theme() -> Theme {
+    Theme::from_reference(ThemeMode::Light, LIGHT_REFERENCE)
+}
+
+pub fn light_theme_with_accent_key(key: &str) -> Theme {
+    let Some(preset) = light_accent_preset(key) else {
+        return light_theme();
+    };
+    let system =
+        SystemPalette::from_reference(LIGHT_REFERENCE).with_accent_pair(preset.rgb, preset.ink);
+    Theme::from_reference_and_system(ThemeMode::Light, LIGHT_REFERENCE, system)
+}
+
+pub fn theme_for_native_key(native: Option<&str>, accent: Option<&str>) -> Theme {
+    match native {
+        Some("slate") => match accent {
+            Some(key) => dark_theme_with_accent_key(key),
+            None => dark_theme(),
+        },
+        _ => match accent {
+            Some(key) => light_theme_with_accent_key(key),
+            None => light_theme(),
+        },
+    }
+}
+
+static RUNTIME_THEME_OVERRIDE: std::sync::RwLock<Option<(Option<String>, Option<String>)>> =
+    std::sync::RwLock::new(None);
+
+pub fn set_runtime_theme_override(native: Option<&str>, accent: Option<&str>) {
+    let mut guard = RUNTIME_THEME_OVERRIDE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some((native.map(str::to_string), accent.map(str::to_string)));
+}
+
+pub fn runtime_theme() -> Theme {
+    let override_guard = RUNTIME_THEME_OVERRIDE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((native, accent)) = override_guard.as_ref() {
+        return theme_for_native_key(native.as_deref(), accent.as_deref());
+    }
+    theme_for_native_key(
+        std::env::var(qol_conventions::ENV_THEME_NAME)
+            .ok()
+            .as_deref(),
+        std::env::var(qol_conventions::ENV_THEME_ACCENT)
+            .ok()
+            .as_deref(),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OverlayPalette {
@@ -397,6 +594,10 @@ pub struct TrayThemePreset {
 
 pub const DEFAULT_TRAY_THEME_KEY: &str = "slate";
 
+pub const NATIVE_THEME_KEYS: [&str; 2] = ["bone", "slate"];
+
+pub const DEFAULT_NATIVE_THEME_KEY: &str = "bone";
+
 pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
     TrayThemePreset {
         key: "slate",
@@ -414,10 +615,12 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             text_faint: DARK_REFERENCE.slate_600,
             border_subtle: DARK_REFERENCE.slate_750,
             accent: DARK_REFERENCE.orange_400,
+            accent_ink: DARK_REFERENCE.orange_400,
             success: DARK_REFERENCE.green_400,
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,
             warning: DARK_REFERENCE.amber_500,
+            accent_fill: DARK_REFERENCE.accent_fill,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x12161e,
@@ -448,10 +651,12 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             text_faint: 0x555974,
             border_subtle: 0x34374d,
             accent: 0x8a93f7,
+            accent_ink: 0x8a93f7,
             success: DARK_REFERENCE.green_400,
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,
             warning: DARK_REFERENCE.amber_500,
+            accent_fill: 0x1c1830,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x0f1121,
@@ -615,19 +820,21 @@ pub struct ComponentPalettes {
     pub toast: ToastPalette,
     pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
+    pub picker_surface: PickerSurfacePalette,
 }
 
 impl ComponentPalettes {
-    pub fn new(reference: ReferencePalette, system: SystemPalette) -> Self {
+    pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            cli_sessions: CliSessionsPalette::from_theme(reference, system),
+            cli_sessions: CliSessionsPalette::from_system(system),
             launcher: LauncherPalette::from_system(system),
-            remove_app: RemoveAppPalette::from_theme(reference, system),
+            remove_app: RemoveAppPalette::from_system(system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
             toast: ToastPalette::from_system(system),
-            settings_panel: SettingsPanelPalette::from_system(system),
+            settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
+            picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
         }
     }
 }
@@ -645,6 +852,7 @@ pub struct CliSessionsPalette {
     pub text_faint: u32,
     pub keycap_bg_rgba: u32,
     pub selection_border: u32,
+    pub selection_bg: u32,
     pub needs_you: u32,
     pub your_turn: u32,
     pub working: u32,
@@ -664,7 +872,7 @@ pub struct CliSessionsPalette {
 }
 
 impl CliSessionsPalette {
-    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
+    pub fn from_system(system: SystemPalette) -> Self {
         Self {
             panel_bg: system.surface_elevated,
             chrome_bg: system.surface_canvas,
@@ -675,13 +883,14 @@ impl CliSessionsPalette {
             text_secondary: system.text_muted,
             text_muted: system.text_muted,
             text_faint: system.text_faint,
-            keycap_bg_rgba: with_alpha(reference.white, 0x0f),
+            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
             selection_border: system.accent,
+            selection_bg: system.accent_fill,
             needs_you: system.danger,
             your_turn: system.warning,
             working: system.success,
             service: system.info,
-            bridged: system.accent,
+            bridged: system.accent_ink,
             unknown: system.text_faint,
             needs_you_tint_rgba: with_alpha(system.danger, 0x22),
             your_turn_tint_rgba: with_alpha(system.warning, 0x22),
@@ -718,7 +927,7 @@ pub struct RemoveAppPalette {
 }
 
 impl RemoveAppPalette {
-    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
+    pub fn from_system(system: SystemPalette) -> Self {
         Self {
             panel_bg: system.surface_elevated,
             chrome_bg: system.surface_canvas,
@@ -734,7 +943,7 @@ impl RemoveAppPalette {
             warning: system.warning,
             selection_bg_rgba: with_alpha(system.accent, 0x14),
             transparent_rgba: 0x00000000,
-            keycap_bg_rgba: with_alpha(reference.white, 0x0f),
+            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
             warning_banner_rgba: with_alpha(system.warning, 0x1a),
         }
     }
@@ -848,6 +1057,10 @@ pub struct SettingsPanelPalette {
     pub section_text: u32,
     pub row_bg_selected: u32,
     pub row_border_selected: u32,
+    pub rail_bg: u32,
+    pub rail_text: u32,
+    pub rail_text_muted: u32,
+    pub rail_active_text: u32,
     pub dropdown_bg: u32,
     pub state_on: u32,
     pub state_off: u32,
@@ -863,18 +1076,34 @@ pub struct SettingsPanelPalette {
 }
 
 impl SettingsPanelPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
+    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
+        let (rail_bg, rail_text, rail_text_muted) = match mode {
+            ThemeMode::Light => (
+                system.text_primary,
+                system.surface_elevated,
+                system.border_subtle,
+            ),
+            ThemeMode::Dark => (
+                system.surface_canvas,
+                system.text_primary,
+                system.text_muted,
+            ),
+        };
         Self {
             window_bg: system.surface_elevated,
             panel_border: system.border_subtle,
             label_text: system.text_secondary,
             section_text: system.text_primary,
-            row_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
+            row_bg_selected: system.accent_fill,
             row_border_selected: system.accent,
+            rail_bg,
+            rail_text,
+            rail_text_muted,
+            rail_active_text: system.surface_raised,
             dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
-            status_accent: system.accent,
+            status_accent: system.accent_ink,
             status_success: system.success,
             status_danger: system.danger,
             status_warning: system.warning,
@@ -909,7 +1138,7 @@ impl AltTabPreviewPlanePalette {
                 0xd2,
             ),
             card_selected_border_rgba: with_alpha(
-                mix_rgb(system.accent, reference.white, 0.3),
+                mix_rgb(system.accent, system.text_primary, 0.3),
                 0xff,
             ),
         }
@@ -935,6 +1164,7 @@ pub struct LauncherPalette {
     pub highlight_hot: u32,
     pub highlight_cool: u32,
     pub border: u32,
+    pub border_selected: u32,
     pub momentum_up: [u32; 5],
     pub momentum_down: [u32; 5],
     pub compass_up: [u32; 3],
@@ -950,7 +1180,7 @@ impl LauncherPalette {
     pub fn from_system(system: SystemPalette) -> Self {
         Self {
             bg: system.surface_elevated,
-            bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
+            bg_selected: system.accent_fill,
             bg_trail_hot: mix_rgb(system.surface_raised, system.accent, 0.14),
             bg_trail: mix_rgb(system.surface_raised, system.accent, 0.09),
             bg_near: system.surface_hovered,
@@ -961,11 +1191,12 @@ impl LauncherPalette {
             text_dim: system.text_muted,
             text_muted: system.text_faint,
             text_faint: mix_rgb(system.text_faint, system.surface_canvas, 0.24),
-            highlight: system.accent,
-            highlight_warm: mix_rgb(system.accent, system.warning, 0.36),
-            highlight_hot: mix_rgb(system.accent, system.text_primary, 0.22),
-            highlight_cool: mix_rgb(system.accent, system.info, 0.28),
+            highlight: system.accent_ink,
+            highlight_warm: mix_rgb(system.accent_ink, system.warning, 0.36),
+            highlight_hot: mix_rgb(system.accent_ink, system.text_primary, 0.22),
+            highlight_cool: mix_rgb(system.accent_ink, system.info, 0.28),
             border: system.border_subtle,
+            border_selected: system.accent,
             momentum_up: ramp(system.surface_raised, system.info),
             momentum_down: ramp(system.surface_raised, system.danger),
             compass_up: [
@@ -978,11 +1209,11 @@ impl LauncherPalette {
                 mix_rgb(system.text_muted, system.danger, 0.45),
                 mix_rgb(system.text_muted, system.danger, 0.75),
             ],
-            semantic_prefix: system.info,
-            semantic_contains: mix_rgb(system.info, system.accent, 0.45),
+            semantic_prefix: system.text_muted,
+            semantic_contains: system.text_muted,
             semantic_fuzzy: system.text_muted,
-            semantic_freq: mix_rgb(system.accent, system.danger, 0.45),
-            boost_bg: mix_rgb(system.surface_raised, system.success, 0.22),
+            semantic_freq: system.text_muted,
+            boost_bg: mix_rgb(system.surface_raised, system.surface_hovered, 0.5),
         }
     }
 }
@@ -1012,86 +1243,92 @@ pub struct PickerSurfacePalette {
 }
 
 impl PickerSurfacePalette {
-    pub fn from_card_color(card_bg: u32, opacity: f32) -> Self {
-        Self::from_card_color_with_reference(card_bg, opacity, DARK_REFERENCE)
-    }
-
-    pub fn from_card_color_with_reference(
-        card_bg: u32,
-        opacity: f32,
-        reference: ReferencePalette,
-    ) -> Self {
+    pub fn themed(system: SystemPalette, card_override: Option<u32>, opacity: f32) -> Self {
+        let card_bg = card_override.unwrap_or(system.surface_raised);
         let opacity = clamp_unit(opacity);
-        let selected_bg = mix_rgb(card_bg, reference.white, 0.13);
+        let (card_hover_bg, card_selected_bg, card_selected_border) = match card_override {
+            Some(_) => (
+                mix_rgb(card_bg, system.text_primary, 0.07),
+                mix_rgb(card_bg, system.text_primary, 0.13),
+                mix_rgb(card_bg, system.text_primary, 0.36),
+            ),
+            None => (system.surface_hovered, system.accent_fill, system.accent),
+        };
         Self {
-            panel_bg: mix_rgb(card_bg, reference.black, 0.56),
-            header_bg: mix_rgb(card_bg, reference.black, 0.35),
-            header_border: mix_rgb(card_bg, reference.white, 0.08),
+            panel_bg: mix_rgb(card_bg, system.surface_canvas, 0.56),
+            header_bg: mix_rgb(card_bg, system.surface_canvas, 0.35),
+            header_border: mix_rgb(card_bg, system.text_primary, 0.08),
             card_bg,
-            card_hover_bg: mix_rgb(card_bg, reference.white, 0.07),
-            card_selected_bg: selected_bg,
-            card_selected_border: mix_rgb(card_bg, reference.warm_slate_300, 0.36),
+            card_hover_bg,
+            card_selected_bg,
+            card_selected_border,
             card_bg_rgba: rgba_from_rgb(card_bg, opacity),
-            card_selected_rgba: rgba_from_rgb(selected_bg, opacity.max(0.92)),
-            caption_divider: rgba_from_rgb(mix_rgb(card_bg, reference.white, 0.12), 0.58),
-            preview_icon_border: rgba_from_rgb(mix_rgb(card_bg, reference.white, 0.12), 0.48),
+            card_selected_rgba: rgba_from_rgb(card_selected_bg, opacity.max(0.92)),
+            caption_divider: rgba_from_rgb(mix_rgb(card_bg, system.text_primary, 0.12), 0.58),
+            preview_icon_border: rgba_from_rgb(mix_rgb(card_bg, system.text_primary, 0.12), 0.48),
             preview_icon_selected_border: rgba_from_rgb(
-                mix_rgb(card_bg, reference.white, 0.18),
+                mix_rgb(card_bg, system.text_primary, 0.18),
                 0.52,
             ),
-            header_left_text: reference.slate_550,
-            header_right_text: reference.slate_700,
-            grid_empty_text: reference.slate_550,
-            label_text: reference.slate_200,
-            label_selected_text: reference.slate_050,
-            placeholder_text: reference.slate_650,
-            placeholder_bg: reference.night_800,
-            placeholder_border: reference.slate_700,
+            header_left_text: system.text_muted,
+            header_right_text: system.text_secondary,
+            grid_empty_text: system.text_muted,
+            label_text: system.text_secondary,
+            label_selected_text: system.text_primary,
+            placeholder_text: system.text_faint,
+            placeholder_bg: system.surface_elevated,
+            placeholder_border: system.border_subtle,
         }
     }
 }
 
 pub fn launcher_runtime() -> LauncherPalette {
-    runtime_dark_theme().components.launcher
+    runtime_theme().components.launcher
 }
 
 pub fn cli_sessions_runtime() -> CliSessionsPalette {
-    runtime_dark_theme().components.cli_sessions
+    runtime_theme().components.cli_sessions
 }
 
 pub fn remove_app_runtime() -> RemoveAppPalette {
-    runtime_dark_theme().components.remove_app
+    runtime_theme().components.remove_app
 }
 
 pub fn shot_selector_runtime() -> ShotSelectorPalette {
-    runtime_dark_theme().components.shot_selector
+    runtime_theme().components.shot_selector
 }
 
 pub fn shot_preview_runtime() -> ShotPreviewPalette {
-    runtime_dark_theme().components.shot_preview
+    runtime_theme().components.shot_preview
 }
 
 pub fn toast_runtime() -> ToastPalette {
-    runtime_dark_theme().components.toast
+    runtime_theme().components.toast
 }
 
 pub fn settings_panel_runtime() -> SettingsPanelPalette {
-    runtime_dark_theme().components.settings_panel
+    runtime_theme().components.settings_panel
 }
 
-pub fn alt_tab_preview_plane_dark() -> AltTabPreviewPlanePalette {
-    dark_theme().components.alt_tab_preview_plane
+pub fn alt_tab_preview_plane_runtime() -> AltTabPreviewPlanePalette {
+    runtime_theme().components.alt_tab_preview_plane
 }
 
-pub fn resolve_surface_color(
+pub fn picker_surface_runtime() -> PickerSurfacePalette {
+    runtime_theme().components.picker_surface
+}
+
+pub fn resolve_surface_override(
     color_hex: &str,
-    fallback_hex: &str,
     brightness: f32,
     opacity: f32,
-) -> (u32, f32) {
-    let fallback = parse_rgb24(fallback_hex).unwrap_or(DARK_SYSTEM.surface_raised);
-    let color = parse_rgb24(color_hex).unwrap_or(fallback);
-    (scale_rgb(color, brightness), clamp_unit(opacity))
+) -> Option<(u32, f32)> {
+    let trimmed = color_hex.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(THEME_COLOR_SENTINEL) {
+        return None;
+    }
+    let color = parse_rgb24(trimmed)?;
+    Some((scale_rgb(color, brightness), clamp_unit(opacity)))
 }
 
 fn parse_rgb24(hex: &str) -> Option<u32> {
@@ -1107,4 +1344,56 @@ fn ramp(base: u32, target: u32) -> [u32; 5] {
         mix_rgb(base, target, 0.26),
         mix_rgb(base, target, 0.32),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slate_native_key_yields_dark_canvas() {
+        let theme = theme_for_native_key(Some("slate"), None);
+        assert_eq!(theme.system.surface_canvas, DARK_SYSTEM.surface_canvas);
+    }
+
+    #[test]
+    fn missing_unknown_or_bone_native_key_yields_light_canvas() {
+        for native in [None, Some("bone"), Some("garbage")] {
+            let theme = theme_for_native_key(native, None);
+            assert_eq!(theme.system.surface_canvas, LIGHT_SYSTEM.surface_canvas);
+        }
+    }
+
+    #[test]
+    fn accent_key_changes_accent_on_dark_path() {
+        let plain = theme_for_native_key(Some("slate"), None);
+        let accented = theme_for_native_key(Some("slate"), Some("blue"));
+        assert_eq!(
+            accented.system.accent,
+            dark_accent_preset("blue").unwrap().rgb
+        );
+        assert_ne!(accented.system.accent, plain.system.accent);
+    }
+
+    #[test]
+    fn accent_key_changes_accent_on_light_path() {
+        let plain = theme_for_native_key(None, None);
+        let accented = theme_for_native_key(None, Some("blue"));
+        assert_eq!(
+            accented.system.accent,
+            light_accent_preset("blue").unwrap().rgb
+        );
+        assert_ne!(accented.system.accent, plain.system.accent);
+    }
+
+    #[test]
+    fn runtime_theme_override_switches_theme_and_accent() {
+        set_runtime_theme_override(Some("slate"), Some("blue"));
+        let theme = runtime_theme();
+        assert_eq!(theme.system.surface_canvas, DARK_SYSTEM.surface_canvas);
+        assert_eq!(theme.system.accent, dark_accent_preset("blue").unwrap().rgb);
+        set_runtime_theme_override(Some("bone"), None);
+        let theme = runtime_theme();
+        assert_eq!(theme.system.surface_canvas, LIGHT_SYSTEM.surface_canvas);
+    }
 }

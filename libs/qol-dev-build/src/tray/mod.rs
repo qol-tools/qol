@@ -66,13 +66,15 @@ where
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
-    let identity =
-        match qol_build_identity::BuildIdentityEnvironment::development(&artifact_root(root)) {
-            Ok(identity) => identity,
-            Err(error) => {
-                return failed_build(format!("Failed to resolve build identity: {error}"));
-            }
-        };
+    let identity = match qol_build_identity::BuildIdentityEnvironment::development_scoped(
+        &artifact_root(root),
+        &qol_build_identity::TRAY_BUILD_SCOPE_PATHS,
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return failed_build(format!("Failed to resolve build identity: {error}"));
+        }
+    };
     let CargoChild {
         mut child,
         stdout,

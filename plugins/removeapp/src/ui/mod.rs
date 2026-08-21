@@ -1,7 +1,5 @@
 pub mod run;
 
-use std::sync::LazyLock;
-
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable, FontWeight,
@@ -23,10 +21,8 @@ const FOOTER_H: f32 = 34.0;
 const ROW_H: f32 = 38.0;
 const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
 
-static CURRENT_PALETTE: LazyLock<RemoveAppPalette> = LazyLock::new(remove_app_runtime);
-
-fn current_palette() -> &'static RemoveAppPalette {
-    &CURRENT_PALETTE
+fn current_palette() -> RemoveAppPalette {
+    remove_app_runtime()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -391,7 +387,7 @@ impl RemoveAppView {
                 div()
                     .flex_none()
                     .text_color(rgb(palette.text_muted))
-                    .text_size(px(11.0))
+                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                     .child(format!("{}", self.matches.len())),
             )
     }
@@ -416,14 +412,14 @@ impl RemoveAppView {
                             .flex_1()
                             .min_w(px(0.0))
                             .truncate()
-                            .text_size(px(11.0))
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .text_color(rgb(palette.text_secondary))
                             .child(l.path.display().to_string()),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(11.0))
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .text_color(rgb(palette.text_muted))
                             .child(format_size(l.size_bytes)),
                     )
@@ -499,7 +495,7 @@ impl RemoveAppView {
                     .child(
                         div()
                             .text_color(rgb(palette.text_primary))
-                            .text_size(px(11.0))
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .child(format!(
                                 "{} items \u{00b7} {}",
                                 plan.items.len(),
@@ -577,20 +573,20 @@ impl RemoveAppView {
                 .panel_drag_area()
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(px(qol_gpui::theme::TEXT_TITLE))
                         .text_color(rgb(palette.danger))
                         .child("Removal failed"),
                 )
                 .child(
                     div()
                         .text_color(rgb(palette.text_secondary))
-                        .text_size(px(12.0))
+                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child(error.clone()),
                 )
                 .child(
                     div()
                         .text_color(rgb(palette.text_muted))
-                        .text_size(px(11.0))
+                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child("Enter to continue \u{00b7} Esc to quit"),
                 )
                 .into_any_element();
@@ -611,28 +607,28 @@ impl RemoveAppView {
             .panel_drag_area()
             .child(
                 div()
-                    .text_size(px(15.0))
+                    .text_size(px(qol_gpui::theme::TEXT_TITLE))
                     .text_color(rgb(palette.success))
                     .child(format!("Removed {removed} item(s)")),
             )
             .child(
                 div()
                     .text_color(rgb(palette.text_secondary))
-                    .text_size(px(12.0))
+                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                     .child(format!("Freed {}", format_size(outcome.freed_bytes))),
             )
             .when(failed > 0, |d| {
                 d.child(
                     div()
                         .text_color(rgb(palette.danger))
-                        .text_size(px(11.0))
+                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child(format!("{failed} failed")),
                 )
             })
             .child(
                 div()
                     .text_color(rgb(palette.text_muted))
-                    .text_size(px(11.0))
+                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                     .child("Enter to continue \u{00b7} Esc to quit"),
             )
             .into_any_element()
@@ -658,7 +654,7 @@ impl Render for RemoveAppView {
             .overflow_hidden()
             .bg(rgb(palette.panel_bg))
             .text_color(rgb(palette.text_primary))
-            .font_family(SharedString::from("Menlo"))
+            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
             .child(self.render_body())
     }
@@ -729,7 +725,7 @@ fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElem
             d.child(
                 div()
                     .flex_none()
-                    .text_size(px(10.0))
+                    .text_size(px(qol_gpui::theme::TEXT_NANO))
                     .text_color(rgb(palette.danger))
                     .child("protected"),
             )
@@ -775,15 +771,15 @@ fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
                 .items_center()
                 .gap(px(5.0))
                 .text_color(rgb(palette.text_muted))
-                .text_size(px(10.0))
+                .text_size(px(qol_gpui::theme::TEXT_NANO))
                 .child(
                     div()
                         .text_color(rgb(palette.text_heading))
-                        .text_size(px(9.0))
+                        .text_size(px(qol_gpui::theme::TEXT_NANO))
                         .bg(rgba(palette.keycap_bg_rgba))
                         .border_1()
                         .border_color(rgb(palette.border_strong))
-                        .rounded(px(4.0))
+                        .rounded_none()
                         .px(px(5.0))
                         .py(px(1.0))
                         .child(key.to_string()),
@@ -810,7 +806,7 @@ fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
 
 fn banner_line(color: u32, text: &str) -> impl IntoElement {
     div()
-        .text_size(px(11.0))
+        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
         .text_color(rgb(color))
         .child(text.to_string())
 }

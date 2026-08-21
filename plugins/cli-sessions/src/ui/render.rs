@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
@@ -18,10 +16,12 @@ const HIDE_BUTTON_REASON: &str = "hide-button";
 const ESCAPE_REASON: &str = "escape";
 const STRIP_ESCAPE_REASON: &str = "strip-escape";
 
-static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_runtime);
+fn current_palette() -> CliSessionsPalette {
+    cli_sessions_runtime()
+}
 
-fn current_palette() -> &'static CliSessionsPalette {
-    &CURRENT_PALETTE
+fn panel_shadow(palette: &CliSessionsPalette) -> Vec<gpui::BoxShadow> {
+    qol_gpui::kit::float_shadow(palette.text_primary)
 }
 
 fn now_secs() -> u64 {
@@ -118,11 +118,11 @@ fn summary_groups_el(rows: &[SessionState]) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(rgb(color)))
+                .child(div().w(px(7.0)).h(px(7.0)).bg(rgb(color)))
                 .child(
                     div()
                         .text_color(rgb(palette.text_secondary))
-                        .text_size(px(11.0))
+                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child(format!("{count}")),
                 )
         }))
@@ -145,17 +145,14 @@ fn header_button(
         .tab_stop(true)
         .w(px(24.0))
         .h(px(24.0))
-        .rounded_md()
-        .border_1()
-        .border_color(rgba(palette.transparent_rgba))
         .flex()
         .items_center()
         .justify_center()
         .text_color(rgb(palette.text_secondary))
-        .text_size(px(13.0))
+        .text_size(px(qol_gpui::theme::TEXT_BODY))
         .cursor(CursorStyle::PointingHand)
         .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
-        .in_focus(|style| style.border_color(rgb(palette.selection_border)))
+        .in_focus(|style| style.bg(rgb(palette.selection_bg)))
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if accepts_activation_click(event) {
                 activate(this, window, cx);
@@ -183,14 +180,12 @@ fn header(rows: &[SessionState], cx: &mut Context<SessionsView>) -> impl IntoEle
         .justify_between()
         .px(px(12.0))
         .bg(rgb(palette.chrome_bg))
-        .border_b_1()
-        .border_color(rgb(palette.divider))
         .cursor(CursorStyle::OpenHand)
         .panel_drag_area()
         .child(
             div()
                 .text_color(rgb(palette.text_heading))
-                .text_size(px(11.0))
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("CLI SESSIONS"),
         )
@@ -234,13 +229,13 @@ fn empty_state() -> impl IntoElement {
         .child(
             div()
                 .text_color(rgb(palette.text_heading))
-                .text_size(px(13.0))
+                .text_size(px(qol_gpui::theme::TEXT_BODY))
                 .child("No CLI sessions found"),
         )
         .child(
             div()
                 .text_color(rgb(palette.text_muted))
-                .text_size(px(11.0))
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                 .child("Open a CLI in kitty, then open this panel again."),
         )
 }
@@ -252,17 +247,20 @@ fn key_hint(key: &'static str, label: &'static str) -> impl IntoElement {
         .items_center()
         .gap(px(5.0))
         .text_color(rgb(palette.text_faint))
-        .text_size(px(10.0))
+        .text_size(px(qol_gpui::theme::TEXT_NANO))
         .child(
             div()
                 .text_color(rgb(palette.text_heading))
-                .text_size(px(9.0))
+                .text_size(px(qol_gpui::theme::TEXT_NANO))
                 .bg(rgba(palette.keycap_bg_rgba))
-                .border_1()
-                .border_color(rgb(palette.border))
-                .rounded(px(4.0))
                 .px(px(5.0))
                 .py(px(1.0))
+                .shadow(vec![gpui::BoxShadow {
+                    color: rgba((palette.border & 0x00ff_ffff) | 0xff00_0000).into(),
+                    offset: gpui::point(px(0.0), px(1.5)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(0.0),
+                }])
                 .child(key),
         )
         .child(label)
@@ -278,8 +276,6 @@ fn footer() -> impl IntoElement {
         .px(px(11.0))
         .py(px(7.0))
         .bg(rgb(palette.chrome_bg))
-        .border_t_1()
-        .border_color(rgb(palette.divider))
         .child(key_hint("\u{2191}\u{2193}", "move"))
         .child(key_hint("\u{2190}\u{2192}", "cycle"))
         .child(key_hint("\u{23CE}", "jump"))
@@ -321,7 +317,8 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
                         .overflow_hidden()
                         .truncate()
                         .text_color(rgb(palette.text_primary))
-                        .text_size(px(13.0))
+                        .text_size(px(qol_gpui::theme::TEXT_BODY))
+                        .font_weight(FontWeight::MEDIUM)
                         .child(label),
                 )
                 .when(!branch.is_empty(), |d| {
@@ -329,7 +326,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
                         div()
                             .flex_none()
                             .text_color(rgb(palette.text_secondary))
-                            .text_size(px(11.0))
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .child(branch),
                     )
                 }),
@@ -339,7 +336,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
                 div()
                     .flex_none()
                     .text_color(rgb(tool_color))
-                    .text_size(px(10.0))
+                    .text_size(px(qol_gpui::theme::TEXT_NANO))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(tool_tag),
             )
@@ -361,10 +358,9 @@ fn summary_cell(
             .flex_none()
             .px(px(7.0))
             .py(px(1.0))
-            .rounded_md()
             .bg(rgba(palette.your_turn_badge_rgba))
             .text_color(rgb(accent))
-            .text_size(px(11.0))
+            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
             .cursor_pointer()
             .hover(|style| style.bg(rgba(palette.your_turn_hover_rgba)))
             .child(format!("{summary} \u{2713}"))
@@ -379,7 +375,7 @@ fn summary_cell(
         .flex_none()
         .w(px(11.0))
         .text_color(rgb(accent))
-        .text_size(px(10.0))
+        .text_size(px(qol_gpui::theme::TEXT_NANO))
         .child(status_glyph(status));
     div()
         .flex()
@@ -394,7 +390,7 @@ fn summary_cell(
                 .overflow_hidden()
                 .truncate()
                 .text_color(rgb(accent))
-                .text_size(px(11.0))
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                 .child(summary.to_string()),
         )
         .into_any_element()
@@ -412,10 +408,9 @@ fn driving_chip(
         .flex_none()
         .px(px(7.0))
         .py(px(1.0))
-        .rounded_md()
         .bg(rgba(palette.bridged_badge_rgba))
         .text_color(rgb(palette.bridged))
-        .text_size(px(11.0))
+        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
         .cursor_pointer()
         .hover(|style| style.bg(rgba(palette.bridged_hover_rgba)))
         .child(format!("\u{21C4} {count}"))
@@ -448,7 +443,7 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
                         div()
                             .flex_none()
                             .text_color(rgb(palette.bridged))
-                            .text_size(px(11.0))
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .child("\u{21C4}"),
                     )
                 })
@@ -459,7 +454,7 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
                     div()
                         .flex_none()
                         .text_color(rgb(palette.text_faint))
-                        .text_size(px(11.0))
+                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child(meta_value(s)),
                 ),
         )
@@ -477,7 +472,7 @@ fn session_row(
     div()
         .id(("session-row", index))
         .w_full()
-        .border_l_2()
+        .border_l_3()
         .border_color(if selected {
             rgb(palette.selection_border)
         } else {
@@ -492,9 +487,11 @@ fn session_row(
             div()
                 .relative()
                 .w_full()
-                .bg(rgba(tint))
-                .border_b_1()
-                .border_color(rgb(palette.divider))
+                .bg(if selected {
+                    rgb(palette.selection_bg)
+                } else {
+                    rgba(tint)
+                })
                 .child(
                     div()
                         .id(("row-hover", index))
@@ -552,11 +549,9 @@ impl SessionsView {
             .items_center()
             .justify_between()
             .px(px(12.0))
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette.border))
             .bg(rgb(palette.chrome_bg))
-            .font_family(SharedString::from("Menlo"))
+            .shadow(panel_shadow(&palette))
+            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
             .cursor(CursorStyle::OpenHand)
             .panel_drag_after(&self.drag_gesture)
             .hover(|style| style.bg(rgba(palette.keycap_bg_rgba)))
@@ -588,7 +583,7 @@ impl SessionsView {
             .child(
                 div()
                     .text_color(rgb(palette.text_heading))
-                    .text_size(px(12.0))
+                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                     .child("\u{25B2}"),
             )
             .into_any_element()
@@ -600,6 +595,7 @@ impl SessionsView {
         let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
+        self.list_scroll.follow(highlight);
         let row_els: Vec<_> = rows
             .iter()
             .enumerate()
@@ -614,11 +610,9 @@ impl SessionsView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette.border))
             .bg(rgb(palette.panel_bg))
-            .font_family(SharedString::from("Menlo"))
+            .shadow(panel_shadow(&palette))
+            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match ev.keystroke.key.as_str() {
                     "tab" => {
@@ -667,6 +661,7 @@ impl SessionsView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .track_scroll(self.list_scroll.handle())
                     .overflow_y_scroll()
                     .when(is_empty, |d| d.child(empty_state()))
                     .children(row_els),

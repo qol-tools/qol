@@ -243,7 +243,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
 
     fn run_resident_policy_cli(args: &[String]) -> Result<i32> {
         let parsed = cli::parse_args(args)?;
-        execute(&parsed.command)
+        execute(&parsed.policy, &parsed.command)
     }
 
     fn expected_fingerprint_owner() -> Option<(u32, u32)> {
@@ -2146,8 +2146,7 @@ fn run_privileged_operation(
     }
 }
 
-fn execute(command: &cli::ResidentCommand) -> Result<i32> {
-    let policy = ResidentPolicy::nvidia();
+fn execute(policy: &ResidentPolicy, command: &cli::ResidentCommand) -> Result<i32> {
     match command {
         cli::ResidentCommand::Status => {
             let view = policy.status()?;
@@ -2168,22 +2167,25 @@ fn execute(command: &cli::ResidentCommand) -> Result<i32> {
         }
         cli::ResidentCommand::Enable => {
             require_root()?;
-            run_privileged_operation(&policy, PrivilegedOperation::Enable, None).map(|()| 0)
+            run_privileged_operation(policy, PrivilegedOperation::Enable, None).map(|()| 0)
         }
         cli::ResidentCommand::Disable { owner } => {
             require_root()?;
-            run_privileged_operation(&policy, PrivilegedOperation::Disable, owner.as_ref())
+            run_privileged_operation(policy, PrivilegedOperation::Disable, owner.as_ref())
                 .map(|()| 0)
         }
         cli::ResidentCommand::Join { owner } => {
             require_root()?;
-            run_privileged_operation(&policy, PrivilegedOperation::Join, Some(owner)).map(|()| 0)
+            run_privileged_operation(policy, PrivilegedOperation::Join, Some(owner)).map(|()| 0)
         }
         cli::ResidentCommand::Transfer { owner } => {
             require_root()?;
-            run_privileged_operation(&policy, PrivilegedOperation::Transfer, Some(owner))
-                .map(|()| 0)
+            run_privileged_operation(policy, PrivilegedOperation::Transfer, Some(owner)).map(|()| 0)
         }
+        cli::ResidentCommand::Residency { .. } => Err(PolicyError::PlatformUnsupported {
+            policy: policy.id().to_string(),
+        }
+        .into()),
     }
 }
 

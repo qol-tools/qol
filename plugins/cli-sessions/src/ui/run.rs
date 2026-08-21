@@ -312,6 +312,14 @@ fn spawn_command_poll(
                         .await;
                     LoopFlow::Continue
                 }
+                Command::Theme { native, accent } => {
+                    qol_gpui::theme::set_runtime_theme_override(
+                        native.as_deref(),
+                        accent.as_deref(),
+                    );
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                    LoopFlow::Continue
+                }
                 Command::Kill => {
                     #[cfg(debug_assertions)]
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=kill");

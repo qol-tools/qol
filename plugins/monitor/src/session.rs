@@ -8,6 +8,7 @@ use qol_windowing::display::DisplayHandle;
 use crate::monitor::{BrightnessSource, DisplayControl, GammaTable, MonitorError};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const EVICTION_GENERATION: &str = "socket-eviction";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
@@ -20,16 +21,25 @@ pub struct Snapshot {
     pub last_value: u8,
     pub mutations: u32,
     pub clean: bool,
+    #[serde(default)]
+    pub handoff: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lut: Option<GammaTable>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checksum: String,
 }
 
 impl Snapshot {
-    pub fn canonical_checksum(&self) -> String {
+    fn legacy_canonical_checksum(&self) -> String {
         let mut hash = 0xcbf29ce484222325u64;
         let source_byte = self.source.as_bytes().first().copied().unwrap_or(0);
+        let adopt_generation = self
+            .adopt_generation
+            .as_deref()
+            .map(str::as_bytes)
+            .unwrap_or(&[0]);
         for field in [
             self.session_id.as_bytes(),
             self.display_id.as_bytes(),
@@ -37,6 +47,7 @@ impl Snapshot {
             &[self.value, source_byte, self.last_value],
             &self.mutations.to_le_bytes(),
             &[u8::from(self.clean)],
+            adopt_generation,
         ] {
             if let Some(lut) = &self.lut {
                 for byte in lut.checksum().to_le_bytes() {
@@ -52,13 +63,8 @@ impl Snapshot {
         format!("{hash:016x}")
     }
 
-    pub fn with_checksum(mut self) -> Self {
-        self.checksum = self.canonical_checksum();
-        self
-    }
-
-    pub fn verify_checksum(&self) -> bool {
-        !self.checksum.is_empty() && self.checksum == self.canonical_checksum()
+    fn legacy_verifies(&self) -> bool {
+        self.checksum.is_empty() || self.checksum == self.legacy_canonical_checksum()
     }
 
     pub fn source_kind(&self) -> Option<BrightnessSource> {
@@ -67,6 +73,19 @@ impl Snapshot {
             "gamma" => Some(BrightnessSource::Gamma),
             _ => None,
         }
+    }
+}
+
+impl qol_host_session::SessionSnapshot for Snapshot {
+    const SCHEMA_VERSION: u32 = SNAPSHOT_SCHEMA_VERSION;
+    const SUBDIR: &'static str = "monitor";
+
+    fn id(&self) -> &str {
+        &self.display_id
+    }
+
+    fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 }
 
@@ -142,7 +161,7 @@ pub enum RestoreMode {
 }
 
 pub struct SessionStore {
-    dir: PathBuf,
+    inner: qol_host_session::SessionStore,
 }
 #[derive(Debug, Default)]
 pub struct SnapshotInventory {
@@ -153,40 +172,28 @@ pub struct SnapshotInventory {
 impl Clone for SessionStore {
     fn clone(&self) -> Self {
         Self {
-            dir: self.dir.clone(),
+            inner: self.inner.clone(),
         }
     }
 }
 
 impl SessionStore {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            inner: qol_host_session::SessionStore::new(dir),
+        }
     }
 
     pub fn dir(&self) -> &Path {
-        &self.dir
+        self.inner.dir()
     }
 
     fn snapshot_path(&self, display_id: &str) -> PathBuf {
-        self.dir.join(format!("{display_id}.json"))
+        self.dir().join(format!("{display_id}.json"))
     }
 
     pub fn write_snapshot(&self, snapshot: &Snapshot) -> Result<()> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("failed to create session dir {}", self.dir.display()))?;
-        let content = serde_json::to_vec(&snapshot.clone().with_checksum())
-            .context("failed to serialize the brightness snapshot")?;
-        qol_fs::atomic_write_durable_mode(
-            &self.snapshot_path(&snapshot.display_id),
-            &content,
-            0o600,
-        )
-        .with_context(|| {
-            format!(
-                "failed to commit snapshot {}",
-                self.snapshot_path(&snapshot.display_id).display()
-            )
-        })
+        self.inner.write(snapshot)
     }
 
     pub fn load_snapshot(&self, display_id: &str) -> Result<Option<Snapshot>> {
@@ -194,10 +201,25 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
-        let content = std::fs::read(&path)
+        match self.inner.load::<Snapshot>(display_id) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => self.load_legacy_and_migrate(&path, error),
+        }
+    }
+
+    fn load_legacy_and_migrate(
+        &self,
+        path: &Path,
+        envelope_error: anyhow::Error,
+    ) -> Result<Option<Snapshot>> {
+        let content = std::fs::read(path)
             .with_context(|| format!("failed to read snapshot {}", path.display()))?;
-        let snapshot: Snapshot = serde_json::from_slice(&content)
-            .with_context(|| format!("failed to parse snapshot {}", path.display()))?;
+        let snapshot: Snapshot = serde_json::from_slice(&content).map_err(|legacy_error| {
+            anyhow::anyhow!(
+                "failed to parse snapshot {} (envelope: {envelope_error:#}; flat: {legacy_error})",
+                path.display()
+            )
+        })?;
         if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
             anyhow::bail!(
                 "snapshot {} carries schema {} (expected {})",
@@ -206,30 +228,24 @@ impl SessionStore {
                 SNAPSHOT_SCHEMA_VERSION
             );
         }
-        if !snapshot.verify_checksum() {
+        if !snapshot.legacy_verifies() {
             anyhow::bail!("snapshot {} failed its checksum", path.display());
         }
+        let snapshot = Snapshot {
+            checksum: String::new(),
+            ..snapshot
+        };
+        self.inner
+            .write(&snapshot)
+            .with_context(|| format!("failed to migrate legacy snapshot {}", path.display()))?;
         Ok(Some(snapshot))
     }
 
     pub fn load_all(&self) -> Result<SnapshotInventory> {
         let mut inventory = SnapshotInventory::default();
-        if !self.dir.exists() {
-            return Ok(inventory);
-        }
-        for entry in std::fs::read_dir(&self.dir)
-            .with_context(|| format!("failed to list session dir {}", self.dir.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() || path.extension().map(|ext| ext != "json").unwrap_or(true) {
-                continue;
-            }
-            let display_id = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(str::to_string)
-                .unwrap_or_default();
+        let ids = self.inner.ids::<Snapshot>()?;
+        for display_id in ids {
+            let path = self.snapshot_path(&display_id);
             match self.load_snapshot(&display_id) {
                 Ok(Some(snapshot)) => inventory.snapshots.push(snapshot),
                 Ok(None) => {}
@@ -246,14 +262,7 @@ impl SessionStore {
     }
 
     pub fn delete_snapshot(&self, display_id: &str) -> Result<()> {
-        let path = self.snapshot_path(display_id);
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => {
-                Err(error).with_context(|| format!("failed to remove snapshot {}", path.display()))
-            }
-        }
+        self.inner.delete(display_id)
     }
 }
 
@@ -262,16 +271,25 @@ pub struct Session<C: ?Sized> {
     store: SessionStore,
     lut: Arc<dyn LutProvider>,
     snapshotted: Mutex<HashSet<String>>,
+    adoption_generation: Option<String>,
 }
 
 impl<C: DisplayControl + ?Sized> Session<C> {
     pub fn new(control: Arc<C>, store: SessionStore, lut: Arc<dyn LutProvider>) -> Self {
+        let adoption_generation = std::env::var(qol_conventions::ENV_DEV_GENERATION_ID).ok();
         Self {
             control,
             store,
             lut,
             snapshotted: Mutex::new(HashSet::new()),
+            adoption_generation,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
+        self.adoption_generation = generation;
+        self
     }
 
     pub fn control(&self) -> &Arc<C> {
@@ -317,15 +335,55 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             last_value: state.value,
             mutations: 0,
             clean: false,
+            handoff: false,
+            adopt_generation: None,
             lut,
             checksum: String::new(),
-        }
-        .with_checksum();
+        };
         self.store
             .write_snapshot(&snapshot)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
         self.mark_snapshotted(handle.id());
         Ok(())
+    }
+
+    pub fn adopt(&self, handle: &DisplayHandle) {
+        self.mark_snapshotted(handle.id());
+    }
+
+    pub fn mark_handoff_all(&self, successor: Option<&str>) {
+        let Ok(inventory) = self.store.load_all() else {
+            return;
+        };
+        for snapshot in inventory.snapshots {
+            if snapshot.mutations == 0 || snapshot.clean || snapshot.handoff {
+                continue;
+            }
+            let display_id = snapshot.display_id.clone();
+            if self
+                .store
+                .write_snapshot(&Snapshot {
+                    handoff: true,
+                    adopt_generation: successor.map(str::to_string),
+                    ..snapshot
+                })
+                .is_err()
+            {
+                eprintln!(
+                    "[plugin-monitor] failed to mark snapshot {} for reload handoff",
+                    display_id
+                );
+            }
+        }
+    }
+
+    pub fn retire_all(&self) {
+        let Ok(inventory) = self.store.load_all() else {
+            return;
+        };
+        for snapshot in inventory.snapshots {
+            let _ = self.store.delete_snapshot(&snapshot.display_id);
+        }
     }
 
     pub fn mutate(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
@@ -373,6 +431,14 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         }
     }
 
+    pub(crate) fn handoff_is_for_this_generation(&self, snapshot: &Snapshot) -> bool {
+        match &snapshot.adopt_generation {
+            Some(addressed) if addressed == EVICTION_GENERATION => true,
+            Some(addressed) => self.adoption_generation.as_deref() == Some(addressed.as_str()),
+            None => self.adoption_generation.is_some(),
+        }
+    }
+
     pub fn restore_all(&self, mode: RestoreMode) -> RestoreReport {
         let mut report = RestoreReport::default();
         let Ok(inventory) = self.store.load_all() else {
@@ -391,7 +457,25 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 report.record(RestoreOutcome::NothingToRestore);
                 continue;
             }
+            if snapshot.handoff
+                && mode == RestoreMode::Recovery
+                && self.handoff_is_for_this_generation(&snapshot)
+            {
+                report.record(RestoreOutcome::NothingToRestore);
+                continue;
+            }
+            if snapshot.handoff && mode == RestoreMode::Exit && snapshot.adopt_generation.is_some()
+            {
+                report.record(RestoreOutcome::NothingToRestore);
+                continue;
+            }
+            let stale_handoff = snapshot.handoff
+                && mode == RestoreMode::Recovery
+                && !self.handoff_is_for_this_generation(&snapshot);
             let Some(handle) = self.find_handle(&snapshot) else {
+                if stale_handoff {
+                    let _ = self.store.delete_snapshot(&snapshot.display_id);
+                }
                 report.record(RestoreOutcome::SkippedDisplayGone);
                 continue;
             };
@@ -538,6 +622,7 @@ mod tests {
         last_value: u8,
         mutations: u32,
         clean: bool,
+        handoff: bool,
     ) -> Snapshot {
         Snapshot {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
@@ -549,42 +634,45 @@ mod tests {
             last_value,
             mutations,
             clean,
+            handoff,
+            adopt_generation: None,
             lut: None,
             checksum: String::new(),
         }
-        .with_checksum()
     }
 
     #[test]
-    fn snapshot_checksum_detects_any_field_change() {
-        let original = snapshot("id-1", "card0-DP-1", 100, 60, 3, false);
-        assert!(original.verify_checksum());
-        let mut changed = original.clone();
-        changed.value = 99;
-        assert!(!changed.verify_checksum());
-        let mut changed_clean = original.clone();
-        changed_clean.clean = true;
-        assert!(!changed_clean.verify_checksum());
-        let mut changed_mutations = original.clone();
-        changed_mutations.mutations = 4;
-        assert!(!changed_mutations.verify_checksum());
+    fn envelope_checksum_rejects_a_tampered_body_field() {
+        let (_dir, store) = fake_store();
+        let snap = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false);
+        store.write_snapshot(&snap).unwrap();
+
+        let path = store.dir().join("id-1.json");
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        envelope["body"]["value"] = serde_json::json!(99);
+        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        assert!(
+            store.load_snapshot("id-1").is_err(),
+            "a body field change must fail the envelope checksum"
+        );
     }
 
     #[test]
-    fn empty_source_checksums_without_panicking() {
+    fn empty_source_snapshot_round_trips_the_crate_store() {
+        let (_dir, store) = fake_store();
         let snap = Snapshot {
             source: String::new(),
-            ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false)
-        }
-        .with_checksum();
-        assert!(!snap.checksum.is_empty());
-        assert!(snap.verify_checksum());
+            ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+        };
+        store.write_snapshot(&snap).unwrap();
+        assert_eq!(store.load_snapshot("id-1").unwrap(), Some(snap.clone()));
     }
 
     #[test]
     fn store_round_trips_and_rejects_tampered_snapshots() {
         let (_dir, store) = fake_store();
-        let snap = snapshot("id-1", "card0-DP-1", 100, 60, 3, false);
+        let snap = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false);
         store.write_snapshot(&snap).unwrap();
         assert_eq!(store.load_snapshot("id-1").unwrap(), Some(snap.clone()));
         assert!(store.load_snapshot("missing").unwrap().is_none());
@@ -597,6 +685,40 @@ mod tests {
             store.load_snapshot("id-1").is_err(),
             "tampered snapshot must not load"
         );
+    }
+
+    #[test]
+    fn legacy_flat_snapshot_loads_and_restores_then_migrates_to_an_envelope() {
+        let (_dir, store) = fake_store();
+        let mut legacy = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false);
+        legacy.checksum = legacy.legacy_canonical_checksum();
+        let path = store.dir().join("id-1.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let loaded = store
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("a legacy flat baseline must still load");
+        assert_eq!(loaded.value, 100);
+        assert_eq!(loaded.last_value, 60);
+
+        let rewrap: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            rewrap["body"].is_object(),
+            "the legacy file is rewrapped as an envelope on the first read"
+        );
+
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(
+            report.restored, 1,
+            "a pending legacy baseline restores like any snapshot"
+        );
+        assert_eq!(control.calls(), vec![("id-1".to_string(), 100)]);
     }
 
     #[test]
@@ -625,7 +747,7 @@ mod tests {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 100, 0, false))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 100, 0, false, false))
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 100));
         let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
@@ -641,7 +763,7 @@ mod tests {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
         let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
@@ -658,7 +780,7 @@ mod tests {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, true))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, true, false))
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
         let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
@@ -675,7 +797,7 @@ mod tests {
     fn vanished_display_keeps_its_snapshot_alive() {
         let (_dir, store) = fake_store();
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![], 60));
         let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
@@ -703,6 +825,132 @@ mod tests {
         assert!(snap.clean, "exit restore leaves the clean-exit marker");
         let again = session.restore_all(RestoreMode::Exit);
         assert_eq!(again.restored, 0, "a second exit restore is a no-op");
+    }
+
+    #[test]
+    fn a_socket_eviction_hands_off_instead_of_restoring_the_baseline() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 10));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        session.mutate(&display, 10).unwrap();
+        control.calls.lock().unwrap().clear();
+
+        session.mark_handoff_all(Some(EVICTION_GENERATION));
+
+        assert_eq!(
+            control.calls(),
+            Vec::new(),
+            "marking an eviction handoff must not touch the display"
+        );
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(snap.handoff);
+        assert_eq!(snap.adopt_generation.as_deref(), Some(EVICTION_GENERATION));
+
+        let successor = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(None);
+        let report = successor.restore_all(RestoreMode::Recovery);
+
+        assert_eq!(
+            report.restored, 0,
+            "the successor that evicted the predecessor must not write the baseline"
+        );
+        assert_eq!(control.calls(), Vec::new());
+        let snap = store
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("the eviction handoff survives for the successor to adopt");
+        assert_eq!(snap.last_value, 10);
+    }
+
+    #[test]
+    fn dev_handoff_kill_does_not_write_the_display() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 55));
+        let mut snap = snapshot("id-1", "card0-DP-1", 100, 55, 1, false, true);
+        snap.adopt_generation = Some("successor-gen".into());
+        store.write_snapshot(&snap).unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("old-gen".into()));
+        let report = session.restore_all(RestoreMode::Exit);
+        assert_eq!(
+            report.restored, 0,
+            "a dev handoff that is killed must not write the display"
+        );
+        assert_eq!(control.sets.load(Ordering::SeqCst), 0);
+        let snap = store
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("the handoff snapshot survives the kill");
+        assert!(snap.handoff, "the snapshot stays marked for the successor");
+        assert!(!snap.clean, "a handoff snapshot is not a clean exit");
+        assert_eq!(
+            snap.value, 100,
+            "the baseline stays intact for the successor"
+        );
+    }
+
+    #[test]
+    fn handoff_snapshots_survive_recovery_without_restoring() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let mut snap = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, true);
+        snap.adopt_generation = Some("generation-g".into());
+        store.write_snapshot(&snap).unwrap();
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("generation-g".into()));
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 0);
+        assert_eq!(control.sets.load(Ordering::SeqCst), 0);
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(
+            snap.handoff,
+            "recovery leaves a handoff addressed to the current generation for the successor to adopt"
+        );
+        assert_eq!(snap.value, 100, "the baseline survives recovery");
+    }
+
+    #[test]
+    fn stale_handoff_for_a_vanished_display_is_cleared_not_orphaned() {
+        let (_dir, store) = fake_store();
+        let mut snap = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, true);
+        snap.adopt_generation = Some("abandoned-generation".into());
+        store.write_snapshot(&snap).unwrap();
+        let control = Arc::new(RecordingControl::new(vec![], 60));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("current-generation".into()));
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert_eq!(control.sets.load(Ordering::SeqCst), 0);
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "a handoff whose intended successor did not start for a disconnected display must not live forever"
+        );
+    }
+
+    #[test]
+    fn mark_handoff_all_skips_clean_and_untouched_snapshots() {
+        let (_dir, store) = fake_store();
+        store
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
+            .unwrap();
+        store
+            .write_snapshot(&snapshot("id-2", "card0-DP-2", 80, 80, 0, false, false))
+            .unwrap();
+        store
+            .write_snapshot(&snapshot("id-3", "card0-DP-3", 90, 90, 1, true, false))
+            .unwrap();
+        let control = Arc::new(RecordingControl::new(vec![], 60));
+        let session = Session::new(control, store.clone(), Arc::new(NoLutProvider));
+        session.mark_handoff_all(None);
+        let first = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(first.handoff, "a live snapshot is marked for handoff");
+        let second = store.load_snapshot("id-2").unwrap().unwrap();
+        assert!(!second.handoff, "an untouched snapshot is not marked");
+        let third = store.load_snapshot("id-3").unwrap().unwrap();
+        assert!(!third.handoff, "a clean snapshot is not marked");
     }
 
     struct FakeLut {
@@ -752,7 +1000,7 @@ mod tests {
                 source: "gamma".into(),
                 lut: Some(original.clone()),
                 last_value: 60,
-                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false)
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
             })
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
@@ -782,7 +1030,7 @@ mod tests {
                 source: "gamma".into(),
                 lut: Some(original.clone()),
                 last_value: 60,
-                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false)
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
             })
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
@@ -884,7 +1132,7 @@ mod tests {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
             .unwrap();
         let control = Arc::new(SetFailureControl::new(vec![display.clone()], 60));
         let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
@@ -912,7 +1160,7 @@ mod tests {
                 source: "gamma".into(),
                 lut: Some(gamma_table(1000)),
                 last_value: 60,
-                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false)
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
             })
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
@@ -1040,13 +1288,13 @@ mod tests {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
         store
-            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false))
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
             .unwrap();
         std::fs::write(store.dir().join("id-2.json"), b"{not-json").unwrap();
         let future = store.dir().join("id-3.json");
         std::fs::write(
             &future,
-            serde_json::to_vec(&snapshot("id-3", "card0-DP-2", 80, 80, 1, false)).unwrap(),
+            serde_json::to_vec(&snapshot("id-3", "card0-DP-2", 80, 80, 1, false, false)).unwrap(),
         )
         .unwrap();
         let mut raw: serde_json::Value =

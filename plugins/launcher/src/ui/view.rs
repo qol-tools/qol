@@ -1,17 +1,18 @@
 use std::ops::Range;
-use std::sync::LazyLock;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_gpui::theme::{launcher_runtime, LauncherPalette};
+use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO, TEXT_TITLE};
 
 use super::layout::HEADER_HEIGHT;
 use crate::discovery::search::{MatchKind, Scored};
 
-static CURRENT_PALETTE: LazyLock<LauncherPalette> = LazyLock::new(launcher_runtime);
+fn current_palette() -> LauncherPalette {
+    launcher_runtime()
+}
 
-fn current_palette() -> &'static LauncherPalette {
-    &CURRENT_PALETTE
+pub fn palette() -> LauncherPalette {
+    current_palette()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -26,11 +27,10 @@ pub fn search_bar(
     result_count: usize,
     scroll_offset: usize,
     visible: usize,
-    momentum_signed: i8,
+    _momentum_signed: i8,
     hidden_above: usize,
     hidden_below: usize,
 ) -> Div {
-    let momentum_bg = momentum_badge_bg(momentum_signed);
     div()
         .h(px(HEADER_HEIGHT))
         .w_full()
@@ -39,17 +39,15 @@ pub fn search_bar(
         .px_4()
         .gap_2()
         .bg(rgb(current_palette().bg))
-        .border_b_1()
-        .border_color(rgb(current_palette().border))
         .child(
             div()
                 .h(px(20.))
                 .px_2()
                 .flex()
                 .items_center()
-                .bg(momentum_bg)
+                .bg(rgb(current_palette().bg_badge))
                 .text_color(rgb(current_palette().text_dim))
-                .text_size(px(12.))
+                .text_size(px(TEXT_NANO))
                 .child(mode_label),
         )
         .child(
@@ -58,22 +56,22 @@ pub fn search_bar(
                 .px_2()
                 .flex()
                 .items_center()
-                .bg(momentum_bg)
+                .bg(rgb(current_palette().bg_badge))
                 .text_color(rgb(current_palette().text_dim))
-                .text_size(px(12.))
+                .text_size(px(TEXT_NANO))
                 .child(fuzziness_label),
         )
         .child(
             div()
                 .text_color(rgb(current_palette().text_muted))
-                .text_size(px(16.))
+                .text_size(px(TEXT_TITLE))
                 .child(">"),
         )
         .child(
             div()
                 .flex_1()
                 .overflow_hidden()
-                .font_family(SharedString::from("Menlo"))
+                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .flex()
                 .flex_col()
                 .justify_center()
@@ -81,8 +79,8 @@ pub fn search_bar(
                     div()
                         .h(px(18.))
                         .overflow_hidden()
-                        .rounded_full()
-                        .text_size(px(14.))
+                        .rounded_none()
+                        .text_size(px(TEXT_TITLE))
                         .flex()
                         .items_center()
                         .child(search_bar_content(query, cursor, selection)),
@@ -93,18 +91,20 @@ pub fn search_bar(
                             .h(px(12.))
                             .overflow_hidden()
                             .text_color(rgb(current_palette().highlight_warm))
-                            .text_size(px(10.))
+                            .text_size(px(TEXT_NANO))
                             .child(error.to_owned()),
                     )
                 }),
         )
-        .child(compass_widget(hidden_above, hidden_below))
-        .child(browse_status(
-            selected,
-            result_count,
-            scroll_offset,
-            visible,
-        ))
+        .when(result_count > 0, |bar| {
+            bar.child(compass_widget(hidden_above, hidden_below))
+                .child(browse_status(
+                    selected,
+                    result_count,
+                    scroll_offset,
+                    visible,
+                ))
+        })
 }
 
 const SEARCH_VISIBLE_CHARS: usize = 25;
@@ -213,7 +213,7 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
             .px_4()
             .bg(bg)
             .text_color(base_color)
-            .text_size(px(14.))
+            .text_size(px(TEXT_BODY))
             .child(name.to_owned());
         if scored.manual_boost > 0 {
             row = row.child(boost_badge(scored.manual_boost, false));
@@ -235,8 +235,20 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
         .w_full()
         .flex()
         .items_center()
+        .relative()
         .px_4()
-        .bg(bg);
+        .bg(bg)
+        .when(cues.selected, |row| {
+            row.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.0))
+                    .bg(rgb(current_palette().border_selected)),
+            )
+        });
 
     if cues.cluster_break {
         row = row.child(cluster_badge());
@@ -248,7 +260,7 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
             .flex()
             .items_center()
             .text_color(base_color)
-            .text_size(px(14.))
+            .text_size(px(TEXT_BODY))
             .child(styled_name),
     );
 
@@ -305,7 +317,7 @@ fn status_badge(label: String) -> Div {
         .items_center()
         .bg(rgb(current_palette().bg_badge))
         .text_color(rgb(current_palette().text_dim))
-        .text_size(px(12.))
+        .text_size(px(TEXT_NANO))
         .child(label)
 }
 
@@ -331,7 +343,7 @@ fn motion_badge_element(label: &'static str, momentum_signed: i8) -> Div {
         .justify_center()
         .bg(momentum_badge_bg(momentum_signed))
         .text_color(rgb(current_palette().text_selected))
-        .text_size(px(10.))
+        .text_size(px(TEXT_NANO))
         .child(label)
 }
 
@@ -355,7 +367,7 @@ fn confidence_bar(confidence_pct: u8, selected: bool) -> Div {
         } else {
             rgb(current_palette().text_faint)
         })
-        .text_size(px(10.))
+        .text_size(px(TEXT_NANO))
         .child(label)
 }
 
@@ -367,31 +379,22 @@ fn cluster_badge() -> Div {
         .items_center()
         .bg(rgb(current_palette().bg_badge))
         .text_color(rgb(current_palette().text_dim))
-        .text_size(px(10.))
+        .text_size(px(TEXT_NANO))
         .child("gap")
 }
 
-fn boost_badge(boost: i32, selected: bool) -> Div {
+fn boost_badge(boost: i32, _selected: bool) -> Div {
     div()
         .h(px(18.))
         .px_2()
         .flex()
         .items_center()
-        .bg(if selected {
-            rgb(current_palette().boost_bg)
-        } else {
-            rgb(current_palette().bg)
-        })
-        .text_color(if selected {
-            rgb(current_palette().text_selected)
-        } else {
-            rgb(current_palette().text_faint)
-        })
-        .text_size(px(10.))
+        .text_color(rgb(current_palette().text_muted))
+        .text_size(px(TEXT_NANO))
         .child(format!("+{boost}"))
 }
 
-fn semantic_badge(kind: MatchKind, freq_bonus: bool, selected: bool) -> Div {
+fn semantic_badge(kind: MatchKind, freq_bonus: bool, _selected: bool) -> Div {
     let base = match kind {
         MatchKind::Prefix => "prefix",
         MatchKind::Contains => "contains",
@@ -402,31 +405,13 @@ fn semantic_badge(kind: MatchKind, freq_bonus: bool, selected: bool) -> Div {
     } else {
         base.to_string()
     };
-    let bg = if selected {
-        if freq_bonus {
-            rgb(current_palette().semantic_freq)
-        } else {
-            match kind {
-                MatchKind::Prefix => rgb(current_palette().semantic_prefix),
-                MatchKind::Contains => rgb(current_palette().semantic_contains),
-                MatchKind::Fuzzy => rgb(current_palette().semantic_fuzzy),
-            }
-        }
-    } else {
-        rgb(current_palette().bg)
-    };
     div()
         .h(px(18.))
         .px_2()
         .flex()
         .items_center()
-        .bg(bg)
-        .text_color(if selected {
-            rgb(current_palette().text_selected)
-        } else {
-            rgb(current_palette().text_faint)
-        })
-        .text_size(px(10.))
+        .text_color(rgb(current_palette().text_muted))
+        .text_size(px(TEXT_NANO))
         .child(label)
 }
 
@@ -494,22 +479,16 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .iter()
         .filter_map(|&char_idx| {
             let &(byte_pos, byte_len) = byte_map.get(char_idx)?;
-            let color: Hsla = match_heat_color(char_idx, positions).into();
-            Some((byte_pos..byte_pos + byte_len, HighlightStyle::color(color)))
+            Some((
+                byte_pos..byte_pos + byte_len,
+                HighlightStyle {
+                    color: Some(rgb(current_palette().highlight).into()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            ))
         })
         .collect()
-}
-
-fn match_heat_color(index: usize, positions: &[usize]) -> gpui::Rgba {
-    let contiguous_left = index > 0 && positions.contains(&(index - 1));
-    let contiguous_right = positions.contains(&(index + 1));
-    if contiguous_left && contiguous_right {
-        rgb(current_palette().highlight_hot)
-    } else if contiguous_left || contiguous_right {
-        rgb(current_palette().highlight_warm)
-    } else {
-        rgb(current_palette().highlight_cool)
-    }
 }
 
 fn row_text_color(selected: bool, previous_selected: bool, trail_depth: u8) -> gpui::Rgba {

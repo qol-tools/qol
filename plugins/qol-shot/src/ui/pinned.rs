@@ -11,7 +11,7 @@ use gpui::*;
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
-use crate::ui::preview::{current_palette, PREVIEW_APP_ID};
+use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 
 const MIN_DIM: f32 = 48.0;
@@ -936,11 +936,10 @@ impl PinnedView {
                             .id(("pin-action", index))
                             .w(px(CIRCLE))
                             .h(px(CIRCLE))
-                            .rounded_full()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .border_2()
+                            .border_1()
                             .border_color(rgb(palette.action_border))
                             .bg(rgb(palette.action_bg))
                             .text_color(rgb(palette.action_glyph))
@@ -962,11 +961,10 @@ impl PinnedView {
             .right(px(EDGE))
             .w(px(CLOSE_CIRCLE))
             .h(px(CLOSE_CIRCLE))
-            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
-            .border_2()
+            .border_1()
             .border_color(rgb(palette.action_border))
             .bg(rgb(palette.action_bg))
             .text_color(rgb(palette.action_glyph))
@@ -1072,6 +1070,7 @@ impl Render for PinnedView {
             .size_full()
             .relative()
             .bg(rgb(palette.window_bg))
+            .shadow(surface_shadow())
             .on_hover(cx.listener(Self::on_hover))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(

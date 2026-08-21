@@ -10,7 +10,7 @@ use qol_config::object_array::pretty_label;
 use super::object_array_row::{
     ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome, ObjectArrayState,
 };
-use super::persistence::save_values;
+use super::persistence::{panel_base, save_values};
 use super::rows::{
     apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
     list_item_actions, list_slider_value, merged_config, primary_list_item_action,
@@ -35,6 +35,10 @@ const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
 const ROW_CHROME: f32 = 28.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
+const LIST_SCROLL_PIXELS_PER_NOTCH: f32 = 60.0;
+const LIST_FIT_MIN_VISIBLE: usize = 3;
+const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
+const BAND_TEXT_BASELINE_PAD: f32 = 13.0;
 
 use std::sync::PoisonError;
 
@@ -85,11 +89,11 @@ pub(super) struct SettingsPanelView {
     active_section: Option<usize>,
     selected_section: usize,
     values: serde_json::Value,
-    path: PathBuf,
+    path: Option<PathBuf>,
     selected: usize,
-    scroll_offset: usize,
-    body_max: f32,
+    body_scroll: crate::scroll_list::SelectionScroll,
     height_cap: f32,
+    panel_width: f32,
     active_control: Option<ActiveControl>,
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
@@ -114,9 +118,9 @@ pub(super) struct SettingsPanelState {
     pub(super) rows: Vec<Row>,
     pub(super) sections: Vec<RowSection>,
     pub(super) values: serde_json::Value,
-    pub(super) path: PathBuf,
-    pub(super) body_max: f32,
+    pub(super) path: Option<PathBuf>,
     pub(super) height_cap: f32,
+    pub(super) panel_width: f32,
     pub(super) runtime: SettingsRuntime,
     pub(super) daemon_port: Option<u16>,
 }
@@ -168,9 +172,9 @@ impl SettingsPanelView {
             values: state.values,
             path: state.path,
             selected: 0,
-            scroll_offset: 0,
-            body_max: state.body_max,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
             height_cap: state.height_cap,
+            panel_width: state.panel_width,
             active_control: None,
             row_bounds,
             wheel_generation: 0,
@@ -194,23 +198,67 @@ impl SettingsPanelView {
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
         };
+        view.selected_section = (0..view.sections.len())
+            .find(|index| !view.section_visible_rows(*index).is_empty())
+            .unwrap_or(0);
         view.selected = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.resume_runtime_poll(cx);
         view
     }
 
     fn current_visible_rows(&self) -> Vec<usize> {
-        let Some(section) = self
-            .active_section
-            .and_then(|index| self.sections.get(index))
-        else {
-            return Vec::new();
-        };
-        section
-            .rows
-            .iter()
-            .copied()
-            .filter(|index| super::rows::row_is_visible(&self.rows, *index))
+        self.section_visible_rows(self.active_section.unwrap_or(self.selected_section))
+    }
+
+    fn fit_lists(&mut self) {
+        let show_section_headers = self.sections.len() <= 1;
+        let budget = self.height_cap - super::chrome_height(&self.sections);
+        for section_index in 0..self.sections.len() {
+            let visible = self.section_visible_rows(section_index);
+            let mut fixed = visible.len().saturating_sub(1) as f32 * super::PANEL_COLUMN_GAP;
+            let mut lists: Vec<usize> = Vec::new();
+            for index in &visible {
+                let row = &self.rows[*index];
+                let header = if show_section_headers && row.section_label.is_some() {
+                    super::PANEL_SECTION_HEADER_HEIGHT
+                } else {
+                    0.0
+                };
+                if matches!(row.control, RowControl::List { .. }) {
+                    fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
+                    lists.push(*index);
+                } else {
+                    fixed += row_height(row, self.panel_width, show_section_headers);
+                }
+            }
+            if lists.is_empty() {
+                continue;
+            }
+            let per_list = ((budget - fixed) / lists.len() as f32).max(0.0);
+            let fit = (per_list / (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP)) as usize;
+            let visible_items = fit.clamp(LIST_FIT_MIN_VISIBLE, super::rows::LIST_MAX_VISIBLE);
+            for index in lists {
+                if let RowControl::List { list, .. } = &mut self.rows[index].control {
+                    list.max_visible = visible_items;
+                }
+            }
+        }
+    }
+
+    fn window_height(&self) -> f32 {
+        super::panel_height(&self.rows, &self.sections, self.panel_width).clamp(
+            super::chrome_height(&self.sections) + super::PANEL_ROW_HEIGHT,
+            self.height_cap,
+        )
+    }
+
+    fn rail_is_open(&self) -> bool {
+        self.sections.len() > 1
+    }
+
+    fn rail_sections(&self) -> Vec<usize> {
+        (0..self.sections.len())
+            .filter(|index| !self.section_visible_rows(*index).is_empty())
             .collect()
     }
 
@@ -218,13 +266,49 @@ impl SettingsPanelView {
         self.sections.len() > 1 && self.active_section.is_none()
     }
 
+    fn section_visible_rows(&self, index: usize) -> Vec<usize> {
+        let Some(section) = self.sections.get(index) else {
+            return Vec::new();
+        };
+        section
+            .rows
+            .iter()
+            .copied()
+            .filter(|row| super::rows::row_is_visible(&self.rows, *row))
+            .collect()
+    }
+
+    fn step_selected_section(&mut self, direction: isize) {
+        let last = self.sections.len().saturating_sub(1);
+        let mut candidate = self.selected_section;
+        loop {
+            let next = if direction < 0 {
+                candidate.saturating_sub(1)
+            } else {
+                (candidate + 1).min(last)
+            };
+            if next == candidate {
+                return;
+            }
+            candidate = next;
+            if !self.section_visible_rows(candidate).is_empty() {
+                self.selected_section = candidate;
+                return;
+            }
+        }
+    }
+
     fn open_selected_section(&mut self) {
         if self.sections.is_empty() {
             return;
         }
-        self.active_section = Some(self.selected_section.min(self.sections.len() - 1));
-        self.selected = self.current_visible_rows().into_iter().next().unwrap_or(0);
-        self.scroll_offset = self.selected;
+        let target = self.selected_section.min(self.sections.len() - 1);
+        let Some(first) = self.section_visible_rows(target).into_iter().next() else {
+            return;
+        };
+        self.active_section = Some(target);
+        self.selected = first;
+        self.body_scroll.rewind();
         self.active_control = None;
     }
 
@@ -235,16 +319,13 @@ impl SettingsPanelView {
         self.selected_section = active;
         self.active_section = None;
         self.active_control = None;
-        self.scroll_offset = 0;
+        self.body_scroll.rewind();
     }
 
     fn on_section_menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
         match key {
-            "up" => self.selected_section = self.selected_section.saturating_sub(1),
-            "down" => {
-                self.selected_section =
-                    (self.selected_section + 1).min(self.sections.len().saturating_sub(1));
-            }
+            "up" => self.step_selected_section(-1),
+            "down" => self.step_selected_section(1),
             "enter" | "return" | "space" | "right" => self.open_selected_section(),
             "escape" | "left" => {
                 self.pause_runtime_poll();
@@ -1456,6 +1537,7 @@ impl SettingsPanelView {
         if let Some(action) = action {
             self.dispatch_stream_action(&action, cx);
         }
+        cx.notify();
     }
 
     fn stream_edit(&mut self) {
@@ -1505,19 +1587,31 @@ impl SettingsPanelView {
     }
 
     fn persist(&mut self) {
+        let previous_theme = (
+            self.values.get("native_theme").cloned(),
+            self.values.get("accent").cloned(),
+        );
         self.values = merged_config(&self.values, &self.rows);
-        save_values(&self.panel.plugin_id, &self.path, &self.values);
+        save_values(
+            &panel_base(&self.panel.plugin_id),
+            self.path.as_deref(),
+            &self.values,
+        );
+        if self.panel.plugin_id == qol_conventions::CORE_PANEL_ID
+            && (self.values.get("native_theme") != previous_theme.0.as_ref()
+                || self.values.get("accent") != previous_theme.1.as_ref())
+        {
+            let (native, accent) = theme_override_values(&self.values);
+            qol_theme::set_runtime_theme_override(native, accent);
+        }
     }
 
     fn sync_scroll(&mut self) {
-        self.scroll_offset = scroll_offset_for(
-            &self.rows,
-            &self.current_visible_rows(),
-            self.selected,
-            self.scroll_offset,
-            self.body_max,
-            self.sections.len() <= 1,
-        );
+        let position = self
+            .current_visible_rows()
+            .iter()
+            .position(|index| *index == self.selected);
+        self.body_scroll.follow(position);
     }
 
     fn display_value(&self, index: usize) -> String {
@@ -1650,6 +1744,7 @@ impl SettingsPanelView {
             border: self.palette.row_border_selected,
             text: self.palette.label_text,
             text_selected: self.palette.section_text,
+            accent: self.palette.row_border_selected,
         }
     }
 
@@ -1659,6 +1754,36 @@ impl SettingsPanelView {
             border: self.palette.row_border_selected,
             thumb_border: self.palette.section_text,
         }
+    }
+
+    fn body_has_focus(&self) -> bool {
+        self.active_section.is_some() || self.sections.len() <= 1
+    }
+
+    fn mark_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
+        if !selected || !self.body_has_focus() {
+            return row;
+        }
+        self.paint_selection(row.mx(px(-16.0)).px(px(24.0)))
+    }
+
+    fn mark_selected_nested<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
+        if !selected || !self.body_has_focus() {
+            return row;
+        }
+        self.paint_selection(row)
+    }
+
+    fn paint_selection<E: Styled + ParentElement>(&self, row: E) -> E {
+        row.relative().bg(rgb(self.palette.row_bg_selected)).child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(3.0))
+                .bg(rgb(self.palette.row_border_selected)),
+        )
     }
 
     fn render_value_cell(&self, index: usize) -> Div {
@@ -1682,7 +1807,7 @@ impl SettingsPanelView {
             RowControl::Action { .. } => return self.render_action_value(index),
             RowControl::Unsupported { reason, .. } => {
                 return div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.status_muted))
                     .child(format!("Unsupported: {reason}"));
             }
@@ -1710,22 +1835,14 @@ impl SettingsPanelView {
             ));
         }
         if let Some(color) = self.swatch_color(index) {
-            cell = cell.child(
-                div()
-                    .w_3()
-                    .h_3()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(self.palette.panel_border))
-                    .bg(rgb(color)),
-            );
+            cell = cell.child(div().w_3().h_3().rounded_none().bg(rgb(color)));
         }
         if let Some(accent) = self.option_accent(index) {
-            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+            cell = cell.child(div().w_2().h_2().rounded_none().bg(rgb(accent)));
         }
         cell.child(
             div()
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .text_color(rgb(self.value_color(index)))
                 .child(self.display_value(index)),
         )
@@ -1749,7 +1866,7 @@ impl SettingsPanelView {
             .gap_2()
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(label_color))
                     .child(if active { "On" } else { "Off" }),
@@ -1763,19 +1880,13 @@ impl SettingsPanelView {
                     .w(px(30.))
                     .h(px(16.))
                     .p(px(2.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgb(if active {
-                        self.palette.state_on
-                    } else {
-                        self.palette.panel_border
-                    }))
+                    .rounded_none()
                     .bg(rgb(track_color))
                     .child(
                         div()
                             .w(px(10.))
                             .h(px(10.))
-                            .rounded_full()
+                            .rounded_none()
                             .bg(rgb(if active {
                                 self.palette.window_bg
                             } else {
@@ -1788,21 +1899,19 @@ impl SettingsPanelView {
     fn render_select_value(&self, index: usize) -> Div {
         let mut value = div().flex().flex_row().items_center().gap_2();
         if let Some(accent) = self.option_accent(index) {
-            value = value.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+            value = value.child(div().w_2().h_2().rounded_none().bg(rgb(accent)));
         }
         value
             .px_2()
             .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(self.palette.panel_border))
+            .rounded_none()
             .bg(rgb(self.palette.dropdown_bg))
-            .text_sm()
+            .text_size(px(qol_theme::TEXT_BODY))
             .text_color(rgb(self.palette.label_text))
             .child(self.display_value(index))
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.status_muted))
                     .child("▾"),
             )
@@ -1833,7 +1942,7 @@ impl SettingsPanelView {
                     .relative()
                     .w(px(72.))
                     .h(px(4.))
-                    .rounded_full()
+                    .rounded_none()
                     .overflow_hidden()
                     .bg(rgb(self.palette.panel_border))
                     .child(
@@ -1843,7 +1952,7 @@ impl SettingsPanelView {
                             .top_0()
                             .h_full()
                             .w(px(fill))
-                            .rounded_full()
+                            .rounded_none()
                             .bg(rgb(self.palette.row_border_selected)),
                     ),
             );
@@ -1856,16 +1965,14 @@ impl SettingsPanelView {
                 .gap_1()
                 .px_2()
                 .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(self.palette.panel_border))
+                .rounded_none()
                 .bg(rgb(self.palette.dropdown_bg))
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .text_color(rgb(self.palette.label_text))
                 .child(self.display_value(index))
                 .children(number_unit(&self.rows[index].id).map(|unit| {
                     div()
-                        .text_xs()
+                        .text_size(px(qol_theme::TEXT_CAPTION))
                         .text_color(rgb(self.palette.status_muted))
                         .child(unit)
                 })),
@@ -1874,22 +1981,15 @@ impl SettingsPanelView {
 
     fn render_action_value(&self, index: usize) -> Div {
         let variant = self.rows[index].variant.as_deref();
-        let (background, border, text) = match variant {
-            Some("ghost") => (
-                rgba(self.palette.transparent_rgba),
-                rgb(self.palette.panel_border),
-                self.palette.label_text,
-            ),
+        let (background, text) = match variant {
+            Some("ghost") => (rgb(self.palette.dropdown_bg), self.palette.label_text),
             Some("danger") => (
-                rgba(self.palette.transparent_rgba),
-                rgb(self.palette.state_off),
+                rgba(qol_color::with_alpha(self.palette.state_off, 0x29)),
                 self.palette.state_off,
             ),
-            Some("primary") | None | Some(_) => (
-                rgb(self.palette.row_bg_selected),
-                rgb(self.palette.row_border_selected),
-                self.palette.section_text,
-            ),
+            Some("primary") | None | Some(_) => {
+                (rgb(self.palette.row_bg_selected), self.palette.section_text)
+            }
         };
         let mut control = div().flex().flex_row().items_center().gap_1();
         if self.action_is_busy(index) {
@@ -1904,11 +2004,12 @@ impl SettingsPanelView {
         control
             .px_2()
             .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(border)
+            .rounded_none()
+            .when(variant == Some("ghost"), |control| {
+                control.shadow(crate::kit::raised_shadow(self.palette.section_text))
+            })
             .bg(background)
-            .text_xs()
+            .text_size(px(qol_theme::TEXT_CAPTION))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(text))
             .child(self.display_value(index))
@@ -1952,7 +2053,7 @@ impl SettingsPanelView {
             if let Some(section) = section_label_for(&self.rows, index) {
                 container = container.child(
                     div()
-                        .text_xs()
+                        .text_size(px(qol_theme::TEXT_CAPTION))
                         .text_color(rgb(self.palette.section_text))
                         .child(section.to_string()),
                 );
@@ -1986,7 +2087,7 @@ impl SettingsPanelView {
             .child(
                 div()
                     .truncate()
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(self.palette.section_text))
                     .child(label),
@@ -1994,7 +2095,7 @@ impl SettingsPanelView {
             .when_some(row.description.clone(), |group, description| {
                 group.child(
                     div()
-                        .text_xs()
+                        .text_size(px(qol_theme::TEXT_CAPTION))
                         .text_color(rgb(self.palette.label_text))
                         .child(description),
                 )
@@ -2007,23 +2108,13 @@ impl SettingsPanelView {
             .items_center()
             .justify_between()
             .gap_3()
-            .h(px(row_body_height(row)))
+            .h(px(row_body_height(row, self.panel_width)))
             .px_2()
             .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(if selected {
-                rgb(self.palette.row_border_selected)
-            } else {
-                rgba(self.palette.transparent_rgba)
-            })
-            .bg(if selected {
-                rgb(self.palette.row_bg_selected)
-            } else {
-                rgba(self.palette.transparent_rgba)
-            })
+            .rounded_none()
             .child(label_group)
             .child(self.render_value_cell(index));
+        line = self.mark_selected(line, selected);
         let row_bounds = Rc::clone(&self.row_bounds[index]);
         line = line.relative().child(
             canvas(
@@ -2121,7 +2212,7 @@ impl SettingsPanelView {
             container = container.child(
                 div()
                     .px_2()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.state_off))
                     .child(error.clone()),
             );
@@ -2149,7 +2240,7 @@ impl SettingsPanelView {
         div()
             .id(("settings-gamepad", index))
             .h(px(super::PANEL_GAMEPAD_HEIGHT))
-            .rounded_lg()
+            .rounded_none()
             .border_1()
             .border_color(if selected {
                 rgb(self.palette.row_border_selected)
@@ -2178,57 +2269,44 @@ impl SettingsPanelView {
 
     fn render_section_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let section = &self.sections[index];
+        let current = self.active_section == Some(index);
         let selected = index == self.selected_section;
+        let rail_has_focus = self.active_section.is_none();
+        let active = current || (rail_has_focus && selected);
         let mut item = div()
             .id(("settings-section", index))
+            .relative()
             .flex()
             .items_center()
-            .justify_between()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(if selected {
-                self.palette.row_border_selected
-            } else {
-                self.palette.panel_border
-            }))
-            .bg(rgb(if selected {
-                self.palette.row_bg_selected
-            } else {
-                self.palette.window_bg
-            }))
+            .w_full()
+            .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .px_4()
+            .rounded_none()
             .child(
                 div()
-                    .flex()
+                    .truncate()
                     .min_w_0()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(self.palette.section_text))
-                            .child(section.label.clone()),
-                    )
-                    .when_some(section.description.clone(), |content, description| {
-                        content.child(
-                            div()
-                                .truncate()
-                                .text_xs()
-                                .text_color(rgb(self.palette.label_text))
-                                .child(description),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_sm()
-                    .text_color(rgb(self.palette.label_text))
-                    .child("›"),
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .when(active, |label| label.font_weight(FontWeight::SEMIBOLD))
+                    .text_color(rgb(if active {
+                        self.palette.rail_active_text
+                    } else {
+                        self.palette.rail_text_muted
+                    }))
+                    .child(section.label.clone()),
             )
             .cursor(CursorStyle::PointingHand);
+        if active {
+            item = item.bg(rgb(self.palette.row_border_selected)).child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.0))
+                    .bg(rgb(self.palette.row_bg_selected)),
+            );
+        }
         item = item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
                 return;
@@ -2238,15 +2316,6 @@ impl SettingsPanelView {
             cx.notify();
         }));
         item
-    }
-
-    fn detail_heading(&self) -> Option<String> {
-        if self.sections.len() <= 1 {
-            return None;
-        }
-        self.active_section
-            .and_then(|index| self.sections.get(index))
-            .map(|section| format!("‹ {}", section.label))
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
@@ -2287,16 +2356,13 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row)))
+            .h(px(row_body_height(row, self.panel_width)))
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_md();
+            .rounded_none();
         if index == self.selected {
-            container = container
-                .bg(rgb(self.palette.row_bg_selected))
-                .border_1()
-                .border_color(rgb(self.palette.row_border_selected));
+            container = self.mark_selected(container, true);
         }
         container = container.child(
             div()
@@ -2307,7 +2373,7 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap_3()
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
                         .flex()
@@ -2329,7 +2395,7 @@ impl SettingsPanelView {
                             group.child(
                                 div()
                                     .truncate()
-                                    .text_xs()
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
                                     .text_color(rgb(self.palette.label_text))
                                     .child(description),
                             )
@@ -2340,7 +2406,7 @@ impl SettingsPanelView {
         if let Some(error) = error {
             return container.child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.state_off))
                     .child(error.clone()),
             );
@@ -2349,7 +2415,7 @@ impl SettingsPanelView {
             return container.child(
                 div()
                     .py_2()
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(self.palette.label_text))
                     .child(empty_message.clone()),
             );
@@ -2358,16 +2424,47 @@ impl SettingsPanelView {
             return container.child(
                 div()
                     .py_2()
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(self.palette.label_text))
                     .child("No matching results."),
             );
         }
-        for slot in list.visible_range(filtered.len()) {
-            let item_index = filtered[slot];
-            container = container.child(self.render_list_item(index, item_index, slot, cx));
-        }
-        container
+        let rendered_items: Vec<Stateful<Div>> = list
+            .visible_range(filtered.len())
+            .map(|slot| self.render_list_item(index, filtered[slot], slot, cx))
+            .collect();
+        container.child(
+            div()
+                .id(("settings-list-items", index))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .flex_none()
+                .on_scroll_wheel(cx.listener(
+                    move |this: &mut SettingsPanelView, event: &ScrollWheelEvent, _window, cx| {
+                        let Some(RowControl::List {
+                            actions,
+                            items,
+                            list,
+                            filter,
+                            ..
+                        }) = this.rows.get_mut(index).map(|row| &mut row.control)
+                        else {
+                            return;
+                        };
+                        let count = filtered_list_items(actions, items, filter).len();
+                        let notches = match event.delta {
+                            ScrollDelta::Lines(lines) => lines.y,
+                            ScrollDelta::Pixels(pixels) => {
+                                pixels.y.to_f64() as f32 / LIST_SCROLL_PIXELS_PER_NOTCH
+                            }
+                        };
+                        list.scroll_by(-notches, count);
+                        cx.notify();
+                    },
+                ))
+                .children(rendered_items),
+        )
     }
 
     fn render_qr_code(&self, index: usize) -> Div {
@@ -2386,16 +2483,13 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row)))
+            .h(px(row_body_height(row, self.panel_width)))
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_md();
+            .rounded_none();
         if index == self.selected {
-            container = container
-                .bg(rgb(self.palette.row_bg_selected))
-                .border_1()
-                .border_color(rgb(self.palette.row_border_selected));
+            container = self.mark_selected(container, true);
         }
         container = container.child(
             div()
@@ -2405,7 +2499,7 @@ impl SettingsPanelView {
                 .items_center()
                 .h(px(list_header_height(row)))
                 .gap_3()
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
                         .flex()
@@ -2423,7 +2517,7 @@ impl SettingsPanelView {
                             group.child(
                                 div()
                                     .truncate()
-                                    .text_xs()
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
                                     .text_color(rgb(self.palette.label_text))
                                     .child(description),
                             )
@@ -2472,7 +2566,7 @@ impl SettingsPanelView {
                     .items_center()
                     .justify_center()
                     .h(px(super::PANEL_QR_CODE_HEIGHT))
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(self.palette.label_text))
                     .child(placeholder)
             }
@@ -2490,7 +2584,7 @@ impl SettingsPanelView {
                     .flex_none()
                     .items_center()
                     .h(px(super::PANEL_QR_URL_HEIGHT))
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(if error.is_some() {
                         rgb(self.palette.state_off)
                     } else {
@@ -2527,16 +2621,13 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row)))
+            .h(px(row_body_height(row, self.panel_width)))
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_md();
+            .rounded_none();
         if index == self.selected {
-            container = container
-                .bg(rgb(self.palette.row_bg_selected))
-                .border_1()
-                .border_color(rgb(self.palette.row_border_selected));
+            container = self.mark_selected(container, true);
         }
         container.child(
             div()
@@ -2547,7 +2638,7 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap_3()
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
                         .flex()
@@ -2565,7 +2656,7 @@ impl SettingsPanelView {
                             group.child(
                                 div()
                                     .truncate()
-                                    .text_xs()
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
                                     .text_color(rgb(self.palette.label_text))
                                     .child(description),
                             )
@@ -2596,7 +2687,7 @@ impl SettingsPanelView {
         } else {
             div().flex().flex_row().items_center().child(
                 div()
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(self.palette.state_on))
                     .child("+ Add"),
             )
@@ -2625,8 +2716,8 @@ impl SettingsPanelView {
             .id(("settings-object-remove", entry_id(index, entry)))
             .flex_none()
             .px_1p5()
-            .rounded_sm()
-            .text_xs()
+            .rounded_none()
+            .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(self.palette.status_muted))
             .cursor(CursorStyle::PointingHand)
             .hover(|style| style.text_color(rgb(self.palette.state_off)))
@@ -2666,13 +2757,10 @@ impl SettingsPanelView {
             .h(px(super::PANEL_OBJECT_ROW_HEIGHT))
             .overflow_hidden()
             .px_2()
-            .rounded_sm()
+            .rounded_none()
             .cursor(CursorStyle::PointingHand);
         if selected {
-            line = line
-                .bg(rgb(self.palette.dropdown_bg))
-                .border_l_2()
-                .border_color(rgb(self.palette.row_border_selected));
+            line = self.mark_selected(line, true);
         }
         line
     }
@@ -2695,7 +2783,7 @@ impl SettingsPanelView {
         if chips.is_directional() {
             row = row.child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.label_text))
                     .child("\u{2192}"),
             );
@@ -2718,14 +2806,18 @@ impl SettingsPanelView {
         div()
             .flex_none()
             .px_1p5()
-            .rounded_sm()
-            .border_1()
-            .border_color(rgb(self.palette.panel_border))
+            .rounded_none()
+            .shadow(vec![BoxShadow {
+                color: rgba(qol_color::with_alpha(self.palette.panel_border, 0xff)).into(),
+                offset: point(px(0.0), px(1.5)),
+                blur_radius: px(0.0),
+                spread_radius: px(0.0),
+            }])
             .bg(match tone {
                 ChipTone::Plain => rgba(background),
                 _ => rgb(background),
             })
-            .text_xs()
+            .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(text))
             .child(label)
     }
@@ -2748,7 +2840,7 @@ impl SettingsPanelView {
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.label_text))
                     .child(pretty_label(&field.key)),
             )
@@ -2795,7 +2887,7 @@ impl SettingsPanelView {
         value.child(
             div()
                 .truncate()
-                .text_sm()
+                .text_size(px(qol_theme::TEXT_BODY))
                 .text_color(rgb(match &field.value {
                     DraftValue::Text(text) if text.is_empty() && !selected => {
                         self.palette.status_muted
@@ -2811,19 +2903,27 @@ impl SettingsPanelView {
         div()
             .flex_none()
             .px_1p5()
-            .rounded_sm()
-            .border_1()
-            .border_color(rgb(if focused {
-                self.palette.row_border_selected
-            } else {
-                self.palette.panel_border
-            }))
+            .rounded_none()
+            .shadow(vec![BoxShadow {
+                color: rgba(qol_color::with_alpha(
+                    if focused {
+                        self.palette.row_border_selected
+                    } else {
+                        self.palette.panel_border
+                    },
+                    0xff,
+                ))
+                .into(),
+                offset: point(px(0.0), px(1.5)),
+                blur_radius: px(0.0),
+                spread_radius: px(0.0),
+            }])
             .bg(if on {
                 rgb(self.palette.dropdown_bg)
             } else {
                 rgba(self.palette.transparent_rgba)
             })
-            .text_xs()
+            .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(if on {
                 self.palette.state_on
             } else {
@@ -2842,13 +2942,13 @@ impl SettingsPanelView {
         self.object_array_line(index, entry, selected)
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(self.palette.state_on))
                     .child("Save"),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.label_text))
                     .child("enter"),
             )
@@ -2949,10 +3049,6 @@ impl SettingsPanelView {
         let selected = self.list_item_selected(index, slot);
         let action = primary_list_item_action(actions, item);
         let title = self.render_list_item_title(index, item_index, slot, item, action, cx);
-        let accent = item
-            .accent
-            .map(|tone| rgb(status_tone_color(self.palette, tone)))
-            .unwrap_or_else(|| rgba(self.palette.transparent_rgba));
         let mut item_row = div()
             .id((
                 "settings-list-item",
@@ -2963,11 +3059,9 @@ impl SettingsPanelView {
             .flex_none()
             .h(px(super::PANEL_LIST_ITEM_HEIGHT))
             .overflow_hidden()
-            .border_l_2()
-            .border_color(accent)
             .px_2()
             .py_1()
-            .rounded_sm()
+            .rounded_none()
             .cursor(CursorStyle::PointingHand)
             .child(title);
         item_row = item_row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -2978,14 +3072,14 @@ impl SettingsPanelView {
             cx.notify();
         }));
         if selected {
-            item_row = item_row.bg(rgb(self.palette.dropdown_bg));
+            item_row = self.mark_selected_nested(item_row, true);
         }
         let Some(detail) = item.error.as_ref().or(item.subtitle.as_ref()) else {
             return item_row;
         };
         item_row.child(
             div()
-                .text_xs()
+                .text_size(px(qol_theme::TEXT_CAPTION))
                 .text_color(rgb(if item.error.is_some() {
                     self.palette.state_off
                 } else {
@@ -3004,7 +3098,6 @@ impl SettingsPanelView {
         action: Option<qol_config::contract::ResolvedRowAction>,
         cx: &mut Context<Self>,
     ) -> Div {
-        let selected = self.list_item_selected(index, slot);
         let badge = item.badge.as_ref().map(|label| {
             StatusIndicator::new(
                 (
@@ -3032,12 +3125,9 @@ impl SettingsPanelView {
                     .flex_1()
                     .min_w(px(0.))
                     .overflow_hidden()
-                    .text_sm()
-                    .text_color(rgb(if selected {
-                        self.palette.section_text
-                    } else {
-                        self.palette.label_text
-                    }))
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(self.palette.section_text))
                     .child(item.label.clone()),
             )
             .child(
@@ -3090,7 +3180,7 @@ impl SettingsPanelView {
                     .relative()
                     .w(px(72.))
                     .h(px(4.))
-                    .rounded_full()
+                    .rounded_none()
                     .overflow_hidden()
                     .bg(rgb(self.palette.panel_border))
                     .child(
@@ -3100,7 +3190,7 @@ impl SettingsPanelView {
                             .top_0()
                             .h_full()
                             .w(px(fill))
-                            .rounded_full()
+                            .rounded_none()
                             .bg(rgb(self.palette.row_border_selected)),
                     )
                     .child(
@@ -3160,7 +3250,7 @@ impl SettingsPanelView {
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.label_text))
                     .child(percent),
             )
@@ -3200,14 +3290,16 @@ impl SettingsPanelView {
                 ((index as u64) << 32) | item_index as u64,
             ))
             .px_1()
-            .rounded_sm()
-            .border_1()
-            .border_color(if selected {
-                rgb(self.palette.row_border_selected)
+            .rounded_none()
+            .bg(if selected {
+                rgb(self.palette.row_bg_selected)
             } else {
-                rgb(self.palette.panel_border)
+                rgb(self.palette.dropdown_bg)
             })
-            .text_xs()
+            .when(!selected, |control| {
+                control.shadow(crate::kit::raised_shadow(self.palette.section_text))
+            })
+            .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(if selected {
                 self.palette.state_on
             } else {
@@ -3261,6 +3353,15 @@ impl SettingsPanelView {
     }
 }
 
+fn theme_override_values(values: &serde_json::Value) -> (Option<&str>, Option<&str>) {
+    (
+        values
+            .get("native_theme")
+            .and_then(serde_json::Value::as_str),
+        values.get("accent").and_then(serde_json::Value::as_str),
+    )
+}
+
 impl Focusable for SettingsPanelView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -3269,85 +3370,184 @@ impl Focusable for SettingsPanelView {
 
 impl Render for SettingsPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette = settings_panel_runtime();
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
         }
-        let items: Vec<AnyElement> = if self.section_menu_is_open() {
-            (0..self.sections.len())
+        self.fit_lists();
+        let rail: Vec<AnyElement> = if self.rail_is_open() {
+            self.rail_sections()
+                .into_iter()
                 .map(|index| self.render_section_menu_item(index, cx).into_any_element())
                 .collect()
         } else {
-            visible_row_window(
-                &self.rows,
-                &self.current_visible_rows(),
-                self.scroll_offset,
-                self.body_max,
-                self.sections.len() <= 1,
-            )
+            Vec::new()
+        };
+        let items: Vec<AnyElement> = self
+            .current_visible_rows()
             .into_iter()
             .map(|index| self.render_row(index, cx).into_any_element())
-            .collect()
-        };
-        let detail_heading = self.detail_heading();
+            .collect();
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
+            .relative()
             .overflow_hidden()
             .flex()
             .flex_col()
-            .rounded_xl()
-            .border_1()
-            .border_color(rgb(self.palette.panel_border))
+            .rounded_none()
+            .shadow(crate::kit::float_shadow(self.palette.section_text))
             .bg(rgb(self.palette.window_bg))
-            .child(
-                div().w_full().pt_4().px_4().pb_1().panel_drag_area().child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(self.palette.section_text))
-                                .child(self.panel.heading.clone()),
-                        )
-                        .when_some(detail_heading, |header, detail| {
-                            header.child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(self.palette.row_border_selected))
-                                    .child(detail),
-                            )
-                        }),
-                ),
-            )
+            .child(self.render_band())
             .child(
                 div()
-                    .flex_none()
-                    .relative()
+                    .flex_1()
+                    .min_h(px(0.))
                     .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_4()
-                    .pb_4()
-                    .children(items)
-                    .child(self.measure_canvas()),
+                    .flex_row()
+                    .items_start()
+                    .when(self.rail_is_open(), |row| {
+                        row.child(
+                            div()
+                                .id("settings-section-rail")
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .h_full()
+                                .w(px(super::PANEL_RAIL_WIDTH))
+                                .pb_4()
+                                .bg(rgb(self.palette.rail_bg))
+                                .children(rail),
+                        )
+                    })
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(
+                                div()
+                                    .id("settings-panel-body")
+                                    .size_full()
+                                    .track_scroll(self.body_scroll.handle())
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .px_4()
+                                    .pb_4()
+                                    .children(items),
+                            )
+                            .child(crate::scrollbar::seam_track(
+                                self.body_scroll.handle().clone(),
+                                crate::kit::alpha(self.palette.panel_border, 0x48),
+                                crate::kit::alpha(self.palette.section_text, 0x8c),
+                            )),
+                    ),
             )
+            .child(self.resize_canvas())
     }
 }
 
 impl SettingsPanelView {
-    fn measure_canvas(&self) -> impl IntoElement {
+    fn current_section_label(&self) -> String {
+        self.sections
+            .get(self.active_section.unwrap_or(self.selected_section))
+            .map(|section| section.label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| self.panel.heading.clone())
+    }
+
+    fn render_band(&self) -> Div {
+        let title = self.current_section_label();
+        if self.rail_is_open() {
+            return div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .h(px(super::PANEL_BAND_HEIGHT))
+                .panel_drag_area()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(super::PANEL_RAIL_WIDTH))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .justify_end()
+                        .px_4()
+                        .pb(px(BAND_TEXT_BASELINE_PAD))
+                        .bg(rgb(self.palette.rail_bg))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(qol_theme::TEXT_BODY))
+                                .line_height(px(BAND_TEXT_LINE_HEIGHT))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.rail_text))
+                                .child(self.panel.heading.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .justify_end()
+                        .px_4()
+                        .pb(px(BAND_TEXT_BASELINE_PAD))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(qol_theme::TEXT_DISPLAY))
+                                .line_height(px(BAND_TEXT_LINE_HEIGHT))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.section_text))
+                                .child(title),
+                        ),
+                );
+        }
+        let eyebrow = (self.panel.heading != title).then(|| {
+            div()
+                .truncate()
+                .text_size(px(qol_theme::TEXT_MICRO))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(self.palette.rail_text_muted))
+                .child(self.panel.heading.to_uppercase())
+        });
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .h(px(super::PANEL_BAND_SINGLE_HEIGHT))
+            .px_4()
+            .pb(px(BAND_TEXT_BASELINE_PAD))
+            .panel_drag_area()
+            .bg(rgb(self.palette.rail_bg))
+            .children(eyebrow)
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_DISPLAY))
+                    .line_height(px(BAND_TEXT_LINE_HEIGHT))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(self.palette.rail_text))
+                    .child(title),
+            )
+    }
+
+    fn resize_canvas(&self) -> impl IntoElement {
         let dismisser = self.dismisser.clone();
-        let floor = super::PANEL_CHROME_HEIGHT + super::PANEL_ROW_HEIGHT;
-        let cap = self.height_cap;
+        let target = self.window_height();
         canvas(
             |_, _, _| (),
-            move |bounds, _, window, cx| {
-                let target = (bounds.bottom().to_f64() as f32).clamp(floor, cap);
+            move |_bounds, _, window, cx| {
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
                     return;
@@ -3692,25 +3892,16 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     }
 }
 
-pub(super) fn row_height(row: &Row) -> f32 {
-    let header = if row.section_label.is_some() {
+pub(super) fn row_height(row: &Row, panel_width: f32, show_section_headers: bool) -> f32 {
+    let header = if show_section_headers && row.section_label.is_some() {
         super::PANEL_SECTION_HEADER_HEIGHT
     } else {
         0.0
     };
-    row_body_height(row) + header
+    row_body_height(row, panel_width) + header
 }
 
-fn visible_row_height(rows: &[Row], index: usize, show_section_headers: bool) -> f32 {
-    let header = if show_section_headers && section_label_for(rows, index).is_some() {
-        super::PANEL_SECTION_HEADER_HEIGHT
-    } else {
-        0.0
-    };
-    row_body_height(&rows[index]) + header
-}
-
-pub(super) fn row_body_height(row: &Row) -> f32 {
+pub(super) fn row_body_height(row: &Row, panel_width: f32) -> f32 {
     if matches!(row.control, RowControl::Gamepad { .. }) {
         return super::PANEL_GAMEPAD_HEIGHT;
     }
@@ -3724,22 +3915,20 @@ pub(super) fn row_body_height(row: &Row) -> f32 {
     if let RowControl::ObjectArray(state) = &row.control {
         return object_array_body_height(row, state);
     }
-    if matches!(row.control, RowControl::List { .. }) {
-        return super::PANEL_LIST_HEIGHT
-            + if row.description.is_some() {
-                super::PANEL_LIST_DESCRIPTION_HEIGHT
-            } else {
-                0.0
-            };
+    if let RowControl::List { list, .. } = &row.control {
+        return super::PANEL_LIST_PADDING_Y
+            + list_header_height(row)
+            + list.max_visible as f32 * (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP);
     }
     if row.description.is_some() {
         return super::PANEL_DESCRIBED_ROW_HEIGHT
-            + description_wrap_lines(row) as f32 * super::PANEL_DESCRIPTION_LINE_HEIGHT;
+            + description_wrap_lines(row, panel_width) as f32
+                * super::PANEL_DESCRIPTION_LINE_HEIGHT;
     }
     super::PANEL_ROW_HEIGHT
 }
 
-fn description_wrap_lines(row: &Row) -> usize {
+fn description_wrap_lines(row: &Row, panel_width: f32) -> usize {
     let Some(description) = row.description.as_deref() else {
         return 0;
     };
@@ -3747,7 +3936,7 @@ fn description_wrap_lines(row: &Row) -> usize {
     if chars == 0 {
         return 0;
     }
-    let column = super::PANEL_WIDTH - ROW_CHROME - value_cell_width(&row.control);
+    let column = panel_width - ROW_CHROME - value_cell_width(&row.control);
     let per_line = (column / DESCRIPTION_CHAR_WIDTH) as usize;
     chars.div_ceil(per_line.max(1)) - 1
 }
@@ -3799,61 +3988,6 @@ fn qr_module_px(modules: &[bool]) -> f32 {
     module.clamp(2.0, 4.0)
 }
 
-fn visible_row_window(
-    rows: &[Row],
-    visible: &[usize],
-    offset: usize,
-    body_max: f32,
-    show_section_headers: bool,
-) -> Vec<usize> {
-    let start = visible
-        .iter()
-        .position(|index| *index >= offset)
-        .unwrap_or(visible.len());
-    let mut used = 0.0;
-    let mut window = Vec::new();
-    for index in visible.iter().copied().skip(start) {
-        used += visible_row_height(rows, index, show_section_headers);
-        if used > body_max && !window.is_empty() {
-            break;
-        }
-        window.push(index);
-    }
-    window
-}
-
-fn scroll_offset_for(
-    rows: &[Row],
-    visible: &[usize],
-    selected: usize,
-    offset: usize,
-    body_max: f32,
-    show_section_headers: bool,
-) -> usize {
-    let Some(selected_position) = visible.iter().position(|index| *index == selected) else {
-        return visible.first().copied().unwrap_or(0);
-    };
-    let mut offset_position = visible
-        .iter()
-        .position(|index| *index >= offset)
-        .unwrap_or(selected_position);
-    if selected_position < offset_position {
-        return selected;
-    }
-    while !visible_row_window(
-        rows,
-        visible,
-        visible[offset_position],
-        body_max,
-        show_section_headers,
-    )
-    .contains(&selected)
-    {
-        offset_position += 1;
-    }
-    visible[offset_position]
-}
-
 fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) -> usize {
     let Some(position) = visible.iter().position(|index| *index == selected) else {
         return visible.first().copied().unwrap_or(0);
@@ -3880,9 +4014,9 @@ mod tests {
         binary_state_label, color_display, description_wrap_lines, format_number,
         horizontal_step_direction, initial_active_section, intent, is_filter_text,
         list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
-        parsed_number, row_body_height, scroll_offset_for, slider_fraction, slider_percent_label,
+        parsed_number, row_body_height, slider_fraction, slider_percent_label,
         slider_value_from_fraction, stepped_number, stepped_slider_value, text_or_placeholder,
-        visible_row_window, Intent, ListIntent, Row, RowControl,
+        Intent, ListIntent, Row, RowControl,
     };
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
@@ -3971,15 +4105,24 @@ mod tests {
             visibility: None,
             control: RowControl::Toggle(false),
         };
-        assert_eq!(description_wrap_lines(&icon), 0);
-        assert_eq!(description_wrap_lines(&card), 0);
-        assert_eq!(description_wrap_lines(&dynamic), 1);
         assert_eq!(
-            row_body_height(&dynamic),
+            description_wrap_lines(&icon, crate::settings_panel::PANEL_WIDTH),
+            0
+        );
+        assert_eq!(
+            description_wrap_lines(&card, crate::settings_panel::PANEL_WIDTH),
+            0
+        );
+        assert_eq!(
+            description_wrap_lines(&dynamic, crate::settings_panel::PANEL_WIDTH),
+            1
+        );
+        assert_eq!(
+            row_body_height(&dynamic, crate::settings_panel::PANEL_WIDTH),
             super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
         );
         assert_eq!(
-            row_body_height(&card),
+            row_body_height(&card, crate::settings_panel::PANEL_WIDTH),
             super::super::PANEL_DESCRIBED_ROW_HEIGHT
         );
     }
@@ -4050,73 +4193,28 @@ mod tests {
     }
 
     #[test]
-    fn visible_range_windows_rows_by_height_budget() {
-        let rows = rows(&[true, false, false, false]);
-        let two_plain_rows = 2.0 * super::super::PANEL_ROW_HEIGHT;
-        let cases = [
-            (0, two_plain_rows, 0..1),
-            (1, two_plain_rows, 1..3),
-            (3, two_plain_rows, 3..4),
-            (0, 1000.0, 0..4),
-            (0, 1.0, 0..1),
-        ];
-        let visible = (0..rows.len()).collect::<Vec<_>>();
-        for (offset, budget, expected) in cases {
-            assert_eq!(
-                visible_row_window(&rows, &visible, offset, budget, true),
-                expected.collect::<Vec<_>>(),
-                "offset {offset} budget {budget}"
-            );
-        }
-    }
-
-    #[test]
-    fn visible_range_reserves_the_full_runtime_list_height() {
-        let mut panel_rows = rows(&[true]);
-        panel_rows.push(list_row());
-        panel_rows.extend(rows(&[true, false, false, false]));
-        let visible = (0..panel_rows.len()).collect::<Vec<_>>();
-
-        assert_eq!(
-            visible_row_window(&panel_rows, &visible, 0, 480.0, true),
-            vec![0, 1, 2, 3]
-        );
-    }
-
-    #[test]
-    fn scroll_offset_keeps_selection_visible_in_both_directions() {
-        let rows = rows(&[false, false, false, false]);
-        let two_rows = 2.0 * super::super::PANEL_ROW_HEIGHT;
-        let cases = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 1, 2), (0, 2, 0)];
-        let visible = (0..rows.len()).collect::<Vec<_>>();
-        for (selected, offset, expected) in cases {
-            assert_eq!(
-                scroll_offset_for(&rows, &visible, selected, offset, two_rows, true),
-                expected,
-                "selected {selected} offset {offset}"
-            );
-        }
-    }
-
-    #[test]
     fn descriptions_expand_only_the_rows_that_render_them() {
         let mut plain = rows(&[false]).remove(0);
-        let plain_height = row_body_height(&plain);
+        let plain_height = row_body_height(&plain, crate::settings_panel::PANEL_WIDTH);
         plain.description = Some("Helpful context".into());
 
         assert_eq!(plain_height, super::super::PANEL_ROW_HEIGHT);
         assert_eq!(
-            row_body_height(&plain),
+            row_body_height(&plain, crate::settings_panel::PANEL_WIDTH),
             super::super::PANEL_DESCRIBED_ROW_HEIGHT
         );
 
         let mut list = list_row();
-        let plain_list_height = row_body_height(&list);
+        let plain_list_height = row_body_height(&list, crate::settings_panel::PANEL_WIDTH);
         list.description = Some("Live devices".into());
-        assert_eq!(plain_list_height, super::super::PANEL_LIST_HEIGHT);
+        let full_list_height = super::super::PANEL_LIST_PADDING_Y
+            + super::super::PANEL_LIST_HEADER_HEIGHT
+            + super::super::rows::LIST_MAX_VISIBLE as f32
+                * (super::super::PANEL_LIST_ITEM_HEIGHT + super::super::PANEL_LIST_GAP);
+        assert_eq!(plain_list_height, full_list_height);
         assert_eq!(
-            row_body_height(&list),
-            super::super::PANEL_LIST_HEIGHT + super::super::PANEL_LIST_DESCRIPTION_HEIGHT
+            row_body_height(&list, crate::settings_panel::PANEL_WIDTH),
+            full_list_height + super::super::PANEL_LIST_DESCRIPTION_HEIGHT
         );
     }
 
@@ -4556,6 +4654,26 @@ default = "visible"
             list.selected, 1,
             "list selection holds against the phantom up"
         );
+    }
+
+    #[test]
+    fn theme_override_values_reads_native_and_accent() {
+        let values = serde_json::json!({
+            "native_theme": "dark",
+            "accent": "teal",
+            "other": "field",
+        });
+        let (native, accent) = super::theme_override_values(&values);
+        assert_eq!(native, Some("dark"));
+        assert_eq!(accent, Some("teal"));
+    }
+
+    #[test]
+    fn theme_override_values_treats_missing_fields_as_none() {
+        let values = serde_json::json!({ "other": "field" });
+        let (native, accent) = super::theme_override_values(&values);
+        assert_eq!(native, None);
+        assert_eq!(accent, None);
     }
 
     #[test]

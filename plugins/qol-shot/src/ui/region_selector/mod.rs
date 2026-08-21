@@ -11,7 +11,9 @@ use crate::capture::geometry::rect_label;
 use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 use qol_gpui::placement::{intersect_bounds, monitor_at_point, project_bounds, MonitorPlacement};
-use qol_gpui::theme::{shot_selector_runtime, ShotSelectorPalette};
+use qol_gpui::theme::{
+    font_mono, runtime_theme, shot_selector_runtime, ShotSelectorPalette, TEXT_MICRO,
+};
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
@@ -1326,7 +1328,6 @@ fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
         .top(bounds.origin.y)
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .rounded(px(CHIP_H / 2.0))
         .border_1()
         .border_color(rgba(border))
         .bg(rgba(palette.panel_bg_rgba))
@@ -1334,7 +1335,7 @@ fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
         .items_center()
         .justify_center()
         .text_center()
-        .text_size(px(13.0))
+        .text_size(px(qol_gpui::theme::TEXT_BODY))
         .line_height(px(CHIP_H))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgba(foreground))
@@ -1383,15 +1384,15 @@ fn format_duration(seconds: u64) -> String {
 }
 
 fn selection_frame(bounds: Bounds<Pixels>) -> Div {
-    let palette = current_palette();
+    let system = runtime_theme().system;
     let mut frame = div()
         .absolute()
         .left(bounds.origin.x)
         .top(bounds.origin.y)
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .border_2()
-        .border_color(rgb(palette.selection_outer));
+        .border_1()
+        .border_color(rgb(system.accent));
 
     if bounds.size.width <= px(4.0) || bounds.size.height <= px(4.0) {
         return frame;
@@ -1400,12 +1401,12 @@ fn selection_frame(bounds: Bounds<Pixels>) -> Div {
     frame = frame.child(
         div()
             .absolute()
-            .left(px(2.0))
-            .top(px(2.0))
-            .w(bounds.size.width - px(4.0))
-            .h(bounds.size.height - px(4.0))
-            .border_2()
-            .border_color(rgb(palette.selection_inner)),
+            .left(px(1.0))
+            .top(px(1.0))
+            .w(bounds.size.width - px(2.0))
+            .h(bounds.size.height - px(2.0))
+            .border_1()
+            .border_color(rgb(system.surface_raised)),
     );
     frame
 }
@@ -1463,7 +1464,7 @@ struct SelectionLabel {
 
 impl SelectionLabel {
     fn positioned(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
-        let palette = current_palette();
+        let system = runtime_theme().system;
         div()
             .absolute()
             .left(px(left))
@@ -1473,12 +1474,19 @@ impl SelectionLabel {
             .flex()
             .items_center()
             .justify_center()
-            .text_center()
-            .text_size(px(18.0))
-            .line_height(px(height))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgba(palette.label_text_rgba))
-            .child(self.title)
+            .child(
+                div()
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .text_center()
+                    .font_family(SharedString::from(font_mono()))
+                    .text_size(px(TEXT_MICRO))
+                    .text_color(rgb(system.accent_ink))
+                    .bg(rgb(system.surface_raised))
+                    .border_1()
+                    .border_color(rgb(system.accent))
+                    .child(self.title),
+            )
     }
 }
 

@@ -6,7 +6,7 @@ export function ThemeRow({ value, onPick }) {
     const effective = value ?? DEFAULT_THEME;
     return html`
         <div class="wsp-accent">
-            <span class="wsp-label">Theme</span>
+            <span class="wsp-label">Web UI theme</span>
             <div class="wsp-swatches">
                 ${THEMES.map((theme) => html`
                     <${Surface} as="button" key=${theme.key}

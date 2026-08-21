@@ -256,7 +256,7 @@ fn print_usage() {
     );
     println!("    qol-tray doctor                       Run read-only host and plugin checks");
     println!(
-        "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy"
+        "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy; residency --resident|--portable toggles this device"
     );
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");

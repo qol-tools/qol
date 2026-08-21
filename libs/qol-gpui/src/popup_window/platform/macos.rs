@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::AtomicPtr;
+use std::sync::{Mutex, Once, PoisonError};
 
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -572,7 +573,70 @@ pub fn configure_popup_window(title: &str) -> bool {
     };
     window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     window.setLevel(NSPopUpMenuWindowLevel);
+    install_process_square_corner_mask();
     true
+}
+
+static SQUARE_CORNER_MASK: AtomicPtr<objc2::runtime::AnyObject> =
+    AtomicPtr::new(std::ptr::null_mut());
+
+unsafe extern "C-unwind" fn opaque_corner_mask(
+    _this: *mut objc2::runtime::AnyObject,
+    _cmd: objc2::runtime::Sel,
+) -> *mut objc2::runtime::AnyObject {
+    SQUARE_CORNER_MASK.load(std::sync::atomic::Ordering::Acquire)
+}
+
+unsafe fn make_opaque_corner_mask() -> *mut objc2::runtime::AnyObject {
+    let image: *mut objc2::runtime::AnyObject = objc2::msg_send![objc2::class!(NSImage), alloc];
+    let size = NSSize::new(1.0, 1.0);
+    let image: *mut objc2::runtime::AnyObject = objc2::msg_send![image, initWithSize: size];
+    if image.is_null() {
+        return std::ptr::null_mut();
+    }
+    let _: () = objc2::msg_send![image, lockFocus];
+    let white: *mut objc2::runtime::AnyObject =
+        objc2::msg_send![objc2::class!(NSColor), whiteColor];
+    let _: () = objc2::msg_send![white, setFill];
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
+    let _: () = objc2::msg_send![objc2::class!(NSBezierPath), fillRect: rect];
+    let _: () = objc2::msg_send![image, unlockFocus];
+    image
+}
+
+fn install_process_square_corner_mask() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| unsafe {
+        let image = make_opaque_corner_mask();
+        if image.is_null() {
+            return;
+        }
+        SQUARE_CORNER_MASK.store(image, std::sync::atomic::Ordering::Release);
+        for class_name in [c"GPUIWindow", c"GPUIPanel"] {
+            let Some(cls) = objc2::runtime::AnyClass::get(class_name) else {
+                continue;
+            };
+            let added = objc2::ffi::class_addMethod(
+                cls as *const objc2::runtime::AnyClass as *mut objc2::runtime::AnyClass,
+                objc2::sel!(_cornerMask),
+                objc2::runtime::MethodImplementation::__imp(
+                    opaque_corner_mask
+                        as unsafe extern "C-unwind" fn(
+                            *mut objc2::runtime::AnyObject,
+                            objc2::runtime::Sel,
+                        )
+                            -> *mut objc2::runtime::AnyObject,
+                ),
+                c"@@:".as_ptr(),
+            );
+            qol_runtime::probe!(
+                "CORNER_MASK",
+                "class={} added={}",
+                class_name.to_string_lossy(),
+                added.as_bool()
+            );
+        }
+    });
 }
 
 pub fn set_window_type_dock_by_title(_title: &str) -> bool {
@@ -586,10 +650,6 @@ pub fn configure_overlay_window(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
     };
-    // gpui opens ghost windows with NSTitledWindowMask, and AppKit runs
-    // constrainFrameRect:toScreen: on titled windows, which pushes a display-sized
-    // overlay down by the menu bar height. Borderless windows are exempt, and gpui's
-    // window class overrides canBecomeKeyWindow, so the overlay still takes focus.
     window.setStyleMask(NSWindowStyleMask::Borderless);
     true
 }

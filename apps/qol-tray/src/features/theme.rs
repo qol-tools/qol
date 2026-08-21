@@ -8,6 +8,7 @@ const THEME_SETTINGS_FILE: &str = "theme.json";
 struct ThemeSettings {
     accent: Option<String>,
     theme: Option<String>,
+    native_theme: Option<String>,
 }
 
 fn update_settings(update: impl FnOnce(&mut ThemeSettings)) -> Result<()> {
@@ -52,8 +53,40 @@ pub fn current_theme_key() -> String {
         .unwrap_or_else(|| qol_theme::DEFAULT_TRAY_THEME_KEY.to_string())
 }
 
+pub fn save_selected_native_theme_key(key: &str) -> Result<()> {
+    let key = validated_native_theme_key(key)?.to_string();
+    update_settings(|settings| settings.native_theme = Some(key))
+}
+
+pub fn clear_selected_native_theme_key() -> Result<()> {
+    update_settings(|settings| settings.native_theme = None)
+}
+
+pub fn selected_native_theme_key() -> Result<Option<String>> {
+    let settings: ThemeSettings = crate::file_io::load_json_or_default(&settings_path()?)
+        .context("failed to load theme settings")?;
+    match settings.native_theme.as_deref() {
+        Some(key) => Ok(Some(validated_native_theme_key(key)?.to_string())),
+        None => Ok(None),
+    }
+}
+
+pub fn current_native_theme_key() -> String {
+    selected_native_theme_key()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| qol_theme::DEFAULT_NATIVE_THEME_KEY.to_string())
+}
+
+fn validated_native_theme_key(key: &str) -> Result<&str> {
+    if qol_theme::NATIVE_THEME_KEYS.contains(&key) {
+        return Ok(key);
+    }
+    Err(anyhow!("unknown native theme: {key}"))
+}
+
 pub fn apply_theme_name_env(command: &mut Command) {
-    command.env(qol_conventions::ENV_THEME_NAME, current_theme_key());
+    command.env(qol_conventions::ENV_THEME_NAME, current_native_theme_key());
 }
 
 fn validated_theme_key(key: &str) -> Result<&str> {
@@ -161,6 +194,23 @@ mod tests {
         save_selected_theme_key("midnight").unwrap();
         assert_eq!(selected_theme_key().unwrap().as_deref(), Some("midnight"));
         assert_eq!(current_theme_key(), "midnight");
+    }
+
+    #[test]
+    fn selected_native_theme_round_trips_valid_key_and_defaults_to_bone() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(current_native_theme_key(), "bone");
+
+        save_selected_native_theme_key("slate").unwrap();
+
+        assert_eq!(
+            selected_native_theme_key().unwrap().as_deref(),
+            Some("slate")
+        );
+        assert_eq!(current_native_theme_key(), "slate");
+        assert!(save_selected_native_theme_key("not-a-native-theme").is_err());
     }
 
     #[test]

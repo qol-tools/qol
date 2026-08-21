@@ -7,6 +7,7 @@ pub enum Command {
     Screenshot,
     Preview,
     Reload,
+    Theme,
     Cli(String),
     Kill,
 }

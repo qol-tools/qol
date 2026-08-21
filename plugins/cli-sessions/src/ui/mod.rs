@@ -34,6 +34,7 @@ pub struct SessionsView {
     collapse_state: collapse::CollapseState,
     drag_gesture: std::rc::Rc<std::cell::RefCell<DragGestureState>>,
     key_hold: KeyHold,
+    list_scroll: qol_gpui::scroll_list::SelectionScroll,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -49,6 +50,7 @@ impl SessionsView {
             registry,
             host,
             selection: Selection::default(),
+            list_scroll: qol_gpui::scroll_list::SelectionScroll::new(),
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
             drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),

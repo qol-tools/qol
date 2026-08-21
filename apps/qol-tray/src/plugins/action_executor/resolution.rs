@@ -72,7 +72,7 @@ fn validate_catalog_action_membership(
     })
 }
 
-fn daemon_socket(plugin: &Plugin) -> Option<PathBuf> {
+pub(crate) fn daemon_socket(plugin: &Plugin) -> Option<PathBuf> {
     plugin
         .manifest
         .daemon

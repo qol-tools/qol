@@ -316,9 +316,10 @@ impl ColorWheel {
         div()
             .id("qol-color-wheel")
             .p(px(WHEEL_PADDING))
-            .rounded_md()
+            .rounded_none()
             .border_1()
             .border_color(rgb(style.border))
+            .shadow(crate::kit::float_shadow(style.thumb_border))
             .bg(rgb(style.bg))
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
@@ -345,7 +346,7 @@ impl ColorWheel {
                             .top(px(ty - THUMB_SIZE / 2.0))
                             .w(px(THUMB_SIZE))
                             .h(px(THUMB_SIZE))
-                            .rounded_full()
+                            .rounded_none()
                             .border_2()
                             .border_color(rgb(style.thumb_border))
                             .bg(rgb(self.thumb_color())),

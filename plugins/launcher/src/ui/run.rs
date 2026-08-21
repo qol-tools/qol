@@ -109,6 +109,14 @@ fn spawn_command_poll(
                     dispatch_settings(&cx, focus_cache).await;
                     LoopFlow::Continue
                 }
+                app::Command::Theme { native, accent } => {
+                    qol_gpui::theme::set_runtime_theme_override(
+                        native.as_deref(),
+                        accent.as_deref(),
+                    );
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                    LoopFlow::Continue
+                }
                 app::Command::Kill => LoopFlow::Stop,
             }
         }

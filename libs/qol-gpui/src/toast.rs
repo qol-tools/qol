@@ -314,67 +314,83 @@ impl ToastLayout {
 }
 
 fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(toast, palette)
-        .flex_col()
-        .justify_center()
-        .gap(px(2.0))
-        .px_4()
-        .py_3()
-        .child(
-            div()
-                .w_full()
-                .truncate()
-                .text_sm()
-                .text_color(rgb(palette.text_primary))
-                .child(toast.title.clone()),
-        )
-        .child(
-            div()
-                .w_full()
-                .truncate()
-                .text_xs()
-                .text_color(rgb(palette.text_secondary))
-                .child(toast.message.clone()),
-        )
+    toast_root(palette).child(tone_bar(toast, palette)).child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex_col()
+            .justify_center()
+            .gap(px(2.0))
+            .px_4()
+            .py_3()
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(palette.text_primary))
+                    .child(toast.title.clone()),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_color(rgb(palette.text_secondary))
+                    .child(toast.message.clone()),
+            ),
+    )
 }
 
 fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(toast, palette)
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(2.0))
-        .px_6()
-        .py_3()
-        .text_center()
-        .child(
-            div()
-                .w_full()
-                .truncate()
-                .text_size(px(20.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.text_primary))
-                .child(toast.title.clone()),
-        )
-        .child(
-            div()
-                .w_full()
-                .truncate()
-                .text_size(px(14.0))
-                .text_color(rgb(palette.text_secondary))
-                .child(toast.message.clone()),
-        )
+    toast_root(palette).child(tone_bar(toast, palette)).child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(2.0))
+            .px_6()
+            .py_3()
+            .text_center()
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_DISPLAY))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette.text_primary))
+                    .child(toast.title.clone()),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(palette.text_secondary))
+                    .child(toast.message.clone()),
+            ),
+    )
 }
 
-fn toast_root(toast: &Toast, palette: ToastPalette) -> Div {
+fn toast_root(palette: ToastPalette) -> Div {
     div()
         .size_full()
         .flex()
+        .flex_row()
         .overflow_hidden()
-        .rounded_xl()
-        .border_1()
-        .border_color(rgb(toast.tone.color(palette)))
+        .rounded_none()
+        .shadow(crate::kit::float_shadow(palette.text_primary))
         .bg(rgb(palette.window_bg))
+}
+
+fn tone_bar(toast: &Toast, palette: ToastPalette) -> Div {
+    div()
+        .flex_none()
+        .w(px(4.0))
+        .h_full()
+        .bg(rgb(toast.tone.color(palette)))
 }
 
 impl ToastTone {

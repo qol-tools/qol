@@ -31,6 +31,16 @@ pub fn dispatch_daemon_action_with_timeout(
     dispatch_daemon_action_request(endpoint, action_id, &serde_json::Value::Null, timeout)
 }
 
+pub fn dispatch_daemon_theme(endpoint: &Path, native: &str, accent: &str) -> DaemonActionDispatch {
+    let line = format!("theme {native} {accent}");
+    platform::dispatch_action(
+        endpoint,
+        &line,
+        &serde_json::Value::Null,
+        platform::default_io_timeout(),
+    )
+}
+
 fn dispatch_daemon_action_request(
     endpoint: &Path,
     action_id: &str,

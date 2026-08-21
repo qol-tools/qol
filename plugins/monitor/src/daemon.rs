@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use qol_host_fixes::residency::HostResidency;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::DaemonRequest;
 
@@ -13,7 +14,7 @@ use crate::monitor::{
     MonitorError, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 use crate::platform::MonitorControl;
-use crate::session::{LutProvider, RestoreMode, Session, SessionStore};
+use crate::session::{LutProvider, RestoreMode, Session, SessionStore, Snapshot};
 use qol_windowing::display::DisplayHandle;
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
@@ -60,15 +61,26 @@ pub enum Command {
     ApplyPreferred,
     Reload,
     Kill,
+    Evicted,
+    Handoff,
+    HandoffSuccessor { generation: Option<String> },
 }
 
 pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => return ReadResult::Handled,
-        "kill" => return ReadResult::Command(Command::Kill),
+        "kill" => return ReadResult::Command(Command::Evicted),
         "settings" => return ReadResult::Command(Command::Settings),
         "apply" => return ReadResult::Command(Command::ApplyPreferred),
         "reload" => return ReadResult::Command(Command::Reload),
+        "handoff" => {
+            let generation = request
+                .input
+                .get("generation")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            return ReadResult::Command(Command::HandoffSuccessor { generation });
+        }
         "set_brightness" => {
             return match parse_brightness_input(&request.input) {
                 Ok((display, value)) => {
@@ -286,10 +298,12 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     config_root: Option<PathBuf>,
     preferred_save: PreferredSave,
     brightness_cache: BTreeMap<String, BrightnessState>,
+    residency: ResidencyCheck,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type PreferredSave = Arc<dyn Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync>;
+type ResidencyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
 impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
     pub fn new(
@@ -299,6 +313,7 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         notify: impl Fn(&str, &str) + Send + Sync + 'static,
         config_root: Option<PathBuf>,
         preferred_save: impl Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync + 'static,
+        residency: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             session: Session::new(control, store, lut),
@@ -310,11 +325,28 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             config_root,
             preferred_save: Arc::new(preferred_save),
             brightness_cache: BTreeMap::new(),
+            residency: Arc::new(residency),
         }
     }
 
     pub fn session(&self) -> &Session<C> {
         &self.session
+    }
+
+    fn is_resident(&self) -> bool {
+        (self.residency)()
+    }
+
+    #[cfg(test)]
+    fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
+        self.session = self.session.with_adoption_generation(generation);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_residency(mut self, resident: bool) -> Self {
+        self.residency = Arc::new(move || resident);
+        self
     }
 
     fn surface_gamma_warnings(&self, report: &crate::session::RestoreReport) {
@@ -340,11 +372,72 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
 
 impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
     pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
-        let recovery = self.session.restore_all(RestoreMode::Recovery);
-        self.surface_gamma_warnings(&recovery);
+        let handoffs = self.handoff_snapshots();
+        let recovery = if self.is_resident() {
+            crate::session::RestoreReport::default()
+        } else {
+            let recovery = self.session.restore_all(RestoreMode::Recovery);
+            self.surface_gamma_warnings(&recovery);
+            if recovery.restored > 0 {
+                (self.notify)(
+                    "Monitor",
+                    &format!(
+                        "Restored {} display{} after an unclean shutdown",
+                        recovery.restored,
+                        if recovery.restored == 1 { "" } else { "s" }
+                    ),
+                );
+            }
+            recovery
+        };
         *self.config.lock().unwrap() = policy_config(config);
         self.preferred = config::load_preferred(self.config_root.as_deref());
+        self.adopt_handoffs(&handoffs);
+        self.apply_preferred_map();
         recovery
+    }
+
+    fn handoff_snapshots(&self) -> Vec<Snapshot> {
+        let Ok(inventory) = self.session.store().load_all() else {
+            return Vec::new();
+        };
+        inventory
+            .snapshots
+            .into_iter()
+            .filter(|snapshot| snapshot.handoff)
+            .collect()
+    }
+
+    fn adopt_handoffs(&mut self, handoffs: &[Snapshot]) {
+        if handoffs.is_empty() {
+            return;
+        }
+        let Ok(handles) = self.session.control().enumerate() else {
+            return;
+        };
+        for snapshot in handoffs {
+            if !self.session.handoff_is_for_this_generation(snapshot) {
+                continue;
+            }
+            let Some(handle) = handles
+                .iter()
+                .find(|handle| handle.id() == snapshot.display_id)
+                .or_else(|| {
+                    handles
+                        .iter()
+                        .find(|handle| handle.connector() == snapshot.connector)
+                })
+            else {
+                continue;
+            };
+            let handle = handle.clone();
+            self.session.adopt(&handle);
+            self.remember_brightness(&handle, snapshot.last_value);
+            let _ = self.session.store().write_snapshot(&Snapshot {
+                handoff: false,
+                ..snapshot.clone()
+            });
+        }
     }
 
     pub fn config(&self) -> DeviceConfig {
@@ -437,8 +530,23 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 true
             }
             Command::Kill => {
-                let report = self.session.restore_all(RestoreMode::Exit);
-                self.surface_gamma_warnings(&report);
+                if !self.is_resident() {
+                    let report = self.session.restore_all(RestoreMode::Exit);
+                    self.surface_gamma_warnings(&report);
+                }
+                false
+            }
+            Command::Evicted => {
+                self.session
+                    .mark_handoff_all(Some(crate::session::EVICTION_GENERATION));
+                false
+            }
+            Command::Handoff => {
+                self.session.mark_handoff_all(None);
+                false
+            }
+            Command::HandoffSuccessor { generation } => {
+                self.session.mark_handoff_all(generation.as_deref());
                 false
             }
         }
@@ -620,20 +728,29 @@ fn drain_all_queued(rx: &Receiver<Command>) {
     while rx.try_recv().is_ok() {}
 }
 
-fn install_sigterm_handler(tx: Sender<Command>) -> signal_hook::iterator::Handle {
-    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])
-        .expect("failed to register the SIGTERM handler");
+fn install_signal_handlers(tx: Sender<Command>) -> signal_hook::iterator::Handle {
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGHUP,
+    ])
+    .expect("failed to register the SIGTERM and SIGHUP handlers");
     let handle = signals.handle();
     std::thread::Builder::new()
-        .name("monitor-sigterm".into())
+        .name("monitor-signals".into())
         .spawn(move || {
-            if let Some(signal) = signals.forever().next() {
-                if signal == signal_hook::consts::SIGTERM {
-                    let _ = tx.send(Command::Kill);
+            for signal in signals.forever() {
+                let command = match signal {
+                    signal_hook::consts::SIGTERM => Some(Command::Kill),
+                    signal_hook::consts::SIGHUP => Some(Command::Handoff),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                    return;
                 }
             }
         })
-        .expect("failed to spawn the SIGTERM forwarder");
+        .expect("failed to spawn the signal forwarder");
     handle
 }
 
@@ -654,7 +771,7 @@ pub fn run() -> Result<(), String> {
         return Err("failed to start plugin-monitor daemon listener".into());
     }
     trace_startup(&recovery);
-    let _sigterm = install_sigterm_handler(tx);
+    let _sigterm = install_signal_handlers(tx);
     run_loop(&runtime, &rx);
     core_daemon::cleanup(&DAEMON_CONFIG);
     Ok(())
@@ -672,7 +789,15 @@ fn build_runtime(
         let root = config_root.clone();
         move |preferred: &BTreeMap<String, u8>| config::save_preferred(root.as_deref(), preferred)
     };
-    Runtime::new(control, store, lut, notify, config_root, preferred_save)
+    Runtime::new(
+        control,
+        store,
+        lut,
+        notify,
+        config_root,
+        preferred_save,
+        || HostResidency::current().is_resident(),
+    )
 }
 
 fn session_store_for(config_root: Option<&std::path::Path>) -> SessionStore {
@@ -719,6 +844,8 @@ mod tests {
     use crate::session::NoLutProvider;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+
+    static SIGNAL_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
         DisplayHandle::new(id.into(), connector.into(), None, false)
@@ -793,11 +920,28 @@ mod tests {
         ));
         assert!(matches!(
             parse_request(&request("kill", serde_json::Value::Null)),
-            ReadResult::Command(Command::Kill)
+            ReadResult::Command(Command::Evicted)
         ));
         assert!(matches!(
             parse_request(&request("nope", serde_json::Value::Null)),
             ReadResult::Fallback
+        ));
+    }
+
+    #[test]
+    fn routes_handoff_with_and_without_a_delivered_successor_generation() {
+        assert!(matches!(
+            parse_request(&request(
+                "handoff",
+                serde_json::json!({ "generation": "successor-gen" })
+            )),
+            ReadResult::Command(Command::HandoffSuccessor {
+                generation: Some(value)
+            }) if value == "successor-gen"
+        ));
+        assert!(matches!(
+            parse_request(&request("handoff", serde_json::Value::Null)),
+            ReadResult::Command(Command::HandoffSuccessor { generation: None })
         ));
     }
 
@@ -1035,7 +1179,16 @@ mod tests {
             |_title, _body| {},
             None,
             |_preferred| Ok(()),
+            || false,
         )
+    }
+
+    fn runtime_with_generation(
+        control: Arc<FakeControl>,
+        store: SessionStore,
+        generation: &str,
+    ) -> Runtime<FakeControl> {
+        runtime_with(control, store).with_adoption_generation(Some(generation.to_string()))
     }
 
     type Toasts = Arc<StdMutex<Vec<String>>>;
@@ -1055,6 +1208,7 @@ mod tests {
             },
             None,
             |_preferred| Ok(()),
+            || false,
         );
         (runtime, toasts)
     }
@@ -1071,6 +1225,23 @@ mod tests {
             |_title, _body| {},
             config_root,
             |_preferred| Ok(()),
+            || false,
+        )
+    }
+
+    fn runtime_with_residency(
+        control: Arc<FakeControl>,
+        store: SessionStore,
+        resident: bool,
+    ) -> Runtime<FakeControl> {
+        Runtime::new(
+            control,
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            None,
+            |_preferred| Ok(()),
+            move || resident,
         )
     }
 
@@ -1107,6 +1278,8 @@ mod tests {
             last_value,
             mutations: 3,
             clean: false,
+            handoff: false,
+            adopt_generation: None,
             lut: None,
             checksum: String::new(),
         }
@@ -1191,6 +1364,7 @@ mod tests {
                 saved.fetch_add(1, Ordering::SeqCst);
                 config::save_preferred(Some(&saved_root), preferred)
             },
+            || false,
         );
         runtime.handle(Command::SetBrightness {
             display: "id-2".into(),
@@ -1245,6 +1419,7 @@ mod tests {
             },
             Some(config_root.clone()),
             |_preferred| Ok(()),
+            || false,
         );
         runtime.handle(Command::SetBrightness {
             display: "id-gone".into(),
@@ -1265,7 +1440,7 @@ mod tests {
     }
 
     #[test]
-    fn start_restores_stale_snapshots_and_never_applies_preferred() {
+    fn portable_start_restores_the_stale_baseline_then_applies_preferred() {
         let (_dir, store) = runtime_store();
         let (_root, config_root) = preferred_root();
         write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
@@ -1278,21 +1453,90 @@ mod tests {
         store
             .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 100, 60))
             .unwrap();
-        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        let mut runtime =
+            runtime_with_root(control.clone(), store, Some(config_root)).with_residency(false);
         runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
-            vec![("id-1".to_string(), 100)],
-            "crash restore runs and preferred is never written on top"
+            vec![
+                ("id-1".to_string(), 100),
+                ("id-1".to_string(), 80),
+            ],
+            "the crash restore returns the baseline first, then preferred is applied on top (portable)"
         );
-        assert!(
-            runtime
-                .session()
-                .store()
-                .load_snapshot("id-1")
-                .unwrap()
-                .is_none(),
-            "a recovered snapshot is cleared"
+        let snapshot = runtime
+            .session()
+            .store()
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("portable start captures a fresh baseline");
+        assert_eq!(
+            snapshot.value, 100,
+            "the restored baseline becomes the live untouched-host baseline"
+        );
+    }
+
+    #[test]
+    fn resident_start_keeps_the_baseline_and_applies_preferred() {
+        let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        store
+            .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 100, 60))
+            .unwrap();
+        let mut runtime =
+            runtime_with_root(control.clone(), store, Some(config_root)).with_residency(true);
+        runtime.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 80)],
+            "resident start never restores the old baseline and converges to preferred instead"
+        );
+        let snapshot = runtime
+            .session()
+            .store()
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("apply_preferred captures a fresh snapshot");
+        assert_eq!(
+            snapshot.value, 60,
+            "the live value becomes the baseline so it can be restored if residency is ever disabled"
+        );
+    }
+
+    #[test]
+    fn resident_start_adopts_handoffs_then_applies_preferred() {
+        let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        store
+            .write_snapshot(&crate::session::Snapshot {
+                handoff: true,
+                adopt_generation: Some("reload-1".to_string()),
+                last_value: 60,
+                ..stale_snapshot("id-1", "card0-DP-1", 100, 60)
+            })
+            .unwrap();
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root))
+            .with_residency(true)
+            .with_adoption_generation(Some("reload-1".to_string()));
+        runtime.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 80)],
+            "the resident successor adopts the handoff without restoring and then applies preferred"
         );
     }
 
@@ -1307,7 +1551,8 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        let mut runtime =
+            runtime_with_root(control.clone(), store, Some(config_root)).with_residency(false);
         runtime.start(&DeviceConfig::default());
         assert!(runtime.handle(Command::ApplyPreferred));
         control.calls.lock().unwrap().clear();
@@ -1315,7 +1560,7 @@ mod tests {
         assert_eq!(
             control.calls(),
             vec![("id-1".to_string(), 100)],
-            "exit restore returns to the pre-daemon state"
+            "portable exit restore returns to the pre-daemon state"
         );
         let snapshot = runtime
             .session()
@@ -1334,6 +1579,627 @@ mod tests {
     }
 
     #[test]
+    fn resident_exit_preserves_the_display_and_keeps_the_baseline_snapshot() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with_residency(control.clone(), store.clone(), true);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(!runtime.handle(Command::Kill), "kill stops the loop");
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "resident exit must never write the display"
+        );
+        let after_exit = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_exit,
+            Some(60),
+            "resident exit keeps the display exactly as the user set it"
+        );
+        let snapshot = store
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("a resident exit keeps the baseline snapshot on disk");
+        assert_eq!(
+            snapshot.value, 100,
+            "the untouched-host baseline survives so disabling residency later can restore it"
+        );
+    }
+
+    #[test]
+    fn resident_then_portable_flip_takes_effect_at_the_next_decision_point() {
+        let (_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 80)]));
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let residen = std::sync::Arc::new(StdMutex::new(true));
+        let gate = residen.clone();
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        );
+        runtime.residency = Arc::new(move || *gate.lock().unwrap());
+        runtime.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 80)],
+            "starting resident converges to preferred"
+        );
+        control.calls.lock().unwrap().clear();
+        *residen.lock().unwrap() = false;
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !runtime.handle(Command::Kill),
+            "the flip to portable is read at exit, not cached at daemon start"
+        );
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "the now-portable host restores the baseline at the next decision point"
+        );
+    }
+
+    #[test]
+    fn restart_after_clean_exit_writes_nothing_and_keeps_the_baseline() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with(control.clone(), store.clone());
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        assert!(!first.handle(Command::Kill));
+        let after_exit = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(after_exit, Some(100), "exit restore returns the baseline");
+        drop(first);
+        control.calls.lock().unwrap().clear();
+        let mut second = runtime_with(control.clone(), store.clone());
+        second.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "a restart after a clean exit must not write the display"
+        );
+        let after_restart = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_restart,
+            Some(100),
+            "the display keeps whatever the user left on it"
+        );
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "the clean snapshot is retired without being re-applied"
+        );
+        assert!(!second.handle(Command::Kill));
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "nothing to restore on the next exit either"
+        );
+    }
+
+    #[test]
+    fn crash_recovery_restores_the_baseline_and_surfaces_the_write() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            60,
+            BrightnessSource::Ddc,
+        ));
+        store
+            .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 100, 60))
+            .unwrap();
+        let toasts: Toasts = Arc::new(StdMutex::new(Vec::new()));
+        let sink = toasts.clone();
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            move |_title, body| {
+                sink.lock().unwrap().push(body.to_string());
+            },
+            None,
+            |_preferred| Ok(()),
+            || false,
+        );
+        runtime.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "an unclean crash restores the pre-qol baseline at the next start"
+        );
+        assert_eq!(
+            toasts.lock().unwrap().as_slice(),
+            ["Restored 1 display after an unclean shutdown"],
+            "the crash restore must be surfaced, never silent"
+        );
+    }
+
+    #[test]
+    fn reload_handoff_keeps_the_display_value_and_writes_no_hardware() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with_generation(control.clone(), store.clone(), "reload-1");
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !first.handle(Command::Handoff),
+            "a reload must end the daemon loop"
+        );
+        let after_handoff = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_handoff,
+            Some(60),
+            "a reload must not move the display at exit"
+        );
+        assert!(
+            control.calls().is_empty(),
+            "the reload exit must not write the hardware"
+        );
+        drop(first);
+        let mut second = runtime_with_generation(control.clone(), store.clone(), "reload-1");
+        second.start(&DeviceConfig::default());
+        let after_restart = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_restart,
+            Some(60),
+            "a reloaded daemon must not move the display at start"
+        );
+        assert!(
+            control.calls().is_empty(),
+            "the reloaded start must not write the hardware"
+        );
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            snapshot.value, 100,
+            "the pre-qol baseline survives a reload"
+        );
+        assert_eq!(snapshot.last_value, 60);
+        assert!(
+            !snapshot.clean,
+            "the reload must not mark a clean exit that was never restored"
+        );
+        assert!(
+            !snapshot.handoff,
+            "the successor must clear the handoff marker after adopting"
+        );
+        assert!(!second.handle(Command::Kill));
+        let after_exit = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_exit,
+            Some(100),
+            "a real exit after a reload still restores the baseline"
+        );
+    }
+
+    #[test]
+    fn reload_successor_adopts_unaddressed_handoff_with_zero_hardware_writes() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut predecessor = runtime_with_generation(control.clone(), store.clone(), "reload-1");
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the reload loop"
+        );
+        drop(predecessor);
+
+        let marked = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(marked.handoff, "SIGHUP marks the handoff");
+
+        let mut successor = runtime_with_generation(control.clone(), store.clone(), "reload-1");
+        let report = successor.start(&DeviceConfig::default());
+        assert!(
+            control.calls().is_empty(),
+            "the reload successor must adopt without writing hardware: {:?}",
+            control.calls()
+        );
+        assert_eq!(report.restored, 0);
+        let after = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after,
+            Some(60),
+            "the display stays where the user set it across the reload"
+        );
+        let adopted = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(
+            !adopted.handoff,
+            "the successor clears the handoff marker after adopting"
+        );
+    }
+
+    #[test]
+    fn handoff_stamps_the_successor_generation_not_the_predecessors_own() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with_generation(control.clone(), store.clone(), "predecessor-gen");
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        assert!(
+            !first.handle(Command::HandoffSuccessor {
+                generation: Some("successor-gen".into()),
+            }),
+            "the orchestrator-delivered handoff ends the loop"
+        );
+        drop(first);
+
+        let marked = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(marked.handoff, "the handoff marks the snapshot");
+        assert_eq!(
+            marked.adopt_generation.as_deref(),
+            Some("successor-gen"),
+            "the handoff stamps the SUCCESSOR generation id the orchestrator delivered, not the predecessor's own {}",
+            "predecessor-gen"
+        );
+    }
+
+    #[test]
+    fn a_successor_of_a_different_generation_does_not_adopt_an_addressed_handoff() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with_generation(control.clone(), store.clone(), "gen-reload-a");
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !first.handle(Command::HandoffSuccessor {
+                generation: Some("gen-reload-a".into()),
+            }),
+            "the addressed handoff ends the loop"
+        );
+        drop(first);
+
+        let mut different = runtime_with_generation(control.clone(), store.clone(), "gen-reload-b");
+        let report = different.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "a different generation is a genuine orphan of this handoff and must restore the baseline"
+        );
+        assert_eq!(report.restored, 1);
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "the restored handoff snapshot must be cleared"
+        );
+    }
+
+    #[test]
+    fn a_promoted_daemon_without_identity_does_not_adopt_an_orphaned_handoff() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with_generation(control.clone(), store.clone(), "gen-reload-a");
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(!first.handle(Command::Handoff), "SIGHUP ends the loop");
+        drop(first);
+
+        let mut promoted_later = runtime_with(control.clone(), store.clone());
+        let report = promoted_later.start(&DeviceConfig::default());
+        assert_eq!(
+            report.restored, 1,
+            "a daemon that boots with no generation identity (long after promotion) must restore the orphaned baseline"
+        );
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "the orphan's recovery writes the pre-qol baseline back"
+        );
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "the restored handoff snapshot must be cleared"
+        );
+    }
+
+    #[test]
+    fn the_same_generation_reload_successor_adopts_with_zero_hardware_writes() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut predecessor =
+            runtime_with_generation(control.clone(), store.clone(), "gen-reload-a");
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the reload loop"
+        );
+        drop(predecessor);
+
+        let mut successor = runtime_with_generation(control.clone(), store.clone(), "gen-reload-a");
+        let report = successor.start(&DeviceConfig::default());
+        assert!(
+            control.calls().is_empty(),
+            "the reload successor must adopt without writing hardware: {:?}",
+            control.calls()
+        );
+        assert_eq!(report.restored, 0);
+        let adopted = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(!adopted.handoff, "the successor clears the handoff marker");
+    }
+
+    #[test]
+    fn a_reload_successor_whose_handoff_was_addressed_by_the_orchestrator_adopts_across_a_rebuild()
+    {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut predecessor = runtime_with_generation(control.clone(), store.clone(), "digest-old");
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the reload loop"
+        );
+        drop(predecessor);
+
+        let mut stamped = store.load_snapshot("id-1").unwrap().unwrap();
+        stamped.adopt_generation = Some("digest-new".to_string());
+        store.write_snapshot(&stamped).unwrap();
+
+        let mut successor = runtime_with_generation(control.clone(), store.clone(), "digest-new");
+        let report = successor.start(&DeviceConfig::default());
+        assert!(
+            control.calls().is_empty(),
+            "the orchestrator-stamped successor adopts even when the build digest changed: {:?}",
+            control.calls()
+        );
+        assert_eq!(report.restored, 0);
+    }
+
+    #[test]
+    fn cold_start_after_an_aborted_reload_restores_and_notifies() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut predecessor = runtime_with(control.clone(), store.clone());
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the reload loop"
+        );
+        drop(predecessor);
+
+        let (mut cold_start, toasts) = runtime_with_toasts(control.clone(), store.clone());
+        let report = cold_start.start(&DeviceConfig::default());
+        assert_eq!(
+            report.restored, 1,
+            "a pure-stable cold start must restore the pre-qol baseline"
+        );
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "the orphan's recovery writes the baseline back"
+        );
+        {
+            let bodies = toasts.lock().unwrap();
+            assert!(
+                bodies.iter().any(|body| body.contains("Restored")),
+                "a permanent mutation must never be silent: {bodies:?}"
+            );
+        }
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "the restored handoff snapshot must be cleared"
+        );
+    }
+
+    #[test]
+    fn kill_after_handoff_without_adoption_still_restores_the_baseline() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control.clone(), store.clone());
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        assert!(!runtime.handle(Command::Handoff));
+        drop(runtime);
+        let mut successor = runtime_with(control.clone(), store.clone());
+        assert!(!successor.handle(Command::Kill));
+        let after_exit = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after_exit,
+            Some(100),
+            "a real quit during the handoff window still restores the baseline"
+        );
+    }
+
+    #[test]
+    fn stale_handoff_without_a_successor_is_restored_on_the_next_recovery() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut first = runtime_with_generation(control.clone(), store.clone(), "gen-a");
+        first.start(&DeviceConfig::default());
+        first.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(!first.handle(Command::Handoff), "SIGHUP ends the loop");
+        drop(first);
+
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(snap.handoff, "SIGHUP must mark the snapshot for handoff");
+        assert_eq!(
+            snap.adopt_generation.as_deref(),
+            None,
+            "a bare SIGHUP with no orchestrator successor id leaves the handoff unaddressed"
+        );
+
+        store.write_snapshot(&snap).unwrap();
+
+        let mut cold_start = runtime_with(control.clone(), store.clone());
+        let report = cold_start.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 100)],
+            "a handoff whose successor never started must restore the baseline when an unrelated cold start boots"
+        );
+        assert_eq!(report.restored, 1);
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "the restored handoff snapshot must be cleared"
+        );
+    }
+
+    #[test]
+    fn a_successor_that_starts_late_still_adopts_instead_of_restoring() {
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let mut predecessor = runtime_with_generation(control.clone(), store.clone(), "gen-s");
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 60,
+        });
+        control.calls.lock().unwrap().clear();
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the loop"
+        );
+        drop(predecessor);
+
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(snap.handoff, "SIGHUP must mark the snapshot for handoff");
+        assert_eq!(
+            snap.adopt_generation.as_deref(),
+            None,
+            "a bare SIGHUP with no orchestrator successor id leaves the handoff unaddressed"
+        );
+
+        store.write_snapshot(&snap).unwrap();
+
+        let mut successor = runtime_with_generation(control.clone(), store.clone(), "gen-s");
+        let report = successor.start(&DeviceConfig::default());
+        assert_eq!(
+            control.calls(),
+            Vec::<(String, u8)>::new(),
+            "the intended successor adopts no matter how much time passed: booting must never write hardware"
+        );
+        assert_eq!(report.restored, 0);
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_some(),
+            "an adopted handoff is kept so the successor owns the display"
+        );
+    }
+
+    #[test]
     fn config_never_overrides_restore() {
         let (_dir, store) = runtime_store();
         let (_root, config_root) = preferred_root();
@@ -1347,12 +2213,13 @@ mod tests {
         store
             .write_snapshot(&stale_snapshot("id-1", "card0-DP-1", 50, 60))
             .unwrap();
-        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        let mut runtime =
+            runtime_with_root(control.clone(), store, Some(config_root)).with_residency(false);
         runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
-            vec![("id-1".to_string(), 50)],
-            "the crash-restored value stands; preferred is never layered on top"
+            vec![("id-1".to_string(), 50), ("id-1".to_string(), 20)],
+            "the crash-restored value is written before preferred is layered on top"
         );
     }
 
@@ -1372,23 +2239,64 @@ mod tests {
     }
 
     #[test]
-    fn start_never_writes_brightness_when_preferred_is_configured() {
+    fn start_applies_preferred_in_both_residency_modes() {
+        for resident in [false, true] {
+            let (_dir, store) = runtime_store();
+            let (_root, config_root) = preferred_root();
+            write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 30)]));
+            let control = Arc::new(FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                75,
+                BrightnessSource::Ddc,
+            ));
+            let mut runtime = runtime_with_root(control.clone(), store, Some(config_root))
+                .with_residency(resident);
+            runtime.start(&DeviceConfig::default());
+            assert_eq!(
+                control.calls(),
+                vec![("id-1".to_string(), 30)],
+                "start applies preferred whether resident={resident}"
+            );
+            assert_eq!(control.steps.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn start_applies_a_differing_preferred_over_a_settled_snapshot() {
         let (_dir, store) = runtime_store();
         let (_root, config_root) = preferred_root();
-        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 30)]));
+        write_preferred(&config_root, BTreeMap::from([("id-1".to_string(), 100)]));
+        let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
-            vec![handle("id-1", "card0-DP-1")],
-            75,
+            vec![display.clone()],
+            50,
             BrightnessSource::Ddc,
         ));
+        let settled = Snapshot {
+            value: 50,
+            last_value: 100,
+            mutations: 2,
+            clean: true,
+            ..stale_snapshot("id-1", "card0-DP-1", 100, 50)
+        };
+        store.write_snapshot(&settled).unwrap();
         let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
         runtime.start(&DeviceConfig::default());
         assert_eq!(
             control.calls(),
-            Vec::<(String, u8)>::new(),
-            "opening the settings panel spawns the daemon and must move no display"
+            vec![("id-1".to_string(), 100)],
+            "a clean settled snapshot is dropped and preferred is applied at start"
         );
-        assert_eq!(control.steps.load(Ordering::SeqCst), 0);
+        let snapshot = runtime
+            .session()
+            .store()
+            .load_snapshot("id-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.value, 50,
+            "the on-disk host baseline stays the live pre-profile value"
+        );
     }
 
     #[test]
@@ -1687,6 +2595,7 @@ mod tests {
             |_title, _body| {},
             Some(config_root),
             |_preferred| Ok(()),
+            || false,
         );
         runtime.start(&DeviceConfig::default());
         set_live_state(Arc::new(Mutex::new(runtime)));
@@ -1698,8 +2607,8 @@ mod tests {
         };
         assert_eq!(payload[0]["connector"], "card0-DP-1");
         assert_eq!(
-            payload[0]["brightness"], 42,
-            "start reports the live value it read, never one it wrote"
+            payload[0]["brightness"], 80,
+            "start applies the preferred value in both residency modes"
         );
         assert_eq!(payload[0]["preferred"], 80);
 
@@ -1944,6 +2853,7 @@ mod tests {
 
     #[test]
     fn sigterm_runs_the_exit_restore_and_marks_clean() {
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
         let (_dir, store) = runtime_store();
         let display = handle("id-1", "card0-DP-1");
         let control = Arc::new(FakeControl::new(
@@ -1960,7 +2870,7 @@ mod tests {
             .unwrap();
         control.calls.lock().unwrap().clear();
         let (tx, rx) = mpsc::channel();
-        let _sigterm = install_sigterm_handler(tx);
+        let _sigterm = install_signal_handlers(tx);
         let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
         let status = std::process::Command::new("kill")
             .args(["-TERM", &std::process::id().to_string()])
@@ -1977,6 +2887,50 @@ mod tests {
             vec![("id-1".to_string(), 100)],
             "the SIGTERM restore returns to the pre-daemon state"
         );
+    }
+
+    #[test]
+    fn sighup_handoff_exits_without_restoring_and_marks_the_snapshot() {
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
+        let (_dir, store) = runtime_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Ddc,
+        ));
+        let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
+        runtime
+            .lock()
+            .unwrap()
+            .session()
+            .mutate(&display, 60)
+            .unwrap();
+        control.calls.lock().unwrap().clear();
+        let (tx, rx) = mpsc::channel();
+        let _sighup = install_signal_handlers(tx);
+        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
+        let status = std::process::Command::new("kill")
+            .args(["-HUP", &std::process::id().to_string()])
+            .status()
+            .expect("kill must run");
+        assert!(status.success());
+        loop_thread.join().expect("the loop must exit after SIGHUP");
+        let after = control.current.lock().unwrap().get("id-1").copied();
+        assert_eq!(
+            after,
+            Some(60),
+            "SIGHUP must leave the display exactly as the user set it"
+        );
+        assert!(
+            control.calls().is_empty(),
+            "SIGHUP must not write the hardware"
+        );
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(snap.handoff, "SIGHUP must mark the reload handoff");
+        assert_eq!(snap.value, 100, "the baseline survives the handoff");
+        assert_eq!(snap.last_value, 60);
+        assert!(!snap.clean);
     }
 
     #[test]
@@ -1998,6 +2952,7 @@ mod tests {
             notify,
             None,
             |_preferred| Ok(()),
+            || false,
         );
         store
             .write_snapshot(&crate::session::Snapshot {
@@ -2042,6 +2997,7 @@ mod tests {
             notify,
             None,
             |_preferred| Ok(()),
+            || false,
         );
         runtime.session().mutate(&display, 60).unwrap();
         runtime.handle(Command::Kill);

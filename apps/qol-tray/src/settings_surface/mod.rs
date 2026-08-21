@@ -35,6 +35,10 @@ pub fn stop() {
     platform::stop();
 }
 
+pub fn apply_theme(native: &str, accent: &str) -> bool {
+    platform::apply_theme(native, accent)
+}
+
 pub fn show_toast(
     title: &str,
     body: &str,

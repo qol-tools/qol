@@ -1,3 +1,4 @@
+mod core_config;
 mod hotkey_handlers;
 mod http_json;
 mod media_apps_handlers;
@@ -58,6 +59,17 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/theme", get(theme_handlers::get_theme))
         .route("/theme", axum::routing::put(theme_handlers::set_theme))
+        .route("/native-theme", get(theme_handlers::get_native_theme))
+        .route(
+            "/native-theme",
+            axum::routing::put(theme_handlers::set_native_theme),
+        )
+        .route("/core/queries/{query}", get(theme_handlers::get_core_query))
+        .route("/core/config", get(core_config::get_core_config))
+        .route(
+            "/core/config",
+            axum::routing::put(core_config::set_core_config),
+        )
         .route(
             "/notifications",
             get(notifications_handlers::get_notifications),

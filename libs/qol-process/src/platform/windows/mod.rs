@@ -930,6 +930,10 @@ pub(crate) fn terminate_pid(pid: u32, grace: Duration) {
     }
 }
 
+pub(crate) fn reload_group(pid: u32, grace: Duration) {
+    terminate_group(pid, grace);
+}
+
 pub(crate) fn terminate_group(pid: u32, grace: Duration) {
     terminate_pid(pid, grace);
 }

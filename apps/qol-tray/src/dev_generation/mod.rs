@@ -179,7 +179,7 @@ pub fn drain_predecessor_daemons_for_promotion() -> anyhow::Result<()> {
         format_predecessor_daemons(&remaining)
     );
     for daemon in &remaining {
-        crate::process_utils::terminate_group(daemon.pid as i32, PREDECESSOR_DAEMON_TERM_GRACE);
+        crate::process_utils::reload_group(daemon.pid as i32, PREDECESSOR_DAEMON_TERM_GRACE);
     }
     let remaining = wait_for_predecessor_daemons_to_exit(remaining, PREDECESSOR_DAEMON_TERM_GRACE);
     if remaining.is_empty() {
@@ -429,6 +429,10 @@ mod tests {
             crate::paths::runtime_dir()
                 .join("sockets")
                 .join("qol-launcher.sock")
+        );
+        assert!(
+            std::env::var(ENV_DEV_GENERATION_ID).is_err(),
+            "promotion strips the generation id so no later daemon inherits a shadow identity"
         );
         reset_generation_state();
     }

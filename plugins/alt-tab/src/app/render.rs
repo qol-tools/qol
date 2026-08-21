@@ -7,7 +7,10 @@ use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_gpui::theme::PickerSurfacePalette;
+use qol_gpui::kit::float_shadow;
+use qol_gpui::theme::{
+    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_BODY, TEXT_CAPTION, TEXT_NANO,
+};
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -30,11 +33,13 @@ struct RenderSnap {
     icon_position: PreviewIconPosition,
     rendering: RenderingFlow,
     palette: PickerSurfacePalette,
+    system: SystemPalette,
     metrics: CardMetrics,
 }
 
 struct CardRenderContext<'a> {
     snap: &'a RenderSnap,
+    grid_scroll: &'a gpui::ScrollHandle,
     label_config: &'a LabelConfig,
     previews: &'a PreviewMap,
     live_frames: &'a LiveFrameMap,
@@ -128,7 +133,12 @@ impl Render for AltTabApp {
             show_hotkey_hints: d.show_hotkey_hints,
             icon_position: d.icon_position,
             rendering: self.rendering,
-            palette: PickerSurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
+            palette: PickerSurfacePalette::themed(
+                runtime_theme().system,
+                d.card_bg_color,
+                d.card_bg_opacity,
+            ),
+            system: runtime_theme().system,
             metrics: layout.metrics,
         };
 
@@ -143,8 +153,11 @@ impl Render for AltTabApp {
 
         let (panel_w, panel_h) = (layout.width, layout.height);
 
+        self.grid_scroll.follow(d.selected_index);
+        let grid_scroll = self.grid_scroll.handle().clone();
         let render_context = CardRenderContext {
             snap: &snap,
+            grid_scroll: &grid_scroll,
             label_config: &d.label_config,
             previews: &d.live_previews,
             live_frames: &d.live_frames,
@@ -163,6 +176,7 @@ impl Render for AltTabApp {
             .w(px(panel_w))
             .h(px(panel_h))
             .when(!snap.transparent_bg, |s| s.bg(rgb(snap.palette.panel_bg)))
+            .shadow(float_shadow(snap.system.text_primary))
             .on_key_down(key_handler)
             .when(snap.visible, |s| {
                 s.on_modifiers_changed(modifiers_handler)
@@ -174,14 +188,14 @@ impl Render for AltTabApp {
                 s.child(header_bar(
                     "Alt Tab",
                     "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
-                    &snap.palette,
+                    &snap,
                 ))
             })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
                 s.child(header_bar(
                     "Alt Tab  ·  Live Window Grid",
                     "↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
-                    &snap.palette,
+                    &snap,
                 ))
             })
             .child(grid);
@@ -263,26 +277,28 @@ fn probe_rendered_front(
     }
 }
 
-fn header_bar(left: &str, right: &str, palette: &PickerSurfacePalette) -> Div {
+fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
+    let system = &snap.system;
     div()
         .px_4()
         .py_2()
         .border_b_1()
-        .border_color(rgb(palette.header_border))
-        .bg(rgb(palette.header_bg))
+        .border_color(rgb(system.border_subtle))
+        .bg(rgb(snap.palette.header_bg))
         .flex()
         .items_center()
         .justify_between()
         .child(
             div()
-                .text_color(rgb(palette.header_left_text))
-                .text_xs()
+                .text_color(rgb(snap.palette.header_left_text))
+                .text_size(px(TEXT_CAPTION))
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(left.to_string()),
         )
         .child(
             div()
-                .text_color(rgb(palette.header_right_text))
-                .text_xs()
+                .text_color(rgb(snap.palette.header_right_text))
+                .text_size(px(TEXT_CAPTION))
                 .child(right.to_string()),
         )
 }
@@ -297,6 +313,7 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
             .content_start()
             .w_full()
             .h_full()
+            .track_scroll(context.grid_scroll)
             .overflow_y_scroll()
             .px_5()
             .py_4()
@@ -304,7 +321,7 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
             .when(windows.is_empty(), |s| {
                 s.items_center().justify_center().child(
                     div()
-                        .text_sm()
+                        .text_size(px(TEXT_BODY))
                         .text_color(rgb(context.snap.palette.grid_empty_text))
                         .child("Scanning windows..."),
                 )
@@ -329,7 +346,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
                 let entity = context.entity.clone();
                 move |_, window, cx| {
                     let _ = entity.update(cx, |this, cx| {
-                        this.delegate.update(cx, |s, _| s.selected_index = Some(i));
+                        this.delegate.update(cx, |s, _| s.select_index(i));
                         this.dismiss("click/card", window, cx);
                         this.delegate
                             .update(cx, |s, _| s.activate_selected_target());
@@ -343,18 +360,9 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
         .w(px(snap.metrics.card_width))
         .h(px(snap.metrics.card_height))
         .p(px(snap.metrics.card_padding))
-        .rounded_xl()
         .when(snap.visible, |el| el.cursor_pointer())
-        .map(|el| {
-            card_bg(
-                el,
-                is_selected,
-                snap.visible,
-                snap.transparent_bg,
-                &snap.palette,
-            )
-        })
-        .child(render_preview(win, context, is_selected))
+        .map(|el| card_bg(el, is_selected, snap))
+        .child(render_preview(win, context))
         .child(render_label(
             i,
             win,
@@ -365,38 +373,36 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
         ))
 }
 
-fn card_bg(
-    el: Stateful<Div>,
-    selected: bool,
-    visible: bool,
-    transparent: bool,
-    palette: &PickerSurfacePalette,
-) -> Stateful<Div> {
-    if selected && transparent {
-        return el
-            .bg(rgba(palette.card_selected_rgba))
+fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div> {
+    let system = &snap.system;
+    let selected_card = |el: Stateful<Div>| {
+        el.bg(rgb(system.accent_fill))
             .border_1()
-            .border_color(rgb(palette.card_selected_border));
-    }
+            .border_color(rgb(system.accent))
+            .shadow(vec![BoxShadow {
+                color: rgb(system.accent).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(1.0),
+            }])
+    };
     if selected {
-        return el
-            .bg(rgb(palette.card_selected_bg))
-            .border_1()
-            .border_color(rgb(palette.card_selected_border));
+        return selected_card(el);
     }
-    if transparent {
-        return el.bg(rgba(palette.card_bg_rgba));
+    let base = el.border_1().border_color(rgb(system.border_subtle));
+    if snap.transparent_bg {
+        return base.bg(rgba(snap.palette.card_bg_rgba));
     }
-    if !visible {
-        return el.bg(rgb(palette.card_bg));
+    if !snap.visible {
+        return base.bg(rgb(snap.palette.card_bg));
     }
-    el.bg(rgb(palette.card_bg)).hover(|mut h| {
-        h.background = Some(rgb(palette.card_hover_bg).into());
+    base.bg(rgb(snap.palette.card_bg)).hover(|mut h| {
+        h.background = Some(rgb(system.surface_hovered).into());
         h
     })
 }
 
-fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: bool) -> Div {
+fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>) -> Div {
     let snap = context.snap;
     let metrics = &snap.metrics;
     let palette = &snap.palette;
@@ -415,18 +421,12 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
         .max(22.0)
         .min(metrics.preview_width * 0.18);
     let inset_px = (metrics.card_padding + 3.0).clamp(6.0, 10.0);
-    let icon_border = if selected {
-        palette.preview_icon_selected_border
-    } else {
-        palette.preview_icon_border
-    };
 
     div()
         .relative()
         .w(px(metrics.preview_width))
         .h(px(metrics.preview_height))
         .flex_none()
-        .rounded_md()
         .overflow_hidden()
         .child(if render_gpui_preview {
             preview_tile(
@@ -435,9 +435,10 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
                 minimized_icon,
                 metrics,
                 palette,
+                snap.system.border_subtle,
             )
         } else {
-            preview_plane_slot(metrics, palette, selected)
+            preview_plane_slot(metrics, snap.system.border_subtle)
         })
         .when_some(overlay_icon, |el, icon| {
             let icon = div()
@@ -448,14 +449,12 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_md()
                 .border_1()
-                .border_color(rgba(icon_border))
+                .border_color(rgb(snap.system.border_subtle))
                 .child(
                     img(icon)
                         .w(px(icon_px - 2.0))
                         .h(px(icon_px - 2.0))
-                        .rounded_sm()
                         .opacity(0.8),
                 );
             match snap.icon_position {
@@ -477,14 +476,17 @@ fn render_label(
     let metrics = &snap.metrics;
     let palette = &snap.palette;
     let label = label_text(i, win, snap, label_config);
-    let size_factor = label_config.size.factor();
-    let text_px = metrics.label_font_px(size_factor);
-    let line_height_px = metrics.label_line_height_px(size_factor);
+    let line_height_px = metrics.label_line_height_px(label_config.size.factor());
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
+    let font_weight = if selected {
+        FontWeight::SEMIBOLD
+    } else {
+        FontWeight::NORMAL
+    };
     let primary_color = rgb(if selected {
-        palette.label_selected_text
+        snap.system.accent_ink
     } else {
         palette.label_text
     });
@@ -499,7 +501,7 @@ fn render_label(
         .justify_center()
         .overflow_hidden()
         .border_t_1()
-        .border_color(rgba(palette.caption_divider));
+        .border_color(rgb(snap.system.border_subtle));
 
     if label.is_empty() {
         return base;
@@ -508,8 +510,8 @@ fn render_label(
     base.child(render_single_label(
         label,
         label_width_px,
-        text_px,
         line_height_px,
+        font_weight,
         primary_color,
         window,
         cx,
@@ -544,22 +546,22 @@ fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &Labe
 fn render_single_label(
     label: String,
     width_px: f32,
-    text_px: f32,
     line_height_px: f32,
+    font_weight: FontWeight,
     color: Rgba,
     window: &Window,
     cx: &App,
 ) -> Div {
-    let label = truncate_label(label, width_px, text_px, window, cx);
+    let label = truncate_label(label, width_px, font_weight, window, cx);
     div()
         .w(px(width_px))
         .max_w(px(width_px))
         .flex_none()
         .min_w(px(0.))
         .text_center()
-        .text_size(px(text_px))
+        .text_size(px(TEXT_CAPTION))
         .line_height(px(line_height_px))
-        .font_weight(FontWeight::SEMIBOLD)
+        .font_weight(font_weight)
         .text_color(color)
         .truncate()
         .overflow_hidden()
@@ -569,7 +571,7 @@ fn render_single_label(
 fn truncate_label(
     label: String,
     max_width_px: f32,
-    text_px: f32,
+    font_weight: FontWeight,
     window: &Window,
     cx: &App,
 ) -> SharedString {
@@ -578,10 +580,10 @@ fn truncate_label(
     }
 
     let mut text_style = window.text_style();
-    text_style.font_weight = FontWeight::SEMIBOLD;
+    text_style.font_weight = font_weight;
     let mut runs = vec![text_style.to_run(label.len())];
     cx.text_system()
-        .line_wrapper(text_style.font(), px(text_px))
+        .line_wrapper(text_style.font(), px(TEXT_CAPTION))
         .truncate_line(SharedString::from(label), px(max_width_px), "…", &mut runs)
 }
 
@@ -591,9 +593,10 @@ fn preview_tile(
     minimized_icon: Option<&Arc<RenderImage>>,
     metrics: &CardMetrics,
     palette: &PickerSurfacePalette,
+    border_subtle: u32,
 ) -> AnyElement {
     if let Some(icon) = minimized_icon {
-        return minimized_placeholder(icon, metrics, palette);
+        return minimized_placeholder(icon, metrics, palette, border_subtle);
     }
     if let Some(frame) = live_frame {
         return crate::capture::live_frame_element(
@@ -607,28 +610,17 @@ fn preview_tile(
             .w(px(metrics.preview_width))
             .h(px(metrics.preview_height))
             .object_fit(ObjectFit::Fill)
-            .rounded_md()
             .into_any_element();
     }
-    empty_placeholder(metrics, palette)
+    empty_placeholder(metrics, palette, border_subtle)
 }
 
-fn preview_plane_slot(
-    metrics: &CardMetrics,
-    palette: &PickerSurfacePalette,
-    selected: bool,
-) -> AnyElement {
-    let border = if selected {
-        palette.preview_icon_selected_border
-    } else {
-        palette.preview_icon_border
-    };
+fn preview_plane_slot(metrics: &CardMetrics, border_subtle: u32) -> AnyElement {
     div()
         .w(px(metrics.preview_width))
         .h(px(metrics.preview_height))
-        .rounded_md()
         .border_1()
-        .border_color(rgba(border))
+        .border_color(rgb(border_subtle))
         .into_any_element()
 }
 
@@ -636,29 +628,37 @@ fn minimized_placeholder(
     icon: &Arc<RenderImage>,
     metrics: &CardMetrics,
     palette: &PickerSurfacePalette,
+    border_subtle: u32,
 ) -> AnyElement {
     let icon_px = metrics.minimized_icon_px();
-    placeholder_frame(metrics, palette)
-        .child(img(icon.clone()).w(px(icon_px)).h(px(icon_px)).rounded_md())
+    placeholder_frame(metrics, palette, border_subtle)
+        .child(img(icon.clone()).w(px(icon_px)).h(px(icon_px)))
         .into_any_element()
 }
 
-fn empty_placeholder(metrics: &CardMetrics, palette: &PickerSurfacePalette) -> AnyElement {
-    placeholder_frame(metrics, palette)
-        .text_xs()
+fn empty_placeholder(
+    metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
+    border_subtle: u32,
+) -> AnyElement {
+    placeholder_frame(metrics, palette, border_subtle)
+        .text_size(px(TEXT_NANO))
         .text_color(rgb(palette.placeholder_text))
         .child("...")
         .into_any_element()
 }
 
-fn placeholder_frame(metrics: &CardMetrics, palette: &PickerSurfacePalette) -> Div {
+fn placeholder_frame(
+    metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
+    border_subtle: u32,
+) -> Div {
     div()
         .w(px(metrics.preview_width))
         .h(px(metrics.preview_height))
         .bg(rgb(palette.placeholder_bg))
-        .rounded_md()
         .border_1()
-        .border_color(rgb(palette.placeholder_border))
+        .border_color(rgb(border_subtle))
         .flex()
         .items_center()
         .justify_center()

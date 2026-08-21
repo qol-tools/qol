@@ -7,6 +7,7 @@ import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../..
 import { ACCENT_PRESETS } from '../../lib/accent-presets.js';
 import { getThemeAccent, setThemeAccent, subscribeThemeAccent } from '../../lib/theme-accent-sync.js';
 import { getTheme, setTheme, subscribeTheme } from '../../lib/theme-sync.js';
+import { getNativeTheme, setNativeTheme } from '../../lib/native-theme-sync.js';
 import { getSystemNotifications, setSystemNotifications, subscribeSystemNotifications } from '../../lib/notifications-sync.js';
 import { ThemeRow } from '../../lib/components/ThemeRow.js';
 import { TextInput } from '../../lib/components/TextInput.js';
@@ -95,12 +96,16 @@ function focusSettingsPanel(panelRef) {
 const TRANSITION_STYLE_OPTIONS = ['zoom-fade', 'fade', 'instant'];
 const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only', instant: 'Instant' };
 
+const NATIVE_THEME_OPTIONS = ['bone', 'slate'];
+const NATIVE_THEME_LABELS = { bone: 'Bone', slate: 'Slate' };
+
 export const MINIMAP_NEIGHBOURS_MIN = 1;
 export const MINIMAP_NEIGHBOURS_MAX = 12;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch, containerRef, onKeyDown }) {
     const [themeAccent, setThemeAccentState] = useState(getThemeAccent);
     const [theme, setThemeState] = useState(getTheme);
+    const [nativeTheme, setNativeThemeState] = useState(null);
     const [systemNotifications, setSystemNotificationsState] = useState(getSystemNotifications);
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
@@ -115,6 +120,12 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             toast('error', error?.message || 'Failed to save theme');
         });
     }, []);
+    const updateNativeTheme = useCallback((key) => {
+        setNativeThemeState(key);
+        setNativeTheme(key).catch((error) => {
+            toast('error', error?.message || 'Failed to save desktop theme');
+        });
+    }, []);
     const updateSystemNotifications = useCallback((enabled) => {
         setSystemNotifications(enabled).catch((error) => {
             toast('error', error?.message || 'Failed to save notification setting');
@@ -124,6 +135,20 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     useEffect(() => subscribeThemeAccent(setThemeAccentState), []);
     useEffect(() => subscribeTheme(setThemeState), []);
     useEffect(() => subscribeSystemNotifications(setSystemNotificationsState), []);
+
+    useEffect(() => {
+        let cancelled = false;
+        getNativeTheme()
+            .then((key) => {
+                if (!cancelled) setNativeThemeState(key);
+            })
+            .catch(() => {
+                if (!cancelled) setNativeThemeState('bone');
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
@@ -158,6 +183,10 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Appearance</div>
+                <${SelectRow} label="Desktop theme">
+                    <${CustomSelect} value=${nativeTheme} options=${NATIVE_THEME_OPTIONS}
+                        labels=${NATIVE_THEME_LABELS} onChange=${updateNativeTheme} compact=${true} />
+                </${SelectRow}>
                 <${ThemeRow} value=${theme} onPick=${updateTheme} />
                 <${AccentRow} value=${themeAccent} onPick=${updateThemeAccent} />
                 <div class="wsp-toggles">

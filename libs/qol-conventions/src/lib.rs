@@ -281,7 +281,9 @@ pub fn local_hash_url_with_token(route: &str, port: u16, token: Option<&str>) ->
     }
 }
 
-const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
+pub const CORE_PANEL_ID: &str = "core";
+
+const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template", CORE_PANEL_ID];
 
 pub fn is_reserved_plugin_id(id: &str) -> bool {
     RESERVED_PLUGIN_IDS.contains(&id)
@@ -315,9 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn only_template_is_a_reserved_plugin_id() {
+    fn only_reserved_ids_are_special_plugin_ids() {
         let cases = [
             ("plugin-template", true),
+            (CORE_PANEL_ID, true),
             ("plugin-foo", false),
             ("plugin-bar", false),
             ("", false),

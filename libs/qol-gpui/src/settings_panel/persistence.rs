@@ -16,16 +16,24 @@ pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
 }
 
-fn tray_config_route(plugin_id: &str) -> String {
-    format!("/api/plugins/{plugin_id}/config")
+pub(super) fn panel_base(plugin_id: &str) -> String {
+    if plugin_id == qol_conventions::CORE_PANEL_ID {
+        "/api/core".to_string()
+    } else {
+        format!("/api/plugins/{plugin_id}")
+    }
 }
 
-pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, String> {
-    let route = format!("/api/plugins/{plugin_id}/queries/{query}");
+fn tray_config_route(base: &str) -> String {
+    format!("{base}/config")
+}
+
+pub(super) fn query(base: &str, query: &str) -> Result<serde_json::Value, String> {
+    let route = format!("{base}/queries/{query}");
     let (status, body) = tray_http_session(&route).map_err(|error| error.to_string())?;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
-        "plugin={plugin_id} phase=runtime-query query={query} status={status}"
+        "panel={base} phase=runtime-query query={query} status={status}"
     );
     if status != 200 {
         return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
@@ -35,11 +43,11 @@ pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, S
 }
 
 pub(super) fn run_action(
-    plugin_id: &str,
+    base: &str,
     action: &str,
     input: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
-    let route = format!("/api/plugins/{plugin_id}/actions/{action}");
+    let route = format!("{base}/actions/{action}");
     let body = serde_json::to_string(input).map_err(|error| error.to_string())?;
     let (status, response) =
         tray_http(Method::Post, &route, Some(&body)).map_err(|error| error.to_string())?;
@@ -57,8 +65,8 @@ fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, Strin
     Ok(result.data)
 }
 
-pub(super) fn daemon_port(plugin_id: &str) -> Option<u16> {
-    let route = format!("/api/plugins/{plugin_id}/config-form");
+pub(super) fn daemon_port(base: &str) -> Option<u16> {
+    let route = format!("{base}/config-form");
     let (status, body) = tray_http_session(&route).ok()?;
     if status != 200 {
         return None;
@@ -71,41 +79,40 @@ pub(super) fn daemon_port(plugin_id: &str) -> Option<u16> {
         .ok()
 }
 
-pub(super) fn load_values(plugin_id: &str, path: &Path) -> serde_json::Value {
-    if let Ok((200, body)) = tray_http(Method::Get, &tray_config_route(plugin_id), None) {
+pub(super) fn load_values(base: &str, path: Option<&Path>) -> serde_json::Value {
+    if let Ok((200, body)) = tray_http(Method::Get, &tray_config_route(base), None) {
         if let Ok(values) = serde_json::from_str(&body) {
             return values;
         }
     }
-    std::fs::read_to_string(path)
-        .ok()
+    path.and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Value) {
+pub(super) fn save_values(base: &str, path: Option<&Path>, values: &serde_json::Value) {
     let body = match serde_json::to_string(values) {
         Ok(body) => body,
         Err(error) => {
-            eprintln!("[{plugin_id}] settings serialize failed: {error:#}");
+            eprintln!("[{base}] settings serialize failed: {error:#}");
             return;
         }
     };
-    match tray_http(Method::Put, &tray_config_route(plugin_id), Some(&body)) {
+    match tray_http(Method::Put, &tray_config_route(base), Some(&body)) {
         Ok((200, _)) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",
-                "plugin={plugin_id} transport=tray outcome=saved"
+                "panel={base} transport=tray outcome=saved"
             );
             return;
         }
         Ok((status, payload)) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",
-                "plugin={plugin_id} transport=tray outcome=rejected status={status}"
+                "panel={base} transport=tray outcome=rejected status={status}"
             );
             eprintln!(
-                "[{plugin_id}] settings save rejected by tray ({status}): {}",
+                "[{base}] settings save rejected by tray ({status}): {}",
                 payload.trim()
             );
             return;
@@ -113,25 +120,28 @@ pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Val
         Err(error) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",
-                "plugin={plugin_id} transport=tray outcome=unavailable"
+                "panel={base} transport=tray outcome=unavailable"
             );
-            eprintln!("[{plugin_id}] tray unreachable, saving locally: {error:#}");
+            eprintln!("[{base}] tray unreachable, saving locally: {error:#}");
         }
     }
+    let Some(path) = path else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(error) = std::fs::write(path, body) {
         qol_runtime::probe!(
             "SETTINGS_PERSIST",
-            "plugin={plugin_id} transport=file outcome=failed"
+            "panel={base} transport=file outcome=failed"
         );
-        eprintln!("[{plugin_id}] settings save failed: {error:#}");
+        eprintln!("[{base}] settings save failed: {error:#}");
         return;
     }
     qol_runtime::probe!(
         "SETTINGS_PERSIST",
-        "plugin={plugin_id} transport=file outcome=saved"
+        "panel={base} transport=file outcome=saved"
     );
 }
 
@@ -167,6 +177,15 @@ fn tray_http_session(route: &str) -> anyhow::Result<(u16, String)> {
 #[cfg(test)]
 mod tests {
     use super::action_result_data;
+
+    #[test]
+    fn panel_base_maps_plugin_and_core_ids() {
+        assert_eq!(super::panel_base("plugin-foo"), "/api/plugins/plugin-foo");
+        assert_eq!(
+            super::panel_base(qol_conventions::CORE_PANEL_ID),
+            "/api/core"
+        );
+    }
 
     #[test]
     fn action_result_extracts_optional_daemon_data() {

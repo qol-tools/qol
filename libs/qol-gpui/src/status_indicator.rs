@@ -64,7 +64,7 @@ impl RenderOnce for StatusIndicator {
         let dot = div()
             .flex_none()
             .w(px(10.))
-            .text_size(px(8.))
+            .text_size(px(qol_theme::TEXT_MICRO))
             .text_color(self.color)
             .child("●");
         let dot: AnyElement = if self.pulsing {
@@ -81,7 +81,7 @@ impl RenderOnce for StatusIndicator {
             .flex()
             .items_center()
             .gap_1()
-            .text_size(px(10.))
+            .text_size(px(qol_theme::TEXT_MICRO))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.color)
             .child(dot)

@@ -11,7 +11,7 @@ pub(crate) struct PickerState {
     pub(crate) selected_index: Option<usize>,
     pub(crate) label_config: LabelConfig,
     pub(crate) transparent_background: bool,
-    pub(crate) card_bg_color: u32,
+    pub(crate) card_bg_color: Option<u32>,
     pub(crate) card_bg_opacity: f32,
     pub(crate) icon_position: PreviewIconPosition,
     pub(crate) show_debug_overlay: bool,
@@ -174,7 +174,7 @@ impl PickerState {
     pub(crate) fn apply_config(
         &mut self,
         config: &AltTabConfig,
-        card_color: u32,
+        card_color: Option<u32>,
         card_opacity: f32,
         layout_budget: Option<(f32, f32)>,
     ) {
@@ -237,13 +237,27 @@ impl PickerState {
         self.set_windows(reordered, false, app, window);
     }
 
+    pub(crate) fn select_index(&mut self, index: usize) {
+        if self.windows.is_empty() {
+            self.selected_index = None;
+            return;
+        }
+        self.selected_index = Some(index.min(self.windows.len() - 1));
+    }
+
     pub(crate) fn activate_selected_target(&self) {
         let Some(ix) = self.selected_index else {
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/activate] no selection — skipping");
             return;
         };
-        let win = &self.windows[ix];
+        let Some(win) = self.windows.get(ix) else {
+            eprintln!(
+                "[alt-tab/activate] selection {ix} is past {} windows - skipping",
+                self.windows.len()
+            );
+            return;
+        };
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/activate] idx={} id={} app={} title={}",
@@ -420,7 +434,7 @@ mod cycle_direction_tests {
             windows,
             label_config: LabelConfig::default(),
             transparent_bg: false,
-            card_color: 0,
+            card_color: None,
             card_opacity: 1.0,
             icon_position: crate::config::PreviewIconPosition::default(),
             show_debug_overlay: false,
@@ -582,7 +596,7 @@ mod set_windows_tests {
             windows: windows(count),
             label_config: LabelConfig::default(),
             transparent_bg: false,
-            card_color: 0,
+            card_color: None,
             card_opacity: 1.0,
             icon_position: crate::config::PreviewIconPosition::default(),
             show_debug_overlay: false,
@@ -684,5 +698,25 @@ mod set_windows_tests {
             s.replace_windows_for_test(windows(c.new_count), c.reset);
             assert_eq!(s.selected_index, c.want, "{}", c.label);
         }
+    }
+
+    #[test]
+    fn a_stale_card_index_clamps_instead_of_panicking() {
+        let mut picker = picker_at(6, Some(5));
+        picker.replace_windows_for_test(windows(2), false);
+
+        picker.select_index(5);
+        assert_eq!(picker.selected_index, Some(1));
+
+        picker.activate_selected_target();
+    }
+
+    #[test]
+    fn selecting_a_card_when_every_window_closed_clears_the_selection() {
+        let mut picker = picker_at(3, Some(2));
+        picker.replace_windows_for_test(Vec::new(), false);
+
+        picker.select_index(2);
+        assert_eq!(picker.selected_index, None);
     }
 }

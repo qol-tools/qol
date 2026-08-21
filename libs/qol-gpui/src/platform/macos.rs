@@ -152,6 +152,27 @@ pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
     }
 }
 
+pub fn square_window_corners(window: &mut gpui::Window) {
+    use objc2_app_kit::NSWindowStyleMask;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
+        return;
+    };
+    let Some(native_window) = view.window() else {
+        return;
+    };
+    native_window.setStyleMask(NSWindowStyleMask::Borderless);
+    native_window.makeFirstResponder(Some(&view));
+    if native_window.isVisible() {
+        native_window.makeKeyWindow();
+    }
+}
+
 pub fn start_window_move(window: &mut gpui::Window) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         window.start_window_move();

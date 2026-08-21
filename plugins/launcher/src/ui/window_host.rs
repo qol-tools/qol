@@ -45,6 +45,7 @@ pub(crate) fn pre_create_ghost(
         let _ = handle.update(cx, |view, _window, _cx| view.set_showing(false));
 
         popup_window::configure_popup_window(&title);
+        popup_window::disable_window_shadow(&title);
         qol_gpui::ghost::hide_invisible(&title);
     }
     let keys = active.borrow().keys();
@@ -204,6 +205,7 @@ fn create_and_show_ghost(
     active.borrow_mut().insert(target, handle);
     let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
     popup_window::configure_popup_window(&title);
+    popup_window::disable_window_shadow(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
         super::platform::show_topmost_window(&title, &all_titles);

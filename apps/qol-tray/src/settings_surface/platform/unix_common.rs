@@ -25,6 +25,7 @@ enum Command {
         action: Option<(String, String)>,
         layout: Option<NotificationLayout>,
     },
+    ThemeChanged,
     Kill,
 }
 
@@ -201,6 +202,10 @@ fn process_elapsed_ms() -> Option<u64> {
         .duration_since(started)
         .ok()
         .map(|elapsed| elapsed.as_millis() as u64)
+}
+
+pub(in crate::settings_surface) fn apply_theme(native: &str, accent: &str) -> bool {
+    core_daemon::send_action(&config(), &format!("theme {native} {accent}"), true)
 }
 
 pub(in crate::settings_surface) fn stop() -> bool {
@@ -380,6 +385,10 @@ fn spawn_command_loop(
                     show_toast_in_host(toast_host, title, body, level, action, layout, &cx);
                     LoopFlow::Continue
                 }
+                Command::ThemeChanged => {
+                    let _ = cx.update(|cx| cx.refresh_windows());
+                    LoopFlow::Continue
+                }
                 Command::Kill => LoopFlow::Stop,
             }
         }
@@ -516,6 +525,23 @@ async fn activate(
 }
 
 fn load_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
+    if plugin_id == qol_conventions::CORE_PANEL_ID {
+        return Ok(load_core_panel());
+    }
+    load_plugin_panel(plugin_id)
+}
+
+fn load_core_panel() -> (SettingsPanel, SettingsRuntime) {
+    let panel = SettingsPanel {
+        plugin_id: qol_conventions::CORE_PANEL_ID.to_string(),
+        contract: include_str!("core-config.toml").to_string(),
+        heading: "qol Settings".to_string(),
+    };
+    let runtime = SettingsRuntime::tray_core();
+    (panel, runtime)
+}
+
+fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
     let plugin_root = crate::plugins::paths::resolve_plugin_root(plugin_id)?;
     let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(&plugin_root)?;
     if !manifest.capabilities.gpui {
@@ -587,6 +613,9 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => ReadResult::Handled,
         "kill" => ReadResult::Command(Command::Kill),
+        action if action == "theme" || action.starts_with("theme ") => {
+            ReadResult::Command(Command::ThemeChanged)
+        }
         "open" => request
             .input
             .get("plugin_id")
@@ -671,6 +700,31 @@ mod tests {
     use qol_runtime::protocol::DaemonRequest;
 
     use super::{config, parse_request, spawn_replacement_after_handover, Command};
+
+    #[test]
+    fn core_panel_carries_every_wired_field_in_a_valid_contract() {
+        let (panel, _runtime) = super::load_core_panel();
+        assert_eq!(panel.plugin_id, qol_conventions::CORE_PANEL_ID);
+        assert_eq!(panel.heading, "qol Settings");
+        let spec = qol_config::contract::parse_spec_str(&panel.contract)
+            .expect("core contract must parse");
+        for (name, kind) in [
+            ("native_theme", qol_config::contract::FieldKind::Select),
+            ("theme", qol_config::contract::FieldKind::Select),
+            ("accent", qol_config::contract::FieldKind::Select),
+            ("profile", qol_config::contract::FieldKind::Select),
+            ("residency", qol_config::contract::FieldKind::Boolean),
+        ] {
+            let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(field.kind, kind, "wrong kind for {name}");
+        }
+        assert_eq!(
+            spec.field("profile").and_then(|field| field.query.clone()),
+            Some("profiles".to_string())
+        );
+        qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("core contract must resolve with no stored values");
+    }
 
     #[test]
     fn settings_socket_lives_in_the_private_runtime_tree() {

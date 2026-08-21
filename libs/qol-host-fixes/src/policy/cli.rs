@@ -10,6 +10,7 @@ pub enum ResidentCommand {
     Disable { owner: Option<ResidencyOwnerId> },
     Join { owner: ResidencyOwnerId },
     Transfer { owner: ResidencyOwnerId },
+    Residency { resident: bool },
 }
 
 impl ResidentCommand {
@@ -21,6 +22,7 @@ impl ResidentCommand {
             Self::Disable { .. } => "disable",
             Self::Join { .. } => "join",
             Self::Transfer { .. } => "transfer",
+            Self::Residency { .. } => "residency",
         }
     }
 
@@ -28,7 +30,7 @@ impl ResidentCommand {
         match self {
             Self::Disable { owner } => owner.as_ref(),
             Self::Join { owner } | Self::Transfer { owner } => Some(owner),
-            Self::Status | Self::Help | Self::Enable => None,
+            Self::Status | Self::Help | Self::Enable | Self::Residency { .. } => None,
         }
     }
 }
@@ -36,6 +38,7 @@ impl ResidentCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommand {
     pub hidden: bool,
+    pub policy: ResidentPolicy,
     pub command: ResidentCommand,
 }
 
@@ -59,20 +62,21 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
         },
         None => ("status", false),
     };
-    let mut policy_value: Option<String> = None;
+    let mut policy: Option<ResidentPolicy> = None;
     let mut owner_seen = false;
     let mut owner_value: Option<ResidencyOwnerId> = None;
+    let mut residency_seen = false;
+    let mut residency_value: Option<bool> = None;
     while let Some(token) = tokens.next() {
         match token.as_str() {
             "--policy" => {
-                if policy_value.is_some() {
+                if policy.is_some() {
                     bail!("duplicate --policy flag");
                 }
                 let value = tokens
                     .next()
                     .ok_or_else(|| anyhow!("--policy requires a value"))?;
-                ResidentPolicy::from_id(value)?;
-                policy_value = Some(value.clone());
+                policy = Some(ResidentPolicy::from_id(value)?);
             }
             "--owner" => {
                 if owner_seen {
@@ -84,6 +88,20 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
                     .ok_or_else(|| anyhow!("--owner requires a value"))?;
                 owner_value = Some(ResidencyOwnerId::parse(value)?);
             }
+            "--resident" => {
+                if residency_seen {
+                    bail!("duplicate residency --resident flag");
+                }
+                residency_seen = true;
+                residency_value = Some(true);
+            }
+            "--portable" => {
+                if residency_seen {
+                    bail!("duplicate residency --portable flag");
+                }
+                residency_seen = true;
+                residency_value = Some(false);
+            }
             other if other.starts_with('-') => {
                 bail!("unknown flag `{other}`");
             }
@@ -91,7 +109,7 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
         }
     }
     if hidden {
-        match policy_value.as_deref() {
+        match policy.as_ref().map(ResidentPolicy::id) {
             Some(NVIDIA_POLICY_ID) => {}
             Some(other) => {
                 bail!(
@@ -103,6 +121,7 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
             }
         }
     }
+    let policy = policy.unwrap_or_else(ResidentPolicy::nvidia);
     if matches!(operation, "help" | "--help" | "-h") {
         if hidden {
             if owner_seen {
@@ -113,11 +132,18 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
         }
         return Ok(ParsedCommand {
             hidden,
+            policy,
             command: ResidentCommand::Help,
         });
     }
+    if residency_seen && operation != "residency" {
+        bail!("--resident/--portable are only valid for the `residency` operation");
+    }
+    if hidden && operation == "residency" {
+        bail!("the hidden route does not accept the `residency` operation");
+    }
     match operation {
-        "status" | "enable" => {
+        "status" | "enable" | "residency" => {
             if owner_seen {
                 bail!("--owner is not valid for `{operation}`");
             }
@@ -138,9 +164,17 @@ pub fn parse_args(args: &[String]) -> Result<ParsedCommand> {
                 owner_value.ok_or_else(|| anyhow!("transfer requires an explicit --owner"))?;
             ResidentCommand::Transfer { owner }
         }
+        "residency" => ResidentCommand::Residency {
+            resident: residency_value
+                .ok_or_else(|| anyhow!("residency requires --resident or --portable"))?,
+        },
         _ => unreachable!("operation was validated above"),
     };
-    Ok(ParsedCommand { hidden, command })
+    Ok(ParsedCommand {
+        hidden,
+        policy,
+        command,
+    })
 }
 
 #[cfg(test)]
@@ -158,6 +192,22 @@ mod tests {
 
     fn hidden(values: &[&str]) -> Result<ParsedCommand> {
         parse(&[&["__resident-policy-disable"], values].concat())
+    }
+
+    #[test]
+    fn the_requested_policy_survives_parsing() {
+        let parsed = parse(&["status", "--policy", crate::udev::UDEV_UACCESS_POLICY_ID]).unwrap();
+        assert_eq!(parsed.policy, ResidentPolicy::UdevUaccess);
+        let parsed = parse(&["status", "--policy", NVIDIA_POLICY_ID]).unwrap();
+        assert_eq!(parsed.policy, ResidentPolicy::NvidiaDriverVersionPin);
+    }
+
+    #[test]
+    fn an_absent_policy_flag_still_means_the_driver_pin() {
+        assert_eq!(
+            parse(&["status"]).unwrap().policy,
+            ResidentPolicy::NvidiaDriverVersionPin
+        );
     }
 
     #[test]
@@ -238,5 +288,39 @@ mod tests {
         assert!(parse(&["transfer"]).is_err());
         assert!(parse(&["join", "--owner", "owner-a"]).is_ok());
         assert!(parse(&["transfer", "--owner", "owner-a"]).is_ok());
+    }
+
+    #[test]
+    fn residency_parses_from_explicit_flags() {
+        assert_eq!(
+            parse(&["residency", "--resident"]).unwrap().command,
+            ResidentCommand::Residency { resident: true }
+        );
+        assert_eq!(
+            parse(&["residency", "--portable"]).unwrap().command,
+            ResidentCommand::Residency { resident: false }
+        );
+    }
+
+    #[test]
+    fn residency_requires_exactly_one_mode_flag() {
+        let missing = parse(&["residency"]).unwrap_err();
+        assert!(
+            format!("{missing:#}").contains("--resident or --portable"),
+            "{missing:#}"
+        );
+        let duplicate = parse(&["residency", "--resident", "--portable"]).unwrap_err();
+        assert!(
+            format!("{duplicate:#}").contains("duplicate"),
+            "{duplicate:#}"
+        );
+        assert!(parse(&["status", "--resident"]).is_err());
+        assert!(parse(&["residency", "--owner", "owner-a"]).is_err());
+    }
+
+    #[test]
+    fn residency_is_not_a_hidden_elevated_route() {
+        assert!(parse(&["__resident-policy-residency", "--resident"]).is_err());
+        assert!(parse(&["__resident-policy-residency", "--policy", NVIDIA_POLICY_ID]).is_err());
     }
 }

@@ -1,6 +1,7 @@
 pub mod elevation;
 pub mod policy;
 pub mod privilege;
+pub mod residency;
 pub mod takeover;
 pub mod udev;
 

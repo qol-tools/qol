@@ -13,12 +13,12 @@ pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
-use crate::config::{ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR};
+use crate::config::{ActionMode, AltTabConfig, DisplayConfig};
 use crate::rendering::RenderingFlow;
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
-use qol_gpui::theme::resolve_surface_color;
+use qol_gpui::theme::resolve_surface_override;
 use qol_gpui::window::{MonitorKey, PopupPlacement};
 use qol_gpui::MonitorBounds;
 use run::{SharedPreviewCache, WindowCache};
@@ -390,13 +390,14 @@ fn finalize_reuse(
     probe_app_active_after_frame(handle, cx);
 }
 
-pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
-    resolve_surface_color(
+pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (Option<u32>, f32) {
+    let opacity = display.card_background_opacity;
+    let color = resolve_surface_override(
         &display.card_background_color,
-        DEFAULT_CARD_BACKGROUND_COLOR,
         display.card_background_brightness,
-        display.card_background_opacity,
-    )
+        opacity,
+    );
+    (color.map(|(c, _)| c), opacity.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -412,7 +413,7 @@ mod color_tests {
             card_background_opacity: 1.2,
             ..Default::default()
         };
-        assert_eq!(resolve_card_bg(&display), (0x203040, 1.0));
+        assert_eq!(resolve_card_bg(&display), (Some(0x203040), 1.0));
     }
 
     #[test]
@@ -422,7 +423,7 @@ mod color_tests {
             card_background_brightness: 0.25,
             ..Default::default()
         };
-        assert_eq!(resolve_card_bg(&display), (0x402010, 0.85));
+        assert_eq!(resolve_card_bg(&display), (Some(0x402010), 0.85));
     }
 
     #[test]
@@ -438,18 +439,27 @@ mod color_tests {
             ..Default::default()
         };
 
-        assert_eq!(resolve_card_bg(&bright), (0x102030, 0.85));
-        assert_eq!(resolve_card_bg(&dark), (0x000000, 0.85));
+        assert_eq!(resolve_card_bg(&bright), (Some(0x102030), 0.85));
+        assert_eq!(resolve_card_bg(&dark), (Some(0x000000), 0.85));
     }
 
     #[test]
-    fn invalid_card_background_falls_back_to_default() {
-        let display = DisplayConfig {
+    fn themed_cases_follow_theme_with_clamped_opacity() {
+        let dim = DisplayConfig {
             card_background_color: "nope".to_string(),
             card_background_opacity: -1.0,
             ..Default::default()
         };
-        assert_eq!(resolve_card_bg(&display), (0x202322, 0.0));
+        let sentinel = DisplayConfig {
+            card_background_color: "theme".to_string(),
+            card_background_opacity: 1.5,
+            ..Default::default()
+        };
+        let themed_default = DisplayConfig::default();
+
+        assert_eq!(resolve_card_bg(&dim), (None, 0.0));
+        assert_eq!(resolve_card_bg(&sentinel), (None, 1.0));
+        assert_eq!(resolve_card_bg(&themed_default), (None, 0.85));
     }
 }
 

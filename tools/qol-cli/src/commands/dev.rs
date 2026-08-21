@@ -64,7 +64,7 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
 
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     let mut phases = PhaseTimer::start(verbose);
-    crate::setup::run_setup(&root, verbose)?;
+    crate::setup::run_setup(&plan.target.root, verbose)?;
     phases.mark("setup");
     if verbose {
         print_title("qol dev");
@@ -362,7 +362,7 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let root = repo_root()?;
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     dev_reload_progress("setup", "workspace");
-    crate::setup::run_setup(&root, verbose)?;
+    crate::setup::run_setup(&cli_build_root(&plan), verbose)?;
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
@@ -389,17 +389,9 @@ fn prebuild_via_fresh_cli(args: &[OsString], verbose: bool, skip_plugins: bool) 
     let root = repo_root()?;
     let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
     let directive = tray_directive(optional_single_arg(args, &usage)?);
-    let cli_root = match directive {
-        TrayDirective::Branch(branch) => match resolve_tray_target(&root, Some(&branch)) {
-            Ok(target) => cli_workspace_root(&target.root, &root),
-            Err(_) => {
-                eprintln!("qol dev: no worktree for `{branch}`; using base (selection kept)");
-                root.clone()
-            }
-        },
-        TrayDirective::Base => root.clone(),
-        TrayDirective::Follow => fresh_cli_root(&root, current_active_worktree_marker()),
-    };
+    let plan = resolve_directive(&root, directive, current_active_worktree_marker())
+        .unwrap_or_else(|_| base_directive_plan(&root));
+    let cli_root = cli_workspace_root(&cli_build_root(&plan), &root);
     dev_reload_progress("build", "qol dev cli");
     build_qol_cli_debug(&cli_root, verbose)?;
     let fresh = cli_root
@@ -490,6 +482,22 @@ fn resolve_directive(
             })
         }
     }
+}
+
+fn base_directive_plan(root: &Path) -> DirectivePlan {
+    DirectivePlan {
+        target: TrayTarget {
+            branch: None,
+            root: root.to_path_buf(),
+        },
+        marker_update: MarkerUpdate::Keep,
+        note: None,
+    }
+}
+
+fn cli_build_root(plan: &DirectivePlan) -> PathBuf {
+    qol_workspace::workspace_root_from(&plan.target.root)
+        .unwrap_or_else(|_| plan.target.root.clone())
 }
 
 fn apply_marker_update(update: &MarkerUpdate) -> Result<()> {
@@ -1346,6 +1354,62 @@ mod tests {
             error.contains("feat/gone"),
             "unknown branch must fail before any state changes, got: {error}"
         );
+    }
+
+    #[test]
+    fn cli_build_root_climbs_to_the_workspace_root_of_the_tray_crate() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let workspace = tmp.path().join("qol-monorepo");
+        let tray = workspace.join("apps").join("qol-tray");
+        std::fs::create_dir_all(&tray).unwrap();
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\n",
+        )
+        .unwrap();
+        std::fs::write(tray.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
+        let plan = DirectivePlan {
+            target: TrayTarget {
+                branch: Some("bone".to_string()),
+                root: tray,
+            },
+            marker_update: MarkerUpdate::Keep,
+            note: None,
+        };
+
+        assert_eq!(cli_build_root(&plan), workspace);
+    }
+
+    #[test]
+    fn cli_build_root_follows_the_selected_worktree_for_a_branch_plan() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let worktree = tmp.path().join("worktree");
+        let plan = DirectivePlan {
+            target: TrayTarget {
+                branch: Some("feat/x".to_string()),
+                root: worktree.clone(),
+            },
+            marker_update: MarkerUpdate::Keep,
+            note: None,
+        };
+
+        assert_eq!(cli_build_root(&plan), worktree);
+    }
+
+    #[test]
+    fn cli_build_root_stays_the_base_root_for_a_base_plan() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path();
+        let plan = DirectivePlan {
+            target: TrayTarget {
+                branch: None,
+                root: base.to_path_buf(),
+            },
+            marker_update: MarkerUpdate::Keep,
+            note: None,
+        };
+
+        assert_eq!(cli_build_root(&plan), base);
     }
 
     #[test]

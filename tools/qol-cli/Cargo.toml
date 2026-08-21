@@ -29,6 +29,7 @@ qol-terminal-sessions.workspace = true
 qol-host-fixes.workspace = true
 qol-plugin-api.workspace = true
 qol-process.workspace = true
+qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-profile-sync.workspace = true
 qol-workspace.workspace = true

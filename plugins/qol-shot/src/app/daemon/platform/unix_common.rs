@@ -56,6 +56,9 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "reload" => ReadResult::Command(Command::Reload),
         "audio_sources" => audio_device_payload(crate::platform::list_audio_sources()),
         "audio_sinks" => audio_device_payload(crate::platform::list_audio_sinks()),
+        theme if theme == "theme" || theme.starts_with("theme ") => {
+            ReadResult::Command(Command::Theme)
+        }
         other => ReadResult::Command(Command::Cli(other.to_string())),
     }
 }
@@ -82,6 +85,9 @@ mod tests {
             ("preview", "preview"),
             ("reload", "reload"),
             ("copy", "cli:copy"),
+            ("theme bone amber", "theme"),
+            ("theme", "theme"),
+            ("themes", "cli:themes"),
         ];
 
         for (input, expected) in cases {
@@ -91,6 +97,7 @@ mod tests {
                 ReadResult::Command(Command::Screenshot) => "screenshot".to_string(),
                 ReadResult::Command(Command::Preview) => "preview".to_string(),
                 ReadResult::Command(Command::Reload) => "reload".to_string(),
+                ReadResult::Command(Command::Theme) => "theme".to_string(),
                 ReadResult::Command(Command::Cli(action)) => format!("cli:{action}"),
                 ReadResult::HandledWithData(_) => "handled-with-data".to_string(),
                 ReadResult::Fallback => "fallback".to_string(),

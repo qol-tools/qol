@@ -5807,6 +5807,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -5887,6 +5888,7 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
+ "qol-host-session",
  "qol-hotkeys",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -5911,6 +5913,8 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-host-fixes",
+ "qol-host-session",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -6294,6 +6298,7 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-plugin-api",
+ "qol-plugin-daemon",
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
@@ -6483,6 +6488,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "taffy",
  "tungstenite 0.26.2",
  "x11rb",
 ]
@@ -6525,6 +6531,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "qol-host-session"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-fs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6583,6 +6599,7 @@ dependencies = [
  "libc",
  "qol-conventions",
  "qol-runtime",
+ "qol-theme",
  "serde_json",
 ]
 

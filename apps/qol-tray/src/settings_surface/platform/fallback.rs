@@ -18,4 +18,8 @@ pub(in crate::settings_surface) fn run(_boot: super::super::HostBoot) -> anyhow:
 
 pub(in crate::settings_surface) fn stop() {}
 
+pub(in crate::settings_surface) fn apply_theme(_native: &str, _accent: &str) -> bool {
+    false
+}
+
 pub(in crate::settings_surface) fn prewarm() {}

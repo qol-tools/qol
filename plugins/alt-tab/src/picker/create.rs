@@ -105,7 +105,7 @@ pub(crate) struct PickerInit {
     pub(crate) action_mode: ActionMode,
     pub(crate) label_config: LabelConfig,
     pub(crate) transparent_bg: bool,
-    pub(crate) card_color: u32,
+    pub(crate) card_color: Option<u32>,
     pub(crate) card_opacity: f32,
     pub(crate) icon_position: PreviewIconPosition,
     pub(crate) show_debug_overlay: bool,
