@@ -2,6 +2,7 @@ pub mod color_wheel;
 pub mod command_loop;
 pub mod dropdown;
 pub mod event_router;
+pub mod format;
 pub mod gamepad;
 pub mod ghost;
 pub mod history;
@@ -23,6 +24,7 @@ pub mod surface;
 pub mod toast;
 pub mod window;
 
+pub use format::format_bytes;
 pub use spinner::Spinner;
 pub use status_indicator::StatusIndicator;
 

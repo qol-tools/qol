@@ -422,7 +422,7 @@ impl RemoveAppView {
                             .flex_none()
                             .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .text_color(rgb(palette.text_muted))
-                            .child(format_size(l.size_bytes)),
+                            .child(qol_gpui::format_bytes(l.size_bytes)),
                     )
             })
             .collect();
@@ -500,7 +500,7 @@ impl RemoveAppView {
                             .child(format!(
                                 "{} items \u{00b7} {}",
                                 plan.items.len(),
-                                format_size(plan.total_bytes)
+                                qol_gpui::format_bytes(plan.total_bytes)
                             )),
                     ),
             )
@@ -616,7 +616,10 @@ impl RemoveAppView {
                 div()
                     .text_color(rgb(palette.text_secondary))
                     .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .child(format!("Freed {}", format_size(outcome.freed_bytes))),
+                    .child(format!(
+                        "Freed {}",
+                        qol_gpui::format_bytes(outcome.freed_bytes)
+                    )),
             )
             .when(failed > 0, |d| {
                 d.child(
@@ -810,21 +813,6 @@ fn banner_line(color: u32, text: &str) -> impl IntoElement {
         .text_size(px(qol_gpui::theme::TEXT_CAPTION))
         .text_color(rgb(color))
         .child(text.to_string())
-}
-
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 #[cfg(test)]

@@ -963,7 +963,7 @@ impl RegionSelector {
         let state = self.state.borrow();
         let chip = state.chip;
         let label = kind_label(chip.kind);
-        let free = format_bytes(chip.free_bytes);
+        let free = qol_gpui::format_bytes(chip.free_bytes);
         let estimate = capture_estimate(chip, selection_global_rect(&state), &state.displays);
         let headroom = space::headroom(&estimate, chip.free_bytes);
         let text = match headroom.seconds {
@@ -1362,18 +1362,6 @@ fn kind_label(kind: CaptureKind) -> &'static str {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
-    const GB: u64 = 1_000_000_000;
-    const MB: u64 = 1_000_000;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{} MB", bytes / MB)
-    } else {
-        format!("{} KB", bytes / 1_000)
-    }
-}
-
 fn format_duration(seconds: u64) -> String {
     if seconds >= 3_600 {
         format!("{} h {} min", seconds / 3_600, (seconds % 3_600) / 60)
@@ -1511,10 +1499,9 @@ fn selected_rect(origin: Point<Pixels>, start: Point<Pixels>, end: Point<Pixels>
 #[cfg(test)]
 mod tests {
     use super::{
-        backdrop_segments, capture_estimate, format_bytes, format_duration, kind_label,
-        local_from_global, selected_rect, selection_bounds_in_window, selection_global_rect,
-        shift_rect, ChipModel, DetectedTarget, DetectedTargetRole, SelectionState, CHIP_H,
-        CHIP_TOP, CHIP_W,
+        backdrop_segments, capture_estimate, format_duration, kind_label, local_from_global,
+        selected_rect, selection_bounds_in_window, selection_global_rect, shift_rect, ChipModel,
+        DetectedTarget, DetectedTargetRole, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
@@ -1650,20 +1637,6 @@ mod tests {
             )),
             "the capture chip uses the same monitor-relative projection contract"
         );
-    }
-
-    #[test]
-    fn format_bytes_uses_decimal_gb_mb_kb() {
-        let cases = [
-            (84_600_000_000, "84.6 GB"),
-            (2_000_000_000, "2.0 GB"),
-            (512_000_000, "512 MB"),
-            (1_000_000, "1 MB"),
-            (4_096, "4 KB"),
-        ];
-        for (bytes, expected) in cases {
-            assert_eq!(format_bytes(bytes), expected, "bytes: {bytes}");
-        }
     }
 
     #[test]
