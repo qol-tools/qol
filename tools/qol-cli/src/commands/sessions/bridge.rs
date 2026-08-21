@@ -1077,6 +1077,7 @@ fn resume_owned(
                 else {
                     return Err(error).context("bridge screen read failed");
                 };
+                settle_and_deliver_group(terminals, pending, binding, &round, trace_dir, snapshot)?;
                 return Ok(BridgeOutcome {
                     completed: true,
                     submitted: false,
@@ -1093,6 +1094,7 @@ fn resume_owned(
             }
             Err(error) => return Err(error).context("bridge screen read failed"),
         };
+        settle_and_deliver_group(terminals, pending, binding, &round, trace_dir, &screen)?;
         if round.autoclose {
             super::watch::close_lane_terminal(terminals, binding);
         }
@@ -1177,16 +1179,14 @@ fn resume_owned(
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
         super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
-        if let Some(group) = round.group.as_deref() {
-            maybe_deliver_group_if_due(
-                terminals,
-                pending,
-                binding,
-                group,
-                &round.driver,
-                trace_dir,
-            )?;
-        }
+        settle_and_deliver_group(
+            terminals,
+            pending,
+            binding,
+            &round,
+            trace_dir,
+            &outcome.screen,
+        )?;
         if round.autoclose {
             super::watch::close_lane_terminal(terminals, binding);
         }
@@ -1195,21 +1195,26 @@ fn resume_owned(
     Ok(outcome)
 }
 
-fn maybe_deliver_group_if_due(
+fn settle_and_deliver_group(
     terminals: &TerminalSessionService,
     pending: &PendingBridgeStore,
     binding: &SessionBinding,
-    group: &str,
-    driver: &str,
+    round: &PendingRound,
     trace_dir: &std::path::Path,
+    screen: &str,
 ) -> Result<()> {
+    let Some(group) = round.group.as_deref() else {
+        return Ok(());
+    };
+    let session = binding.token();
+    super::watch::settle_group_round(trace_dir, group, &session, round.label.as_deref(), screen)?;
     super::watch::maybe_deliver_group_combined(
         pending,
         terminals,
         trace_dir,
         group,
-        &binding.token(),
-        driver,
+        &session,
+        &round.driver,
         &mut |duration| std::thread::sleep(duration),
     )?;
     Ok(())
@@ -1774,6 +1779,154 @@ mod tests {
             });
             Ok(Some(CliSessionSubscription::from_guard(StopSignal(stop))))
         }
+    }
+
+    fn grouped_lane_collected_by_the_bridge(
+        root: &tempfile::TempDir,
+        pending: &PendingBridgeStore,
+        binding: &SessionBinding,
+        marker: &str,
+        group: &str,
+        label: &str,
+    ) -> BridgeOutcome {
+        pending
+            .start_with_label(
+                binding,
+                marker,
+                &binding.token(),
+                false,
+                Some(group),
+                Some(label),
+            )
+            .unwrap();
+        let backend = FakeBackend::new(
+            facts(binding),
+            vec![format!("report body for {label}\n{marker}"); 4],
+        );
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::new(TickerStrategy) as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+        resume(
+            &terminals,
+            &interpreter,
+            binding,
+            Duration::from_secs(10),
+            pending,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &SpawnLocks::with_dir(root.path().join("spawn-locks")),
+            root.path(),
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_grouped_lane_collected_by_the_bridge_settles_its_group_member_and_fragment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let group = "research";
+        let lane: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        super::super::watch::register_group_member(
+            root.path(),
+            group,
+            &lane.token(),
+            Some("lane-a"),
+        )
+        .unwrap();
+
+        let outcome = grouped_lane_collected_by_the_bridge(
+            &root,
+            &pending,
+            &lane,
+            "QOL_BRIDGE_DONE_a",
+            group,
+            "lane-a",
+        );
+        assert!(outcome.completed);
+
+        let member = root
+            .path()
+            .join("groups")
+            .join(group)
+            .join("members")
+            .join("v1_fake_7_100.json");
+        let recorded = std::fs::read_to_string(&member).unwrap_or_else(|error| {
+            panic!("member record missing at {}: {error}", member.display())
+        });
+        assert!(
+            recorded.contains("\"outcome\":\"completed\""),
+            "the bridge collect path must settle the group member, got {recorded}"
+        );
+        let fragment = root
+            .path()
+            .join("groups")
+            .join(group)
+            .join("lane-a_v1_fake_7_100.txt");
+        assert!(
+            fragment.exists(),
+            "the bridge collect path must write the lane fragment at {}",
+            fragment.display()
+        );
+    }
+
+    #[test]
+    fn a_group_still_completes_when_an_earlier_lane_was_collected_and_acknowledged() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let group = "research";
+        let lane_a: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let lane_b: SessionBinding = "v1:fake:8:200".parse().unwrap();
+        for (lane, label) in [(&lane_a, "lane-a"), (&lane_b, "lane-b")] {
+            super::super::watch::register_group_member(
+                root.path(),
+                group,
+                &lane.token(),
+                Some(label),
+            )
+            .unwrap();
+        }
+
+        grouped_lane_collected_by_the_bridge(
+            &root,
+            &pending,
+            &lane_a,
+            "QOL_BRIDGE_DONE_a",
+            group,
+            "lane-a",
+        );
+        pending
+            .acknowledge(&lane_a, "QOL_BRIDGE_DONE_a", true)
+            .unwrap();
+
+        grouped_lane_collected_by_the_bridge(
+            &root,
+            &pending,
+            &lane_b,
+            "QOL_BRIDGE_DONE_b",
+            group,
+            "lane-b",
+        );
+
+        let combined = root.path().join("groups").join(group).join("combined.md");
+        let report = std::fs::read_to_string(&combined).unwrap_or_else(|error| {
+            panic!(
+                "the last lane must deliver the combined report at {}: {error}",
+                combined.display()
+            )
+        });
+        assert!(
+            report.contains("report body for lane-a"),
+            "combined report lost the acknowledged lane: {report}"
+        );
+        assert!(
+            report.contains("report body for lane-b"),
+            "combined report lost the final lane: {report}"
+        );
     }
 
     #[test]

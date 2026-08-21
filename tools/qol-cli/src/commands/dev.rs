@@ -63,7 +63,11 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
 
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     let mut phases = PhaseTimer::start(verbose);
-    crate::setup::run_setup(&plan.target.root, verbose)?;
+    crate::setup::run_setup_with_install(
+        &cli_build_root(&plan, &root),
+        verbose,
+        plan.target.branch.is_none(),
+    )?;
     phases.mark("setup");
     if verbose {
         print_title("qol dev");
@@ -361,7 +365,11 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let root = repo_root()?;
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     dev_reload_progress("setup", "workspace");
-    crate::setup::run_setup(&cli_build_root(&plan), verbose)?;
+    crate::setup::run_setup_with_install(
+        &cli_build_root(&plan, &root),
+        verbose,
+        plan.target.branch.is_none(),
+    )?;
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
@@ -388,9 +396,14 @@ fn prebuild_via_fresh_cli(args: &[OsString], verbose: bool, skip_plugins: bool) 
     let root = repo_root()?;
     let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
     let directive = tray_directive(optional_single_arg(args, &usage)?);
-    let plan = resolve_directive(&root, directive, current_active_worktree_marker())
-        .unwrap_or_else(|_| base_directive_plan(&root));
-    let cli_root = cli_workspace_root(&cli_build_root(&plan), &root);
+    let plan = match resolve_directive(&root, directive, current_active_worktree_marker()) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("qol dev: {error}; using base (selection kept)");
+            base_directive_plan(&root)
+        }
+    };
+    let cli_root = cli_workspace_root(&cli_build_root(&plan, &root), &root);
     dev_reload_progress("build", "qol dev cli");
     build_qol_cli_debug(&cli_root, verbose)?;
     let fresh = cli_root
@@ -494,9 +507,14 @@ fn base_directive_plan(root: &Path) -> DirectivePlan {
     }
 }
 
-fn cli_build_root(plan: &DirectivePlan) -> PathBuf {
-    qol_workspace::workspace_root_from(&plan.target.root)
-        .unwrap_or_else(|_| plan.target.root.clone())
+fn cli_build_root(plan: &DirectivePlan, base: &Path) -> PathBuf {
+    match qol_workspace::workspace_root_from(&plan.target.root) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("qol dev: could not resolve the target workspace root ({error}); using base");
+            base.to_path_buf()
+        }
+    }
 }
 
 fn apply_marker_update(update: &MarkerUpdate) -> Result<()> {
@@ -1381,23 +1399,57 @@ mod tests {
             note: None,
         };
 
-        assert_eq!(cli_build_root(&plan), workspace);
+        assert_eq!(cli_build_root(&plan, tmp.path()), workspace);
     }
 
     #[test]
     fn cli_build_root_follows_the_selected_worktree_for_a_branch_plan() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let worktree = tmp.path().join("worktree");
+        let base = tmp.path().join("qol-monorepo");
+        let worktree = tmp.path().join("worktrees").join("qol-diff-viewer");
+        let tray = worktree.join("apps").join("qol-tray");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&tray).unwrap();
+        std::fs::write(
+            base.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            worktree.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\n",
+        )
+        .unwrap();
+        std::fs::write(tray.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
         let plan = DirectivePlan {
             target: TrayTarget {
-                branch: Some("feat/x".to_string()),
-                root: worktree.clone(),
+                branch: Some("diff-viewer".to_string()),
+                root: tray,
             },
             marker_update: MarkerUpdate::Keep,
             note: None,
         };
 
-        assert_eq!(cli_build_root(&plan), worktree);
+        assert_eq!(cli_build_root(&plan, &base), worktree);
+    }
+
+    #[test]
+    fn cli_build_root_falls_back_to_the_base_root_without_a_workspace_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("qol-monorepo");
+        let tray = tmp.path().join("qol-tray");
+        std::fs::create_dir_all(&tray).unwrap();
+        std::fs::write(tray.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
+        let plan = DirectivePlan {
+            target: TrayTarget {
+                branch: Some("diff-viewer".to_string()),
+                root: tray,
+            },
+            marker_update: MarkerUpdate::Keep,
+            note: None,
+        };
+
+        assert_eq!(cli_build_root(&plan, &base), base);
     }
 
     #[test]
@@ -1413,7 +1465,7 @@ mod tests {
             note: None,
         };
 
-        assert_eq!(cli_build_root(&plan), base);
+        assert_eq!(cli_build_root(&plan, base), base);
     }
 
     #[test]

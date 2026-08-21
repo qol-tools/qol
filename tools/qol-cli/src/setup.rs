@@ -25,15 +25,23 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
+    run_setup_with_install(root, verbose, true)
+}
+
+pub(crate) fn run_setup_with_install(root: &Path, verbose: bool, install: bool) -> Result<()> {
     let package = root.join("tools").join("qol-cli");
     let target = installed_qol_path()?;
-    let version = package_version(&package)?;
     print_title("qol setup");
     print_hint(verbose);
     register_cargo_lock_driver(root).context("failed to configure Cargo.lock merge driver")?;
     step_label("merge", StepKind::Success, "Cargo.lock auto-resolve");
     register_git_hooks(root).context("failed to configure Git hooks")?;
     step_label("hooks", StepKind::Success, GIT_HOOKS_PATH);
+    if !install {
+        step_label("install", StepKind::Info, "skipped (worktree target)");
+        return Ok(());
+    }
+    let version = package_version(&package)?;
     let target_display = target.display().to_string();
     if install_is_current(root, &package, &target, &version)? {
         step_label("current", StepKind::Success, &target_display);

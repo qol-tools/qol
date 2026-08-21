@@ -979,7 +979,7 @@ pub(super) fn act_plugin(dash: &mut Dash) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev_console::disk::{persist_report, DiskReport, DiskRow, DiskScan, ScanLedger};
+    use crate::dev_console::disk::{persist_report, DiskReport, DiskRow, ScanLedger};
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
 

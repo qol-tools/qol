@@ -409,6 +409,92 @@ fn a_keyed_spawn_names_an_unnamed_session_instead_of_the_project() {
     );
 }
 
+struct SiblingLaneEnvironment {
+    session_files: Vec<std::path::PathBuf>,
+}
+
+impl PiEnvironment for SiblingLaneEnvironment {
+    fn session_file(&self, _pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
+        self.session_files.first().cloned()
+    }
+
+    fn session_files(&self, _pid: i32, _cwd: &str) -> Vec<std::path::PathBuf> {
+        self.session_files.clone()
+    }
+}
+
+fn lane_transcript(root: &TempDir, name: &str, marker: Option<&str>) -> std::path::PathBuf {
+    let path = root.path().join(name);
+    let mut body = String::from(
+        "{\"type\":\"session\",\"version\":3,\"id\":\"a\",\"timestamp\":\"2026-08-21T10:49:27.004Z\",\"cwd\":\"/work/proj\"}\n",
+    );
+    if let Some(marker) = marker {
+        body.push_str(&format!(
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"stopReason\":\"stop\",\"content\":[{{\"type\":\"text\",\"text\":\"done {marker}\"}}]}}}}\n"
+        ));
+    }
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn a_sibling_lanes_transcript_never_vetoes_a_marker_that_another_candidate_holds() {
+    let root = TempDir::new().unwrap();
+    let marker = "QOL_BRIDGE_DONE_c38eb17db221de0cbe79";
+    let sibling = lane_transcript(
+        &root,
+        "2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl",
+        Some("QOL_BRIDGE_DONE_61edf1109074834b8642"),
+    );
+    let own = lane_transcript(
+        &root,
+        "2026-08-21T10-49-27-998Z_01a023f0-a2be-76d4-ba2a-ec473035d7db.jsonl",
+        Some(marker),
+    );
+    let strategy = PiStrategy::with_environment(Arc::new(SiblingLaneEnvironment {
+        session_files: vec![sibling, own],
+    }));
+
+    assert_eq!(
+        strategy.transcript_completion(&session(), marker),
+        Some(true),
+        "the marker lives in the second candidate, so the first must not deny it"
+    );
+}
+
+#[test]
+fn an_ambiguous_candidate_set_withholds_a_veto_instead_of_denying() {
+    let root = TempDir::new().unwrap();
+    let marker = "QOL_BRIDGE_DONE_c38eb17db221de0cbe79";
+    let first = lane_transcript(
+        &root,
+        "2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl",
+        Some("QOL_BRIDGE_DONE_61edf1109074834b8642"),
+    );
+    let second = lane_transcript(
+        &root,
+        "2026-08-21T10-49-27-998Z_01a023f0-a2be-76d4-ba2a-ec473035d7db.jsonl",
+        None,
+    );
+    let ambiguous = PiStrategy::with_environment(Arc::new(SiblingLaneEnvironment {
+        session_files: vec![first.clone(), second],
+    }));
+    assert_eq!(
+        ambiguous.transcript_completion(&session(), marker),
+        None,
+        "with several candidates the transcript has no trustworthy opinion"
+    );
+
+    let single = PiStrategy::with_environment(Arc::new(SiblingLaneEnvironment {
+        session_files: vec![first],
+    }));
+    assert_eq!(
+        single.transcript_completion(&session(), marker),
+        Some(false),
+        "one unambiguous candidate that lacks the marker still denies it"
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

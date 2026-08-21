@@ -934,6 +934,17 @@ pub(super) fn register_group_member(
     )
 }
 
+pub(super) fn settle_group_round(
+    trace_dir: &std::path::Path,
+    group: &str,
+    session: &str,
+    label: Option<&str>,
+    screen: &str,
+) -> Result<()> {
+    write_group_fragment(trace_dir, group, session, screen_tail(screen), label)?;
+    settle_group_member(trace_dir, group, session, label, GroupOutcome::Completed)
+}
+
 fn settle_group_member(
     trace_dir: &std::path::Path,
     group: &str,
@@ -1055,6 +1066,9 @@ pub(super) fn maybe_deliver_group_combined(
         &message,
         sleep,
     )?;
+    if !delivery.delivered {
+        let _ = fs::remove_file(dir.join("combined.claim"));
+    }
     Ok(Some((combined, delivery)))
 }
 

@@ -2,10 +2,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+use super::metadata::id_from_path;
+
 const START_MATCH_TOLERANCE_SECS: i64 = 60;
 
 pub(super) trait PiEnvironment: Send + Sync {
     fn session_file(&self, pid: i32, cwd: &str) -> Option<PathBuf>;
+
+    fn session_files(&self, pid: i32, cwd: &str) -> Vec<PathBuf> {
+        self.session_file(pid, cwd).into_iter().collect()
+    }
 }
 
 pub(super) struct SystemPiEnvironment;
@@ -16,6 +23,16 @@ impl PiEnvironment for SystemPiEnvironment {
         match process_start_unix_secs(pid) {
             Some(started_at) => session_file_started_at(&directory, started_at),
             None => newest_session_file(&directory),
+        }
+    }
+
+    fn session_files(&self, pid: i32, cwd: &str) -> Vec<PathBuf> {
+        let Some(directory) = session_dir(cwd) else {
+            return Vec::new();
+        };
+        match process_start_unix_secs(pid) {
+            Some(started_at) => session_files_started_at(&directory, started_at),
+            None => newest_session_file(&directory).into_iter().collect(),
         }
     }
 }
@@ -80,24 +97,24 @@ fn session_files(directory: &Path) -> Vec<PathBuf> {
 }
 
 fn session_file_started_at(directory: &Path, started_at: i64) -> Option<PathBuf> {
-    let mut closest: Option<(i64, PathBuf)> = None;
+    session_files_started_at(directory, started_at)
+        .into_iter()
+        .next()
+}
+
+fn session_files_started_at(directory: &Path, started_at: i64) -> Vec<PathBuf> {
+    let mut candidates: Vec<(i64, PathBuf)> = Vec::new();
     for path in session_files(directory) {
         let Some(created_at) = created_at_unix_secs(&path) else {
             continue;
         };
         let distance = (created_at - started_at).abs();
-        if distance > START_MATCH_TOLERANCE_SECS {
-            continue;
-        }
-        let better = match &closest {
-            Some((best, _)) => distance < *best,
-            None => true,
-        };
-        if better {
-            closest = Some((distance, path));
+        if distance <= START_MATCH_TOLERANCE_SECS {
+            candidates.push((distance, path));
         }
     }
-    closest.map(|(_, path)| path)
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates.into_iter().map(|(_, path)| path).collect()
 }
 
 fn newest_session_file(directory: &Path) -> Option<PathBuf> {
@@ -163,6 +180,37 @@ fn parse_elapsed(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_transcript_started_in_the_match_window_is_a_candidate() {
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = root.path();
+        for name in [
+            "2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl",
+            "2026-08-21T10-49-27-998Z_01a023f0-a2be-76d4-ba2a-ec473035d7db.jsonl",
+        ] {
+            std::fs::write(directory.join(name), b"{}\n").unwrap();
+        }
+        let started_at = created_at_unix_secs(
+            &directory.join("2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl"),
+        )
+        .unwrap();
+
+        let mut candidates: Vec<String> = session_files_started_at(directory, started_at)
+            .into_iter()
+            .filter_map(|path| id_from_path(&path))
+            .collect();
+        candidates.sort();
+
+        assert_eq!(
+            candidates,
+            vec![
+                "01a023f0-9edc-7376-a318-d88ca8968107".to_owned(),
+                "01a023f0-a2be-76d4-ba2a-ec473035d7db".to_owned(),
+            ],
+            "two lanes started in the same second must both stay candidates"
+        );
+    }
 
     #[test]
     fn session_dir_name_matches_pis_encoding() {

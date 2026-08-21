@@ -70,8 +70,15 @@ impl CliSessionStrategy for PiStrategy {
     }
 
     fn transcript_completion(&self, session: &SessionFacts, marker: &str) -> Option<bool> {
-        let path = self.metadata.subscription_path(session)?;
-        metadata::marker_in_terminal_assistant_text(&path, marker)
+        let paths = self.metadata.subscription_paths(session);
+        for path in &paths {
+            match metadata::marker_in_terminal_assistant_text(path, marker) {
+                Some(true) => return Some(true),
+                Some(false) if paths.len() == 1 => return Some(false),
+                _ => {}
+            }
+        }
+        None
     }
 
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {

@@ -83,7 +83,7 @@ fn payload_from_flags(flags: &[String]) -> Option<Map<String, Value>> {
         return None;
     }
     let mut payload = Map::new();
-    for pair in flags.chunks_exact(2) {
+    for pair in flags.as_chunks::<2>().0 {
         let key = pair[0].strip_prefix("--")?;
         if key.contains('=') {
             return None;

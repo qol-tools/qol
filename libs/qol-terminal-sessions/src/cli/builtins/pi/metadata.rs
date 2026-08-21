@@ -32,6 +32,7 @@ pub(super) struct PiMetadataResolver {
 #[derive(Default)]
 struct PiCache {
     session_files: HashMap<i32, Timed<Option<PathBuf>>>,
+    session_file_lists: HashMap<i32, Timed<Vec<PathBuf>>>,
     facts: HashMap<PathBuf, CachedFacts>,
 }
 
@@ -94,6 +95,13 @@ impl PiMetadataResolver {
         let mut cache = self.cache.lock().ok()?;
         session_file(session, self.environment.as_ref(), &mut cache)
     }
+
+    pub fn subscription_paths(&self, session: &SessionFacts) -> Vec<PathBuf> {
+        let Some(mut cache) = self.cache.lock().ok() else {
+            return Vec::new();
+        };
+        session_files(session, self.environment.as_ref(), &mut cache)
+    }
 }
 
 fn session_file(
@@ -129,7 +137,44 @@ fn cached_session_file(
     value
 }
 
-fn id_from_path(path: &Path) -> Option<String> {
+fn session_files(
+    session: &SessionFacts,
+    environment: &dyn PiEnvironment,
+    cache: &mut PiCache,
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = session
+        .foreground_pids
+        .iter()
+        .flat_map(|pid| cached_session_files(*pid, &session.cwd, environment, cache))
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn cached_session_files(
+    pid: i32,
+    cwd: &str,
+    environment: &dyn PiEnvironment,
+    cache: &mut PiCache,
+) -> Vec<PathBuf> {
+    if let Some(entry) = cache.session_file_lists.get(&pid) {
+        if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
+            return entry.value.clone();
+        }
+    }
+    let value = environment.session_files(pid, cwd);
+    cache.session_file_lists.insert(
+        pid,
+        Timed {
+            value: value.clone(),
+            checked_at: Instant::now(),
+        },
+    );
+    value
+}
+
+pub(super) fn id_from_path(path: &Path) -> Option<String> {
     let stem = path.file_name()?.to_str()?.strip_suffix(".jsonl")?;
     let (_, id) = stem.rsplit_once('_')?;
     (!id.is_empty()).then(|| id.to_owned())

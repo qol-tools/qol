@@ -798,6 +798,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn monitor_handoff_delivers_over_a_path_addressed_socket_without_env_use() {
         use std::io::Write as _;
 
