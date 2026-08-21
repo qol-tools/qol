@@ -686,6 +686,7 @@ fn run_with(
         parsed.task.as_deref(),
         parsed.group.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
+        &super::bridge::trace_dir(),
     )
 }
 
@@ -920,6 +921,7 @@ pub(super) fn spawn_or_reuse(
     task: Option<&str>,
     group: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
+    trace_dir: &std::path::Path,
 ) -> Result<SpawnOutcome> {
     if background && task.is_none() {
         bail!(
@@ -1002,6 +1004,7 @@ pub(super) fn spawn_or_reuse(
                         &prepared.title,
                         autoclose,
                         group,
+                        trace_dir,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1199,6 +1202,7 @@ fn launch_background(
     title: &str,
     autoclose: bool,
     group: Option<&str>,
+    trace_dir: &std::path::Path,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1242,7 +1246,7 @@ fn launch_background(
     )?;
     if let Some(group) = group {
         super::watch::register_group_member(
-            &super::bridge::trace_dir(),
+            trace_dir,
             group,
             &binding.token(),
             Some(identity.key.as_str()),
@@ -1746,6 +1750,7 @@ mod tests {
             task,
             None,
             pending,
+            &std::path::PathBuf::from("."),
         )
     }
 

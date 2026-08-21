@@ -42,6 +42,17 @@ impl Default for WatchConfig {
     }
 }
 
+#[cfg(test)]
+impl WatchConfig {
+    pub(super) fn fast_for_tests() -> Self {
+        Self {
+            poll_base: Duration::from_millis(1),
+            poll_cap: Duration::from_millis(4),
+            stall_after: Duration::from_secs(3600),
+        }
+    }
+}
+
 struct WatchedRound {
     session: String,
     binding: SessionBinding,

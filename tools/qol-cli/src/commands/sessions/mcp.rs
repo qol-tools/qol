@@ -300,6 +300,7 @@ impl McpSessionServer {
             Some(task),
             group.as_deref(),
             &self.pending,
+            &self.reports_dir,
         )
         .map_err(|error| error.to_string())?;
         if outcome.task_submitted == Some(true) {
@@ -677,6 +678,14 @@ mod tests {
         current_facts: Mutex<Option<SessionFacts>>,
         lanes: Mutex<Vec<SessionFacts>>,
         closed: Mutex<Vec<SessionBinding>>,
+        spawns: Mutex<
+            Vec<(
+                qol_terminal_sessions::SpawnIdentity,
+                std::path::PathBuf,
+                qol_terminal_sessions::cli::CliLaunchProgram,
+            )>,
+        >,
+        lane_screens: Mutex<std::collections::HashMap<String, String>>,
     }
 
     impl FakeBackend {
@@ -699,6 +708,8 @@ mod tests {
                 current_facts: Mutex::new(None),
                 lanes: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
+                spawns: Mutex::new(Vec::new()),
+                lane_screens: Mutex::new(std::collections::HashMap::new()),
             }
         }
 
@@ -726,6 +737,41 @@ mod tests {
         fn set_current(&self, facts: SessionFacts) {
             *self.current.lock().unwrap() = true;
             *self.current_facts.lock().unwrap() = Some(facts);
+        }
+
+        fn spawned_sessions(&self) -> Vec<SessionFacts> {
+            self.spawns
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(identity, cwd, _)| SessionFacts {
+                    id: SessionId::new(self.id.clone(), format!("spawn-{}", identity.key)).unwrap(),
+                    root_pid: 200,
+                    cwd: cwd.display().to_string(),
+                    title: "Spawned".to_owned(),
+                    at_prompt: true,
+                    reported_cmd: None,
+                    foreground_basenames: vec![identity.tool.to_string()],
+                    foreground_pids: Vec::new(),
+                    capabilities: SessionCapabilities::ALL,
+                    spawn_identity: Some(identity.clone()),
+                })
+                .collect()
+        }
+
+        fn lane_marker(&self, key: &str) -> Option<String> {
+            let spawns = self.spawns.lock().unwrap();
+            let (_, _, launch) = spawns
+                .iter()
+                .find(|(identity, _, _)| identity.key.as_str() == key)?;
+            marker_in_prompt(launch.args.last()?)
+        }
+
+        fn show_lane_screen(&self, key: &str, screen: String) {
+            self.lane_screens
+                .lock()
+                .unwrap()
+                .insert(format!("spawn-{key}"), screen);
         }
 
         fn spawned_session(&self) -> Option<SessionFacts> {
@@ -785,6 +831,17 @@ mod tests {
         }
     }
 
+    fn marker_in_prompt(prompt: &str) -> Option<String> {
+        let fragments = prompt
+            .split('`')
+            .enumerate()
+            .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
+            .collect::<Vec<_>>();
+        let right = fragments.last()?;
+        let left = fragments.get(fragments.len().checked_sub(2)?)?;
+        Some(format!("{left}{right}"))
+    }
+
     impl SessionInventory for FakeBackend {
         fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
             if self.gone.load(Ordering::Relaxed) {
@@ -797,6 +854,11 @@ mod tests {
             if let Some(spawned) = self.spawned_session() {
                 facts.push(spawned);
             }
+            for extra in self.spawned_sessions() {
+                if !facts.iter().any(|known| known.id == extra.id) {
+                    facts.push(extra);
+                }
+            }
             facts.extend(self.lanes.lock().unwrap().iter().cloned());
             Ok(facts)
         }
@@ -804,6 +866,14 @@ mod tests {
 
     impl ScreenReader for FakeBackend {
         fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            if let Some(screen) = self
+                .lane_screens
+                .lock()
+                .unwrap()
+                .get(_target.session_id().native())
+            {
+                return Ok(screen.clone());
+            }
             if let Some(screen) = self.screens.lock().unwrap().pop_front() {
                 *self.last.lock().unwrap() = Some(screen.clone());
                 return Ok(screen);
@@ -928,6 +998,11 @@ mod tests {
             *self.spawn_identity.lock().unwrap() = Some(request.identity.clone());
             *self.spawn_cwd.lock().unwrap() = Some(request.cwd.clone());
             *self.spawn_launch.lock().unwrap() = Some(request.launch.clone());
+            self.spawns.lock().unwrap().push((
+                request.identity.clone(),
+                request.cwd.clone(),
+                request.launch.clone(),
+            ));
             SessionId::new(self.id.clone(), format!("spawn-{}", request.identity.key)).map_err(
                 |error| TerminalError::SpawnFailed {
                     backend: self.id.clone(),
@@ -2608,6 +2683,155 @@ mod tests {
         assert!(
             entries[1].get("report").is_none(),
             "empty reports are dropped"
+        );
+    }
+    fn spawn_lane(
+        server: &McpSessionServer,
+        backend: &Arc<FakeBackend>,
+        key: &str,
+        cwd: &str,
+        group: Option<&str>,
+    ) -> (String, String) {
+        let mut arguments = spawn_arguments("codex", key, None, cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("research the bounded question and write the report");
+        if let Some(group) = group {
+            arguments["group"] = json!(group);
+        }
+        let response = tool_call(server, "session_spawn", arguments);
+        assert_eq!(
+            response["result"]["isError"], false,
+            "spawn failed: {response}"
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let marker = backend
+            .lane_marker(key)
+            .expect("the launch prompt carries the round marker");
+        assert_eq!(outcome["completion_marker"], marker);
+        (outcome["session"].as_str().unwrap().to_owned(), marker)
+    }
+
+    fn run_watcher(
+        server: &McpSessionServer,
+        tokens: &[String],
+        trace_dir: &std::path::Path,
+    ) -> Vec<Value> {
+        let mut out = Vec::new();
+        super::super::watch::watch(
+            server.terminals.as_ref(),
+            &server.interpreter,
+            &server.pending,
+            &server.ledger,
+            &server.locks,
+            tokens,
+            &mut out,
+            trace_dir,
+            super::super::watch::WatchConfig::fast_for_tests(),
+        )
+        .unwrap();
+        String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn e2e_a_spawned_lane_completes_through_the_watcher_and_bridge_collects_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let (session, marker) = spawn_lane(&server, &backend, "lane-one", &cwd, None);
+        backend.show_lane_screen("lane-one", format!("the report is written\n{marker}"));
+        let events = run_watcher(&server, std::slice::from_ref(&session), root.path());
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["session"], session);
+
+        let waited = tool_call(&server, "session_bridge", json!({ "session": session }));
+        assert_eq!(
+            waited["result"]["isError"], false,
+            "bridge failed: {waited}"
+        );
+        let outcome: Value =
+            serde_json::from_str(waited["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(outcome["completed"], true);
+        assert_eq!(outcome["completion_marker"], marker);
+        assert!(
+            outcome["screen"]
+                .as_str()
+                .unwrap()
+                .contains("the report is written"),
+            "the bridge returns the lane's own report: {outcome}"
+        );
+    }
+
+    #[test]
+    fn e2e_grouped_spawns_wake_the_architect_once_with_every_lane() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(architect_facts(&cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let group = "staleness-research";
+        let keys = ["research-a", "research-b", "research-c"];
+
+        let mut lanes = Vec::new();
+        for key in keys {
+            lanes.push(spawn_lane(&server, &backend, key, &cwd, Some(group)));
+        }
+
+        for (index, (key, (session, marker))) in keys.iter().zip(&lanes).enumerate() {
+            backend.show_lane_screen(key, format!("findings from {key}\n{marker}"));
+            let events = run_watcher(&server, std::slice::from_ref(session), root.path());
+            let last = index + 1 == keys.len();
+            if last {
+                assert_eq!(events.len(), 1, "the final lane wakes once: {events:?}");
+                assert_eq!(events[0]["event"], "completed");
+            } else {
+                assert!(
+                    events.is_empty(),
+                    "an early grouped lane must stay silent: {events:?}"
+                );
+            }
+        }
+
+        let wakes = backend
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, text, _)| text.contains("grouped research"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].1.contains("all 3 lanes finished"),
+            "the combined wake counts every member: {:?}",
+            wakes[0].1
+        );
+        let combined =
+            std::fs::read_to_string(root.path().join("groups").join(group).join("combined.md"))
+                .expect("combined report written");
+        for key in keys {
+            assert!(
+                combined.contains(&format!("findings from {key}")),
+                "the combined report must carry {key}: {combined}"
+            );
+        }
+        assert_eq!(
+            combined.matches("## v1:kitty:spawn-").count(),
+            3,
+            "every spawned lane gets a section: {combined}"
         );
     }
 }
