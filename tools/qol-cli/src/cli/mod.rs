@@ -158,10 +158,16 @@ mod tests {
     }
 
     #[test]
-    fn contextual_check_help_advertises_exact_staged_checks() {
+    fn contextual_check_help_advertises_staged_and_lint_modes() {
         let args = parse_cli(["help", "check"].into_iter().map(OsString::from).collect());
         let execution = contract_execution(&args).unwrap().unwrap();
-        assert!(execution.stdout.contains("qol check [--staged]"));
+        assert!(execution.stdout.contains("qol check [--staged|--lint]"));
+        assert!(execution
+            .stdout
+            .contains("--staged checks the exact staged tree instead of the working tree."));
+        assert!(execution.stdout.contains(
+            "--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache."
+        ));
     }
 
     #[test]

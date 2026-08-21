@@ -146,14 +146,17 @@ fn app() -> HeadlessApp {
             "Build progress on stdout; diagnostics on stderr.",
             "Exits non-zero when the selected build fails.",
         ))
-        .command(command(
-            "check",
-            "Run affected workspace checks.",
-            "qol check [--staged]",
-            "--staged checks the exact staged tree instead of the working tree.",
-            "Check plan and command progress on stdout; diagnostics on stderr.",
-            "Exits non-zero when planning or a selected check fails.",
-        ))
+        .command(
+            command(
+                "check",
+                "Run affected workspace checks.",
+                "qol check [--staged|--lint]",
+                "--staged checks the exact staged tree instead of the working tree.",
+                "Check plan and command progress on stdout; diagnostics on stderr.",
+                "Exits non-zero when planning or a selected check fails.",
+            )
+            .detail("--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache."),
+        )
         .command(command(
             "clean",
             "Clean workspace or named build artifacts.",

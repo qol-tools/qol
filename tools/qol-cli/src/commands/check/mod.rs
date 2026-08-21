@@ -99,6 +99,7 @@ fn run_and_report(
 enum CheckMode {
     Worktree,
     Staged,
+    Lint,
 }
 
 impl CheckMode {
@@ -106,7 +107,8 @@ impl CheckMode {
         match args {
             [] => Ok(Self::Worktree),
             [argument] if argument == "--staged" => Ok(Self::Staged),
-            _ => bail!("usage: qol check [--staged]"),
+            [argument] if argument == "--lint" => Ok(Self::Lint),
+            _ => bail!("usage: qol check [--staged|--lint]"),
         }
     }
 
@@ -114,6 +116,7 @@ impl CheckMode {
         match self {
             Self::Worktree => "worktree",
             Self::Staged => "staged",
+            Self::Lint => "lint",
         }
     }
 }
@@ -128,8 +131,11 @@ fn execute(
     verbose: bool,
 ) -> Result<()> {
     let source_state = SourceState::capture(source_root)?;
-    let base_sha = affected::comparison_base(source_root, &source_state.head);
     report.set_source_state(&source_state.head, &source_state.index_tree);
+    let base_sha = match mode {
+        CheckMode::Lint => Some("HEAD".to_string()),
+        _ => affected::comparison_base(source_root, &source_state.head),
+    };
     report.set_base_sha(base_sha.as_deref());
     let execution = CheckExecution {
         source_root,
@@ -151,6 +157,7 @@ fn execute(
             report,
         ),
         CheckMode::Staged => run_staged_checks(&execution, source_state, report),
+        CheckMode::Lint => run_lint_checks(&execution.lint_context(source_root), report),
     }
 }
 
@@ -182,6 +189,21 @@ impl CheckExecution<'_> {
             cancellation: self.cancellation,
             containment,
             sanitize_git,
+            verbose: self.verbose,
+        }
+    }
+
+    fn lint_context<'a>(&'a self, root: &'a Path) -> CheckContext<'a> {
+        CheckContext {
+            root,
+            cargo_target: root.join("target").join("qol-lint"),
+            platform: self.platform,
+            base_sha: Some("HEAD"),
+            head: affected::WORKTREE_HEAD,
+            affected_path: self.affected_path,
+            cancellation: self.cancellation,
+            containment: command::Containment::Preferred,
+            sanitize_git: false,
             verbose: self.verbose,
         }
     }
@@ -334,6 +356,30 @@ fn run_rust_checks(
     context.run(report, "rust-tests", "test", "affected crates", &mut tests)
 }
 
+fn run_lint_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()> {
+    let mut planner = affected::planner_command(
+        context.root,
+        context.base_sha,
+        context.head,
+        context.affected_path,
+    );
+    context.run(
+        report,
+        "affected-crates",
+        "plan",
+        "affected crates",
+        &mut planner,
+    )?;
+    let cargo = affected::load_plan(context.affected_path, context.platform)?;
+    if cargo.skip {
+        report.skip("clippy", "no affected crates");
+        return Ok(());
+    }
+    let mut clippy = cargo_command(context, "clippy", &cargo.clippy_args);
+    clippy.args(["--", "-D", "warnings"]);
+    context.run(report, "clippy", "clippy", "affected crates", &mut clippy)
+}
+
 fn cargo_command(context: &CheckContext<'_>, verb: &str, args: &[OsString]) -> Command {
     let mut command = context.command("cargo");
     command
@@ -404,16 +450,49 @@ mod tests {
     }
 
     #[test]
-    fn check_mode_accepts_only_the_staged_switch() {
+    fn check_mode_accepts_only_the_mode_switches() {
         let cases = [
             (Vec::new(), Ok(CheckMode::Worktree)),
             (vec![OsString::from("--staged")], Ok(CheckMode::Staged)),
+            (vec![OsString::from("--lint")], Ok(CheckMode::Lint)),
             (vec![OsString::from("--other")], Err(())),
+            (
+                vec![OsString::from("--staged"), OsString::from("--lint")],
+                Err(()),
+            ),
         ];
         for (args, expected) in cases {
             let actual = CheckMode::parse(&args).map_err(|_| ());
             assert_eq!(actual, expected, "args: {args:?}");
         }
+    }
+
+    #[test]
+    fn lint_context_uses_its_own_target_dir_and_head_base() {
+        let directory = tempfile::tempdir().unwrap();
+        let affected = directory.path().join("affected.json");
+        let cancellation = CancellationToken::new();
+        let execution = CheckExecution {
+            source_root: directory.path(),
+            platform: Platform::Linux,
+            base_sha: None,
+            affected_path: &affected,
+            cancellation: &cancellation,
+            verbose: false,
+        };
+        let context = execution.lint_context(directory.path());
+
+        assert_eq!(
+            context.cargo_target,
+            directory.path().join("target").join("qol-lint")
+        );
+        assert_eq!(context.base_sha, Some("HEAD"));
+        assert_eq!(context.head, affected::WORKTREE_HEAD);
+        assert!(matches!(
+            context.containment,
+            command::Containment::Preferred
+        ));
+        assert!(!context.sanitize_git);
     }
 
     #[test]
