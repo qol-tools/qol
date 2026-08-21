@@ -64,6 +64,7 @@ pub trait TerminalBackend:
 
 pub struct TerminalSessionService {
     backends: BTreeMap<BackendId, Arc<dyn TerminalBackend>>,
+    wait_backoff: WaitBackoff,
 }
 
 impl TerminalSessionService {
@@ -86,7 +87,13 @@ impl TerminalSessionService {
         }
         Ok(Self {
             backends: registered,
+            wait_backoff: WaitBackoff::default(),
         })
+    }
+
+    pub fn with_wait_backoff(mut self, base: Duration, cap: Duration) -> Self {
+        self.wait_backoff = WaitBackoff { base, cap };
+        self
     }
 
     pub fn spawn_on(
@@ -297,7 +304,7 @@ impl TerminalSessionService {
             submitted,
             liveness,
             stall_after,
-            WaitBackoff::default(),
+            self.wait_backoff,
             &mut |duration| std::thread::sleep(duration),
         )
     }
