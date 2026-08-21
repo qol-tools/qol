@@ -229,6 +229,9 @@ impl McpSessionServer {
     }
 
     fn tool_spawn(&self, arguments: Value) -> Result<String, String> {
+        if arguments.get("lanes").is_some() {
+            return self.tool_spawn_lanes(&arguments);
+        }
         let tool = string_argument(&arguments, "tool")?;
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
@@ -310,6 +313,63 @@ impl McpSessionServer {
         .map_err(|error| error.to_string())?;
         if outcome.task_submitted == Some(true) {
             self.watcher.record_token(&outcome.session, &self.pending);
+        }
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_spawn_lanes(&self, arguments: &Value) -> Result<String, String> {
+        let tool = string_argument(arguments, "tool")?;
+        let cwd = string_argument(arguments, "cwd")?;
+        for rejected in ["key", "task", "title"] {
+            if arguments.get(rejected).is_some() {
+                return Err(format!(
+                    "`lanes` carries every lane's key, task and title, so a top-level `{rejected}` is ambiguous. Move it into the matching lane entry."
+                ));
+            }
+        }
+        let lanes = arguments
+            .get("lanes")
+            .expect("the caller checked that lanes is present");
+        let lanes: Vec<super::spawn::LaneSpec> =
+            serde_json::from_value(lanes.clone()).map_err(|error| {
+                format!("`lanes` must be an array of {{key, task, title?}} objects: {error}")
+            })?;
+        let surface = optional_string(arguments, "surface", "session_spawn")?;
+        let model_flag = optional_string(arguments, "model", "session_spawn")?;
+        let group = optional_string(arguments, "group", "session_spawn")?;
+        let resume = arguments
+            .get("resume")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
+            })
+            .transpose()?;
+        let model =
+            super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
+                .map_err(|error| error.to_string())?;
+        let outcome = super::spawn::spawn_lanes(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            tool,
+            cwd,
+            &lanes,
+            surface.as_deref(),
+            model.as_deref(),
+            self.spawn_surface,
+            self.spawn_cap.as_ref(),
+            &self.locks,
+            &self.ledger,
+            resume,
+            group.as_deref(),
+            &self.pending,
+            &self.reports_dir,
+        )
+        .map_err(|error| error.to_string())?;
+        for lane in &outcome.lanes {
+            if lane.task_submitted == Some(true) {
+                self.watcher.record_token(&lane.session, &self.pending);
+            }
         }
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
@@ -2825,6 +2885,162 @@ mod tests {
                 .contains("the report is written"),
             "the bridge returns the lane's own report: {outcome}"
         );
+    }
+
+    fn spawn_lane_set(
+        server: &McpSessionServer,
+        backend: &Arc<FakeBackend>,
+        keys: &[&str],
+        cwd: &str,
+    ) -> (Value, Vec<(String, String)>) {
+        let lanes = keys
+            .iter()
+            .map(|key| json!({ "key": key, "task": format!("cover the {key} slice of the work") }))
+            .collect::<Vec<_>>();
+        let response = tool_call(
+            server,
+            "session_spawn",
+            json!({
+                "tool": "codex",
+                "cwd": cwd,
+                "model": "flash-x",
+                "lanes": lanes,
+            }),
+        );
+        assert_eq!(
+            response["result"]["isError"], false,
+            "lane set spawn failed: {response}"
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let lanes = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let marker = backend
+                    .lane_marker(key)
+                    .expect("every lane launch carries its own round marker");
+                assert_eq!(outcome["lanes"][index]["completion_marker"], marker);
+                (
+                    outcome["lanes"][index]["session"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    marker,
+                )
+            })
+            .collect::<Vec<_>>();
+        (outcome, lanes)
+    }
+
+    #[test]
+    fn e2e_a_lane_set_spawned_in_one_call_wakes_the_architect_once() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(architect_facts(&cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let keys = ["set-a", "set-b"];
+
+        let (outcome, lanes) = spawn_lane_set(&server, &backend, &keys, &cwd);
+        assert_eq!(outcome["combined_report"], true);
+        let group = outcome["group"]
+            .as_str()
+            .expect("two lanes in one call are grouped automatically")
+            .to_owned();
+        assert_eq!(outcome["lanes"].as_array().unwrap().len(), keys.len());
+
+        for (index, (key, (session, marker))) in keys.iter().zip(&lanes).enumerate() {
+            backend.show_lane_screen(key, format!("findings from {key}\n{marker}"));
+            let events = run_watcher(&server, std::slice::from_ref(session), root.path());
+            if index + 1 == keys.len() {
+                assert_eq!(events.len(), 1, "the final lane wakes once: {events:?}");
+            } else {
+                assert!(events.is_empty(), "an early lane stays silent: {events:?}");
+            }
+        }
+
+        let wakes = backend
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, text, _)| text.contains("grouped research"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].1.contains("all 2 lanes finished"),
+            "the wake counts every lane in the set: {:?}",
+            wakes[0].1
+        );
+        let combined =
+            std::fs::read_to_string(root.path().join("groups").join(&group).join("combined.md"))
+                .expect("the set writes one combined report");
+        for key in keys {
+            assert!(
+                combined.contains(&format!("findings from {key}")),
+                "the combined report holds every lane: {combined}"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_a_second_ungrouped_lane_is_refused() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(architect_facts(&cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        spawn_lane(&server, &backend, "solo-one", &cwd, None);
+        let mut arguments = spawn_arguments("codex", "solo-two", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("chase the second thread");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(
+            response["result"]["isError"], true,
+            "a second ungrouped lane must be refused: {response}"
+        );
+        let message = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            message.contains("lanes") && message.contains("solo-one"),
+            "the refusal names the live lane and the lanes argument: {message}"
+        );
+    }
+
+    #[test]
+    fn a_lane_set_refuses_a_top_level_task() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let response = tool_call(
+            &server,
+            "session_spawn",
+            json!({
+                "tool": "codex",
+                "cwd": cwd,
+                "model": "flash-x",
+                "task": "do everything",
+                "lanes": [{ "key": "one", "task": "first slice" }],
+            }),
+        );
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Move it into the matching lane entry"));
     }
 
     #[test]

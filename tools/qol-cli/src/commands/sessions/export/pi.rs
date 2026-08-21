@@ -282,12 +282,28 @@ const EXECUTE_LIST: &str = r#"    async execute(_toolCallId, _params, signal, _o
 "#;
 
 const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd, "--key", params.key];
+      const args = ["spawn", "--tool", params.tool, "--cwd", params.cwd];
       if (params.surface != null) args.push("--surface", params.surface);
       if (params.model != null) args.push("--model", params.model);
+      if (params.group != null) args.push("--group", params.group);
+      if (params.resume === true) args.push("--resume");
+      if (Array.isArray(params.lanes)) {
+        args.push("--lanes", JSON.stringify(params.lanes));
+        const stdout = await run(args, 180_000, undefined, signal);
+        const outcome = JSON.parse(stdout);
+        for (const lane of outcome.lanes) {
+          await recordWatchedToken(ctx.sessionManager.getSessionId(), lane.session);
+        }
+        await startWatcher(ctx);
+        const suffix = outcome.combined_report
+          ? `they are grouped as ${outcome.group} and you will be woken once with one combined report`
+          : "you will be woken when it completes";
+        const text = `spawned ${outcome.lanes.length} lane(s) in the background (${params.tool}); ${suffix}`;
+        return { content: [{ type: "text", text }], details: { outcome } };
+      }
+      args.push("--key", params.key);
       if (params.title != null) args.push("--title", params.title);
       args.push("--task", params.task, "--background");
-      if (params.resume === true) args.push("--resume");
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       await recordWatchedToken(ctx.sessionManager.getSessionId(), outcome.session);
@@ -429,6 +445,17 @@ fn typebox_expr(property: &Value, required: bool) -> Result<String> {
         "boolean" => format!("Type.Boolean({args})"),
         "integer" => format!("Type.Integer({args})"),
         "object" => typebox_object(property)?,
+        "array" => {
+            let items = property
+                .get("items")
+                .ok_or_else(|| anyhow!("contract array property must declare its items schema"))?;
+            let element = typebox_expr(items, true)?;
+            if args.is_empty() {
+                format!("Type.Array({element})")
+            } else {
+                format!("Type.Array({element}, {args})")
+            }
+        }
         other => bail!("unsupported contract schema type `{other}`"),
     };
     if required {
@@ -580,7 +607,7 @@ mod tests {
             "the schema no longer accepts a background flag"
         );
         assert!(source.contains(
-            "task: Type.String({ description: \"Required bounded first-round task embedded in the launch"
+            "task: Type.Optional(Type.String({ description: \"Bounded first-round task embedded in the launch"
         ));
         assert!(
             EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"),
@@ -699,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn pi_schema_maps_the_spawn_tool_with_required_key() {
+    fn pi_schema_maps_the_spawn_tool_and_its_lane_set() {
         let specs = tool_specs();
         let spec = specs
             .iter()
@@ -712,12 +739,12 @@ mod tests {
         assert!(source.contains(
             "cwd: Type.String({ description: \"Working directory for the spawned session\" }),"
         ));
-        assert!(source.contains(
-            "key: Type.String({ description: \"Stable spawn key; required so retries are idempotent\" }),"
-        ));
+        assert!(source.contains("key: Type.Optional(Type.String("));
+        assert!(source.contains("lanes: Type.Optional(Type.Array(Type.Object("));
         assert!(source.contains("surface: Type.Optional(Type.String"));
         assert!(EXECUTE_SPAWN.contains("args.push(\"--surface\", params.surface)"));
         assert!(EXECUTE_SPAWN.contains("args.push(\"--task\", params.task, \"--background\")"));
+        assert!(EXECUTE_SPAWN.contains("args.push(\"--lanes\", JSON.stringify(params.lanes))"));
         assert!(EXECUTE_SPAWN.contains("spawned session ${outcome.session}"));
     }
 

@@ -99,7 +99,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_spawn",
             label: "Spawn a tool session",
-            description: "Launch a tagged harness for a registered tool in a new terminal tab, or reuse the single live session already carrying the key when its tool matches. The key makes retries idempotent: a key held by a different tool conflicts, multiple matches are ambiguous, and a launched session is returned only once it is live, tagged, and described as the requested tool. Surface is tab or os-window; the default comes from the spawn_surface config, then tab. Delivery is background-only: the required task is embedded in the launch and the round is open when the call returns; lanes always close when the watcher confirms completion, and sessions without a spawn identity are never closed.",
+            description: "Launch a tagged harness for a registered tool in a new terminal tab, or reuse the single live session already carrying the key when its tool matches. The key makes retries idempotent: a key held by a different tool conflicts, multiple matches are ambiguous, and a launched session is returned only once it is live, tagged, and described as the requested tool. Surface is tab or os-window; the default comes from the spawn_surface config, then tab. Delivery is background-only: the task is embedded in the launch and the round is open when the call returns; lanes always close when the watcher confirms completion, and sessions without a spawn identity are never closed. Decide up front how many lanes the work needs: one lane takes key and task, while a set takes `lanes`, one entry per lane, and comes back as a single combined report instead of one wake per lane.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -113,7 +113,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "key": {
                         "type": "string",
-                        "description": "Stable spawn key; required so retries are idempotent",
+                        "description": "Stable spawn key for a single lane; makes retries idempotent. Use `lanes` instead when the work needs more than one",
                     },
                     "surface": {
                         "type": "string",
@@ -130,7 +130,30 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "task": {
                         "type": "string",
-                        "description": "Required bounded first-round task embedded in the launch; the round is open when the call returns and session_bridge (no task) waits for it",
+                        "description": "Bounded first-round task embedded in the launch; the round is open when the call returns and session_bridge (no task) waits for it. Required for a single lane; use `lanes` instead when the work splits across several",
+                    },
+                    "lanes": {
+                        "type": "array",
+                        "description": "Whole set of lanes to launch in one call, one entry per lane, sized to the work the set has to cover. Replaces key, task and title. Two or more lanes are grouped automatically, so the set wakes you once with one combined report instead of once per lane; pass `group` only to name that set yourself. Spawning a second ungrouped lane while another is still running is refused for exactly this reason",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Stable spawn key for this lane; unique within the set",
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "Bounded first-round task for this lane",
+                                },
+                                "title": {
+                                    "type": "string",
+                                    "description": "Tab title for this lane; defaults to its key",
+                                },
+                            },
+                            "required": ["key", "task"],
+                        },
                     },
                     "group": {
                         "type": "string",
@@ -141,7 +164,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "description": "Force a resume of the harness's persisted session for this key when a new terminal is launched. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); resume: false opts out. The spawn outcome reports resume and resume_detail",
                     },
                 },
-                "required": ["tool", "cwd", "key", "task"],
+                "required": ["tool", "cwd"],
             }),
         },
         ToolSpec {
@@ -400,19 +423,22 @@ mod tests {
     }
 
     #[test]
-    fn session_spawn_schema_requires_tool_cwd_and_key() {
+    fn session_spawn_schema_takes_one_lane_or_a_whole_set() {
         let specs = tool_specs();
         let spec = specs
             .iter()
             .find(|spec| spec.name == "session_spawn")
             .unwrap();
-        assert_eq!(
-            spec.input_schema["required"],
-            json!(["tool", "cwd", "key", "task"])
-        );
+        assert_eq!(spec.input_schema["required"], json!(["tool", "cwd"]));
         assert_eq!(
             spec.input_schema["properties"]["task"]["type"], "string",
-            "spawn always embeds a task in the launch, so task must be required"
+            "a single lane still embeds its task in the launch"
+        );
+        assert_eq!(spec.input_schema["properties"]["lanes"]["type"], "array");
+        assert_eq!(
+            spec.input_schema["properties"]["lanes"]["items"]["required"],
+            json!(["key", "task"]),
+            "every lane in a set carries its own key and task"
         );
         assert_eq!(spec.input_schema["properties"]["tool"]["type"], "string");
         assert_eq!(spec.input_schema["properties"]["cwd"]["type"], "string");

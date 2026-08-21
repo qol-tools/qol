@@ -57,6 +57,23 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct LaneSpec {
+    pub(super) key: String,
+    pub(super) task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LaneSetOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group: Option<String>,
+    pub(super) combined_report: bool,
+    pub(super) lanes: Vec<SpawnOutcome>,
+    pub(super) elapsed_ms: u128,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum SpawnDecision {
     Launch,
@@ -606,6 +623,16 @@ pub(super) fn generate_key() -> String {
     digest[..20].to_owned()
 }
 
+fn generated_group(lanes: &[LaneSpec]) -> String {
+    let mut digest = Sha256::new();
+    for lane in lanes {
+        digest.update(lane.key.as_bytes());
+        digest.update([0]);
+    }
+    let digest = format!("{:x}", digest.finalize());
+    format!("set-{}-{}", lanes.len(), &digest[..8])
+}
+
 fn canonicalize_cwd(requested: &str) -> Result<PathBuf> {
     let process_cwd =
         std::env::current_dir().context("cannot resolve the current working directory")?;
@@ -644,19 +671,45 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             cap.cpu_quota.as_deref().unwrap_or("-")
         );
     }
-    let outcome = run_with(
-        &TerminalSessionService::system(),
-        parsed,
-        model,
-        config_surface()?,
-        &SpawnLocks::system()?,
-        cap,
-    )?;
-    println!(
-        "{}",
+    let terminals = TerminalSessionService::system();
+    let surface = config_surface()?;
+    let locks = SpawnLocks::system()?;
+    let encoded = if parsed.lanes.is_empty() {
+        let outcome = run_with(&terminals, parsed, model, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
-    );
+    } else {
+        let outcome = run_lanes_with(&terminals, parsed, model, surface, &locks, cap)?;
+        serde_json::to_string(&outcome).context("failed to serialize lane set outcome")?
+    };
+    println!("{encoded}");
     Ok(())
+}
+
+fn run_lanes_with(
+    terminals: &TerminalSessionService,
+    parsed: SpawnArgs,
+    model: Option<String>,
+    config: Option<SpawnSurface>,
+    locks: &SpawnLocks,
+    cap: Option<SpawnCapConfig>,
+) -> Result<LaneSetOutcome> {
+    spawn_lanes(
+        terminals,
+        &CliSessionInterpreter::system(),
+        &parsed.tool,
+        &parsed.cwd,
+        &parsed.lanes,
+        parsed.surface.as_deref(),
+        model.as_deref(),
+        config,
+        cap.as_ref(),
+        locks,
+        &SpawnLedger::system()?,
+        parsed.resume,
+        parsed.group.as_deref(),
+        &super::bridge::PendingBridgeStore::system()?,
+        &super::bridge::trace_dir(),
+    )
 }
 
 fn run_with(
@@ -764,10 +817,11 @@ struct SpawnArgs {
     background: bool,
     resume: Option<bool>,
     group: Option<String>,
+    lanes: Vec<LaneSpec>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --lanes takes a JSON array of {key, task, title?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -778,6 +832,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut background = false;
     let mut resume = None;
     let mut group = None;
+    let mut lanes = Vec::new();
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -828,11 +883,21 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 group = Some(flag_value(args, index, "--group", usage)?);
                 index += 2;
             }
+            "--lanes" => {
+                let value = flag_value(args, index, "--lanes", usage)?;
+                lanes = serde_json::from_str(&value).with_context(|| {
+                    format!("--lanes expects a JSON array of {{key, task, title?}} objects, got `{value}`")
+                })?;
+                index += 2;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
     let tool = tool.ok_or_else(|| anyhow!("usage: {usage}"))?;
     let cwd = cwd.ok_or_else(|| anyhow!("usage: {usage}"))?;
+    if !lanes.is_empty() && (key.is_some() || task.is_some() || title.is_some()) {
+        bail!("--lanes carries every lane's key, task and title, so --key, --task and --title cannot be combined with it\nusage: {usage}");
+    }
     Ok(SpawnArgs {
         tool,
         cwd,
@@ -844,6 +909,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         background,
         resume,
         group,
+        lanes,
     })
 }
 
@@ -902,6 +968,108 @@ fn prepare_spawn(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_lanes(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    tool: &str,
+    cwd: &str,
+    lanes: &[LaneSpec],
+    surface: Option<&str>,
+    model: Option<&str>,
+    config: Option<SpawnSurface>,
+    cap: Option<&SpawnCapConfig>,
+    locks: &SpawnLocks,
+    ledger: &SpawnLedger,
+    resume: Option<bool>,
+    group: Option<&str>,
+    pending: &super::bridge::PendingBridgeStore,
+    trace_dir: &std::path::Path,
+) -> Result<LaneSetOutcome> {
+    if lanes.is_empty() {
+        bail!("`lanes` is empty; give one entry per lane, each with its own key and bounded task");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for lane in lanes {
+        if lane.key.trim().is_empty() {
+            bail!("every lane needs a non-empty key so its round stays idempotent");
+        }
+        if !seen.insert(lane.key.as_str()) {
+            bail!(
+                "lane key `{}` appears twice; every lane in a set needs its own key",
+                lane.key
+            );
+        }
+    }
+    let started = Instant::now();
+    let group = match group {
+        Some(group) => Some(group.to_owned()),
+        None if lanes.len() > 1 => Some(generated_group(lanes)),
+        None => None,
+    };
+    let mut outcomes = Vec::with_capacity(lanes.len());
+    for lane in lanes {
+        let outcome = spawn_or_reuse(
+            terminals,
+            interpreter,
+            tool,
+            cwd,
+            Some(lane.key.as_str()),
+            surface,
+            model,
+            lane.title.as_deref(),
+            config,
+            cap,
+            locks,
+            ledger,
+            true,
+            true,
+            resume,
+            Some(lane.task.as_str()),
+            group.as_deref(),
+            pending,
+            trace_dir,
+        )
+        .with_context(|| {
+            format!(
+                "lane `{}` failed to spawn; {} lane(s) of this set are already live and keep running",
+                lane.key,
+                outcomes.len()
+            )
+        })?;
+        outcomes.push(outcome);
+    }
+    qol_runtime::probe!(
+        "CLI_SESSION_SPAWN",
+        "event=lane_set lanes={} group={}",
+        outcomes.len(),
+        group.as_deref().unwrap_or("-")
+    );
+    Ok(LaneSetOutcome {
+        combined_report: group.is_some(),
+        group,
+        lanes: outcomes,
+        elapsed_ms: started.elapsed().as_millis(),
+    })
+}
+
+fn refuse_second_ungrouped_lane(
+    pending: &super::bridge::PendingBridgeStore,
+    live: &std::collections::HashSet<String>,
+) -> Result<()> {
+    for round in pending.pending_rounds()? {
+        if round.completed || round.group.is_some() || !live.contains(&round.session) {
+            continue;
+        }
+        let label = round.label.unwrap_or_else(|| round.session.clone());
+        bail!(
+            "lane `{label}` is still running an open round on `{}`, and a second ungrouped lane would wake you once per lane. Spawn the whole set in one call by passing `lanes`, one entry per lane, so they aggregate into a single combined report, or pass `group` to join them yourself",
+            round.session
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_or_reuse(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -934,6 +1102,14 @@ pub(super) fn spawn_or_reuse(
         let snapshot = terminals.snapshot().context("session discovery failed")?;
         match decide(interpreter, snapshot.sessions(), &prepared.identity) {
             SpawnDecision::Launch => {
+                if background && group.is_none() {
+                    let live = snapshot
+                        .sessions()
+                        .iter()
+                        .filter_map(|facts| facts.binding().ok().map(|binding| binding.token()))
+                        .collect::<std::collections::HashSet<_>>();
+                    refuse_second_ungrouped_lane(pending, &live)?;
+                }
                 require_model_for_launch(model)?;
                 let mut launch = wrap_launch(&prepared.launch, cap);
                 let requested_cwd = canonicalize_cwd(cwd)?;
@@ -1894,6 +2070,55 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_reads_a_lane_set() {
+        let parsed = parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            ".".into(),
+            "--lanes".into(),
+            r#"[{"key":"a","task":"first"},{"key":"b","task":"second","title":"B"}]"#.into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.lanes.len(), 2);
+        assert_eq!(parsed.lanes[0].key, "a");
+        assert_eq!(parsed.lanes[0].task, "first");
+        assert_eq!(parsed.lanes[1].title.as_deref(), Some("B"));
+        assert!(parsed.key.is_none());
+    }
+
+    #[test]
+    fn parse_args_refuses_a_lane_set_beside_a_single_lane() {
+        let error = parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            ".".into(),
+            "--task".into(),
+            "do it".into(),
+            "--lanes".into(),
+            r#"[{"key":"a","task":"first"}]"#.into(),
+        ])
+        .err()
+        .expect("a lane set beside a single lane is refused")
+        .to_string();
+        assert!(error.contains("--lanes carries every lane"), "{error}");
+    }
+
+    #[test]
+    fn a_generated_group_is_stable_per_lane_set() {
+        let lane = |key: &str| LaneSpec {
+            key: key.to_owned(),
+            task: "work".to_owned(),
+            title: None,
+        };
+        let set = [lane("a"), lane("b")];
+        assert_eq!(generated_group(&set), generated_group(&set));
+        assert_ne!(generated_group(&set), generated_group(&[lane("a")]));
+        assert!(generated_group(&set).starts_with("set-2-"));
+    }
+
+    #[test]
     fn spawn_args_reject_the_removed_autoclose_flags() {
         for flag in ["--auto-close", "--no-auto-close"] {
             let error = match parse_args(&[
@@ -2232,6 +2457,9 @@ mod tests {
             !prompt.contains("Act as the implementation agent"),
             "a keyed respawn of a dead lane must not reuse the plain Lane prompt"
         );
+        pending
+            .close_checkpoints_for_session(&outcome.session)
+            .unwrap();
 
         let outcome = run_spawn_with(
             &terminals,
