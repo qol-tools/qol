@@ -233,6 +233,22 @@ fn app() -> HeadlessApp {
                 "Exits non-zero on orchestration, identity, capability, readiness, or task delivery failure.",
             ))
             .subcommand(command(
+                "fork",
+                "Launch a detached architect that never reports back.",
+                "qol sessions fork --tool TOOL --cwd PATH --key KEY --model MODEL (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION]",
+                "Launches a new terminal that owns the brief end to end and reports to the user in its own terminal, not back to the caller. Use it when a second problem surfaces mid-session and chasing it would cost the thread already being held. A fork is the root of a new tree, not a lane: no round is opened on it, no completion signal is embedded in its launch, and bridge refuses it by name. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. --model is required so a fork launches at a deliberately chosen tier rather than inheriting the caller's, and --effort is passed to tools that take one (claude: low, medium, high, xhigh, max). A key already held by a live session is refused because a fork always starts fresh.",
+                "Fork JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation, key conflict, readiness, or launch failure.",
+            ))
+            .subcommand(command(
+                "forks",
+                "List the detached forks recorded on this host.",
+                "qol sessions forks",
+                "Prints one row per recorded fork: key, tool, tier, session token, and the path to its brief. Forks are never collected, so this listing is the only link back to a tree that was deliberately cut loose.",
+                "Fork rows on stdout; diagnostics on stderr.",
+                "Exits non-zero when the fork directory cannot be read.",
+            ))
+            .subcommand(command(
                 "submit",
                 "Deliver one bounded task and return with the round open.",
                 "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]",

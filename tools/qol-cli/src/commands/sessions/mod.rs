@@ -15,6 +15,7 @@ mod capability;
 mod close;
 mod contract;
 mod export;
+mod fork;
 mod last_send;
 mod mcp;
 mod spawn;
@@ -28,7 +29,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 17] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 19] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -40,6 +41,14 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 17] = [
     SessionSubcommand {
         name: "spawn",
         run: |rest, _format| spawn::run(rest),
+    },
+    SessionSubcommand {
+        name: "fork",
+        run: |rest, _format| fork::run(rest),
+    },
+    SessionSubcommand {
+        name: "forks",
+        run: |rest, _format| fork::run_list(rest),
     },
     SessionSubcommand {
         name: "submit",

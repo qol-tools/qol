@@ -1334,6 +1334,87 @@ struct ReadinessObservation {
     described: Option<CliToolId>,
 }
 
+pub(super) struct DetachedLaunch {
+    pub(super) session: String,
+    pub(super) cwd: String,
+    pub(super) surface: &'static str,
+    pub(super) title: String,
+    pub(super) elapsed_ms: u128,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_detached(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    tool: &str,
+    cwd: &str,
+    key: &str,
+    surface: Option<&str>,
+    model: Option<&str>,
+    extra_args: &[String],
+    title: Option<&str>,
+    config: Option<SpawnSurface>,
+    cap: Option<&SpawnCapConfig>,
+    prompt: &str,
+) -> Result<DetachedLaunch> {
+    require_model_for_launch(model)?;
+    let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
+    let _guard = locks.acquire(&prepared.key)?;
+    let started = Instant::now();
+    let snapshot = terminals.snapshot().context("session discovery failed")?;
+    if !matches!(
+        decide(interpreter, snapshot.sessions(), &prepared.identity),
+        SpawnDecision::Launch
+    ) {
+        bail!(
+            "spawn key `{key}` is already held by a live session; a detached fork always starts a fresh tree, so give it an unused key"
+        );
+    }
+    let mut launch = wrap_launch(&prepared.launch, cap);
+    if let Some(model) = model {
+        launch.args.extend(model_args(&prepared.tool_id, model)?);
+    }
+    launch.args.extend(extra_args.iter().cloned());
+    launch.args.push(prompt.to_owned());
+    let request = SpawnRequest {
+        identity: prepared.identity.clone(),
+        launch,
+        cwd: canonicalize_cwd(cwd)?,
+        title: Some(prepared.title.clone()),
+    };
+    let session_id = terminals
+        .spawn_on(qol_terminal_sessions::kitty::backend_id(), &request)
+        .context("terminal backend refused the spawn request")?;
+    let facts = poll_ready(
+        terminals,
+        interpreter,
+        &session_id,
+        &prepared.identity,
+        Duration::from_millis(READY_TIMEOUT_MS),
+    )?;
+    let descriptor = interpreter.describe(&facts);
+    ledger.record(
+        &prepared.key,
+        &prepared.tool_id,
+        prepared.identity.surface,
+        &facts.cwd,
+        model,
+        descriptor.external_id.as_deref(),
+    )?;
+    let binding = facts
+        .binding()
+        .context("spawned session cannot bind to a stable token")?;
+    Ok(DetachedLaunch {
+        session: binding.token(),
+        cwd: facts.cwd.clone(),
+        surface: surface_token(prepared.identity.surface),
+        title: prepared.title,
+        elapsed_ms: started.elapsed().as_millis(),
+    })
+}
+
 fn poll_ready(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,

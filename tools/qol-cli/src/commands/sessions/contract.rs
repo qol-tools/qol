@@ -145,6 +145,51 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "session_fork",
+            label: "Fork a detached architect",
+            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. The fork is recorded and listable; nothing else links it back.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "tool": {
+                        "type": "string",
+                        "description": "Registered CLI tool to fork; defaults to claude",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory for the detached architect",
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Stable, unused key naming the new tree; a key already held by a live session is refused because a fork always starts fresh",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Required model for the fork; assess the problem and pick the tier that can finish it rather than inheriting your own",
+                    },
+                    "effort": {
+                        "type": "string",
+                        "description": "Reasoning effort for tools that take one (claude): low, medium, high, xhigh, max",
+                        "enum": ["low", "medium", "high", "xhigh", "max"],
+                    },
+                    "brief": {
+                        "type": "string",
+                        "description": "Required problem statement. Write it for someone with none of your context: what is wrong, what you already know, what done looks like",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Tab title for the fork; defaults to the key",
+                    },
+                    "surface": {
+                        "type": "string",
+                        "description": "tab or os-window; defaults to the spawn_surface config, then tab",
+                        "enum": ["tab", "os-window"],
+                    },
+                },
+                "required": ["cwd", "key", "model", "brief"],
+            }),
+        },
+        ToolSpec {
             name: "session_submit",
             label: "Submit a task without waiting",
             description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual. Submitted rounds close the lane terminal automatically when the watcher confirms completion: lanes always close, and sessions without a spawn identity are never closed.",
@@ -258,6 +303,7 @@ mod tests {
             [
                 "sessions_list",
                 "session_spawn",
+                "session_fork",
                 "session_submit",
                 "session_bridge",
                 "session_loop_close",

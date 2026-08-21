@@ -37,6 +37,7 @@ pub(crate) struct McpSessionServer {
     round_timeout: Duration,
     watcher: super::watch_owner::ClientWatcher,
     reports_dir: std::path::PathBuf,
+    forks: super::fork::ForkStore,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
@@ -58,6 +59,7 @@ impl McpSessionServer {
             watcher,
             reports_dir: qol_config::data_subdir("sessions")
                 .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            forks: super::fork::ForkStore::system()?,
             #[cfg(test)]
             _pending_root: None,
         })
@@ -82,6 +84,7 @@ impl McpSessionServer {
                 "test-owner".to_owned(),
             ),
             reports_dir: root.path().to_path_buf(),
+            forks: super::fork::ForkStore::with_dir(root.path().join("forks")),
             _pending_root: Some(root),
         }
     }
@@ -107,6 +110,7 @@ impl McpSessionServer {
                 "test-owner".to_owned(),
             ),
             reports_dir: dir.clone(),
+            forks: super::fork::ForkStore::with_dir(dir.join("forks")),
             _pending_root: None,
         }
     }
@@ -182,6 +186,7 @@ impl McpSessionServer {
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
             "session_spawn" => self.tool_spawn(arguments),
+            "session_fork" => self.tool_fork(arguments),
             "session_submit" => self.tool_submit(arguments),
             "session_bridge" => self.tool_bridge(arguments),
             "session_loop_close" => self.close_loop(arguments),
@@ -309,6 +314,43 @@ impl McpSessionServer {
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
+    fn tool_fork(&self, arguments: Value) -> Result<String, String> {
+        let cwd = string_argument(&arguments, "cwd")?;
+        let key = string_argument(&arguments, "key")?;
+        let model = string_argument(&arguments, "model")?;
+        let brief = string_argument(&arguments, "brief")?;
+        let tool = optional_string(&arguments, "tool", "session_fork")?;
+        let effort = optional_string(&arguments, "effort", "session_fork")?;
+        let title = optional_string(&arguments, "title", "session_fork")?;
+        let surface = optional_string(&arguments, "surface", "session_fork")?;
+        if arguments.get("task").is_some() {
+            return Err("session_fork takes no `task`: a fork owns its brief end to end and never reports a round. Put the problem in `brief`.".to_owned());
+        }
+        if arguments.get("group").is_some() {
+            return Err("session_fork takes no `group`: a fork is a new tree, not a member of the caller's grouped set".to_owned());
+        }
+        let parent = Some(super::bridge::driver_token(self.terminals.as_ref()))
+            .filter(|token| !token.is_empty());
+        let outcome = super::fork::fork(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &self.ledger,
+            &self.locks,
+            &self.forks,
+            tool.as_deref().unwrap_or("claude"),
+            cwd,
+            key,
+            surface.as_deref(),
+            model,
+            effort.as_deref(),
+            title.as_deref(),
+            brief,
+            parent.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+        serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
     fn tool_submit(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
         let task = string_argument(&arguments, "task")?;
@@ -367,7 +409,7 @@ impl McpSessionServer {
             &self.pending,
             &self.ledger,
             &self.locks,
-            &super::bridge::trace_dir(),
+            &self.reports_dir,
             false,
         )
         .map_err(|error| error.to_string())?;
@@ -555,6 +597,18 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing `{name}` string argument"))
+}
+
+fn optional_string(arguments: &Value, name: &str, tool: &str) -> Result<Option<String>, String> {
+    arguments
+        .get(name)
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{tool} `{name}` must be a string"))
+        })
+        .transpose()
 }
 
 fn non_empty_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1263,6 +1317,7 @@ mod tests {
             [
                 "sessions_list",
                 "session_spawn",
+                "session_fork",
                 "session_submit",
                 "session_bridge",
                 "session_loop_close",
@@ -2833,5 +2888,129 @@ mod tests {
             3,
             "every spawned lane gets a section: {combined}"
         );
+    }
+    #[test]
+    fn e2e_a_forked_architect_is_detached_and_never_bridgeable() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let response = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": cwd,
+                "key": "chase-lockfile",
+                "model": "opus",
+                "effort": "xhigh",
+                "brief": "cargo metadata --locked fails on CI but passes locally",
+            }),
+        );
+        assert_eq!(
+            response["result"]["isError"], false,
+            "fork failed: {response}"
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["detached"], true);
+        assert_eq!(outcome["model"], "opus");
+        assert_eq!(outcome["effort"], "xhigh");
+        assert!(
+            outcome.get("completion_marker").is_none(),
+            "a fork carries no round marker: {outcome}"
+        );
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "claude");
+        assert!(
+            launch
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--model", "opus"]),
+            "the fork launches at its own model: {:?}",
+            launch.args
+        );
+        assert!(
+            launch
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--effort", "xhigh"]),
+            "the fork launches at its own effort: {:?}",
+            launch.args
+        );
+        let prompt = launch.args.last().unwrap();
+        assert!(prompt.contains("detached architect"), "{prompt}");
+        assert!(
+            !prompt.contains("Completion fragments"),
+            "no completion marker may reach a fork: {prompt}"
+        );
+
+        let brief_path = outcome["brief"].as_str().unwrap();
+        assert!(
+            prompt.contains(brief_path),
+            "the prompt names the brief file: {prompt}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(brief_path).unwrap(),
+            "cargo metadata --locked fails on CI but passes locally"
+        );
+
+        let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
+        assert!(
+            server.pending.pending_round(&binding).unwrap().is_none(),
+            "a fork opens no round"
+        );
+
+        let refused = tool_call(
+            &server,
+            "session_bridge",
+            json!({ "session": outcome["session"] }),
+        );
+        assert_eq!(refused["result"]["isError"], true);
+        let message = refused["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            message.contains("detached fork") && message.contains("chase-lockfile"),
+            "the refusal must name the fork: {message}"
+        );
+
+        let records = server.forks.list().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, "chase-lockfile");
+        assert_eq!(records[0].session, outcome["session"].as_str().unwrap());
+    }
+
+    #[test]
+    fn e2e_a_fork_refuses_lane_shaped_arguments() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        for (argument, expected) in [("task", "no `task`"), ("group", "no `group`")] {
+            let mut arguments = json!({
+                "cwd": cwd,
+                "key": format!("fork-{argument}"),
+                "model": "opus",
+                "brief": "a problem worth its own tree",
+            });
+            arguments[argument] = json!("whatever");
+            let response = tool_call(&server, "session_fork", arguments);
+            assert_eq!(
+                response["result"]["isError"], true,
+                "{argument}: {response}"
+            );
+            let message = response["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(message.contains(expected), "{argument}: {message}");
+        }
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
     }
 }

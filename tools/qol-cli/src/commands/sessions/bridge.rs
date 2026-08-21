@@ -1053,9 +1053,20 @@ fn resume_owned(
     trace_dir: &std::path::Path,
     kickstart: bool,
 ) -> Result<BridgeOutcome> {
-    let round = pending.pending_round(binding)?.ok_or_else(|| {
-        anyhow!("no pending bridge exists for `{binding}`; run `qol sessions next`")
-    })?;
+    let round = match pending.pending_round(binding)? {
+        Some(round) => round,
+        None => {
+            let forks = super::fork::ForkStore::with_dir(trace_dir.join("forks"));
+            if let Ok(Some(record)) = forks.find_session(&binding.token()) {
+                bail!(
+                    "`{binding}` is the detached fork `{}`; it owns its brief alone and never reports back, so there is nothing to collect. Its brief is at {}",
+                    record.key,
+                    record.brief
+                );
+            }
+            bail!("no pending bridge exists for `{binding}`; run `qol sessions next`");
+        }
+    };
     let role = pending.role(binding)?;
     if round.completed {
         let started = Instant::now();

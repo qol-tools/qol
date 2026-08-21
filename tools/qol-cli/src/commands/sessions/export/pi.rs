@@ -297,6 +297,19 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
     },
 "#;
 
+const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const args = ["fork", "--tool", params.tool ?? "claude", "--cwd", params.cwd, "--key", params.key, "--model", params.model];
+      if (params.effort != null) args.push("--effort", params.effort);
+      if (params.title != null) args.push("--title", params.title);
+      if (params.surface != null) args.push("--surface", params.surface);
+      args.push("--brief", params.brief);
+      const stdout = await run(args, 60_000, undefined, signal);
+      const outcome = JSON.parse(stdout);
+      const text = `forked detached architect ${outcome.session} (${outcome.tool} ${outcome.model}${outcome.effort ? " " + outcome.effort : ""}, key ${outcome.key}); it owns the brief at ${outcome.brief} and never reports back`;
+      return { content: [{ type: "text", text }], details: { outcome } };
+    },
+"#;
+
 const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["submit", params.session, "--task", params.task];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
@@ -370,6 +383,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
+        "session_fork" => EXECUTE_FORK,
         "session_submit" => EXECUTE_SUBMIT,
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
