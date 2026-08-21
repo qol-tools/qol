@@ -39,6 +39,9 @@ fn stale_sidecar_builds(dev_links: &HashMap<String, PathBuf>) -> Vec<String> {
     let mut stale: Vec<String> = dev_links
         .iter()
         .filter_map(|(id, plugin_dir)| {
+            if !buildable_on_this_host(plugin_dir) {
+                return None;
+            }
             let binary = qol_dev_build::plugin_binary_path(plugin_dir)?;
             let fingerprint = qol_dev_build::fingerprint_plugin(plugin_dir).ok()?;
             (!qol_dev_build::binary_is_fresh(&binary, &fingerprint)).then(|| id.clone())
@@ -46,6 +49,16 @@ fn stale_sidecar_builds(dev_links: &HashMap<String, PathBuf>) -> Vec<String> {
         .collect();
     stale.sort();
     stale
+}
+
+fn buildable_on_this_host(plugin_dir: &std::path::Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(plugin_dir.join("plugin.toml")) else {
+        return false;
+    };
+    let Ok(manifest) = toml::from_str::<qol_plugin_api::manifest::PluginManifest>(&content) else {
+        return false;
+    };
+    manifest.plugin.supports_current_platform()
 }
 
 #[cfg(test)]
@@ -81,6 +94,23 @@ mod tests {
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"elf").unwrap();
         binary
+    }
+
+    #[test]
+    fn platform_unsupported_plugin_is_not_reported() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plugin_dir = write_workspace_plugin(tmp.path(), "plugin-a");
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            "[plugin]\nid = \"plugin-a\"\nname = \"plugin-a\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"never-os\"]\n\n[menu]\nlabel = \"plugin-a\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+        )
+        .unwrap();
+
+        let dev_links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        assert!(
+            stale_sidecar_builds(&dev_links).is_empty(),
+            "a plugin this host never builds can never have a sidecar"
+        );
     }
 
     #[test]
