@@ -3,15 +3,23 @@ use std::path::{Path, PathBuf};
 use qol_plugin_api::manifest::PluginManifest;
 
 pub fn plugin_binary_exists(plugin_dir: &Path) -> bool {
-    let Some(command) = declared_binary_command(plugin_dir) else {
-        return true;
-    };
-    if Path::new(&command).components().count() != 1 {
-        return true;
+    match plugin_binary_path(plugin_dir) {
+        Some(binary) => binary.is_file(),
+        None => true,
     }
-    binary_candidates(plugin_dir, &command)
+}
+
+pub fn plugin_binary_path(plugin_dir: &Path) -> Option<PathBuf> {
+    let command = declared_binary_command(plugin_dir)?;
+    if Path::new(&command).components().count() != 1 {
+        return None;
+    }
+    let candidates = binary_candidates(plugin_dir, &command);
+    candidates
         .iter()
-        .any(|candidate| candidate.is_file())
+        .find(|candidate| candidate.is_file())
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
 }
 
 fn declared_binary_command(plugin_dir: &Path) -> Option<String> {
@@ -63,6 +71,37 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    }
+
+    #[test]
+    fn binary_path_points_into_workspace_target_even_before_first_build() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"plugin-a\"]\n",
+        )
+        .unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_cargo_plugin(&plugin_dir);
+        write_plugin_toml(
+            &plugin_dir,
+            "\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+        );
+
+        assert_eq!(
+            plugin_binary_path(&plugin_dir),
+            Some(tmp.path().join("target").join("debug").join("plugin-a"))
+        );
+    }
+
+    #[test]
+    fn no_declared_binary_has_no_path() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_cargo_plugin(&plugin_dir);
+        write_plugin_toml(&plugin_dir, "");
+
+        assert_eq!(plugin_binary_path(&plugin_dir), None);
     }
 
     #[test]

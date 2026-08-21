@@ -1,15 +1,12 @@
-use std::collections::HashMap;
-
 use super::super::fingerprint::{fingerprint_plugin_with_cache, FingerprintCache};
 use super::super::types::PluginBuildPlan;
 use super::selection::SelectedPlugin;
 
 pub(super) fn plan_selection(
     selection: SelectedPlugin,
-    known_fingerprints: &HashMap<String, String>,
     fingerprint_cache: &mut FingerprintCache,
 ) -> PluginBuildPlan {
-    let basis = PlanBasis::new(selection, known_fingerprints);
+    let basis = PlanBasis::new(selection);
     if !basis.selection.has_cargo {
         return basis.missing_cargo();
     }
@@ -25,14 +22,19 @@ pub(super) fn plan_selection(
 struct PlanBasis {
     selection: SelectedPlugin,
     last_built_fingerprint: Option<String>,
+    has_sidecar_anchor: bool,
 }
 
 impl PlanBasis {
-    fn new(selection: SelectedPlugin, known_fingerprints: &HashMap<String, String>) -> Self {
-        let last_built_fingerprint = known_fingerprints.get(&selection.plugin_id).cloned();
+    fn new(selection: SelectedPlugin) -> Self {
+        let binary = crate::freshness::plugin_binary_path(&selection.path);
+        let last_built_fingerprint = binary
+            .as_deref()
+            .and_then(crate::sidecar::read_fingerprint_sidecar);
         Self {
             selection,
             last_built_fingerprint,
+            has_sidecar_anchor: binary.is_some(),
         }
     }
 
@@ -47,11 +49,14 @@ impl PlanBasis {
 
     fn fingerprinted(self, current_fingerprint: String) -> PluginBuildPlan {
         let binary_missing = !crate::freshness::plugin_binary_exists(&self.selection.path);
-        let needs_rebuild = build_needed(
-            self.last_built_fingerprint.as_deref(),
-            current_fingerprint.as_str(),
-        ) || binary_missing;
+        let needs_rebuild = !self.has_sidecar_anchor
+            || build_needed(
+                self.last_built_fingerprint.as_deref(),
+                current_fingerprint.as_str(),
+            )
+            || binary_missing;
         let reason = build_reason(
+            self.has_sidecar_anchor,
             self.last_built_fingerprint.as_deref(),
             needs_rebuild,
             binary_missing,
@@ -97,12 +102,16 @@ fn build_needed(last_built_fingerprint: Option<&str>, current_fingerprint: &str)
 }
 
 fn build_reason(
+    has_sidecar_anchor: bool,
     last_built_fingerprint: Option<&str>,
     needs_rebuild: bool,
     binary_missing: bool,
 ) -> String {
     if !needs_rebuild {
         return "Up to date".to_string();
+    }
+    if !has_sidecar_anchor {
+        return "No daemon or runtime binary declared; always rebuilt".to_string();
     }
     if binary_missing {
         return "Binary missing".to_string();

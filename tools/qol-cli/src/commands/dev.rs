@@ -9,13 +9,12 @@ use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    cargo_build_command, dev_repo_root, display_name, qualified_plugin_build_features,
-    read_plugin_source, repo_root, scan_buildable_plugins, BuildablePlugin,
+    cargo_build_command, dev_repo_root, display_name, qualified_plugin_build_features, repo_root,
+    scan_buildable_plugins, BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
 use qol_dev_build::core::CoreEvent;
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -662,7 +661,7 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
     if plugins.is_empty() {
         return Ok(());
     }
-    let stale = plugins_needing_build(plugins, qol_config::config_dir().as_deref());
+    let stale = plugins_needing_build(plugins);
     if stale.is_empty() {
         dev_step_label("plugins", StepKind::Info, "up to date", verbose);
         return Ok(());
@@ -683,62 +682,53 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
         eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
         return Ok(());
     }
-    if let Some(config_dir) = qol_config::config_dir() {
-        persist_batch_fingerprints(&config_dir, &stale);
-    }
+    persist_batch_fingerprints(&stale);
     Ok(())
 }
 
-fn plugins_needing_build(
-    plugins: &[BuildablePlugin],
-    config_dir: Option<&Path>,
-) -> Vec<BuildablePlugin> {
-    let Some(config_dir) = config_dir else {
-        return plugins.to_vec();
-    };
-    let known = qol_dev_build::load_build_fingerprints(config_dir);
+fn plugins_needing_build(plugins: &[BuildablePlugin]) -> Vec<BuildablePlugin> {
     plugins
         .iter()
-        .filter(|plugin| !plugin_is_fresh(plugin, &known))
+        .filter(|plugin| !plugin_is_fresh(plugin))
         .cloned()
         .collect()
 }
 
-fn fingerprint_store_key(plugin_id: &str, plugin_dir: &Path) -> String {
-    format!("{plugin_id}@{}", plugin_dir.display())
-}
-
-fn plugin_is_fresh(plugin: &BuildablePlugin, known: &HashMap<String, String>) -> bool {
-    let Some(plugin_id) = read_plugin_source(&plugin.dir).map(|source| source.id) else {
+fn plugin_is_fresh(plugin: &BuildablePlugin) -> bool {
+    let Ok(fingerprint) = qol_dev_build::fingerprint_plugin(&plugin.dir) else {
         return false;
     };
-    let Some(known_fingerprint) = known.get(&fingerprint_store_key(&plugin_id, &plugin.dir)) else {
-        return false;
-    };
-    qol_dev_build::fingerprint_plugin(&plugin.dir)
-        .is_ok_and(|current| current == *known_fingerprint)
-        && qol_dev_build::plugin_binary_exists(&plugin.dir)
+    qol_dev_build::plugin_binary_path(&plugin.dir)
+        .is_some_and(|binary| qol_dev_build::binary_is_fresh(&binary, &fingerprint))
 }
 
-fn persist_batch_fingerprints(config_dir: &Path, plugins: &[BuildablePlugin]) {
-    let mut fingerprints = qol_dev_build::load_build_fingerprints(config_dir);
+fn persist_batch_fingerprints(plugins: &[BuildablePlugin]) {
     for plugin in plugins {
-        let Some(plugin_id) = read_plugin_source(&plugin.dir).map(|source| source.id) else {
+        let fingerprint = match qol_dev_build::fingerprint_plugin(&plugin.dir) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                eprintln!(
+                    "qol dev: failed to fingerprint {}: {}",
+                    display_name(&plugin.dir),
+                    error
+                );
+                continue;
+            }
+        };
+        let Some(binary) = qol_dev_build::plugin_binary_path(&plugin.dir) else {
+            eprintln!(
+                "qol dev: {} declares no daemon or runtime binary, no sidecar written; always rebuilt",
+                display_name(&plugin.dir)
+            );
             continue;
         };
-        match qol_dev_build::fingerprint_plugin(&plugin.dir) {
-            Ok(fingerprint) => {
-                fingerprints.insert(fingerprint_store_key(&plugin_id, &plugin.dir), fingerprint);
-            }
-            Err(error) => eprintln!(
-                "qol dev: failed to fingerprint {}: {}",
+        if let Err(error) = qol_dev_build::write_fingerprint_sidecar(&binary, &fingerprint) {
+            eprintln!(
+                "qol dev: failed to save fingerprint for {}: {}",
                 display_name(&plugin.dir),
                 error
-            ),
+            );
         }
-    }
-    if let Err(error) = qol_dev_build::save_build_fingerprints(config_dir, &fingerprints) {
-        eprintln!("qol dev: failed to save build fingerprints: {}", error);
     }
 }
 
@@ -1083,6 +1073,20 @@ mod tests {
     }
 
     fn write_freshness_workspace(repo: &Path) -> (BuildablePlugin, PathBuf) {
+        let (plugin, binary) = write_freshness_workspace_with_toml(
+            repo,
+            "[plugin]\nid = \"plugin-a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"A\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+        );
+        (
+            plugin,
+            binary.expect("daemon plugin resolves a runtime binary"),
+        )
+    }
+
+    fn write_freshness_workspace_with_toml(
+        repo: &Path,
+        plugin_toml: &str,
+    ) -> (BuildablePlugin, Option<PathBuf>) {
         std::fs::write(
             repo.join("Cargo.toml"),
             "[workspace]\nmembers = [\"plugins/plugin-a\"]\n",
@@ -1096,78 +1100,59 @@ mod tests {
         )
         .unwrap();
         std::fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(
-            plugin_dir.join("plugin.toml"),
-            "[plugin]\nid = \"plugin-a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"A\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
-        )
-        .unwrap();
+        std::fs::write(plugin_dir.join("plugin.toml"), plugin_toml).unwrap();
         let plugin = BuildablePlugin {
             dir: plugin_dir,
             package_name: "plugin-a".to_string(),
         };
-        let binary = repo.join("target").join("debug").join("plugin-a");
-        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        std::fs::write(&binary, "binary").unwrap();
+        let binary = qol_dev_build::plugin_binary_path(&plugin.dir);
+        if let Some(binary) = &binary {
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(binary, "binary").unwrap();
+        }
         (plugin, binary)
     }
 
     #[test]
     fn plugin_batch_skips_plugins_whose_fingerprint_matches_and_binary_exists() {
         let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("config");
-        std::fs::create_dir_all(&config_dir).unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let (plugin, _binary) = write_freshness_workspace(&repo);
+        let (plugin, binary) = write_freshness_workspace(&repo);
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
-        qol_dev_build::save_build_fingerprints(
-            &config_dir,
-            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
-        )
-        .unwrap();
+        qol_dev_build::write_fingerprint_sidecar(&binary, &fingerprint).unwrap();
 
-        let stale = plugins_needing_build(std::slice::from_ref(&plugin), Some(&config_dir));
+        let stale = plugins_needing_build(std::slice::from_ref(&plugin));
 
         assert!(
             stale.is_empty(),
-            "matching fingerprint and present binary must be fresh"
+            "matching sidecar and present binary must be fresh"
         );
     }
 
     #[test]
-    fn plugin_batch_builds_plugins_without_config_dir_or_fingerprints() {
+    fn plugin_batch_builds_plugins_without_sidecar() {
         let tmp = TempDir::new().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let (plugin, _binary) = write_freshness_workspace(&repo);
 
-        let no_config = plugins_needing_build(std::slice::from_ref(&plugin), None);
-        let empty_store = plugins_needing_build(
-            std::slice::from_ref(&plugin),
-            Some(&tmp.path().join("config")),
-        );
+        let stale = plugins_needing_build(std::slice::from_ref(&plugin));
 
-        assert_eq!(no_config.len(), 1);
-        assert_eq!(empty_store.len(), 1);
+        assert_eq!(stale.len(), 1, "missing sidecar must force a rebuild");
     }
 
     #[test]
     fn plugin_batch_rebuilds_when_binary_is_missing_despite_matching_fingerprint() {
         let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("config");
-        std::fs::create_dir_all(&config_dir).unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let (plugin, binary) = write_freshness_workspace(&repo);
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
-        qol_dev_build::save_build_fingerprints(
-            &config_dir,
-            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
-        )
-        .unwrap();
+        qol_dev_build::write_fingerprint_sidecar(&binary, &fingerprint).unwrap();
         std::fs::remove_file(&binary).unwrap();
 
-        let stale = plugins_needing_build(&[plugin], Some(&config_dir));
+        let stale = plugins_needing_build(&[plugin]);
 
         assert_eq!(stale.len(), 1, "a deleted binary must force a rebuild");
     }
@@ -1175,47 +1160,60 @@ mod tests {
     #[test]
     fn plugin_batch_rebuilds_when_source_changed_despite_present_binary() {
         let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("config");
-        std::fs::create_dir_all(&config_dir).unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let (plugin, _binary) = write_freshness_workspace(&repo);
+        let (plugin, binary) = write_freshness_workspace(&repo);
         let fingerprint = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
-        qol_dev_build::save_build_fingerprints(
-            &config_dir,
-            &HashMap::from([(fingerprint_store_key("plugin-a", &plugin.dir), fingerprint)]),
-        )
-        .unwrap();
+        qol_dev_build::write_fingerprint_sidecar(&binary, &fingerprint).unwrap();
         std::fs::write(plugin.dir.join("src/main.rs"), "fn main() { let x = 1; }\n").unwrap();
 
-        let stale = plugins_needing_build(&[plugin], Some(&config_dir));
+        let stale = plugins_needing_build(&[plugin]);
 
         assert_eq!(stale.len(), 1, "changed sources must force a rebuild");
     }
 
     #[test]
-    fn persist_batch_fingerprints_merges_into_known_store() {
+    fn plugin_batch_always_rebuilds_plugins_without_runtime_binary() {
         let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("config");
-        std::fs::create_dir_all(&config_dir).unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let (plugin, _binary) = write_freshness_workspace(&repo);
-        qol_dev_build::save_build_fingerprints(
-            &config_dir,
-            &HashMap::from([("other-plugin".to_string(), "kept".to_string())]),
-        )
-        .unwrap();
+        let (plugin, binary) = write_freshness_workspace_with_toml(
+            &repo,
+            "[plugin]\nid = \"plugin-a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"A\"\nitems = []\n",
+        );
+        assert!(binary.is_none());
 
-        persist_batch_fingerprints(&config_dir, std::slice::from_ref(&plugin));
+        let stale = plugins_needing_build(std::slice::from_ref(&plugin));
 
-        let stored = qol_dev_build::load_build_fingerprints(&config_dir);
-        assert_eq!(stored.get("other-plugin").map(String::as_str), Some("kept"));
-        let fingerprint = stored
-            .get(&fingerprint_store_key("plugin-a", &plugin.dir))
-            .expect("batch plugin recorded");
-        let current = qol_dev_build::fingerprint_plugin(&repo.join("plugins/plugin-a")).unwrap();
-        assert_eq!(*fingerprint, current);
+        assert_eq!(
+            stale.len(),
+            1,
+            "a plugin without a runtime binary has no sidecar anchor and must rebuild"
+        );
+        persist_batch_fingerprints(&[plugin]);
+        assert!(
+            !repo
+                .join("target")
+                .join("debug")
+                .join("plugin-a.fingerprint")
+                .exists(),
+            "no sidecar may be written without a binary to anchor it"
+        );
+    }
+
+    #[test]
+    fn persist_batch_fingerprints_writes_sidecars_for_built_plugins() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let (plugin, binary) = write_freshness_workspace(&repo);
+
+        persist_batch_fingerprints(std::slice::from_ref(&plugin));
+
+        let stored =
+            qol_dev_build::read_fingerprint_sidecar(&binary).expect("batch plugin sidecar written");
+        let current = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
+        assert_eq!(stored, current);
     }
 
     #[test]

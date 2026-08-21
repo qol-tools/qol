@@ -320,14 +320,6 @@ fn log_applied(action: &FixAction) {
             );
         }
         #[cfg(feature = "dev")]
-        FixAction::PruneOrphanFingerprints { ids } => {
-            log::info!(
-                "doctor: pruned {} orphan build fingerprint(s): {}",
-                ids.len(),
-                ids.join(", ")
-            );
-        }
-        #[cfg(feature = "dev")]
         FixAction::PruneReservedPlugins { ids } => {
             log::info!(
                 "doctor: pruned {} reserved plugin id(s) from registry: {}",

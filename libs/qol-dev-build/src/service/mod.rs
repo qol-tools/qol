@@ -1,16 +1,14 @@
 mod events;
-mod persistence;
 mod runner;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
+use crate::adapters::{CargoPluginBuilder, CoreEventSink};
 use crate::core;
 
 use super::cargo_build::CargoCommandPluginBuilder;
-use super::fingerprint_store::JSON_BUILD_FINGERPRINT_STORE;
 use super::types::{BuildRun, PluginBuildProgress};
 
 pub const MAX_CONCURRENT_PLUGIN_BUILDS: usize = 4;
@@ -30,19 +28,13 @@ pub fn linked_plugin_build_timeout(plugin_count: usize) -> Duration {
 
 pub struct BuildApplicationService<'a> {
     builder: &'a dyn CargoPluginBuilder,
-    fingerprint_store: &'a dyn BuildFingerprintStore,
     event_sink: &'a dyn CoreEventSink,
 }
 
 impl<'a> BuildApplicationService<'a> {
-    pub fn new(
-        builder: &'a dyn CargoPluginBuilder,
-        fingerprint_store: &'a dyn BuildFingerprintStore,
-        event_sink: &'a dyn CoreEventSink,
-    ) -> Self {
+    pub fn new(builder: &'a dyn CargoPluginBuilder, event_sink: &'a dyn CoreEventSink) -> Self {
         Self {
             builder,
-            fingerprint_store,
             event_sink,
         }
     }
@@ -50,36 +42,26 @@ impl<'a> BuildApplicationService<'a> {
     pub fn run(
         &self,
         dev_links: &HashMap<String, PathBuf>,
-        config_dir: Option<&Path>,
+        _config_dir: Option<&Path>,
         worktree_branch: Option<&str>,
     ) -> BuildRun {
-        let known_fingerprints =
-            persistence::load_known_fingerprints(self.fingerprint_store, config_dir);
-        let build_run = runner::run_build(runner::RunRequest {
+        runner::run_build(runner::RunRequest {
             dev_links,
-            known_fingerprints: &known_fingerprints,
             builder: self.builder,
             worktree_branch,
             on_event: |event| self.event_sink.publish(event),
-        });
-        persistence::persist_build_run(self.fingerprint_store, config_dir, &build_run);
-        build_run
+        })
     }
 }
 
 pub fn default_build_application_service(
     event_sink: &dyn CoreEventSink,
 ) -> BuildApplicationService<'_> {
-    BuildApplicationService::new(
-        &CargoCommandPluginBuilder,
-        &JSON_BUILD_FINGERPRINT_STORE,
-        event_sink,
-    )
+    BuildApplicationService::new(&CargoCommandPluginBuilder, event_sink)
 }
 
 pub fn build_linked_plugins_with_core_events<F>(
     dev_links: &HashMap<String, PathBuf>,
-    known_fingerprints: &HashMap<String, String>,
     on_event: F,
 ) -> BuildRun
 where
@@ -87,7 +69,6 @@ where
 {
     runner::run_build(runner::RunRequest {
         dev_links,
-        known_fingerprints,
         builder: &CargoCommandPluginBuilder,
         worktree_branch: None,
         on_event,
@@ -96,13 +77,12 @@ where
 
 pub fn build_linked_plugins_with_progress<F>(
     dev_links: &HashMap<String, PathBuf>,
-    known_fingerprints: &HashMap<String, String>,
     mut on_progress: F,
 ) -> BuildRun
 where
     F: FnMut(PluginBuildProgress),
 {
-    build_linked_plugins_with_core_events(dev_links, known_fingerprints, |event| {
+    build_linked_plugins_with_core_events(dev_links, |event| {
         events::emit_plugin_progress(event, &mut on_progress);
     })
 }

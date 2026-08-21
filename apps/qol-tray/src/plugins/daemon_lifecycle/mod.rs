@@ -41,13 +41,13 @@ pub(super) fn start_daemon_with_context(
         plugin.daemon_listener = listener::bind_for_plugin(plugin, &daemon_config);
     }
 
-    let (child, consumed_generation) = spawn::spawn_daemon(
+    let (child, consumed_generation, spawn_fingerprint) = spawn::spawn_daemon(
         plugin,
         &daemon_config,
         plugin.daemon_listener.as_ref(),
         runtime_config,
     )?;
-    register_daemon(plugin, child);
+    register_daemon(plugin, child, spawn_fingerprint);
     Ok(Some(consumed_generation))
 }
 
@@ -115,6 +115,7 @@ fn clear_exited_daemon(plugin: &mut Plugin, reason: &str) {
         pid,
     );
     plugin.daemon_process = None;
+    plugin.daemon_spawn_fingerprint = None;
 }
 
 fn reaped_elsewhere(error: &std::io::Error) -> bool {
@@ -135,6 +136,7 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     let Some(mut child) = plugin.daemon_process.take() else {
         return Ok(());
     };
+    plugin.daemon_spawn_fingerprint = None;
 
     log::info!("Stopping daemon for plugin: {}", plugin.id);
     super::daemon_tracker::registry::unregister(
@@ -148,7 +150,7 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     Ok(())
 }
 
-fn register_daemon(plugin: &mut Plugin, child: Child) {
+fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<String>) {
     let pid = child.id();
     if let Some(mut previous) = plugin.daemon_process.take() {
         log::warn!(
@@ -160,6 +162,7 @@ fn register_daemon(plugin: &mut Plugin, child: Child) {
         let _ = previous.wait();
     }
     plugin.daemon_process = Some(child);
+    plugin.daemon_spawn_fingerprint = spawn_fingerprint;
     track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),
@@ -244,9 +247,9 @@ items = []
         let mut plugin = minimal_plugin();
         let first = spawn_long_running();
         let orphan = first.id();
-        register_daemon(&mut plugin, first);
+        register_daemon(&mut plugin, first, None);
 
-        register_daemon(&mut plugin, spawn_long_running());
+        register_daemon(&mut plugin, spawn_long_running(), None);
 
         assert!(
             !crate::process_utils::is_pid_alive(orphan as i32),

@@ -45,10 +45,6 @@ pub(super) enum FixAction {
         to: PathBuf,
     },
     #[cfg(feature = "dev")]
-    PruneOrphanFingerprints {
-        ids: Vec<String>,
-    },
-    #[cfg(feature = "dev")]
     PruneReservedPlugins {
         ids: Vec<String>,
     },
@@ -100,7 +96,6 @@ impl FixAction {
             | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
             #[cfg(feature = "dev")]
             FixAction::RelocateDevLink { .. }
-            | FixAction::PruneOrphanFingerprints { .. }
             | FixAction::PruneReservedPlugins { .. }
             | FixAction::RemoveDevLinkEntries { .. }
             | FixAction::FormatRustSources { .. }
@@ -179,8 +174,6 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             super::checks::relocate_dev_link(&config_dir, plugin_id, to)
                 .map_err(|e| anyhow!("failed to relocate dev-link for {plugin_id}: {e}"))
         }
-        #[cfg(feature = "dev")]
-        FixAction::PruneOrphanFingerprints { ids } => prune_orphan_fingerprints(ids),
         #[cfg(feature = "dev")]
         FixAction::PruneReservedPlugins { ids } => prune_reserved_plugins(ids),
         #[cfg(feature = "dev")]
@@ -354,21 +347,6 @@ fn remove_registry_entries(ids: &[String]) -> Result<()> {
     }
     crate::plugins::registry::save_registry(&config_dir, &registry)
         .map_err(|error| anyhow!("failed to save registry: {error}"))
-}
-
-#[cfg(feature = "dev")]
-fn prune_orphan_fingerprints(ids: &[String]) -> Result<()> {
-    let config_dir = crate::paths::shared_config_dir()?;
-    let mut fingerprints = crate::dev::load_build_fingerprints(&config_dir);
-    let before = fingerprints.len();
-    for id in ids {
-        fingerprints.remove(id);
-    }
-    if fingerprints.len() == before {
-        return Ok(());
-    }
-    crate::dev::save_build_fingerprints(&config_dir, &fingerprints)
-        .map_err(|error| anyhow!("failed to save build fingerprints: {error}"))
 }
 
 pub(super) trait SymbolicHotkeyWriter {
@@ -545,15 +523,6 @@ mod tests {
         let action = FixAction::RelocateDevLink {
             plugin_id: "plugin-foo".into(),
             to: PathBuf::from("/ws/plugins/plugin-foo"),
-        };
-        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
-    }
-
-    #[cfg(feature = "dev")]
-    #[test]
-    fn prune_orphan_fingerprints_is_safe_automatic() {
-        let action = FixAction::PruneOrphanFingerprints {
-            ids: vec!["plugin-orphan".into()],
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }

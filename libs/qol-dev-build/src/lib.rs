@@ -2,7 +2,6 @@ pub mod adapters;
 pub mod cargo_build;
 pub mod core;
 mod fingerprint;
-mod fingerprint_store;
 pub mod freshness;
 pub mod planning;
 mod platform;
@@ -16,8 +15,7 @@ mod types;
 
 pub use cargo_build::{CargoChild, CargoCommandPluginBuilder};
 pub use fingerprint::fingerprint_plugin;
-pub use fingerprint_store::{load_build_fingerprints, save_build_fingerprints};
-pub use freshness::plugin_binary_exists;
+pub use freshness::{plugin_binary_exists, plugin_binary_path};
 pub use planning::plan_linked_plugin_builds;
 pub use registry::dev_linked_paths;
 pub use service::{
@@ -29,9 +27,7 @@ pub use sidecar::{
     binary_is_fresh, daemons_needing_restart, fingerprint_sidecar_path, read_fingerprint_sidecar,
     write_fingerprint_sidecar,
 };
-pub use types::{
-    BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress, DEV_BUILD_STATE_FILE,
-};
+pub use types::{BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress};
 
 pub fn configure_dev_cargo(command: &mut std::process::Command) {
     let wrapper = std::env::var_os("QOL_DEV_RUSTC_WRAPPER").unwrap_or_default();

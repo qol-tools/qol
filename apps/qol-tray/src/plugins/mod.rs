@@ -44,6 +44,7 @@ pub struct Plugin {
     pub source: PluginSource,
     daemon_process: Option<Child>,
     daemon_listener: Option<DaemonListener>,
+    daemon_spawn_fingerprint: Option<String>,
 }
 
 impl Plugin {
@@ -64,6 +65,7 @@ impl Plugin {
             source,
             daemon_process: None,
             daemon_listener: None,
+            daemon_spawn_fingerprint: None,
         }
     }
 
@@ -80,6 +82,10 @@ impl Plugin {
 
     pub fn daemon_pid(&self) -> Option<u32> {
         self.daemon_process.as_ref().map(|child| child.id())
+    }
+
+    pub fn daemon_spawn_fingerprint(&self) -> Option<&str> {
+        self.daemon_spawn_fingerprint.as_deref()
     }
 
     pub fn reap_daemon_if_exited(&mut self) {

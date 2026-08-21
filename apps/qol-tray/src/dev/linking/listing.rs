@@ -5,10 +5,8 @@ use super::LinkedPlugin;
 
 pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
     let links = super::active_dev_links(config_dir);
-    let known_fingerprints = crate::dev::load_build_fingerprints(config_dir);
     let branch = super::get_active_worktree_branch(config_dir);
-    let plans =
-        qol_dev_build::plan_linked_plugin_builds(&links, &known_fingerprints, branch.as_deref());
+    let plans = qol_dev_build::plan_linked_plugin_builds(&links, branch.as_deref());
     let log_controls = crate::logging::load_all_plugin_controls(config_dir);
     let plans_by_id: HashMap<String, _> = plans
         .into_iter()

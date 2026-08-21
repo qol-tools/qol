@@ -1,10 +1,8 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::core::BuildStatus;
-
-pub const DEV_BUILD_STATE_FILE: &str = "dev/build-fingerprints.json";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
@@ -14,12 +12,6 @@ pub struct BuildResult {
     pub skipped: bool,
     #[serde(skip_serializing)]
     pub artifacts: Vec<crate::cargo_build::CargoArtifact>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct BuildFingerprintState {
-    #[serde(default)]
-    pub fingerprints: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]

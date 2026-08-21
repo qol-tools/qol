@@ -203,7 +203,11 @@ where
 
     fn record_build_result(&mut self, plan: &PluginBuildPlan, result: BuildResult) {
         if result.success {
-            update_fingerprint(&mut self.fingerprints, plan);
+            if let Some(fingerprint) = built_fingerprint(plan) {
+                self.fingerprints
+                    .insert(plan.plugin_id.clone(), fingerprint.clone());
+                persist_fingerprint_sidecar(plan, &fingerprint);
+            }
             self.events.plugin_progress(
                 &plan.plugin_id,
                 BuildStatus::Success,
@@ -215,6 +219,29 @@ where
                 .plugin_progress(&plan.plugin_id, BuildStatus::Failed, 100, "Build failed");
         }
         self.results.push(result);
+    }
+}
+
+fn built_fingerprint(plan: &PluginBuildPlan) -> Option<String> {
+    crate::fingerprint::fingerprint_plugin(&plan.path)
+        .ok()
+        .or_else(|| plan.current_fingerprint.clone())
+}
+
+fn persist_fingerprint_sidecar(plan: &PluginBuildPlan, fingerprint: &str) {
+    let Some(binary) = crate::freshness::plugin_binary_path(&plan.path) else {
+        log::warn!(
+            "[dev-build] event=sidecar_skip plugin_id={} reason=no_declared_binary",
+            plan.plugin_id
+        );
+        return;
+    };
+    if let Err(error) = crate::sidecar::write_fingerprint_sidecar(&binary, fingerprint) {
+        log::error!(
+            "[dev-build] event=sidecar_write_failed plugin_id={} error={}",
+            plan.plugin_id,
+            error
+        );
     }
 }
 
@@ -242,29 +269,17 @@ fn partition_plans(plans: &[PluginBuildPlan]) -> (Vec<usize>, Vec<(usize, PlanDi
     (builds, skips)
 }
 
-fn update_fingerprint(
-    fingerprints: &mut std::collections::HashMap<String, String>,
-    plan: &PluginBuildPlan,
-) {
-    if let Some(fp) = crate::fingerprint::fingerprint_plugin(&plan.path)
-        .ok()
-        .or_else(|| plan.current_fingerprint.clone())
-    {
-        fingerprints.insert(plan.plugin_id.clone(), fp);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::CargoPluginBuilder;
     use crate::core::{BuildStatus, CoreEvent};
     use crate::service::events::CoreEventEmitter;
-    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
+    use tempfile::TempDir;
 
     struct TestBuilder {
         active: AtomicUsize,
@@ -355,7 +370,6 @@ mod tests {
         let captured_events = Arc::clone(&events);
         let mut runner = BuildRunner::new(
             plans,
-            &HashMap::new(),
             &builder,
             CoreEventEmitter::new(move |event| {
                 captured_events.lock().unwrap().push(event);
@@ -412,12 +426,7 @@ mod tests {
             starts: starts_tx,
             release: Arc::clone(&release),
         };
-        let mut runner = BuildRunner::new(
-            plans,
-            &HashMap::new(),
-            &builder,
-            CoreEventEmitter::new(|_| {}),
-        );
+        let mut runner = BuildRunner::new(plans, &builder, CoreEventEmitter::new(|_| {}));
 
         std::thread::scope(|scope| {
             let handle = scope.spawn(|| runner.run_builds_parallel(&build_indices));
@@ -443,5 +452,114 @@ mod tests {
             );
             handle.join().unwrap();
         });
+    }
+
+    struct SucceedingBuilder;
+
+    impl CargoPluginBuilder for SucceedingBuilder {
+        fn build_plugin_with_progress(
+            &self,
+            plugin_id: &str,
+            _path: &Path,
+            _on_progress: &mut dyn FnMut(u8, String),
+        ) -> BuildResult {
+            BuildResult {
+                plugin_id: plugin_id.to_string(),
+                success: true,
+                output: "built".to_string(),
+                skipped: false,
+                artifacts: Vec::new(),
+            }
+        }
+    }
+
+    fn daemon_plugin_dir(root: &Path) -> PathBuf {
+        let plugin_dir = root.join("plugin-a");
+        std::fs::create_dir_all(plugin_dir.join("src")).unwrap();
+        std::fs::write(
+            plugin_dir.join("Cargo.toml"),
+            "[package]\nname = \"plugin-a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            "[plugin]\nid = \"plugin-a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"A\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+        )
+        .unwrap();
+        plugin_dir
+    }
+
+    fn build_plan_for(path: PathBuf) -> PluginBuildPlan {
+        PluginBuildPlan {
+            plugin_id: "plugin-a".to_string(),
+            path,
+            has_cargo: true,
+            supports_platform: true,
+            needs_rebuild: true,
+            current_fingerprint: None,
+            last_built_fingerprint: None,
+            reason: "Source changed".to_string(),
+        }
+    }
+
+    #[test]
+    fn successful_build_writes_fingerprint_sidecar_next_to_binary() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = daemon_plugin_dir(tmp.path());
+        let builder = SucceedingBuilder;
+        let mut runner = BuildRunner::new(
+            vec![build_plan_for(plugin_dir.clone())],
+            &builder,
+            CoreEventEmitter::new(|_| {}),
+        );
+        let binary = crate::freshness::plugin_binary_path(&plugin_dir).expect("resolved binary");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "binary").unwrap();
+
+        runner.run_builds(&[0]);
+
+        let expected = crate::fingerprint_plugin(&plugin_dir).unwrap();
+        assert_eq!(
+            crate::read_fingerprint_sidecar(&binary).as_deref(),
+            Some(expected.as_str()),
+            "a successful build must anchor its fingerprint next to the binary"
+        );
+        assert_eq!(
+            runner.fingerprints.get("plugin-a").map(String::as_str),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn build_without_declared_binary_writes_no_sidecar() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        std::fs::create_dir_all(plugin_dir.join("src")).unwrap();
+        std::fs::write(
+            plugin_dir.join("Cargo.toml"),
+            "[package]\nname = \"plugin-a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            "[plugin]\nid = \"plugin-a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"A\"\nitems = []\n",
+        )
+        .unwrap();
+        let builder = SucceedingBuilder;
+        let mut runner = BuildRunner::new(
+            vec![build_plan_for(plugin_dir.clone())],
+            &builder,
+            CoreEventEmitter::new(|_| {}),
+        );
+
+        runner.run_builds(&[0]);
+
+        assert!(crate::freshness::plugin_binary_path(&plugin_dir).is_none());
+        assert!(
+            !plugin_dir.join("target").exists(),
+            "no sidecar may be written without a binary to anchor it"
+        );
     }
 }

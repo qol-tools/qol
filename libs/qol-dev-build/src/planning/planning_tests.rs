@@ -3,9 +3,7 @@ mod cases {
     use crate::core::BuildStatus;
     use crate::fingerprint::fingerprint_plugin;
     use crate::platform::{BuildPlatform, Platform};
-    use crate::{
-        build_linked_plugins_with_progress, load_build_fingerprints, save_build_fingerprints,
-    };
+    use crate::{build_linked_plugins_with_progress, write_fingerprint_sidecar};
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
@@ -32,30 +30,54 @@ mod cases {
         .unwrap();
     }
 
+    fn write_daemon_toml_for_current_os(root: &Path) {
+        fs::write(
+            root.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
+                Platform.name()
+            ),
+        )
+        .unwrap();
+    }
+
+    fn seed_binary_with_sidecar(root: &Path, fingerprint: &str) -> PathBuf {
+        let binary = crate::freshness::plugin_binary_path(root).expect("daemon plugin binary");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, "binary").unwrap();
+        write_fingerprint_sidecar(&binary, fingerprint).unwrap();
+        binary
+    }
+
     #[test]
-    fn plan_marks_new_plugin_for_rebuild() {
+    fn plan_always_rebuilds_plugin_without_declared_binary() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].needs_rebuild);
-        assert_eq!(plans[0].reason, "No successful build recorded");
+        assert!(plans[0].last_built_fingerprint.is_none());
+        assert_eq!(
+            plans[0].reason,
+            "No daemon or runtime binary declared; always rebuilt"
+        );
     }
 
     #[test]
-    fn plan_marks_unchanged_plugin_as_up_to_date() {
+    fn plan_keeps_plugin_with_matching_sidecar_up_to_date() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
-
-        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        write_daemon_toml_for_current_os(&plugin_dir);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
-        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
-        let plans = plan_linked_plugin_builds(&links, &known, None);
+        seed_binary_with_sidecar(&plugin_dir, &fingerprint);
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(!plans[0].needs_rebuild);
@@ -63,23 +85,39 @@ mod cases {
     }
 
     #[test]
-    fn matching_fingerprint_with_missing_binary_forces_rebuild() {
+    fn plan_records_sidecar_fingerprint_as_last_built() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
-        fs::write(
-            plugin_dir.join("plugin.toml"),
-            format!(
-                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
-                Platform.name()
-            ),
-        )
-        .unwrap();
-
-        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        write_daemon_toml_for_current_os(&plugin_dir);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
-        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
-        let plans = plan_linked_plugin_builds(&links, &known, None);
+        seed_binary_with_sidecar(&plugin_dir, &fingerprint);
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
+
+        assert_eq!(plans.len(), 1);
+        assert!(!plans[0].needs_rebuild);
+        assert_eq!(
+            plans[0].last_built_fingerprint.as_deref(),
+            Some(fingerprint.as_str()),
+            "the sidecar value must surface as the last built fingerprint"
+        );
+    }
+
+    #[test]
+    fn plan_sidecar_without_binary_forces_rebuild() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        write_daemon_toml_for_current_os(&plugin_dir);
+        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
+        let binary = crate::freshness::plugin_binary_path(&plugin_dir).unwrap();
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        write_fingerprint_sidecar(&binary, &fingerprint).unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].needs_rebuild);
@@ -87,30 +125,19 @@ mod cases {
     }
 
     #[test]
-    fn matching_fingerprint_with_present_binary_stays_fresh() {
+    fn plan_sidecar_mismatch_forces_rebuild() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
-        fs::write(
-            plugin_dir.join("plugin.toml"),
-            format!(
-                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
-                Platform.name()
-            ),
-        )
-        .unwrap();
-        let binary = plugin_dir.join("target").join("debug").join("plugin-a");
-        fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        fs::write(&binary, "binary").unwrap();
+        write_daemon_toml_for_current_os(&plugin_dir);
+        seed_binary_with_sidecar(&plugin_dir, "stale-fingerprint");
 
-        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
-        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
-        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
-        let plans = plan_linked_plugin_builds(&links, &known, None);
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
-        assert!(!plans[0].needs_rebuild);
-        assert_eq!(plans[0].reason, "Up to date");
+        assert!(plans[0].needs_rebuild);
+        assert_eq!(plans[0].reason, "Source changed");
     }
 
     #[test]
@@ -132,15 +159,15 @@ mod cases {
             "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nmy-lib = { path = \"../my-lib\" }\n",
         ).unwrap();
         fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-        write_plugin_toml_for_current_os(&plugin_dir);
+        write_daemon_toml_for_current_os(&plugin_dir);
 
-        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
-        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+        seed_binary_with_sidecar(&plugin_dir, &fingerprint);
 
         fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() { changed() }\n").unwrap();
 
-        let plans = plan_linked_plugin_builds(&links, &known, None);
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
         assert_eq!(plans.len(), 1);
         assert!(
             plans[0].needs_rebuild,
@@ -175,15 +202,15 @@ mod cases {
         )
         .unwrap();
         fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-        write_plugin_toml_for_current_os(&plugin_dir);
+        write_daemon_toml_for_current_os(&plugin_dir);
 
-        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
-        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+        seed_binary_with_sidecar(&plugin_dir, &fingerprint);
 
         fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() { changed() }\n").unwrap();
 
-        let plans = plan_linked_plugin_builds(&links, &known, None);
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, None);
         assert_eq!(plans.len(), 1);
         assert!(
             plans[0].needs_rebuild,
@@ -200,23 +227,12 @@ mod cases {
         fs::write(plugin_dir.join("src.rs"), "fn main() {}\n").unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(!plans[0].has_cargo);
         assert!(!plans[0].needs_rebuild);
         assert_eq!(plans[0].reason, "Cargo.toml missing");
-    }
-
-    #[test]
-    fn fingerprint_state_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let data = HashMap::from([("plugin-a".to_string(), "abc".to_string())]);
-
-        save_build_fingerprints(tmp.path(), &data).unwrap();
-        let loaded = load_build_fingerprints(tmp.path());
-
-        assert_eq!(loaded, data);
     }
 
     #[test]
@@ -234,7 +250,7 @@ mod cases {
         .unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].has_cargo);
@@ -249,17 +265,9 @@ mod cases {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
-        fs::write(
-            plugin_dir.join("plugin.toml"),
-            format!(
-                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
-                Platform.name()
-            ),
-        )
-        .unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].supports_platform);
@@ -274,7 +282,7 @@ mod cases {
         fs::remove_file(plugin_dir.join("plugin.toml")).unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -301,7 +309,7 @@ mod cases {
         .unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+        let plans = plan_linked_plugin_builds(&links, None);
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -321,28 +329,24 @@ mod cases {
         let plugin_a = tmp.path().join("plugin-a");
         let plugin_b = tmp.path().join("plugin-b");
         write_basic_plugin(&plugin_a);
+        write_daemon_toml_for_current_os(&plugin_a);
+        let fingerprint = fingerprint_plugin(&plugin_a).unwrap();
+        seed_binary_with_sidecar(&plugin_a, &fingerprint);
         fs::create_dir_all(&plugin_b).unwrap();
 
         let links = HashMap::from([
-            ("plugin-a".to_string(), plugin_a.clone()),
+            ("plugin-a".to_string(), plugin_a),
             ("plugin-b".to_string(), plugin_b),
         ]);
-        let known = HashMap::from([(
-            "plugin-a".to_string(),
-            fingerprint_plugin(&plugin_a).expect("fingerprint"),
-        )]);
 
         let mut events: Vec<(String, BuildStatus)> = Vec::new();
-        let run = build_linked_plugins_with_progress(&links, &known, |progress| {
+        let run = build_linked_plugins_with_progress(&links, |progress| {
             events.push((progress.plugin_id, progress.status));
         });
 
-        assert!(!events.iter().any(|(plugin_id, status)| {
-            plugin_id == "plugin-a" && *status == BuildStatus::Queued
-        }));
-        assert!(!events.iter().any(|(plugin_id, status)| {
-            plugin_id == "plugin-b" && *status == BuildStatus::Queued
-        }));
+        assert!(!events
+            .iter()
+            .any(|(_, status)| *status == BuildStatus::Queued));
 
         assert_eq!(run.results.len(), 2);
         assert!(run.results.iter().all(|result| result.skipped));
