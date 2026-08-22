@@ -631,6 +631,10 @@ fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathB
 }
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
+    if qol_cli_binary_is_current(root)? {
+        dev_step_label("build", StepKind::Info, "qol dev cli up to date", verbose);
+        return Ok(());
+    }
     let mut command = cargo_build_command(root, &QOL_CLI_BUILD_ARGS);
     qol_dev_build::configure_dev_cargo(&mut command);
     run_dev_step(
@@ -640,6 +644,19 @@ fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
         &mut command,
         verbose,
     )
+}
+
+fn qol_cli_binary_is_current(root: &Path) -> Result<bool> {
+    let binary = root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol"));
+    let built = match std::fs::metadata(&binary).and_then(|meta| meta.modified()) {
+        Ok(built) => built,
+        Err(_) => return Ok(false),
+    };
+    let package = root.join("tools").join("qol-cli");
+    Ok(built >= crate::setup::newest_setup_input(root, &package)?)
 }
 
 fn collect_buildable_plugins(
@@ -764,22 +781,37 @@ fn plugin_batch_command(root: &Path, plugins: &[BuildablePlugin], features: &[St
 }
 
 fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
-    if !rust_changes_pending(root)? {
+    let paths = pending_rust_files(root)?;
+    if paths.is_empty() {
         dev_step_label("fix", StepKind::Info, "rustfmt (no .rs changes)", verbose);
         return Ok(());
+    }
+    if paths.len() > 200 {
+        return run_dev_step(
+            "fix",
+            StepKind::Pending,
+            "rustfmt (all)",
+            Command::new("cargo")
+                .current_dir(root)
+                .args(["fmt", "--all"]),
+            verbose,
+        );
+    }
+    let mut command = Command::new("rustfmt");
+    command.current_dir(root).arg("--edition").arg("2021");
+    for path in &paths {
+        command.arg(path);
     }
     run_dev_step(
         "fix",
         StepKind::Pending,
-        "rustfmt",
-        Command::new("cargo")
-            .current_dir(root)
-            .args(["fmt", "--all"]),
+        &format!("rustfmt ({} files)", paths.len()),
+        &mut command,
         verbose,
     )
 }
 
-fn rust_changes_pending(root: &Path) -> Result<bool> {
+fn pending_rust_files(root: &Path) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
         .current_dir(root)
         .args([
@@ -797,7 +829,34 @@ fn rust_changes_pending(root: &Path) -> Result<bool> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(!output.stdout.is_empty())
+    let porcelain = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_porcelain_paths(&porcelain)
+        .into_iter()
+        .filter(|path| root.join(path).exists())
+        .map(|path| root.join(path))
+        .collect())
+}
+
+fn parse_porcelain_paths(porcelain: &str) -> Vec<PathBuf> {
+    porcelain
+        .lines()
+        .filter_map(|line| {
+            let bytes = line.as_bytes();
+            if bytes.len() < 4 || bytes[0] == b'D' || bytes[1] == b'D' {
+                return None;
+            }
+            let mut path = &line[3..];
+            if let Some(arrow) = path.find(" -> ") {
+                path = &path[arrow + 4..];
+            }
+            let path = path.trim_matches('"');
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path))
+            }
+        })
+        .collect()
 }
 
 fn request_plugin_reload(verbose: bool, branch: Option<&str>) -> Result<()> {
@@ -1006,6 +1065,39 @@ mod tests {
     }
 
     #[test]
+    fn qol_cli_binary_is_current_only_while_the_binary_outlives_its_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("tools/qol-cli");
+        std::fs::create_dir_all(package.join("src")).unwrap();
+        std::fs::create_dir_all(root.path().join("target/debug")).unwrap();
+        std::fs::write(
+            package.join("Cargo.toml"),
+            "[package]\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(root.path().join("Cargo.lock"), "").unwrap();
+        std::fs::write(package.join("src/main.rs"), "").unwrap();
+
+        let binary = root
+            .path()
+            .join("target/debug")
+            .join(host_facade::exe_name("qol"));
+        assert!(!qol_cli_binary_is_current(root.path()).unwrap());
+
+        std::fs::write(&binary, "").unwrap();
+        assert!(qol_cli_binary_is_current(root.path()).unwrap());
+
+        std::fs::File::options()
+            .write(true)
+            .open(package.join("src/main.rs"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+            .unwrap();
+        assert!(!qol_cli_binary_is_current(root.path()).unwrap());
+    }
+
+    #[test]
     fn cargo_build_commands_use_workspace_debug_profile() {
         let root = Path::new("/repo/qol");
         let cases: [(&str, &[&str]); 1] = [("qol cli build", &QOL_CLI_BUILD_ARGS)];
@@ -1050,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_changes_pending_detects_tracked_and_untracked_rs_anywhere_in_the_tree() {
+    fn pending_rust_files_detects_tracked_and_untracked_rs_anywhere_in_the_tree() {
         let repo = TempDir::new().unwrap();
         let git = |args: &[&str]| {
             let status = Command::new("git")
@@ -1068,14 +1160,15 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "--quiet", "-m", "initial"]);
 
-        assert!(!rust_changes_pending(repo.path()).unwrap());
+        assert!(pending_rust_files(repo.path()).unwrap().is_empty());
 
         std::fs::write(
             repo.path().join("apps/tray/main.rs"),
             "fn main() {}\n// edit\n",
         )
         .unwrap();
-        assert!(rust_changes_pending(repo.path()).unwrap());
+        let files = pending_rust_files(repo.path()).unwrap();
+        assert_eq!(files, vec![repo.path().join("apps/tray/main.rs")]);
         git(&["restore", "apps/tray/main.rs"]);
 
         std::fs::write(
@@ -1083,11 +1176,32 @@ mod tests {
             "fn helper() {}\n",
         )
         .unwrap();
-        assert!(rust_changes_pending(repo.path()).unwrap());
+        let files = pending_rust_files(repo.path()).unwrap();
+        assert_eq!(files, vec![repo.path().join("apps/tray/untracked.rs")]);
         std::fs::remove_file(repo.path().join("apps/tray/untracked.rs")).unwrap();
 
         std::fs::write(repo.path().join("notes.txt"), "not rust\n").unwrap();
-        assert!(!rust_changes_pending(repo.path()).unwrap());
+        assert!(pending_rust_files(repo.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_porcelain_paths_handles_plain_untracked_rename_quoted_and_deleted() {
+        let porcelain = concat!(
+            " M apps/tray/main.rs\n",
+            "?? apps/tray/new.rs\n",
+            "R  plugins/old.rs -> plugins/new.rs\n",
+            " M \"docs/weird name.rs\"\n",
+            " D plugins/gone.rs\n",
+        );
+        assert_eq!(
+            parse_porcelain_paths(porcelain),
+            vec![
+                PathBuf::from("apps/tray/main.rs"),
+                PathBuf::from("apps/tray/new.rs"),
+                PathBuf::from("plugins/new.rs"),
+                PathBuf::from("docs/weird name.rs"),
+            ]
+        );
     }
 
     fn write_freshness_workspace(repo: &Path) -> (BuildablePlugin, PathBuf) {

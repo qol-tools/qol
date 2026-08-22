@@ -1,7 +1,6 @@
-use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
+use crate::progress::{print_hint, print_title, run_cargo_step, step_label, StepKind};
 use crate::workspace::{exe_name, record_default_workspace, repo_root};
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::Value as JsonValue;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -41,28 +40,44 @@ pub(crate) fn run_setup_with_install(root: &Path, verbose: bool, install: bool) 
         step_label("install", StepKind::Info, "skipped (worktree target)");
         return Ok(());
     }
-    let version = package_version(&package)?;
     let target_display = target.display().to_string();
-    if install_is_current(root, &package, &target, &version)? {
+    if install_is_current(root, &package, &target)? {
         step_label("current", StepKind::Success, &target_display);
         return Ok(());
     }
+    let manifest = package.join("Cargo.toml");
     let mut command = Command::new("cargo");
     command
-        .arg("install")
-        .arg("--path")
-        .arg(package)
-        .args(["--locked", "--force", "--debug"]);
+        .current_dir(root)
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .args(["--bin", "qol", "--locked", "--offline"]);
     qol_dev_build::configure_dev_cargo(&mut command);
-    run_step(
+    let artifacts = run_cargo_step(
         "install",
         StepKind::Pending,
         &target_display,
         &mut command,
         verbose,
     )?;
+    let built = qol_dev_build::cargo_build::select_binary_executable(&artifacts, &manifest, "qol")?;
+    replace_binary(&built, &target)?;
     step_label("ready", StepKind::Success, &target_display);
     Ok(())
+}
+
+fn replace_binary(built: &Path, target: &Path) -> Result<()> {
+    let parent = target.parent().ok_or_else(|| {
+        anyhow!(
+            "install target has no parent directory: {}",
+            target.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let staged = parent.join(exe_name("qol-staged"));
+    fs::copy(built, &staged).with_context(|| format!("failed to stage {}", built.display()))?;
+    fs::rename(&staged, target).with_context(|| format!("failed to replace {}", target.display()))
 }
 
 pub(crate) fn installed_qol_path() -> Result<PathBuf> {
@@ -106,11 +121,8 @@ fn git_config_unset(root: &Path, key: &str) {
         .status();
 }
 
-fn install_is_current(root: &Path, package: &Path, target: &Path, version: &str) -> Result<bool> {
+fn install_is_current(root: &Path, package: &Path, target: &Path) -> Result<bool> {
     if !target.is_file() {
-        return Ok(false);
-    }
-    if !cargo_registry_has_install(package, version)? {
         return Ok(false);
     }
     let installed = fs::metadata(target)
@@ -120,65 +132,62 @@ fn install_is_current(root: &Path, package: &Path, target: &Path, version: &str)
     Ok(installed >= newest_setup_input(root, package)?)
 }
 
-fn cargo_registry_has_install(package: &Path, version: &str) -> Result<bool> {
-    let registry = cargo_home()?.join(".crates2.json");
-    if !registry.is_file() {
-        return Ok(false);
-    }
-    let content = fs::read_to_string(&registry)
-        .with_context(|| format!("failed to read {}", registry.display()))?;
-    let parsed: JsonValue = serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", registry.display()))?;
-    let installs = match parsed.get("installs").and_then(JsonValue::as_object) {
-        Some(installs) => installs,
-        None => return Ok(false),
-    };
-    let prefix = format!("qol {version} (path+file://");
-    let package = normalized_path(package)?;
-    for (id, metadata) in installs {
-        if !id.starts_with(&prefix) {
-            continue;
-        }
-        if !id.contains(&package) {
-            continue;
-        }
-        if bins_include_qol(metadata) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn bins_include_qol(metadata: &JsonValue) -> bool {
-    metadata
-        .get("bins")
-        .and_then(JsonValue::as_array)
-        .is_some_and(|bins| bins.iter().any(|bin| bin.as_str() == Some("qol")))
-}
-
-fn package_version(package: &Path) -> Result<String> {
-    let manifest = package.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest)
-        .with_context(|| format!("failed to read {}", manifest.display()))?;
-    let parsed: TomlValue = toml::from_str(&content)
-        .with_context(|| format!("failed to parse {}", manifest.display()))?;
-    parsed
-        .get("package")
-        .and_then(|package| package.get("version"))
-        .and_then(TomlValue::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("{} has no package.version", manifest.display()))
-}
-
-fn newest_setup_input(root: &Path, package: &Path) -> Result<SystemTime> {
+pub(crate) fn newest_setup_input(root: &Path, package: &Path) -> Result<SystemTime> {
     let mut newest = UNIX_EPOCH;
     record_mtime(&package.join("Cargo.toml"), &mut newest)?;
     record_mtime(&root.join("Cargo.lock"), &mut newest)?;
     record_tree_mtime(&package.join("src"), &mut newest)?;
+    for dependency in workspace_path_dependencies(root, package)? {
+        record_mtime(&dependency.join("Cargo.toml"), &mut newest)?;
+        record_tree_mtime(&dependency.join("src"), &mut newest)?;
+    }
     Ok(newest)
 }
 
+fn workspace_path_dependencies(root: &Path, package: &Path) -> Result<Vec<PathBuf>> {
+    let manifest_content = fs::read_to_string(package.join("Cargo.toml"))
+        .with_context(|| format!("failed to read {}", package.join("Cargo.toml").display()))?;
+    let manifest: TomlValue = toml::from_str(&manifest_content)
+        .with_context(|| format!("failed to parse {}", package.join("Cargo.toml").display()))?;
+    let workspace_manifest_content = fs::read_to_string(root.join("Cargo.toml"))
+        .with_context(|| format!("failed to read {}", root.join("Cargo.toml").display()))?;
+    let workspace_manifest: TomlValue = toml::from_str(&workspace_manifest_content)
+        .with_context(|| format!("failed to parse {}", root.join("Cargo.toml").display()))?;
+    let workspace_dependencies = workspace_manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(TomlValue::as_table);
+    let mut paths = Vec::new();
+    if let Some(dependencies) = manifest.get("dependencies").and_then(TomlValue::as_table) {
+        for (name, value) in dependencies {
+            let path = match value.as_table() {
+                Some(entry) if entry.contains_key("path") => entry
+                    .get("path")
+                    .and_then(TomlValue::as_str)
+                    .map(|path| package.join(path)),
+                Some(entry)
+                    if entry.get("workspace").and_then(TomlValue::as_bool) == Some(true) =>
+                {
+                    workspace_dependencies
+                        .and_then(|workspace| workspace.get(name))
+                        .and_then(|value| value.get("path"))
+                        .and_then(TomlValue::as_str)
+                        .map(|path| root.join(path))
+                }
+                _ => None,
+            };
+            if let Some(path) = path {
+                paths.push(path);
+            }
+        }
+    }
+    Ok(paths)
+}
+
 fn record_tree_mtime(path: &Path, newest: &mut SystemTime) -> Result<()> {
+    if !path.is_dir() {
+        return Ok(());
+    }
     for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
         let entry = entry?;
         let path = entry.path();
@@ -216,13 +225,6 @@ fn cargo_home() -> Result<PathBuf> {
     let home = crate::host_facade::home_dir()
         .ok_or_else(|| anyhow!("CARGO_HOME is not set and no home directory was found"))?;
     Ok(home.join(".cargo"))
-}
-
-fn normalized_path(path: &Path) -> Result<String> {
-    let path = path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize {}", path.display()))?;
-    Ok(path.to_string_lossy().replace('\\', "/"))
 }
 
 #[cfg(test)]
@@ -266,6 +268,40 @@ mod tests {
         let _ = run_setup(repo.path(), false);
 
         assert_eq!(configured_hooks_path(repo.path()), GIT_HOOKS_PATH);
+    }
+
+    #[test]
+    fn newest_setup_input_tracks_workspace_path_dependency_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("tools/qol-cli");
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::create_dir_all(root.path().join("libs/qol-lib/src")).unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            "[package]\nversion = \"0.0.0\"\n[dependencies]\nqol-lib.workspace = true\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\n[workspace.dependencies]\nqol-lib = { path = \"libs/qol-lib\" }\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("Cargo.lock"), "").unwrap();
+        fs::write(package.join("src/lib.rs"), "").unwrap();
+        fs::write(
+            root.path().join("libs/qol-lib/Cargo.toml"),
+            "[package]\nname = \"qol-lib\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("libs/qol-lib/src/lib.rs"), "").unwrap();
+
+        let newest = newest_setup_input(root.path(), &package).unwrap();
+        let dependency_src = fs::metadata(root.path().join("libs/qol-lib/src/lib.rs"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        assert_eq!(newest, dependency_src);
     }
 
     #[test]
