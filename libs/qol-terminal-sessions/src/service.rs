@@ -409,7 +409,7 @@ pub fn screen_contains_ignoring_whitespace(screen: &str, needle: &str) -> bool {
         .chars()
         .filter(|ch| !ch.is_whitespace() && *ch != '+')
         .collect();
-    stripped.contains(needle)
+    stripped.contains(needle) || crate::marker::marker_close(&stripped, needle)
 }
 
 fn stall_if_quiet(

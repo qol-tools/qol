@@ -109,32 +109,7 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 19] = [
 ];
 
 pub(super) fn marker_present(screen: &str, marker: &str) -> bool {
-    let Some(index) = marker.rfind('_') else {
-        return false;
-    };
-    let prefix = &marker[..=index];
-    let token = &marker[index + 1..];
-    if prefix.is_empty() || token.is_empty() {
-        return false;
-    }
-    let mut cursor = 0usize;
-    while let Some(found) = screen[cursor..].find(prefix) {
-        let start = cursor + found;
-        let tail = &screen[start + prefix.len()..];
-        if tail.starts_with(token) {
-            return true;
-        }
-        let spaces = tail
-            .chars()
-            .take(4)
-            .take_while(|ch| ch.is_ascii_whitespace())
-            .count();
-        if (1..=3).contains(&spaces) && tail[spaces..].starts_with(token) {
-            return true;
-        }
-        cursor = start + prefix.len();
-    }
-    false
+    qol_terminal_sessions::marker::marker_close(screen, marker)
 }
 
 fn split_subcommand(args: &[OsString]) -> (&str, &[OsString]) {
@@ -1327,6 +1302,40 @@ mod tests {
         assert!(!marker_present("QOL_BRIDGE_DONE_ and abc123xyz", marker));
         assert!(!marker_present("QOL_BRIDGE_DONE_ AND abc123xyz", marker));
         assert!(!marker_present("done\nQOL_BRIDGE_DONE_other987", marker));
+    }
+
+    #[test]
+    fn marker_present_tolerates_the_mangled_marker_from_the_field_bug() {
+        let marker = "QOL_BRIDGE_DONE_4aab033102f7a21f7322";
+        assert!(marker_present(
+            "done\nQOL_BRIDGE_DONE_4aab0331027f21a7322",
+            marker
+        ));
+        assert!(marker_present(
+            "QOL_BRIDGE_DONE_4aab033102f7a21f7322",
+            marker
+        ));
+    }
+
+    #[test]
+    fn marker_present_tolerates_reflow_but_not_other_markers() {
+        let marker = "QOL_BRIDGE_DONE_4aab033102f7a21f7322";
+        assert!(marker_present(
+            "QOL_BRIDGE_DONE_4aab0331\n02f7a21f7322",
+            marker
+        ));
+        assert!(!marker_present(
+            "QOL_BRIDGE_DONE_99999999999999999999",
+            marker
+        ));
+        assert!(!marker_present(
+            "QOL_BRIDGE_DONE_4aab033102f7a21f9999",
+            marker
+        ));
+        assert!(!marker_present(
+            "Completion fragments: `QOL_BRIDGE_DONE_` and `4aab033102f7a21f7322`.",
+            marker
+        ));
     }
 
     #[test]

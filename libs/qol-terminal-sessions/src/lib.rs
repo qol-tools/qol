@@ -2,6 +2,7 @@ pub mod bridge;
 pub mod cli;
 mod error;
 pub mod kitty;
+pub mod marker;
 mod model;
 mod service;
 mod spawn;

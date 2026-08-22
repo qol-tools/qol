@@ -354,7 +354,7 @@ fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
-        .any(|text| text.contains(marker));
+        .any(|text| crate::marker::marker_close(text, marker));
     Some(terminal && text_contains)
 }
 
@@ -470,6 +470,19 @@ mod tests {
         ]);
         assert_eq!(
             marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_y"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn mangled_marker_in_terminal_text_still_completes() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[("text", "finished QOL_BRIDGE_DONE_4aab0331027f21a7322")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_4aab033102f7a21f7322"),
             Some(true)
         );
     }

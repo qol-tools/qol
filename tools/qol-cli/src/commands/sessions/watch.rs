@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::bridge::{PendingBridgeStore, PendingRound};
 use super::spawn::{SpawnLedger, SpawnLocks};
 
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
 
 const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(30);
@@ -62,6 +62,8 @@ struct WatchedRound {
     last_screen: Option<String>,
     last_change: Instant,
     marker_seen: bool,
+    runtime_working_seen: bool,
+    ready_polls: u32,
     external_id_captured: bool,
     autoclose: bool,
     group: Option<String>,
@@ -83,6 +85,8 @@ impl WatchedRound {
             last_screen: None,
             last_change: Instant::now(),
             marker_seen: false,
+            runtime_working_seen: false,
+            ready_polls: 0,
             external_id_captured: false,
             autoclose: round.autoclose,
             group: round.group,
@@ -648,18 +652,38 @@ fn poll_round(
     } else {
         round.marker_seen = false;
     }
+    match round_runtime(terminals, interpreter, &round.binding) {
+        CliRuntimeState::Working => {
+            round.runtime_working_seen = true;
+            round.ready_polls = 0;
+        }
+        CliRuntimeState::Ready if round.runtime_working_seen => {
+            round.ready_polls += 1;
+        }
+        _ => {}
+    }
     let mut changed = false;
     if round.last_screen.as_deref() != Some(screen.as_str()) {
         round.last_screen = Some(screen.clone());
         round.last_change = Instant::now();
         changed = true;
     }
-    if round.last_change.elapsed() >= config.stall_after {
-        let idle_msg = format!(
-            "qol sessions: lane {} went idle for 15 minutes without printing its completion marker.\nThe attached screen tail is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
-            round.session,
-            clean_screen(screen_tail(&screen))
-        );
+    let finished_turn = round.runtime_working_seen && round.ready_polls >= 3;
+    let screen_quiet = round.last_change.elapsed() >= config.stall_after;
+    if finished_turn || screen_quiet {
+        let idle_msg = if finished_turn {
+            format!(
+                "qol sessions: lane {} finished its turn without printing its completion marker.\nThe attached screen tail is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
+                round.session,
+                clean_screen(screen_tail(&screen))
+            )
+        } else {
+            format!(
+                "qol sessions: lane {} went idle for 15 minutes without printing its completion marker.\nThe attached screen tail is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
+                round.session,
+                clean_screen(screen_tail(&screen))
+            )
+        };
         return complete_seen_round(
             terminals,
             interpreter,
@@ -707,6 +731,8 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.last_screen = None;
                         round.last_change = Instant::now();
                         round.marker_seen = false;
+                        round.runtime_working_seen = false;
+                        round.ready_polls = 0;
                     }
                     remaining.push(round);
                 }
@@ -794,6 +820,23 @@ fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) ->
                 .any(|session| session.id == *binding.session_id())
         })
         .unwrap_or(false)
+}
+
+fn round_runtime(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> CliRuntimeState {
+    terminals
+        .discover()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .into_iter()
+                .find(|session| session.id == *binding.session_id())
+        })
+        .map(|session| interpreter.describe(&session).evidence.runtime)
+        .unwrap_or_default()
 }
 
 fn screen_tail(screen: &str) -> &str {
@@ -3293,7 +3336,7 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 33);
+        assert_eq!(ls, 58);
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -3969,12 +4012,20 @@ mod tests {
             &self,
             _session: &SessionFacts,
         ) -> qol_terminal_sessions::cli::CliSessionDescriptor {
+            let runtime = match self.transcript.load(Ordering::Relaxed) {
+                1 => CliRuntimeState::Working,
+                2 => CliRuntimeState::Ready,
+                _ => CliRuntimeState::Unknown,
+            };
             qol_terminal_sessions::cli::CliSessionDescriptor {
                 tool: self.tool.clone(),
                 display_name: None,
                 external_id: None,
                 has_activity: None,
-                evidence: qol_terminal_sessions::cli::CliSessionEvidence::default(),
+                evidence: qol_terminal_sessions::cli::CliSessionEvidence {
+                    runtime,
+                    ..Default::default()
+                },
             }
         }
 
@@ -4269,6 +4320,156 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed_markerless");
         assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_that_finishes_without_the_marker_stalls_with_its_screen_tail() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["the lane finished without a marker".to_owned(); 8],
+        );
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.poll_times(&sim, 3);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        assert!(
+            wakes[0].contains("finished its turn without printing its completion marker"),
+            "the wake must name the finished-turn stall: {:?}",
+            wakes[0]
+        );
+        assert!(
+            wakes[0].contains("the lane finished without a marker"),
+            "the wake must carry the lane screen tail: {:?}",
+            wakes[0]
+        );
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_that_never_worked_does_not_stall_on_a_ready_runtime() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Finished,
+            vec!["idle".to_owned(); 8],
+        );
+
+        lane.poll_times(&sim, 8);
+
+        assert!(
+            lane.events().is_empty(),
+            "a lane that was never observed working must not stall: {:?}",
+            lane.events()
+        );
+        assert!(!lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_the_marker_preempts_the_runtime_stall() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec![
+                "still working".to_owned(),
+                "still working".to_owned(),
+                FINAL_SCREEN.to_owned(),
+                FINAL_SCREEN.to_owned(),
+            ],
+        );
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+    }
+
+    #[test]
+    fn sim_a_grouped_set_aggregates_when_one_member_mangles_its_marker() {
+        let sim = SessionSim::new();
+        let group = "mangled-marker-group";
+        let expected = "QOL_BRIDGE_DONE_4aab033102f7a21f7322";
+        let printed = "QOL_BRIDGE_DONE_4aab0331027f21a7322";
+        let mut lane_a = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("panel-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        let mut lane_b = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("panel-b"),
+            Transcript::Finished,
+            vec!["report b\nQOL_BRIDGE_DONE_b".to_owned(); 4],
+        );
+        let mut lane_c = sim.lane(
+            "9",
+            300,
+            expected,
+            true,
+            Some(group),
+            Some("panel-audit"),
+            Transcript::Finished,
+            vec![format!("report c\n{printed}"); 4],
+        );
+
+        lane_a.run(&sim);
+        lane_b.run(&sim);
+        lane_c.run(&sim);
+
+        let events = lane_c.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        let wakes = lane_c.wakes();
+        assert_eq!(wakes.len(), 1, "one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("all 3 lanes finished"),
+            "the combined wake must count every member: {:?}",
+            wakes[0]
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        assert!(
+            combined.contains("report c"),
+            "the mangled-marker member must leave its fragment: {combined}"
+        );
+        assert!(
+            combined.contains(printed),
+            "the combined report must carry the mangled marker text: {combined}"
+        );
     }
 
     #[test]
