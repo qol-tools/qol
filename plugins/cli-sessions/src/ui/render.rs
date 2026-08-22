@@ -98,7 +98,7 @@ fn header(rows: &[SessionState], _cx: &mut Context<SessionsView>) -> impl IntoEl
         .items_center()
         .justify_between()
         .px(px(qol_gpui::theme::SPACE_PAD))
-        .bg(rgb(palette.panel_bg))
+        .bg(rgb(palette.band_bg))
         .border_b(px(1.0))
         .border_color(rgba(kit.washes.hairline.packed()))
         .cursor(CursorStyle::OpenHand)

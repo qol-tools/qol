@@ -1020,6 +1020,7 @@ impl ComponentPalettes {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CliSessionsPalette {
     pub panel_bg: u32,
+    pub band_bg: u32,
     pub chrome_bg: u32,
     pub border: u32,
     pub divider: u32,
@@ -1053,6 +1054,7 @@ impl CliSessionsPalette {
     pub fn from_system(system: SystemPalette) -> Self {
         Self {
             panel_bg: system.surface_elevated,
+            band_bg: system.surface_rail,
             chrome_bg: system.surface_canvas,
             border: system.border_subtle,
             divider: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
