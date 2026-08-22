@@ -5,7 +5,7 @@ import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useDevController } from './use-controller.js';
 import { DevLayout } from './components/DevLayout.js';
 
-export const id = 'dev';
+const id = 'dev';
 
 function useBuildOverlaySync(ctrl) {
     useEffect(() => {

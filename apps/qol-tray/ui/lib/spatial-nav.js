@@ -3,7 +3,7 @@ import { contains } from './world-registry.js';
 
 const log = createDebug('qol:spatial');
 
-export function isSurfaceInsideConfinement(surface, confinement, registry) {
+function isSurfaceInsideConfinement(surface, confinement, registry) {
     if (!confinement) return true;
     const viewEl = surface.closest?.('[data-view-id]');
     if (!viewEl) return false;

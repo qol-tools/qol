@@ -21,7 +21,7 @@ import { isSliderNumberField } from './field-rules.js';
 import { selectOptions } from './fields/select-options.js';
 import { useQueryPoll } from '../../lib/hooks/useQueryPoll.js';
 
-export const FIELD_MAP = {
+const FIELD_MAP = {
     boolean: BooleanField,
     string: StringField,
     select: SelectField,

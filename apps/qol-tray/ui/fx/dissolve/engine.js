@@ -224,7 +224,7 @@ function pixelEdgeFade(x, y, W, H, fade) {
     return dist / fade;
 }
 
-export function activateBatch(s) {
+function activateBatch(s) {
     const progress = s.total > 0 ? s.cursor / s.total : 0;
     let accelMul = 1;
     if (s.dissolveAccel < 0) {
@@ -260,7 +260,7 @@ function fillUndissolved(s) {
 const SCATTER_SIZES = [2, 4, 6, 8, 11, 15, 20];
 const MATERIALIZE_SIZES = [3, 6, 10, 15];
 
-export function drawSolidPixels(s) {
+function drawSolidPixels(s) {
     s._accentRects = [];
     const progress = s.total > 0 ? s.cursor / s.total : 0;
     if (s.materialize <= 0 || progress > 0.95) {
@@ -310,7 +310,7 @@ function particlePos(origX, origY, age, i, s, cx, cy, dir, wobbleAmp, jitter) {
     return [x, y];
 }
 
-export function processBubbles(s) {
+function processBubbles(s) {
     const wobbleAmp = s.wobbleAmp / RENDER_SCALE;
     const cx = s.W / 2;
     const cy = s.H / 2;

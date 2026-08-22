@@ -49,7 +49,7 @@ export function shouldHidePeripheralSide({ side, activeEntry, camera, viewport, 
     return false;
 }
 
-export function isGhostScale(apparentScale, threshold) {
+function isGhostScale(apparentScale, threshold) {
     return apparentScale < threshold;
 }
 

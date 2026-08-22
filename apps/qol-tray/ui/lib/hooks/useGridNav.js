@@ -11,7 +11,7 @@ export function useGridNav(selector, selectedIndexRef, setSelectedIndex) {
     }, [selector, setSelectedIndex]);
 }
 
-export function navigateGrid(selector, selectedIndex, direction) {
+function navigateGrid(selector, selectedIndex, direction) {
     const model = gridSelectionModel(selector, selectedIndex);
     if (!model) return selectedIndex;
 

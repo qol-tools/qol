@@ -9,7 +9,7 @@ export function modalFields(container) {
     return Array.from(container.querySelectorAll(FOCUSABLE));
 }
 
-export function ModalFooter({ actions }) {
+function ModalFooter({ actions }) {
     const ref = useRef(null);
     useEffect(() => {
         const bindings = actions

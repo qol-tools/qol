@@ -29,6 +29,6 @@ export function themeAccentKey(key) {
     return THEMES.find((theme) => theme.key === resolveTheme(key))?.accentKey ?? null;
 }
 
-export function themeIdentityKey(key) {
+function themeIdentityKey(key) {
     return THEMES.find((theme) => theme.key === resolveTheme(key))?.identityKey ?? null;
 }

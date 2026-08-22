@@ -5,7 +5,7 @@ const log = createDebug('qol:spatial');
 const SURFACE_SELECTOR = '[data-selected-surface]';
 const SLOT_SELECTOR = '.world-view-slot';
 
-export function slotAtCenter(viewport) {
+function slotAtCenter(viewport) {
     const vr = viewport.getBoundingClientRect();
     const cx = vr.left + vr.width / 2;
     const cy = vr.top + vr.height / 2;

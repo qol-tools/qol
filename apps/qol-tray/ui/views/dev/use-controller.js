@@ -9,7 +9,7 @@ import { createCoreLogActions } from './core-log-actions.js';
 import { createPluginActionsController } from './plugin-actions-controller.js';
 import { nextDiscoveryCompletedState, nextDiscoveryStartedState } from './discovery/reducer.js';
 
-export function createInitialState() {
+function createInitialState() {
     return {
         building: false, buildResults: null, lastReload: null, error: null,
         plugins: [], discovered: [], discovering: false,

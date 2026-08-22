@@ -59,7 +59,7 @@ function highPriorityChildSurface(parent) {
     return best;
 }
 
-export function isVisibleSurface(surface) {
+function isVisibleSurface(surface) {
     if (!(surface instanceof HTMLElement)) return false;
     if (!surface.isConnected) return false;
     return isVisible(surface);

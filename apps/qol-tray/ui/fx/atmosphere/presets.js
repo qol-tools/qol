@@ -1,6 +1,6 @@
 const PRESETS = new Set(['wood', 'parchment', 'terminal', 'spacecraft']);
 
-export function isKnownPreset(name) {
+function isKnownPreset(name) {
     return typeof name === 'string' && PRESETS.has(name);
 }
 

@@ -1,5 +1,5 @@
-export const SURFACE_FOCUS_TARGET = '[data-surface-focus-target]';
-export const SURFACE_FOCUS_RETURN = '[data-surface-focus-return]';
+const SURFACE_FOCUS_TARGET = '[data-surface-focus-target]';
+const SURFACE_FOCUS_RETURN = '[data-surface-focus-return]';
 export const SURFACE_CONTROL_COMMIT = 'surface-control-commit';
 
 export function focusSurfaceTarget(target) {

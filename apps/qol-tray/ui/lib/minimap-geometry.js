@@ -1,5 +1,5 @@
 export const FOCAL_GAP_PX = 5;
-export const FOCAL_SLOT_ASPECT = 0.62;
+const FOCAL_SLOT_ASPECT = 0.62;
 
 export function computeMinimapFocalLayout({ entries, activePosF, focusRadius = 1, minimapWidth, canvasHeight }) {
     if (!Array.isArray(entries) || entries.length === 0) return null;

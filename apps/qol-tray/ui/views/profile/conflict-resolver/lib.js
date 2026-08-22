@@ -93,7 +93,7 @@ export function conflictKey(conflict) {
     return `${conflict.file}::${conflict.key_path}`;
 }
 
-export function dottedKeyParts(keyPath) {
+function dottedKeyParts(keyPath) {
     if (!keyPath) return [];
     return keyPath.split('.');
 }

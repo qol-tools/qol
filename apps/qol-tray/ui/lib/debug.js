@@ -24,14 +24,6 @@ export function setDebugEnabled(on) {
     on ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, '0');
 }
 
-export function isVerboseDebugEnabled() { return verbose; }
-
-export function setVerboseDebugEnabled(on) {
-    verbose = !!on;
-    if (typeof localStorage === 'undefined') return;
-    on ? localStorage.setItem(VERBOSE_KEY, '1') : localStorage.removeItem(VERBOSE_KEY);
-}
-
 export function createDebug(namespace) {
     if (!nsColors.has(namespace)) nsColors.set(namespace, COLORS[colorIndex++ % COLORS.length]);
 
@@ -66,11 +58,6 @@ export function rectLabel(r) {
     const x = r.x ?? r.left;
     const y = r.y ?? r.top;
     return `(${Math.round(x)},${Math.round(y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
-}
-
-export function pointLabel(p) {
-    if (!p) return '(?)';
-    return `(${Math.round(p.x)},${Math.round(p.y)})`;
 }
 
 function traceNow() {

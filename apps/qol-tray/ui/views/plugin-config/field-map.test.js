@@ -24,7 +24,7 @@ function parseRustWireKinds(source) {
 }
 
 function parseFieldMapKinds(source) {
-    const body = source.split('export const FIELD_MAP = {', 2)[1]?.split('};', 1)[0];
+    const body = source.split('const FIELD_MAP = {', 2)[1]?.split('};', 1)[0];
     assert.ok(body, 'FIELD_MAP must exist');
     return new Set([...body.matchAll(/^\s*([a-z_]+):/gm)].map(match => match[1]));
 }

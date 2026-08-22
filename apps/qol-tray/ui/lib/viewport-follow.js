@@ -1,7 +1,7 @@
 import { CAMERA_FOLLOW_PAD_PX, verticalComfortPx } from './world-geometry.js';
 
 export const KEYBOARD_FOLLOW_DURATION_MS = 180;
-export const EDGE_FOLLOW_DURATION_MS = 200;
+const EDGE_FOLLOW_DURATION_MS = 200;
 
 export function surfaceCenterDelta(viewportRect, surfaceRect) {
     const targetCenterX = surfaceRect.left + surfaceRect.width / 2;

@@ -107,8 +107,8 @@ export function paddedWorldBounds(rect, vp, zoom, entries) {
     return { ...withPadding(rect, padX, padY), layer: rect.layer };
 }
 
-export const WORLD_PAGE_STRIDE = 10000;
-export const WORLD_SLOT_GAP_FACTOR = 0.85;
+const WORLD_PAGE_STRIDE = 10000;
+const WORLD_SLOT_GAP_FACTOR = 0.85;
 const SLOT_SCALE_CENTER_FLOOR = 0.75;
 const SLOT_SCALE_FALLOFF_FACTOR = 2.5;
 const SLOT_SCALE_ZOOM_FLOOR = 0.05;
@@ -134,12 +134,4 @@ export function computeSlotScale({ entry, cameraX, cameraY, viewportW, viewportH
     const proximity = SLOT_SCALE_CENTER_FLOOR + (1 - SLOT_SCALE_CENTER_FLOOR) * (t * t * (3 - 2 * t));
     const maxSlotScale = (WORLD_PAGE_STRIDE * WORLD_SLOT_GAP_FACTOR) / Math.max(entry.width, 1);
     return Math.min(1 + (baseScale - 1) * proximity, maxSlotScale);
-}
-
-export function inflatedEntryRange(entry, slotScale) {
-    if (!entry || !(entry.width > 0)) return { x0: entry?.x ?? 0, x1: (entry?.x ?? 0) + (entry?.width ?? 0) };
-    if (!(slotScale > 1)) return { x0: entry.x, x1: entry.x + entry.width };
-    const cx = entry.x + entry.width / 2;
-    const half = (entry.width * slotScale) / 2;
-    return { x0: cx - half, x1: cx + half };
 }

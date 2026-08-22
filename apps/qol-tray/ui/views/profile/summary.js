@@ -46,7 +46,7 @@ export function buildBadges(counts) {
     return [{ label: 'No plugin actions', className: 'profile-badge-kept' }];
 }
 
-export function formatTimestamp(value) {
+function formatTimestamp(value) {
     if (!value) {
         return '';
     }

@@ -1,6 +1,6 @@
 import { hapticCapability } from './gamepad-haptics.js';
 
-export const STANDARD_BUTTON_NAMES = Object.freeze([
+const STANDARD_BUTTON_NAMES = Object.freeze([
     'A',
     'B',
     'X',
@@ -20,14 +20,14 @@ export const STANDARD_BUTTON_NAMES = Object.freeze([
     'Home',
 ]);
 
-export const STANDARD_AXIS_NAMES = Object.freeze([
+const STANDARD_AXIS_NAMES = Object.freeze([
     'Left X',
     'Left Y',
     'Right X',
     'Right Y',
 ]);
 
-export const INPUT_DEADZONE = 0.08;
+const INPUT_DEADZONE = 0.08;
 export const SIGNAL_HISTORY_LIMIT = 30;
 export const SIGNAL_SAMPLE_INTERVAL_MS = 2000;
 
@@ -308,14 +308,6 @@ export function activeInputs(snapshot, deadzone = INPUT_DEADZONE) {
         .filter(axis => Math.abs(axis.value) > deadzone)
         .map(axis => `${axis.name} ${formatSigned(axis.value)}`);
     return [...buttons, ...axes];
-}
-
-export function buttonAt(snapshot, index) {
-    return snapshot?.buttons?.[index] || { value: 0, pressed: false, touched: false };
-}
-
-export function axisAt(snapshot, index) {
-    return snapshot?.axes?.[index]?.value || 0;
 }
 
 export function formatSigned(value) {

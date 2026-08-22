@@ -61,7 +61,7 @@ export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave 
     `;
 }
 
-export function computeCanSave(shortcut) {
+function computeCanSave(shortcut) {
     if (!shortcut) return false;
     if (!shortcut.name || !shortcut.name.trim()) return false;
     const action = shortcut.action;

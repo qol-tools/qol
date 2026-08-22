@@ -99,8 +99,8 @@ const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only',
 const NATIVE_THEME_OPTIONS = ['bone', 'slate'];
 const NATIVE_THEME_LABELS = { bone: 'Bone', slate: 'Slate' };
 
-export const MINIMAP_NEIGHBOURS_MIN = 1;
-export const MINIMAP_NEIGHBOURS_MAX = 12;
+const MINIMAP_NEIGHBOURS_MIN = 1;
+const MINIMAP_NEIGHBOURS_MAX = 12;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch, containerRef, onKeyDown }) {
     const [themeAccent, setThemeAccentState] = useState(getThemeAccent);
@@ -531,7 +531,7 @@ function computeMinimapView({ camera, registry, viewportRef, navigation, minimap
     };
 }
 
-export function activePosFromCameraCentre(sortedAll, cameraCentreX) {
+function activePosFromCameraCentre(sortedAll, cameraCentreX) {
     if (!Array.isArray(sortedAll) || sortedAll.length === 0) return 0;
     if (sortedAll.length === 1) return 0;
     for (let i = 0; i < sortedAll.length; i++) {

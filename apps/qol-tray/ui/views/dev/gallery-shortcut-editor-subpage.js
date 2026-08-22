@@ -20,7 +20,7 @@ const fallbackFieldProps = (index) => ({
     tabIndex: -1,
 });
 
-export const galleryShortcutEditorSlot = createSharedSlot({
+const galleryShortcutEditorSlot = createSharedSlot({
     modal: { editing: true, shortcut: SAMPLE_SHORTCUT },
     fieldProps: fallbackFieldProps,
     handlers: {},

@@ -38,7 +38,7 @@ const fallbackFieldProps = (index) => ({
     tabIndex: -1,
 });
 
-export const galleryHotkeyEditorSlot = createSharedSlot({
+const galleryHotkeyEditorSlot = createSharedSlot({
     modal: createEditModalState(SAMPLE_HOTKEY, null, galleryGetActions),
     plugins: GALLERY_PLUGINS,
     recording: false,

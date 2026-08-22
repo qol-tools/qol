@@ -17,7 +17,7 @@ function accentChannel() {
     return v.trim() || DEFAULT_ACCENT_RGB;
 }
 
-export function minimapSlabRadius() {
+function minimapSlabRadius() {
     if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
         return RADIUS;
     }

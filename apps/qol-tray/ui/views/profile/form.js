@@ -39,7 +39,7 @@ export function providerFields(provider, section) {
     return provider.fields.filter(field => field.section === section);
 }
 
-export function providerFallbackLabel(kind) {
+function providerFallbackLabel(kind) {
     if (!kind) {
         return 'Sync Target';
     }

@@ -7,13 +7,13 @@ const log = createDebug('qol:surfaces');
 const SURFACE_SELECTOR = '[data-selected-surface]';
 const CONTAINER_SELECTOR = '[data-surface-container]';
 
-export const INTERACTIVE_SELECTOR = [
+const INTERACTIVE_SELECTOR = [
     '[role=slider]', '[role=switch]', '[role=checkbox]', '[role=radio]',
     '[role=button]', '[role=tab]', '[data-slider-thumb]',
     'button', 'input:not([type=hidden])', 'select', 'textarea',
 ].join(',');
 
-export const SURFACE_STATUS = {
+const SURFACE_STATUS = {
     reachable: 'reachable',
     invisible: 'invisible',
     disabled: 'disabled',
@@ -78,7 +78,7 @@ function reachabilityResolver() {
     return resolve;
 }
 
-export function auditSurfaces(doc = document) {
+function auditSurfaces(doc = document) {
     const resolve = reachabilityResolver();
 
     const surfaces = Array.from(doc.querySelectorAll(SURFACE_SELECTOR)).map(el => ({
@@ -107,7 +107,7 @@ export function auditSurfaces(doc = document) {
     return { surfaces, interactables, problems, ok: problems.length === 0 };
 }
 
-export function logSurfaceAudit(report = auditSurfaces()) {
+function logSurfaceAudit(report = auditSurfaces()) {
     log(report.ok ? '✓ all interactables reachable' : `✗ ${report.problems.length} problem(s)`,
         `| surfaces: ${report.surfaces.length} | interactables: ${report.interactables.length}`);
     if (typeof console.table === 'function') {
@@ -118,7 +118,7 @@ export function logSurfaceAudit(report = auditSurfaces()) {
     return report;
 }
 
-export function selectionState(doc = document) {
+function selectionState(doc = document) {
     const app = doc.querySelector('.app-container');
     const focused = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
     const container = (focused && focused.closest(CONTAINER_SELECTOR))

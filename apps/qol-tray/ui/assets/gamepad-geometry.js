@@ -2,7 +2,7 @@ function point(x, y) {
     return Object.freeze({ x, y });
 }
 
-export const GAMEPAD_LOWER_CUTOUT = Object.freeze({
+const GAMEPAD_LOWER_CUTOUT = Object.freeze({
     left: Object.freeze([
         point(246, 370),
         point(267, 365),

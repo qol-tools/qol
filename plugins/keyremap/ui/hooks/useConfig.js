@@ -85,7 +85,7 @@ function modsEqual(a, b) {
     return sa.every((m, i) => m === sb[i]);
 }
 
-export function validateKeyRules(rules) {
+function validateKeyRules(rules) {
     const warnings = [];
     const batchRules = rules.filter(r => r.keys);
 
