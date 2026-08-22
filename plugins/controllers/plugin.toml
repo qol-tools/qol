@@ -1,0 +1,39 @@
+[plugin]
+id = "plugin-controllers"
+uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
+name = "Controllers"
+description = "Inspect connected game controllers and apply relevant driver-specific fixes"
+version = "0.20.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "plugin-controllers"
+
+[action.apply_fixes]
+label = "Apply Relevant Controller Fixes"
+args = ["apply_fixes"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
+
+[daemon]
+enabled = true
+command = "plugin-controllers"
+socket = "/tmp/plugin-controllers.sock"
+port = 42730
+
+[capabilities]
+doctor = true
+gpui = true
+
+[menu]
+label = "Controllers"
+items = []
+
+[[dependencies.binaries]]
+name = "plugin-controllers"
+repo = "qol-tools/plugin-controllers"
+pattern = "plugin-controllers-{os}-{arch}"
