@@ -3886,7 +3886,7 @@ impl Render for SettingsPanelView {
                 continue;
             }
             items.push(
-                self.render_group_header(section, visible.len(), section == self.current_section())
+                self.render_group_header(section, visible.len())
                     .into_any_element(),
             );
             for (position, index) in visible.iter().enumerate() {
@@ -3929,17 +3929,6 @@ impl Render for SettingsPanelView {
                                 .border_r(px(1.))
                                 .border_color(self.hairline())
                                 .bg(rgb(self.palette.rail_bg))
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .px_3()
-                                        .pt(px(6.))
-                                        .pb(px(8.))
-                                        .text_size(px(qol_theme::TEXT_NANO))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(self.palette.rail_text_muted))
-                                        .child("SECTIONS"),
-                                )
                                 .children(rail),
                         )
                     })
@@ -4113,22 +4102,13 @@ impl SettingsPanelView {
         field.child(self.kit.keycap("/"))
     }
 
-    fn current_section(&self) -> usize {
-        self.active_section.unwrap_or(self.selected_section)
-    }
-
-    fn render_group_header(&self, section: usize, count: usize, current: bool) -> Div {
+    fn render_group_header(&self, section: usize, count: usize) -> Div {
         let title = self
             .sections
             .get(section)
             .map(|section| section.label.clone())
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| self.panel.heading.clone());
-        let title_size = if current {
-            qol_theme::TEXT_BODY
-        } else {
-            qol_theme::TEXT_CAPTION
-        };
         div()
             .flex_none()
             .flex()
@@ -4146,34 +4126,13 @@ impl SettingsPanelView {
                     .items_center()
                     .gap_2()
                     .min_w_0()
-                    .when(current, |head| {
-                        head.child(
-                            div()
-                                .flex_none()
-                                .w(px(qol_theme::SPACE_MARK))
-                                .h(px(title_size))
-                                .rounded_full()
-                                .bg(rgb(self.kit.palette.accent)),
-                        )
-                    })
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(title_size))
+                            .text_size(px(qol_theme::TEXT_CAPTION))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(if current {
-                                self.kit.palette.accent_ink
-                            } else {
-                                self.palette.label_text
-                            }))
-                            .border_b(px(2.))
-                            .border_color(if current {
-                                rgb(self.kit.palette.accent)
-                            } else {
-                                rgba(self.palette.transparent_rgba)
-                            })
-                            .pb_1()
+                            .text_color(rgb(self.palette.label_text))
                             .child(title.to_uppercase()),
                     ),
             )

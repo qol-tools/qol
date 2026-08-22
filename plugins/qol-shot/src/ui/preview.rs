@@ -10,11 +10,15 @@ use std::time::{Duration, Instant};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
-use qol_gpui::theme::{runtime_theme, shot_preview_runtime, ShotPreviewPalette, TEXT_CAPTION};
+use qol_gpui::theme::{
+    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, RADIUS_KEYCAP,
+    TEXT_CAPTION, TEXT_NANO,
+};
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
 };
@@ -643,6 +647,7 @@ pub(super) fn read_render_image(path: &Path) -> Result<(Arc<RenderImage>, u32, u
 
 pub struct PreviewView {
     path: PathBuf,
+    size_label: Option<String>,
     thumb: (f32, f32),
     image: Option<Arc<RenderImage>>,
     file_ready: CaptureFileReady,
@@ -720,6 +725,7 @@ impl PreviewView {
     ) -> Self {
         Self {
             path: content.path,
+            size_label: None,
             thumb: content.thumb,
             image: content.image,
             file_ready: content.file_ready,
@@ -1170,6 +1176,12 @@ impl Render for PreviewView {
             return root;
         }
 
+        if self.size_label.is_none() {
+            self.size_label = std::fs::metadata(&self.path)
+                .ok()
+                .map(|meta| format_bytes(meta.len()));
+        }
+
         if self.first_paint {
             self.first_paint = false;
             qol_runtime::probe!(
@@ -1180,6 +1192,7 @@ impl Render for PreviewView {
             );
         }
 
+        let system = runtime_theme().system;
         let controls = preview_controls(self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
@@ -1200,6 +1213,7 @@ impl Render for PreviewView {
                     .w(px(thumb_w))
                     .h(px(thumb_h))
                     .overflow_hidden()
+                    .rounded(px(RADIUS_KEYCAP))
                     .border_1()
                     .border_color(rgb(palette.thumb_border))
                     .child(self.thumbnail(thumb_w, thumb_h)),
@@ -1215,9 +1229,18 @@ impl Render for PreviewView {
                     .text_size(px(TEXT_CAPTION))
                     .text_color(rgb(palette.label_text))
                     .child(label),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(MARGIN / 2.0))
+                    .right(px(MARGIN))
+                    .font_family(SharedString::from(font_mono()))
+                    .text_size(px(TEXT_NANO))
+                    .text_color(rgb(system.text_muted))
+                    .when_some(self.size_label.clone(), |bar, size| bar.child(size)),
             );
 
-        let system = runtime_theme().system;
         for (index, control) in controls.into_iter().enumerate() {
             let left = start_x + index as f32 * (CIRCLE + CIRCLE_GAP);
             let selected = index == self.selected;
@@ -1229,6 +1252,7 @@ impl Render for PreviewView {
                     .top(px(circle_top))
                     .w(px(CIRCLE))
                     .h(px(CIRCLE))
+                    .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
