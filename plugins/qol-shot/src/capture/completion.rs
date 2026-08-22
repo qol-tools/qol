@@ -122,6 +122,13 @@ impl PreviewLifecycle {
     }
 }
 
+pub(crate) fn corner_toast_layout() -> qol_runtime::protocol::NotificationLayout {
+    qol_runtime::protocol::NotificationLayout {
+        style: Some("compact".to_string()),
+        ..Default::default()
+    }
+}
+
 impl PreviewCompletion {
     pub(crate) fn new(path: &Path, open_folder_after_save: bool) -> Self {
         Self {

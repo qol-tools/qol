@@ -10,6 +10,7 @@ pub(crate) struct CaptureStatus {
     subtitle: String,
     tone: ToastTone,
     timeout: Option<Duration>,
+    layout: ToastLayout,
 }
 
 impl CaptureStatus {
@@ -26,6 +27,7 @@ impl CaptureStatus {
             subtitle: subtitle.into(),
             tone: ToastTone::Neutral,
             timeout: None,
+            layout: ToastLayout::status(),
         }
     }
 
@@ -38,6 +40,7 @@ impl CaptureStatus {
     ) -> Self {
         Self {
             timeout: Some(timeout),
+            layout: ToastLayout::compact(),
             ..Self::persistent(context, stage, title, subtitle)
         }
     }
@@ -48,7 +51,7 @@ impl CaptureStatus {
     }
 
     fn into_toast(self) -> Toast {
-        let toast = Toast::new(self.title, self.subtitle, ToastLayout::status()).tone(self.tone);
+        let toast = Toast::new(self.title, self.subtitle, self.layout).tone(self.tone);
         match self.timeout {
             Some(timeout) => toast.timeout(timeout),
             None => toast.persistent(),

@@ -52,6 +52,16 @@ pub fn show_saved_notification(
     timeout_ms: u32,
     _target: crate::capture::completion::RevealTarget,
 ) {
+    let client = qol_runtime::PlatformStateClient::from_env();
+    if client.send_notification_with_layout(
+        title,
+        message,
+        NotificationLevel::Info,
+        None,
+        Some(crate::capture::completion::corner_toast_layout()),
+    ) {
+        return;
+    }
     show_notification(title, message, timeout_ms);
 }
 

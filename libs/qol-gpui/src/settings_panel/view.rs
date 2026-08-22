@@ -2146,51 +2146,34 @@ impl SettingsPanelView {
     }
 
     fn render_toggle_value(&self, active: bool) -> Div {
-        let label_color = if active {
-            self.palette.state_on
-        } else {
-            self.palette.label_text
-        };
         let track_color = if active {
             self.palette.state_on
         } else {
             self.palette.dropdown_bg
         };
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(label_color))
-                    .child(if active { "On" } else { "Off" }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .when(active, |track| track.justify_end())
-                    .when(!active, |track| track.justify_start())
-                    .w(px(40.))
-                    .h(px(24.))
-                    .p(px(2.))
-                    .rounded_full()
-                    .bg(rgb(track_color))
-                    .child(
-                        div()
-                            .w(px(20.))
-                            .h(px(20.))
-                            .rounded_full()
-                            .bg(rgb(if active {
-                                self.palette.window_bg
-                            } else {
-                                self.palette.label_text
-                            })),
-                    ),
-            )
+        div().flex().flex_row().items_center().child(
+            div()
+                .flex()
+                .items_center()
+                .when(active, |track| track.justify_end())
+                .when(!active, |track| track.justify_start())
+                .w(px(40.))
+                .h(px(24.))
+                .p(px(2.))
+                .rounded_full()
+                .bg(rgb(track_color))
+                .child(
+                    div()
+                        .w(px(20.))
+                        .h(px(20.))
+                        .rounded_full()
+                        .bg(rgb(if active {
+                            self.palette.window_bg
+                        } else {
+                            self.palette.label_text
+                        })),
+                ),
+        )
     }
 
     fn render_select_value(&self, index: usize) -> Div {

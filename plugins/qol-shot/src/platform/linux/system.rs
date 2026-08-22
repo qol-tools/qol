@@ -38,11 +38,12 @@ pub fn show_saved_notification(
 ) {
     let client = qol_runtime::PlatformStateClient::from_env();
     let payload = target.path().to_string_lossy().into_owned();
-    if client.send_notification_with_action(
+    if client.send_notification_with_layout(
         title,
         message,
         NotificationLevel::Info,
         Some(("Open Folder", &payload)),
+        Some(crate::capture::completion::corner_toast_layout()),
     ) {
         return;
     }
