@@ -188,7 +188,7 @@ impl Dropdown {
                     .flex()
                     .flex_col()
                     .min_w(px(160.0))
-                    .rounded_none()
+                    .rounded(px(qol_theme::RADIUS_CARD))
                     .shadow(crate::kit::float_shadow(style.text))
                     .bg(rgb(style.bg))
                     .on_scroll_wheel(move |event, window, _cx| {

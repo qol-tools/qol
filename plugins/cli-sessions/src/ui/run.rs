@@ -170,7 +170,7 @@ fn panel_window_options(corner: Corner, cx: &mut gpui::App) -> WindowOptions {
         kind: gpui::WindowKind::Normal,
         focus: true,
         is_movable: true,
-        window_background: WindowBackgroundAppearance::Opaque,
+        window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(APP_ID.to_string()),
         ..Default::default()
     }

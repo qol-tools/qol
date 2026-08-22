@@ -251,6 +251,28 @@ fn remove_after_package_with(
     remove_with(plat, &sub, Disposal::Trash, package)
 }
 
+pub fn app_sizes(apps: &[InstalledApp]) -> std::collections::HashMap<PathBuf, u64> {
+    apps.iter()
+        .map(|app| (app.path.clone(), dir_size(&app.path)))
+        .collect()
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries.flatten().map(|entry| dir_size(&entry.path())).sum()
+}
+
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
     let q = query.to_lowercase();
     let mut out: Vec<InstalledApp> = apps

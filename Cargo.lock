@@ -5819,6 +5819,7 @@ dependencies = [
  "gpui",
  "proptest",
  "qol-apps",
+ "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-fs",

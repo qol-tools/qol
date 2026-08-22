@@ -2,10 +2,10 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO, TEXT_TITLE};
+use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO};
 
 use super::layout::HEADER_HEIGHT;
-use crate::discovery::search::{MatchKind, Scored};
+use crate::discovery::search::{ResultSource, Scored};
 
 fn current_palette() -> LauncherPalette {
     launcher_runtime()
@@ -15,61 +15,43 @@ pub fn palette() -> LauncherPalette {
     current_palette()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn search_bar(
-    mode_label: &'static str,
-    fuzziness_label: &'static str,
     query: &str,
     launch_error: Option<&str>,
     cursor: usize,
     selection: Option<(usize, usize)>,
     selected: usize,
     result_count: usize,
-    scroll_offset: usize,
-    visible: usize,
-    _momentum_signed: i8,
-    hidden_above: usize,
-    hidden_below: usize,
 ) -> Div {
+    let kit = qol_gpui::kit::kit();
+    let counter = if result_count == 0 {
+        format!("0 / {result_count}")
+    } else {
+        format!("{} / {result_count}", selected.min(result_count - 1) + 1)
+    };
     div()
         .h(px(HEADER_HEIGHT))
         .w_full()
+        .flex_none()
         .flex()
         .items_center()
-        .px_4()
-        .gap_2()
+        .px(px(qol_gpui::theme::SPACE_PAD))
+        .gap(px(10.0))
         .bg(rgb(current_palette().bg))
+        .border_b(px(1.0))
+        .border_color(rgba(kit.washes.hairline.packed()))
         .child(
             div()
-                .h(px(20.))
-                .px_2()
-                .flex()
-                .items_center()
-                .bg(rgb(current_palette().bg_badge))
-                .text_color(rgb(current_palette().text_dim))
-                .text_size(px(TEXT_NANO))
-                .child(mode_label),
-        )
-        .child(
-            div()
-                .h(px(20.))
-                .px_2()
-                .flex()
-                .items_center()
-                .bg(rgb(current_palette().bg_badge))
-                .text_color(rgb(current_palette().text_dim))
-                .text_size(px(TEXT_NANO))
-                .child(fuzziness_label),
-        )
-        .child(
-            div()
-                .text_color(rgb(current_palette().text_muted))
-                .text_size(px(TEXT_TITLE))
-                .child(">"),
+                .flex_none()
+                .text_color(rgb(kit.palette.accent_ink))
+                .text_size(px(TEXT_BODY))
+                .font_weight(FontWeight::BOLD)
+                .child("\u{203A}"),
         )
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.0))
                 .overflow_hidden()
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .flex()
@@ -79,8 +61,7 @@ pub fn search_bar(
                     div()
                         .h(px(18.))
                         .overflow_hidden()
-                        .rounded_none()
-                        .text_size(px(TEXT_TITLE))
+                        .text_size(px(TEXT_BODY))
                         .flex()
                         .items_center()
                         .child(search_bar_content(query, cursor, selection)),
@@ -96,15 +77,14 @@ pub fn search_bar(
                     )
                 }),
         )
-        .when(result_count > 0, |bar| {
-            bar.child(compass_widget(hidden_above, hidden_below))
-                .child(browse_status(
-                    selected,
-                    result_count,
-                    scroll_offset,
-                    visible,
-                ))
-        })
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(kit.palette.text_muted))
+                .text_size(px(TEXT_NANO))
+                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .child(counter),
+        )
 }
 
 const SEARCH_VISIBLE_CHARS: usize = 25;
@@ -182,291 +162,56 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-#[derive(Clone, Copy)]
-pub struct RowWindowCue {
-    pub selected: bool,
-    pub previous_selected: bool,
-    pub trail_depth: u8,
-    pub distance_from_selected: usize,
-    pub edge_hit_top: bool,
-    pub edge_hit_bottom: bool,
-    pub momentum_signed: i8,
-    pub confidence_pct: u8,
-    pub cluster_break: bool,
-}
-
-pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f32) -> Div {
-    let base_color = row_text_color(cues.selected, cues.previous_selected, cues.trail_depth);
-    let bg = row_bg_color(
-        cues.selected,
-        cues.previous_selected,
-        cues.trail_depth,
-        cues.distance_from_selected,
-    );
-
-    if !cues.selected {
-        let mut row = div()
-            .h(px(row_height))
-            .w_full()
-            .flex()
-            .items_center()
-            .px_4()
-            .bg(bg)
-            .text_color(base_color)
-            .text_size(px(TEXT_BODY))
-            .child(name.to_owned());
-        if scored.manual_boost > 0 {
-            row = row.child(boost_badge(scored.manual_boost, false));
-        }
-        return row;
-    }
-
+pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) -> Div {
+    let kit = qol_gpui::kit::kit();
     let positions = &scored.m.positions;
-    let highlights = if !positions.is_empty() {
+    let highlights = if selected && !positions.is_empty() {
         char_highlights(name, positions)
     } else {
         vec![]
     };
     let styled_name =
         StyledText::new(SharedString::from(name.to_owned())).with_highlights(highlights);
-
-    let mut row = div()
+    let row = div()
+        .flex_none()
         .h(px(row_height))
-        .w_full()
+        .mx(px(8.0))
+        .px(px(qol_gpui::theme::SPACE_PAD))
         .flex()
         .items_center()
-        .relative()
-        .px_4()
-        .bg(bg)
-        .when(cues.selected, |row| {
-            row.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(3.0))
-                    .bg(rgb(current_palette().border_selected)),
-            )
-        });
-
-    if cues.cluster_break {
-        row = row.child(cluster_badge());
-    }
-
-    row = row.child(
-        div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .text_color(base_color)
-            .text_size(px(TEXT_BODY))
-            .child(styled_name),
-    );
-
-    if scored.manual_boost > 0 {
-        row = row.child(boost_badge(scored.manual_boost, true));
-    }
-    row = row.child(semantic_badge(
-        scored.match_kind,
-        scored.frecency_bonus > 0,
-        true,
-    ));
-    row = row.child(confidence_bar(cues.confidence_pct, true));
-
-    row = row.child(motion_badge(
-        cues.momentum_signed,
-        cues.edge_hit_top,
-        cues.edge_hit_bottom,
-    ));
-
-    row
-}
-
-fn browse_status(
-    selected: usize,
-    result_count: usize,
-    scroll_offset: usize,
-    visible: usize,
-) -> Div {
-    let (selection_label, range_label) = if result_count == 0 {
-        ("0/0".to_string(), "0-0".to_string())
-    } else {
-        let selected_index = selected.min(result_count.saturating_sub(1)) + 1;
-        let start = (scroll_offset + 1).min(result_count);
-        let end = (scroll_offset + visible).min(result_count);
-        (
-            format!("{selected_index}/{result_count}"),
-            format!("{start}-{end}"),
+        .gap(px(12.0))
+        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
+        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        .child(kit.letter_tile(name))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_color(rgb(if selected {
+                    current_palette().text
+                } else {
+                    current_palette().text_muted
+                }))
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                .child(styled_name),
         )
-    };
-
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(status_badge(selection_label))
-        .child(status_badge(range_label))
-}
-
-fn status_badge(label: String) -> Div {
-    div()
-        .h(px(20.))
-        .px_2()
-        .flex()
-        .items_center()
-        .bg(rgb(current_palette().bg_badge))
-        .text_color(rgb(current_palette().text_dim))
-        .text_size(px(TEXT_NANO))
-        .child(label)
-}
-
-fn motion_badge(momentum_signed: i8, edge_hit_top: bool, edge_hit_bottom: bool) -> Div {
-    if momentum_signed < 0 {
-        return motion_badge_element(if edge_hit_top { "^ edge" } else { "^" }, momentum_signed);
-    }
-    if momentum_signed > 0 {
-        return motion_badge_element(
-            if edge_hit_bottom { "v edge" } else { "v" },
-            momentum_signed,
+        .child(
+            div()
+                .flex_none()
+                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text_color(rgb(kit.palette.text_secondary))
+                .text_size(px(qol_gpui::theme::TEXT_MICRO))
+                .child(kind_label(scored.source)),
         );
+    kit.row_selected(row, selected)
+}
+
+fn kind_label(source: ResultSource) -> &'static str {
+    match source {
+        ResultSource::App => "app",
+        ResultSource::File => "dir",
     }
-    motion_badge_placeholder()
-}
-
-fn motion_badge_element(label: &'static str, momentum_signed: i8) -> Div {
-    div()
-        .h(px(18.))
-        .w(px(48.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(momentum_badge_bg(momentum_signed))
-        .text_color(rgb(current_palette().text_selected))
-        .text_size(px(TEXT_NANO))
-        .child(label)
-}
-
-fn motion_badge_placeholder() -> Div {
-    div().h(px(18.)).w(px(48.))
-}
-
-fn confidence_bar(confidence_pct: u8, selected: bool) -> Div {
-    let slots = 6usize;
-    let filled = (confidence_pct as usize * slots).div_ceil(100);
-    let filled = filled.min(slots);
-    let label = format!("[{}{}]", "=".repeat(filled), ".".repeat(slots - filled));
-    div()
-        .h(px(18.))
-        .w(px(52.))
-        .flex()
-        .items_center()
-        .justify_end()
-        .text_color(if selected {
-            rgb(current_palette().text_dim)
-        } else {
-            rgb(current_palette().text_faint)
-        })
-        .text_size(px(TEXT_NANO))
-        .child(label)
-}
-
-fn cluster_badge() -> Div {
-    div()
-        .h(px(18.))
-        .px_2()
-        .flex()
-        .items_center()
-        .bg(rgb(current_palette().bg_badge))
-        .text_color(rgb(current_palette().text_dim))
-        .text_size(px(TEXT_NANO))
-        .child("gap")
-}
-
-fn boost_badge(boost: i32, _selected: bool) -> Div {
-    div()
-        .h(px(18.))
-        .px_2()
-        .flex()
-        .items_center()
-        .text_color(rgb(current_palette().text_muted))
-        .text_size(px(TEXT_NANO))
-        .child(format!("+{boost}"))
-}
-
-fn semantic_badge(kind: MatchKind, freq_bonus: bool, _selected: bool) -> Div {
-    let base = match kind {
-        MatchKind::Prefix => "prefix",
-        MatchKind::Contains => "contains",
-        MatchKind::Fuzzy => "fuzzy",
-    };
-    let label = if freq_bonus {
-        format!("{base}+freq")
-    } else {
-        base.to_string()
-    };
-    div()
-        .h(px(18.))
-        .px_2()
-        .flex()
-        .items_center()
-        .text_color(rgb(current_palette().text_muted))
-        .text_size(px(TEXT_NANO))
-        .child(label)
-}
-
-fn momentum_badge_bg(momentum_signed: i8) -> gpui::Rgba {
-    match momentum_signed {
-        -5..=-1 => match momentum_signed.abs() {
-            1 => rgb(current_palette().momentum_up[0]),
-            2 => rgb(current_palette().momentum_up[1]),
-            3 => rgb(current_palette().momentum_up[2]),
-            4 => rgb(current_palette().momentum_up[3]),
-            _ => rgb(current_palette().momentum_up[4]),
-        },
-        1..=5 => match momentum_signed {
-            1 => rgb(current_palette().momentum_down[0]),
-            2 => rgb(current_palette().momentum_down[1]),
-            3 => rgb(current_palette().momentum_down[2]),
-            4 => rgb(current_palette().momentum_down[3]),
-            _ => rgb(current_palette().momentum_down[4]),
-        },
-        _ => rgb(current_palette().bg_selected),
-    }
-}
-
-fn compass_widget(hidden_above: usize, hidden_below: usize) -> Div {
-    div()
-        .h(px(20.))
-        .w(px(10.))
-        .flex()
-        .flex_col()
-        .justify_between()
-        .child(compass_strip(hidden_above, true))
-        .child(compass_strip(hidden_below, false))
-}
-
-fn compass_strip(hidden_count: usize, is_up: bool) -> Div {
-    let color = if hidden_count == 0 {
-        rgb(current_palette().bg_edge)
-    } else if hidden_count <= 3 {
-        if is_up {
-            rgb(current_palette().compass_up[0])
-        } else {
-            rgb(current_palette().compass_down[0])
-        }
-    } else if hidden_count <= 7 {
-        if is_up {
-            rgb(current_palette().compass_up[1])
-        } else {
-            rgb(current_palette().compass_down[1])
-        }
-    } else if is_up {
-        rgb(current_palette().compass_up[2])
-    } else {
-        rgb(current_palette().compass_down[2])
-    };
-    div().h(px(3.)).w_full().bg(color)
 }
 
 fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, HighlightStyle)> {
@@ -491,37 +236,12 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .collect()
 }
 
-fn row_text_color(selected: bool, previous_selected: bool, trail_depth: u8) -> gpui::Rgba {
-    if selected {
-        rgb(current_palette().text_selected)
-    } else if trail_depth >= 2 {
-        rgb(current_palette().text_dim)
-    } else if trail_depth == 1 || previous_selected {
-        rgb(current_palette().text_muted)
-    } else {
-        rgb(current_palette().text_faint)
-    }
-}
-
-fn row_bg_color(
-    selected: bool,
-    previous_selected: bool,
-    trail_depth: u8,
-    distance_from_selected: usize,
-) -> gpui::Rgba {
-    if selected {
-        rgb(current_palette().bg_selected)
-    } else if trail_depth >= 2 {
-        rgb(current_palette().bg_trail_hot)
-    } else if trail_depth == 1 {
-        rgb(current_palette().bg_trail)
-    } else if previous_selected {
-        rgb(current_palette().bg_near)
-    } else if distance_from_selected <= 1 {
-        rgb(current_palette().bg_edge)
-    } else {
-        rgb(current_palette().bg)
-    }
+pub fn hint_bar() -> Div {
+    let kit = qol_gpui::kit::kit();
+    kit.hint_bar()
+        .child(kit.hint("\u{23CE}", "open"))
+        .child(kit.hint("\u{21E5}", "mode"))
+        .child(kit.hint("esc", "dismiss"))
 }
 
 pub fn bg_color() -> gpui::Rgba {

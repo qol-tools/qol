@@ -5,8 +5,8 @@ use std::sync::{Mutex, Once, PoisonError};
 
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
-    NSWindowAnimationBehavior, NSWindowStyleMask,
+    NSApplication, NSColor, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen, NSView,
+    NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -221,6 +221,14 @@ pub fn sync_window_layout(
 ) -> bool {
     let backing = window_backing_scale(title);
     crate::window::resize_or_sync_scale(window, size, backing);
+    sync_window_layout_by_title(title, origin, size)
+}
+
+pub fn sync_window_layout_by_title(
+    title: &str,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
     set_window_frame_by_title(title, origin, size)
 }
 
@@ -237,7 +245,12 @@ pub fn set_window_frame_by_title(
     };
     let size = NSSize::new(size.width.to_f64(), size.height.to_f64());
     let frame = NSRect::new(
-        cocoa_origin_for_top_left(mtm, origin.x.to_f64(), origin.y.to_f64(), size.height),
+        cocoa_origin_for_primary_anchored_top_left(
+            mtm,
+            origin.x.to_f64(),
+            origin.y.to_f64(),
+            size.height,
+        ),
         size,
     );
     window.setFrame_display(frame, true);
@@ -253,26 +266,52 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
         return false;
     };
     let current_height = window.frame().size.height;
-    let origin = cocoa_origin_for_top_left(mtm, gpui_x, gpui_y, current_height);
+    let origin = cocoa_origin_for_primary_anchored_top_left(mtm, gpui_x, gpui_y, current_height);
     window.setFrameOrigin(origin);
     sync_backing_properties(&window);
     true
 }
 
-fn cocoa_origin_for_top_left(
+fn cocoa_origin_for_primary_anchored_top_left(
     mtm: MainThreadMarker,
     gpui_x: f64,
     gpui_y: f64,
     frame_height: f64,
 ) -> NSPoint {
-    let primary_screen_height = NSScreen::screens(mtm)
-        .iter()
-        .next()
-        .map(|screen| screen.frame().size.height)
-        .unwrap_or(1080.0);
+    cocoa_origin_from_primary_anchored(gpui_x, gpui_y, frame_height, primary_screen_height(mtm))
+}
+
+fn cocoa_origin_from_primary_anchored(
+    gpui_x: f64,
+    gpui_y: f64,
+    frame_height: f64,
+    primary_screen_height: f64,
+) -> NSPoint {
     NSPoint::new(
         gpui_x,
         cocoa_bottom_edge(primary_screen_height, gpui_y, frame_height),
+    )
+}
+
+fn primary_screen_height(mtm: MainThreadMarker) -> f64 {
+    NSScreen::screens(mtm)
+        .iter()
+        .next()
+        .map(|screen| screen.frame().size.height)
+        .unwrap_or(1080.0)
+}
+
+fn primary_anchored_from_screen_relative(
+    screen_relative_x: f64,
+    screen_relative_y: f64,
+    screen_origin_x: f64,
+    screen_origin_y: f64,
+    screen_height: f64,
+    primary_screen_height: f64,
+) -> (f64, f64) {
+    (
+        screen_relative_x + screen_origin_x,
+        screen_relative_y + primary_screen_height - screen_height - screen_origin_y,
     )
 }
 
@@ -412,24 +451,56 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
         .count()
 }
 
+fn native_window_from_gpui_window(
+    window: &mut gpui::Window,
+) -> Result<Retained<NSWindow>, &'static str> {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return Err("handle_error");
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return Err("not_appkit");
+    };
+    let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
+        return Err("view_missing");
+    };
+    view.window().ok_or("window_missing")
+}
+
+pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds<gpui::Pixels> {
+    let bounds = window.bounds();
+    let Some(mtm) = MainThreadMarker::new() else {
+        return bounds;
+    };
+    let Ok(native_window) = native_window_from_gpui_window(window) else {
+        return bounds;
+    };
+    let Some(screen) = native_window.screen() else {
+        return bounds;
+    };
+    let frame = screen.frame();
+    let (x, y) = primary_anchored_from_screen_relative(
+        bounds.origin.x.to_f64(),
+        bounds.origin.y.to_f64(),
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.height,
+        primary_screen_height(mtm),
+    );
+    gpui::Bounds::new(
+        gpui::point(gpui::px(x as f32), gpui::px(y as f32)),
+        bounds.size,
+    )
+}
+
 pub fn hide_for_capture(title: &str, window: &mut gpui::Window) -> bool {
     #[cfg(not(debug_assertions))]
     let _ = title;
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=handle_error");
-        return false;
-    };
-    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=not_appkit");
-        return false;
-    };
-    let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
-        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=view_missing");
-        return false;
-    };
-    let Some(native_window) = view.window() else {
-        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=window_missing");
-        return false;
+    let native_window = match native_window_from_gpui_window(window) {
+        Ok(native_window) => native_window,
+        Err(reason) => {
+            qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result={reason}");
+            return false;
+        }
     };
     native_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     native_window.setLevel(NSPopUpMenuWindowLevel);
@@ -478,15 +549,21 @@ fn debug_ghost_color() -> Option<Retained<NSColor>> {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay)
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
 }
 
 pub fn show_normal_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Normal)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WindowPresentation {
+    Overlay,
+    Normal,
 }
 
 pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
@@ -499,14 +576,22 @@ pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels
     true
 }
 
-fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
+fn show_window_by_title_with_focus(
+    title: &str,
+    focus: bool,
+    presentation: WindowPresentation,
+) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
     };
     let Some(window) = resolve_window(title) else {
         return false;
     };
-    window.setLevel(NSPopUpMenuWindowLevel);
+    let level = match presentation {
+        WindowPresentation::Overlay => NSPopUpMenuWindowLevel,
+        WindowPresentation::Normal => NSNormalWindowLevel,
+    };
+    window.setLevel(level);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(!focus);
@@ -741,7 +826,106 @@ pub fn window_holds_input_focus(title: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::cocoa_bottom_edge;
+    use super::{
+        cocoa_bottom_edge, cocoa_origin_from_primary_anchored,
+        primary_anchored_from_screen_relative,
+    };
+
+    const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    struct Screen {
+        origin_x: f64,
+        origin_y: f64,
+        height: f64,
+    }
+
+    fn gpui_bounds_origin(
+        cocoa_x: f64,
+        cocoa_bottom: f64,
+        frame_height: f64,
+        screen: &Screen,
+    ) -> (f64, f64) {
+        (
+            cocoa_x - screen.origin_x,
+            screen.height - cocoa_bottom - frame_height + screen.origin_y,
+        )
+    }
+
+    #[test]
+    fn a_panel_resized_in_place_keeps_its_cocoa_frame_on_every_screen() {
+        let cases = [
+            (
+                "primary",
+                Screen {
+                    origin_x: 0.0,
+                    origin_y: 0.0,
+                    height: 1080.0,
+                },
+                (100.0, 440.0),
+            ),
+            (
+                "left",
+                Screen {
+                    origin_x: -1920.0,
+                    origin_y: 0.0,
+                    height: 1080.0,
+                },
+                (-1160.0, 280.0),
+            ),
+            (
+                "above",
+                Screen {
+                    origin_x: 0.0,
+                    origin_y: 1080.0,
+                    height: 800.0,
+                },
+                (960.0, 1480.0),
+            ),
+            (
+                "right taller",
+                Screen {
+                    origin_x: 1920.0,
+                    origin_y: -300.0,
+                    height: 1440.0,
+                },
+                (2380.0, 520.0),
+            ),
+        ];
+        let frame_height = 600.0;
+        for (name, screen, (cocoa_x, cocoa_bottom)) in cases {
+            let (screen_x, screen_y) =
+                gpui_bounds_origin(cocoa_x, cocoa_bottom, frame_height, &screen);
+            let (anchored_x, anchored_y) = primary_anchored_from_screen_relative(
+                screen_x,
+                screen_y,
+                screen.origin_x,
+                screen.origin_y,
+                screen.height,
+                PRIMARY_HEIGHT,
+            );
+            let written = cocoa_origin_from_primary_anchored(
+                anchored_x,
+                anchored_y,
+                frame_height,
+                PRIMARY_HEIGHT,
+            );
+            assert_eq!(
+                (written.x, written.y),
+                (cocoa_x, cocoa_bottom),
+                "{name}: reading and writing the same frame must not move the window"
+            );
+        }
+    }
+
+    #[test]
+    fn a_placement_off_the_primary_screen_is_written_where_it_was_asked_for() {
+        let written = cocoa_origin_from_primary_anchored(-1160.0, 240.0, 600.0, PRIMARY_HEIGHT);
+        assert_eq!(
+            (written.x, written.y),
+            (-1160.0, 240.0),
+            "a placement built from monitor bounds is already primary anchored"
+        );
+    }
 
     #[test]
     fn top_edge_survives_every_height_change() {

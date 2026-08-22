@@ -17,9 +17,16 @@ pub const WINDOW_TITLE: &str = "removeapp";
 pub const WINDOW_WIDTH: f32 = 460.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
 const SEARCH_H: f32 = 40.0;
-const FOOTER_H: f32 = 34.0;
-const ROW_H: f32 = 38.0;
-const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
+const SEARCH_PAD: f32 = 12.0;
+const FAILBAR_H: f32 = 64.0;
+const ROW_H: f32 = 40.0;
+const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
+    - SEARCH_PAD
+    - SEARCH_H
+    - SEARCH_PAD
+    - FAILBAR_H
+    - qol_gpui::theme::HEIGHT_HINT_BAR)
+    / ROW_H) as usize;
 const CONTINUE_OR_QUIT_HINT: &str = "Enter to continue \u{00b7} Esc to quit";
 
 fn current_palette() -> RemoveAppPalette {
@@ -58,6 +65,7 @@ pub struct RemoveAppView {
     error: Option<String>,
     guards: Option<Guards>,
     package_index: Option<PackageIndex>,
+    sizes: std::collections::HashMap<std::path::PathBuf, u64>,
     quit_failed: bool,
     focus_handle: FocusHandle,
 }
@@ -67,6 +75,7 @@ impl RemoveAppView {
         let apps = core::installed_apps().unwrap_or_default();
         let matches = core::filter(&apps, "");
         Self::spawn_package_prewarm(cx, apps.clone());
+        Self::spawn_size_prewarm(cx, apps.clone());
         Self {
             apps,
             query: String::new(),
@@ -79,6 +88,7 @@ impl RemoveAppView {
             error: None,
             guards: None,
             package_index: None,
+            sizes: std::collections::HashMap::new(),
             quit_failed: false,
             focus_handle: cx.focus_handle(),
         }
@@ -104,8 +114,41 @@ impl RemoveAppView {
         .detach();
     }
 
+    fn spawn_size_prewarm(cx: &mut Context<Self>, apps: Vec<InstalledApp>) {
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let sizes = async_cx
+                    .background_spawn(async move { core::app_sizes(&apps) })
+                    .await;
+                this.update(&mut async_cx, |view, cx| {
+                    view.sizes = sizes;
+                    let untouched = view.query.is_empty() && view.list.selected == 0;
+                    if view.mode == Mode::Picking && untouched {
+                        view.refilter();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn app_size(&self, app: &InstalledApp) -> Option<u64> {
+        self.sizes.get(&app.path).copied()
+    }
+
     fn refilter(&mut self) {
-        self.matches = core::filter(&self.apps, &self.query);
+        let mut matches = core::filter(&self.apps, &self.query);
+        matches.sort_by(|a, b| {
+            let left = self.sizes.get(&a.path).copied().unwrap_or(0);
+            let right = self.sizes.get(&b.path).copied().unwrap_or(0);
+            right
+                .cmp(&left)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        self.matches = matches;
         self.list.reset();
     }
 
@@ -261,6 +304,10 @@ impl RemoveAppView {
                     self.enter_confirm();
                     cx.notify();
                 }
+                "backspace" if ev.keystroke.modifiers.platform => {
+                    self.enter_confirm();
+                    cx.notify();
+                }
                 "backspace" => {
                     self.query.pop();
                     self.refilter();
@@ -337,59 +384,151 @@ impl RemoveAppView {
             .enumerate()
             .map(|(offset, app)| {
                 let index = range.start + offset;
-                app_row(app, index == selected, core::is_protected(app))
+                app_row(
+                    app,
+                    self.app_size(app),
+                    index == selected,
+                    core::is_protected(app),
+                )
             })
             .collect();
+        let counter = format!("{} / {}", self.matches.len(), self.apps.len());
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(self.search_box())
-            .child(div().flex_1().min_h_0().w_full().children(rows))
-            .child(footer(&[
-                ("\u{2191}\u{2193}", "move"),
-                ("\u{23CE}", "select"),
-                ("esc", "quit"),
-            ]))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .pt(px(SEARCH_PAD))
+                    .children(rows),
+            )
+            .children(self.remove_bar())
+            .child(footer(
+                &[("\u{23CE}", "select"), ("\u{2318}\u{232B}", "remove")],
+                Some(counter),
+            ))
             .into_any_element()
     }
 
+    fn remove_bar(&self) -> Option<AnyElement> {
+        let kit = qol_gpui::kit::kit();
+        let app = self.matches.get(self.list.selected)?;
+        if core::is_protected(app) {
+            return None;
+        }
+        let subtitle = match self.app_size(app) {
+            Some(size) => format!("App bundle \u{00B7} {}", qol_gpui::format_bytes(size)),
+            None => "measuring size\u{2026}".to_string(),
+        };
+        Some(
+            div()
+                .flex_none()
+                .relative()
+                .h(px(FAILBAR_H))
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(qol_gpui::theme::SPACE_PAD))
+                .bg(rgba(kit.washes.fill_hover.packed()))
+                .border_t(px(1.0))
+                .border_color(rgba(kit.washes.hairline.packed()))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(qol_gpui::theme::SPACE_MARK))
+                        .bg(rgb(kit.palette.danger)),
+                )
+                .child(kit.status_dot(kit.palette.danger, kit.washes.halo_invalid.packed()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(kit.palette.text_primary))
+                                .child(format!("Remove {}", app.name)),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(qol_gpui::theme::TEXT_MICRO))
+                                .text_color(rgb(kit.palette.text_secondary))
+                                .child(subtitle),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(5.0))
+                        .py(px(1.0))
+                        .rounded(px(qol_gpui::theme::RADIUS_KEYCAP))
+                        .border(px(1.0))
+                        .border_color(rgba(kit.washes.edge_invalid.packed()))
+                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                        .text_size(px(qol_gpui::theme::TEXT_KEYCAP))
+                        .text_color(rgb(kit.palette.danger))
+                        .child("\u{2318}\u{232B}"),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn search_box(&self) -> impl IntoElement {
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         let empty = self.query.is_empty();
         let shown = if empty {
-            "Type to search apps".to_string()
+            "Search installed apps".to_string()
         } else {
             self.query.clone()
         };
         div()
-            .h(px(40.0))
+            .flex_none()
             .w_full()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .px(px(12.0))
-            .bg(rgb(palette.chrome_bg))
-            .border_b_1()
-            .border_color(rgb(palette.border))
+            .pt(px(SEARCH_PAD))
+            .px(px(SEARCH_PAD))
             .panel_drag_area()
-            .child(div().text_color(rgb(palette.text_muted)).child(">"))
             .child(
                 div()
-                    .flex_1()
-                    .text_color(rgb(if empty {
-                        palette.text_muted
-                    } else {
-                        palette.text_primary
-                    }))
-                    .child(shown),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(rgb(palette.text_muted))
-                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .child(format!("{}", self.matches.len())),
+                    .h(px(SEARCH_H))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .px(px(qol_gpui::theme::SPACE_PAD))
+                    .rounded(px(qol_gpui::theme::RADIUS_WELL))
+                    .border(px(1.0))
+                    .border_color(rgba(kit.washes.hairline.packed()))
+                    .bg(rgba(kit.washes.fill_hover.packed()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                            .text_color(rgb(if empty {
+                                kit.palette.text_muted
+                            } else {
+                                kit.palette.text_primary
+                            }))
+                            .child(shown),
+                    )
+                    .child(kit.keycap("/")),
             )
     }
 
@@ -504,7 +643,7 @@ impl RemoveAppView {
                             )),
                     ),
             )
-            .child(footer(&hints))
+            .child(footer(&hints, None))
             .into_any_element()
     }
 
@@ -655,10 +794,10 @@ impl Render for RemoveAppView {
             .size_full()
             .flex()
             .flex_col()
+            .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
             .overflow_hidden()
             .bg(rgb(palette.panel_bg))
             .text_color(rgb(palette.text_primary))
-            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
             .child(self.render_body())
     }
@@ -692,36 +831,35 @@ fn done_action(key: &str) -> Option<DoneAction> {
     }
 }
 
-fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElement {
-    let palette = current_palette();
-    div()
-        .w_full()
-        .h(px(ROW_H))
+fn app_row(
+    app: &InstalledApp,
+    size: Option<u64>,
+    selected: bool,
+    protected: bool,
+) -> impl IntoElement {
+    let kit = qol_gpui::kit::kit();
+    let row = div()
         .flex_none()
+        .h(px(ROW_H))
+        .mx(px(8.0))
+        .px(px(qol_gpui::theme::SPACE_PAD))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .px(px(12.0))
-        .border_l_2()
-        .border_color(if selected {
-            rgb(palette.accent)
-        } else {
-            rgba(palette.transparent_rgba)
-        })
-        .bg(if selected {
-            rgba(palette.selection_bg_rgba)
-        } else {
-            rgba(palette.transparent_rgba)
-        })
+        .gap(px(12.0))
+        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
+        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        .child(kit.letter_tile(&app.name))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(if protected {
-                    rgb(palette.text_muted)
+                    rgb(kit.palette.text_muted)
                 } else {
-                    rgb(palette.text_primary)
+                    rgb(kit.palette.text_primary)
                 })
                 .child(app.name.clone()),
         )
@@ -730,10 +868,21 @@ fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElem
                 div()
                     .flex_none()
                     .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .text_color(rgb(palette.danger))
+                    .text_color(rgb(kit.palette.danger))
                     .child("protected"),
             )
         })
+        .when_some(size, |d, size| {
+            d.child(
+                div()
+                    .flex_none()
+                    .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                    .text_size(px(qol_gpui::theme::TEXT_MICRO))
+                    .text_color(rgb(kit.palette.text_secondary))
+                    .child(qol_gpui::format_bytes(size)),
+            )
+        });
+    kit.row_selected(row, selected)
 }
 
 fn section_header(title: &str) -> impl IntoElement {
@@ -756,40 +905,23 @@ fn section_header(title: &str) -> impl IntoElement {
         )
 }
 
-fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
-    let palette = current_palette();
-    div()
-        .flex()
-        .flex_none()
-        .h(px(FOOTER_H))
-        .items_center()
-        .gap(px(10.0))
-        .w_full()
-        .px(px(11.0))
-        .bg(rgb(palette.chrome_bg))
-        .border_t_1()
-        .border_color(rgb(palette.border))
-        .children(hints.iter().map(|(key, label)| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .text_color(rgb(palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_NANO))
-                .child(
-                    div()
-                        .text_color(rgb(palette.text_heading))
-                        .text_size(px(qol_gpui::theme::TEXT_NANO))
-                        .bg(rgba(palette.keycap_bg_rgba))
-                        .border_1()
-                        .border_color(rgb(palette.border_strong))
-                        .rounded_none()
-                        .px(px(5.0))
-                        .py(px(1.0))
-                        .child(key.to_string()),
-                )
-                .child(label.to_string())
-        }))
+fn footer(hints: &[(&str, &str)], counter: Option<String>) -> impl IntoElement {
+    let kit = qol_gpui::kit::kit();
+    let mut bar = kit.hint_bar();
+    for (key, label) in hints {
+        bar = bar.child(kit.hint(key.to_string(), label.to_string()));
+    }
+    bar.child(div().flex_1())
+        .when_some(counter, |bar, counter| {
+            bar.child(
+                div()
+                    .flex_none()
+                    .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                    .text_size(px(qol_gpui::theme::TEXT_NANO))
+                    .text_color(rgb(kit.palette.text_muted))
+                    .child(counter),
+            )
+        })
 }
 
 fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
@@ -818,14 +950,15 @@ fn banner_line(color: u32, text: &str) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        done_action, primary_action, DoneAction, PrimaryAction, FOOTER_H, MAX_VISIBLE, ROW_H,
-        SEARCH_H, WINDOW_HEIGHT,
+        done_action, primary_action, DoneAction, PrimaryAction, FAILBAR_H, MAX_VISIBLE, ROW_H,
+        SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
     };
     use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
     #[test]
     fn visible_rows_fit_window_and_are_maximal() {
-        let chrome = SEARCH_H + FOOTER_H;
+        let chrome =
+            SEARCH_PAD + SEARCH_H + SEARCH_PAD + FAILBAR_H + qol_gpui::theme::HEIGHT_HINT_BAR;
         let fits = chrome + MAX_VISIBLE as f32 * ROW_H;
         let one_more = chrome + (MAX_VISIBLE + 1) as f32 * ROW_H;
         assert!(

@@ -184,13 +184,6 @@ impl Render for AltTabApp {
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
-            .when(snap.show_hotkey_hints, |s| {
-                s.child(header_bar(
-                    "Alt Tab",
-                    "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  Esc close",
-                    &snap,
-                ))
-            })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
                 s.child(header_bar(
                     "Alt Tab  ·  Live Window Grid",
@@ -198,7 +191,8 @@ impl Render for AltTabApp {
                     &snap,
                 ))
             })
-            .child(grid);
+            .child(grid)
+            .when(snap.show_hotkey_hints, |s| s.child(hint_bar()));
 
         let root = div()
             .id("alt-tab-backdrop")
@@ -277,6 +271,16 @@ fn probe_rendered_front(
     }
 }
 
+fn hint_bar() -> Div {
+    let kit = qol_gpui::kit::kit();
+    kit.hint_bar()
+        .justify_center()
+        .gap(px(26.0))
+        .child(kit.hint("\u{2325}\u{21E5}", "next"))
+        .child(kit.hint("\u{2325}\u{21E7}\u{21E5}", "previous"))
+        .child(kit.hint("W", "close window"))
+}
+
 fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
     let system = &snap.system;
     div()
@@ -316,8 +320,8 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
             .track_scroll(context.grid_scroll)
             .overflow_y_scroll()
             .px_5()
-            .py_4()
-            .gap_3()
+            .py(px(18.0))
+            .gap_4()
             .when(windows.is_empty(), |s| {
                 s.items_center().justify_center().child(
                     div()
@@ -375,16 +379,12 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
 
 fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div> {
     let system = &snap.system;
+    let kit = qol_gpui::kit::kit();
     let selected_card = |el: Stateful<Div>| {
-        el.bg(rgb(system.accent_fill))
+        el.bg(rgb(snap.palette.card_bg))
             .border_1()
-            .border_color(rgb(system.accent))
-            .shadow(vec![BoxShadow {
-                color: rgb(system.accent).into(),
-                offset: point(px(0.0), px(0.0)),
-                blur_radius: px(0.0),
-                spread_radius: px(1.0),
-            }])
+            .border_color(rgba(kit.washes.accent_border.packed()))
+            .shadow(kit.focus_ring())
     };
     if selected {
         return selected_card(el);
@@ -480,16 +480,9 @@ fn render_label(
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
-    let font_weight = if selected {
-        FontWeight::SEMIBOLD
-    } else {
-        FontWeight::NORMAL
-    };
-    let primary_color = rgb(if selected {
-        snap.system.accent_ink
-    } else {
-        palette.label_text
-    });
+    let _ = selected;
+    let font_weight = FontWeight::NORMAL;
+    let primary_color = rgb(palette.label_text);
 
     let base = div()
         .w(px(metrics.preview_width))
@@ -498,7 +491,8 @@ fn render_label(
         .flex_none()
         .flex()
         .items_center()
-        .justify_center()
+        .justify_start()
+        .px(px(label_padding_px * 2.0))
         .overflow_hidden()
         .border_t_1()
         .border_color(rgb(snap.system.border_subtle));

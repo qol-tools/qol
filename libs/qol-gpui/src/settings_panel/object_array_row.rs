@@ -405,6 +405,25 @@ impl ItemDraft {
         }
     }
 
+    pub(super) fn toggle_mod_at(&mut self, field_index: usize, mod_index: usize) -> bool {
+        if field_index >= self.fields.len() {
+            return false;
+        }
+        self.selected = field_index;
+        match &mut self.fields[field_index].value {
+            DraftValue::Mods {
+                selected, cursor, ..
+            } => {
+                if mod_index >= selected.len() {
+                    return false;
+                }
+                *cursor = mod_index;
+            }
+            _ => return false,
+        }
+        self.toggle()
+    }
+
     pub(super) fn insert(&mut self, text: &str) -> bool {
         let Some(DraftValue::Text(value)) = self
             .fields
@@ -1098,6 +1117,91 @@ mod tests {
             0..OBJECT_ARRAY_MAX_VISIBLE,
             "a full page of items stays visible while the add entry is selected"
         );
+    }
+
+    #[test]
+    fn a_chip_click_turns_an_off_modifier_on_and_moves_focus() {
+        let mut state = state();
+        state.open_draft();
+        let draft = state.draft.as_mut().unwrap();
+        select_field(draft, "to_mods");
+
+        assert!(draft.toggle_mod_at(0, 1));
+
+        assert_eq!(draft.selected, 0);
+        let DraftValue::Mods {
+            options, selected, ..
+        } = &draft.fields[0].value
+        else {
+            panic!("modifier field");
+        };
+        assert_eq!(
+            chosen_options(options, selected),
+            vec!["ctrl".to_string(), "shift".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_second_chip_click_turns_the_modifier_back_off() {
+        let mut state = state();
+        state.open_draft();
+        let draft = state.draft.as_mut().unwrap();
+
+        assert!(draft.toggle_mod_at(0, 1));
+        assert!(draft.toggle_mod_at(0, 1));
+
+        let DraftValue::Mods {
+            options, selected, ..
+        } = &draft.fields[0].value
+        else {
+            panic!("modifier field");
+        };
+        assert_eq!(chosen_options(options, selected), vec!["ctrl".to_string()]);
+    }
+
+    #[test]
+    fn a_chip_click_on_an_out_of_range_field_is_a_no_op() {
+        let mut state = state();
+        state.open_draft();
+        let draft = state.draft.as_mut().unwrap();
+        select_field(draft, "to_mods");
+        let before: Vec<String> = draft.fields.iter().map(DraftField::display).collect();
+
+        assert!(!draft.toggle_mod_at(draft.fields.len(), 0));
+
+        assert_eq!(draft.selected, 1);
+        let after: Vec<String> = draft.fields.iter().map(DraftField::display).collect();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn a_chip_click_on_an_out_of_range_modifier_is_a_no_op() {
+        let mut state = state();
+        state.open_draft();
+        let draft = state.draft.as_mut().unwrap();
+        select_field(draft, "to_mods");
+
+        assert!(!draft.toggle_mod_at(0, 99));
+
+        assert_eq!(draft.selected, 0);
+        let DraftValue::Mods {
+            options, selected, ..
+        } = &draft.fields[0].value
+        else {
+            panic!("modifier field");
+        };
+        assert_eq!(chosen_options(options, selected), vec!["ctrl".to_string()]);
+    }
+
+    #[test]
+    fn a_chip_click_on_a_text_field_moves_focus_without_toggling() {
+        let mut state = state();
+        state.open_draft();
+        let draft = state.draft.as_mut().unwrap();
+
+        assert!(!draft.toggle_mod_at(2, 0));
+
+        assert_eq!(draft.selected, 2);
     }
 
     #[test]

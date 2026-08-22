@@ -34,7 +34,9 @@ pub struct SessionsView {
     collapse_state: collapse::CollapseState,
     drag_gesture: std::rc::Rc<std::cell::RefCell<DragGestureState>>,
     key_hold: KeyHold,
+    nav_guard: qol_gpui::phantom_nav::PhantomNavGuard,
     list_scroll: qol_gpui::scroll_list::SelectionScroll,
+    pinned: std::cell::RefCell<qol_gpui::pinned_order::PinnedOrder<SessionId>>,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -51,17 +53,25 @@ impl SessionsView {
             host,
             selection: Selection::default(),
             list_scroll: qol_gpui::scroll_list::SelectionScroll::new(),
+            pinned: std::cell::RefCell::new(qol_gpui::pinned_order::PinnedOrder::new()),
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
             drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
             key_hold: KeyHold::default(),
+            nav_guard: qol_gpui::phantom_nav::PhantomNavGuard::new(),
             last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
     }
 
     pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {
-        self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
+        let sorted = self.registry.lock().map(|r| r.sorted()).unwrap_or_default();
+        let ids: Vec<SessionId> = sorted.iter().map(|row| row.id.clone()).collect();
+        let pinned = self.pinned.borrow_mut().apply(&ids);
+        pinned
+            .into_iter()
+            .filter_map(|id| sorted.iter().find(|row| row.id == id).cloned())
+            .collect()
     }
 
     pub fn is_showing(&self) -> bool {
@@ -69,6 +79,9 @@ impl SessionsView {
     }
 
     pub fn set_showing(&mut self, showing: bool) {
+        if showing && !self.is_showing {
+            self.pinned.borrow_mut().reset();
+        }
         self.is_showing = showing;
     }
 
@@ -76,15 +89,15 @@ impl SessionsView {
         self.collapse_state.is_collapsed()
     }
 
-    pub fn collapse_panel(&mut self, window: &mut Window) -> bool {
-        let expanded = window.bounds();
+    pub fn collapse_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let expanded = qol_gpui::popup_window::window_bounds_primary_anchored(window);
         let strip = self.collapse_state.collapse(expanded);
         trace::collapse(true);
-        if !apply_panel_bounds(window, strip) {
-            self.collapse_state.expand();
+        schedule_panel_bounds(window, cx, strip, |view, _| {
+            view.collapse_state.expand();
             trace::collapse(false);
-            return false;
-        }
+        });
+        self.key_hold.clear();
         window.focus(&self.focus_handle);
         true
     }
@@ -93,14 +106,17 @@ impl SessionsView {
         let Some(expanded) = self.collapse_state.expand() else {
             return false;
         };
-        let anchored =
-            collapse::reanchor_expanded(expanded, window.bounds(), self.collapse_state.corner());
+        let anchored = collapse::reanchor_expanded(
+            expanded,
+            qol_gpui::popup_window::window_bounds_primary_anchored(window),
+            self.collapse_state.corner(),
+        );
         let anchored = clamp_to_monitor(anchored, cx);
-        if !apply_panel_bounds(window, anchored) {
-            self.collapse_state.collapse(anchored);
-            return false;
-        }
+        schedule_panel_bounds(window, cx, anchored, |view, bounds| {
+            view.collapse_state.collapse(bounds);
+        });
         trace::collapse(false);
+        self.key_hold.clear();
         window.focus(&self.focus_handle);
         true
     }
@@ -153,13 +169,24 @@ impl SessionsView {
     }
 
     pub fn move_selection_down(&mut self) {
+        if self.swallow_nav(1.0) {
+            return;
+        }
         let order = self.order();
         self.selection.move_down(&order);
     }
 
     pub fn move_selection_up(&mut self) {
+        if self.swallow_nav(-1.0) {
+            return;
+        }
         let order = self.order();
         self.selection.move_up(&order);
+    }
+
+    fn swallow_nav(&mut self, direction: f64) -> bool {
+        self.nav_guard
+            .swallow(qol_gpui::phantom_nav::NavAxis::Vertical, direction)
     }
 
     pub fn focus_selected(&mut self, cx: &mut Context<Self>) {
@@ -287,11 +314,28 @@ impl Focusable for SessionsView {
     }
 }
 
-fn apply_panel_bounds(window: &mut Window, bounds: Bounds<Pixels>) -> bool {
+fn schedule_panel_bounds(
+    window: &mut Window,
+    cx: &mut Context<SessionsView>,
+    bounds: Bounds<Pixels>,
+    on_failure: fn(&mut SessionsView, Bounds<Pixels>),
+) {
+    cx.spawn_in(window, async move |view, cx| {
+        let applied = apply_panel_bounds(bounds);
+        let _ = view.update_in(cx, |view, _window, cx| {
+            if !applied {
+                on_failure(view, bounds);
+            }
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+fn apply_panel_bounds(bounds: Bounds<Pixels>) -> bool {
     let locked = qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
-    let synced = qol_gpui::popup_window::sync_window_layout(
+    let synced = qol_gpui::popup_window::sync_window_layout_by_title(
         WINDOW_TITLE,
-        window,
         bounds.origin,
         bounds.size,
     );
@@ -321,6 +365,10 @@ impl KeyHold {
 
     fn release(&mut self, key: &str) {
         self.held.remove(key);
+    }
+
+    fn clear(&mut self) {
+        self.held.clear();
     }
 }
 

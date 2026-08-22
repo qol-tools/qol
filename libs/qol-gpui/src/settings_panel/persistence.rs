@@ -90,21 +90,25 @@ pub(super) fn load_values(base: &str, path: Option<&Path>) -> serde_json::Value 
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-pub(super) fn save_values(base: &str, path: Option<&Path>, values: &serde_json::Value) {
+pub(super) fn save_values(
+    base: &str,
+    path: Option<&Path>,
+    values: &serde_json::Value,
+) -> Result<(), String> {
     let body = match serde_json::to_string(values) {
         Ok(body) => body,
         Err(error) => {
             eprintln!("[{base}] settings serialize failed: {error:#}");
-            return;
+            return Err(format!("settings serialize failed: {error:#}"));
         }
     };
-    match tray_http(Method::Put, &tray_config_route(base), Some(&body)) {
+    let tray_error = match tray_http(Method::Put, &tray_config_route(base), Some(&body)) {
         Ok((200, _)) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",
                 "panel={base} transport=tray outcome=saved"
             );
-            return;
+            return Ok(());
         }
         Ok((status, payload)) => {
             qol_runtime::probe!(
@@ -115,7 +119,10 @@ pub(super) fn save_values(base: &str, path: Option<&Path>, values: &serde_json::
                 "[{base}] settings save rejected by tray ({status}): {}",
                 payload.trim()
             );
-            return;
+            return Err(format!(
+                "settings save rejected by tray ({status}): {}",
+                payload.trim()
+            ));
         }
         Err(error) => {
             qol_runtime::probe!(
@@ -123,10 +130,13 @@ pub(super) fn save_values(base: &str, path: Option<&Path>, values: &serde_json::
                 "panel={base} transport=tray outcome=unavailable"
             );
             eprintln!("[{base}] tray unreachable, saving locally: {error:#}");
+            error
         }
-    }
+    };
     let Some(path) = path else {
-        return;
+        return Err(format!(
+            "tray unreachable, no local path to save: {tray_error:#}"
+        ));
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -137,12 +147,13 @@ pub(super) fn save_values(base: &str, path: Option<&Path>, values: &serde_json::
             "panel={base} transport=file outcome=failed"
         );
         eprintln!("[{base}] settings save failed: {error:#}");
-        return;
+        return Err(format!("settings save failed: {error:#}"));
     }
     qol_runtime::probe!(
         "SETTINGS_PERSIST",
         "panel={base} transport=file outcome=saved"
     );
+    Ok(())
 }
 
 fn tray_http(method: Method, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
@@ -177,6 +188,7 @@ fn tray_http_session(route: &str) -> anyhow::Result<(u16, String)> {
 #[cfg(test)]
 mod tests {
     use super::action_result_data;
+    use std::path::PathBuf;
 
     #[test]
     fn panel_base_maps_plugin_and_core_ids() {
@@ -205,5 +217,72 @@ mod tests {
     fn action_result_rejects_invalid_json() {
         let error = action_result_data("not json").unwrap_err();
         assert!(error.starts_with("action returned invalid JSON:"));
+    }
+
+    static DIR_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "qol-gpui-persistence-{}-{}-{tag}",
+            std::process::id(),
+            DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn without_token<R>(body: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = std::env::var(qol_conventions::ENV_HTTP_TOKEN).ok();
+        std::env::remove_var(qol_conventions::ENV_HTTP_TOKEN);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        match previous {
+            Some(token) => std::env::set_var(qol_conventions::ENV_HTTP_TOKEN, token),
+            None => std::env::remove_var(qol_conventions::ENV_HTTP_TOKEN),
+        }
+        match result {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    #[test]
+    fn save_values_writes_local_file_when_tray_unreachable() {
+        without_token(|| {
+            let dir = temp_dir("local-write");
+            let path = dir.join("config.json");
+            let values = serde_json::json!({ "dark": true });
+            super::save_values("panel-test", Some(&path), &values).unwrap();
+            let written: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(written, values);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    fn save_values_reports_missing_local_path_when_tray_unreachable() {
+        without_token(|| {
+            let error = super::save_values("panel-test", None, &serde_json::json!({})).unwrap_err();
+            assert!(
+                error.starts_with("tray unreachable, no local path to save:"),
+                "unexpected error: {error}"
+            );
+        });
+    }
+
+    #[test]
+    fn save_values_reports_local_write_failure() {
+        without_token(|| {
+            let dir = temp_dir("write-failure");
+            let error =
+                super::save_values("panel-test", Some(&dir), &serde_json::json!({})).unwrap_err();
+            assert!(
+                error.starts_with("settings save failed:"),
+                "unexpected error: {error}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        });
     }
 }

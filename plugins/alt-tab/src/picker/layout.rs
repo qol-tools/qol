@@ -3,27 +3,26 @@ pub const MAX_CARD_SCALE: f32 = 2.5;
 pub const DEFAULT_CARD_SCALE: f32 = 1.5;
 pub const MIN_CARD_PADDING: f32 = 0.0;
 pub const MAX_CARD_PADDING: f32 = 24.0;
-pub const DEFAULT_CARD_PADDING: f32 = 4.0;
+pub const DEFAULT_CARD_PADDING: f32 = 0.0;
 
 const BASE_CARD_WIDTH: f32 = 220.0;
 const PREVIEW_ASPECT_W: f32 = 16.0;
 const PREVIEW_ASPECT_H: f32 = 9.0;
 const BASE_LABEL_FONT: f32 = 10.0;
-const BASE_LABEL_STRIP_HEIGHT: f32 = BASE_LABEL_FONT * 1.75;
+const BASE_LABEL_STRIP_HEIGHT: f32 = BASE_LABEL_FONT * 2.65;
 const LABEL_LINE_HEIGHT_FACTOR: f32 = 1.25;
 const BASE_LABEL_ICON: f32 = 16.0;
 const BASE_MINIMIZED_ICON: f32 = 48.0;
 /// Height of the hotkey hints bar (py_2 + text_xs + border_b_1).
-pub const HOTKEY_HINTS_HEIGHT: f32 = 48.0;
+pub const HOTKEY_HINTS_HEIGHT: f32 = 40.0;
 /// Capture ceiling: previews are captured once at the largest size any
 /// card scale can display, then downscaled by the renderer.
 pub const PREVIEW_MAX_WIDTH: usize = (BASE_CARD_WIDTH * MAX_CARD_SCALE + 1.0) as usize;
 pub const PREVIEW_MAX_HEIGHT: usize =
     (BASE_CARD_WIDTH * MAX_CARD_SCALE * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W + 1.0) as usize;
-/// Matches render: px_5 * 2 = 40px horizontal, py_4 * 2 = 32px vertical, gap_3 = 12px.
 const RENDER_PAD_X: f32 = 40.0;
-const RENDER_PAD_Y: f32 = 32.0;
-const RENDER_GAP: f32 = 12.0;
+const RENDER_PAD_Y: f32 = 36.0;
+const RENDER_GAP: f32 = 16.0;
 /// Slack added to the panel width so float rounding in the flex-wrap pass
 /// can never wrap the last card of a row early.
 const WIDTH_SLACK: f32 = 1.0;
@@ -255,11 +254,11 @@ mod tests {
     #[test]
     fn card_metrics_scale_and_clamp() {
         let cases = [
-            (1.0, (220.0, 144.75, 212.0, 119.25, 17.5)),
-            (1.5, (330.0, 215.375, 322.0, 181.125, 26.25)),
-            (0.1, (110.0, 74.125, 102.0, 57.375, 8.75)),
-            (10.0, (550.0, 356.625, 542.0, 304.875, 43.75)),
-            (f32::NAN, (330.0, 215.375, 322.0, 181.125, 26.25)),
+            (1.0, (220.0, 150.25, 220.0, 123.75, 26.5)),
+            (1.5, (330.0, 225.375, 330.0, 185.625, 39.75)),
+            (0.1, (110.0, 75.125, 110.0, 61.875, 13.25)),
+            (10.0, (550.0, 375.625, 550.0, 309.375, 66.25)),
+            (f32::NAN, (330.0, 225.375, 330.0, 185.625, 39.75)),
         ];
         for (scale, (cw, ch, pw, ph, lh)) in cases {
             let m = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
@@ -310,7 +309,7 @@ mod tests {
             (0.0, (330.0, 185.625, 0.0)),
             (12.0, (306.0, 172.125, 12.0)),
             (100.0, (282.0, 158.625, MAX_CARD_PADDING)),
-            (f32::NAN, (322.0, 181.125, DEFAULT_CARD_PADDING)),
+            (f32::NAN, (330.0, 185.625, DEFAULT_CARD_PADDING)),
         ];
         for (padding, (pw, ph, cp)) in cases {
             let m = CardMetrics::from_config(1.5, padding);
@@ -377,10 +376,10 @@ mod tests {
         let metrics = CardMetrics::from_config(1.5, 4.0);
         let rect = preview_rect_for_card(7, 6, (100.0, 200.0), true, &metrics);
 
-        assert_close(rect.x, 100.0 + 20.0 + 1.0 * (330.0 + 12.0) + 4.0, "x");
+        assert_close(rect.x, 100.0 + 20.0 + 1.0 * (330.0 + 16.0) + 4.0, "x");
         assert_close(
             rect.y,
-            200.0 + HOTKEY_HINTS_HEIGHT + 16.0 + 1.0 * (215.375 + 12.0) + 4.0,
+            200.0 + HOTKEY_HINTS_HEIGHT + 18.0 + 1.0 * (228.875 + 16.0) + 4.0,
             "y",
         );
         assert_close(rect.w, metrics.preview_width, "w");

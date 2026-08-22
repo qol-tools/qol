@@ -32,6 +32,33 @@ impl PlatformAdapter for Adapter {
         ))
     }
 
+    fn toggle(&self) -> Result<CommandResult> {
+        let enabled = !app::config::load_config().enabled;
+        let mut stored = qol_runtime::plugin_config::load_json()
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+        let Some(fields) = stored.as_object_mut() else {
+            return Ok(CommandResult::runtime_error(
+                "keyremap: stored config is not an object",
+            ));
+        };
+        fields.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+        if !qol_runtime::plugin_config::save(&stored) {
+            return Ok(CommandResult::runtime_error(
+                "keyremap: failed to persist the new remapping state",
+            ));
+        }
+        let state = if enabled {
+            "key remapping enabled"
+        } else {
+            "key remapping disabled"
+        };
+        Ok(action_result(
+            app::daemon::send_reload(),
+            state,
+            "no daemon running",
+        ))
+    }
+
     fn kill(&self) -> Result<CommandResult> {
         Ok(action_result(
             app::daemon::send_kill(),

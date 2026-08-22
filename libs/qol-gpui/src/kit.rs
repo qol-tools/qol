@@ -1,33 +1,58 @@
 use gpui::prelude::*;
 use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, FontWeight, SharedString};
-use qol_theme::SystemPalette;
+use qol_theme::{SystemPalette, ThemeMode, WashPalette};
 
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
 pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
 
-pub const HEADER_HEIGHT: f32 = 42.0;
-pub const SECTION_HEIGHT: f32 = 30.0;
-pub const ROW_HEIGHT: f32 = 44.0;
-pub const ROW_DESCRIBED_HEIGHT: f32 = 58.0;
+const DISABLED_OPACITY: f32 = 0.4;
+
+pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
+pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
+pub const ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
+pub const ROW_DESCRIBED_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
 pub const ROW_TIGHT_HEIGHT: f32 = 32.0;
-pub const GUTTER: f32 = 16.0;
+pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
 pub const LAMP_SIZE: f32 = 10.0;
+
+pub const FOCUS_RING_EDGE: f32 = 1.5;
+pub const FOCUS_RING_HALO: f32 = 4.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowState {
+    #[default]
+    Resting,
+    Hover,
+    Current,
+    NeedsAttention,
+    Invalid,
+    Disabled,
+}
 
 #[derive(Clone, Copy)]
 pub struct Kit {
     pub palette: SystemPalette,
+    pub washes: WashPalette,
 }
 
 impl Kit {
-    pub fn new(palette: SystemPalette) -> Self {
-        Self { palette }
+    pub fn new(mode: ThemeMode, palette: SystemPalette) -> Self {
+        Self {
+            palette,
+            washes: WashPalette::for_mode(mode, palette),
+        }
+    }
+
+    pub fn focus_ring(&self) -> Vec<BoxShadow> {
+        focus_ring_from(self.palette.accent, self.washes.accent_halo.packed())
     }
 
     pub fn panel(&self) -> Div {
         div()
             .flex()
             .flex_col()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_WINDOW))
+            .overflow_hidden()
             .shadow(float_shadow(self.palette.text_primary))
             .bg(rgb(self.palette.surface_elevated))
     }
@@ -104,20 +129,55 @@ impl Kit {
             .rounded_none()
     }
 
-    pub fn row_selected(&self, row: Div, selected: bool) -> Div {
-        let row = row.relative();
-        if !selected {
-            return row;
-        }
-        row.bg(rgb(self.palette.accent_fill)).child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(px(3.0))
-                .bg(rgb(self.palette.accent)),
+    pub fn row_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
+        self.row_state(
+            row,
+            if selected {
+                RowState::Current
+            } else {
+                RowState::Resting
+            },
         )
+    }
+
+    pub fn row_state<E: Styled + ParentElement>(&self, row: E, state: RowState) -> E {
+        let row = row.relative().border(px(1.0));
+        let (wash, edge, bar) = match state {
+            RowState::Resting => return row.border_color(rgba(0x00000000)),
+            RowState::Disabled => {
+                return row.border_color(rgba(0x00000000)).opacity(DISABLED_OPACITY)
+            }
+            RowState::Hover => (self.washes.fill_hover, None, None),
+            RowState::Current => (
+                self.washes.wash_selected,
+                Some(self.washes.hairline),
+                Some(self.palette.accent),
+            ),
+            RowState::NeedsAttention => {
+                (self.washes.wash_attention, None, Some(self.palette.warning))
+            }
+            RowState::Invalid => (
+                self.washes.wash_invalid,
+                Some(self.washes.edge_invalid),
+                Some(self.palette.danger),
+            ),
+        };
+        let row = row
+            .bg(rgba(wash.packed()))
+            .border_color(rgba(edge.map(|tone| tone.packed()).unwrap_or(0)));
+        match bar {
+            None => row,
+            Some(tone) => row.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(8.0))
+                    .bottom(px(8.0))
+                    .w(px(qol_theme::SPACE_MARK))
+                    .rounded_full()
+                    .bg(rgb(tone)),
+            ),
+        }
     }
 
     pub fn label(&self, text: impl Into<SharedString>) -> Div {
@@ -156,20 +216,103 @@ impl Kit {
     pub fn keycap(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
-            .px_1p5()
-            .py_0p5()
-            .rounded_none()
+            .px(px(5.0))
+            .py(px(1.0))
+            .rounded(px(qol_theme::RADIUS_KEYCAP))
+            .border(px(1.0))
+            .border_color(rgba(self.washes.hairline_strong.packed()))
             .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .bg(rgb(self.palette.surface_raised))
-            .shadow(vec![BoxShadow {
-                color: rgb(self.palette.border_subtle).into(),
-                offset: point(px(0.0), px(1.5)),
-                blur_radius: px(0.0),
-                spread_radius: px(0.0),
-            }])
-            .text_color(rgb(self.palette.text_secondary))
+            .text_size(px(qol_theme::TEXT_KEYCAP))
+            .text_color(rgb(self.palette.text_muted))
             .child(text.into())
+    }
+
+    pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
+        div()
+            .flex_none()
+            .w(px(7.0))
+            .h(px(7.0))
+            .rounded_full()
+            .bg(rgb(tone))
+            .shadow(vec![BoxShadow {
+                color: rgba(halo).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(3.0),
+            }])
+    }
+
+    pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .h(px(22.0))
+            .px(px(8.0))
+            .rounded(px(qol_theme::RADIUS_CONTROL))
+            .border(px(1.0))
+            .border_color(rgba(self.washes.hairline.packed()))
+            .bg(rgba(self.washes.fill_hover.packed()))
+            .text_size(px(qol_theme::TEXT_NANO))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(self.palette.text_primary))
+                    .child(format!("{count}")),
+            )
+            .child(
+                div()
+                    .text_color(rgb(self.palette.text_secondary))
+                    .child(label.into()),
+            )
+    }
+
+    pub fn hint_bar(&self) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_GUTTER))
+            .w_full()
+            .h(px(qol_theme::HEIGHT_HINT_BAR))
+            .px(px(qol_theme::SPACE_PAD))
+            .border_t(px(1.0))
+            .border_color(rgba(self.washes.hairline.packed()))
+            .bg(rgba(self.washes.fill_hover.packed()))
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .text_color(rgb(self.palette.text_secondary))
+    }
+
+    pub fn hint(&self, key: impl Into<SharedString>, label: impl Into<SharedString>) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(self.keycap(key))
+            .child(label.into())
+    }
+
+    pub fn letter_tile(&self, name: &str) -> Div {
+        let glyph = name
+            .chars()
+            .find(|character| character.is_alphanumeric())
+            .map(|character| character.to_uppercase().to_string())
+            .unwrap_or_else(|| "\u{2022}".to_string());
+        div()
+            .flex_none()
+            .w(px(23.0))
+            .h(px(23.0))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(tile_tone(name)))
+            .text_color(rgb(0xffffff))
+            .text_size(px(qol_theme::TEXT_NANO))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(glyph)
     }
 
     pub fn chip(&self, text: impl Into<SharedString>, tone: u32) -> Div {
@@ -177,7 +320,7 @@ impl Kit {
             .flex_none()
             .px_1p5()
             .py_0p5()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(rgba(alpha(tone, 0x33)))
             .text_size(px(qol_theme::TEXT_MICRO))
             .font_weight(FontWeight::SEMIBOLD)
@@ -190,7 +333,7 @@ impl Kit {
             .flex_none()
             .w(px(LAMP_SIZE))
             .h(px(LAMP_SIZE))
-            .rounded_none()
+            .rounded_full()
             .bg(rgb(tone))
     }
 
@@ -221,7 +364,7 @@ impl Kit {
             .items_center()
             .px_3()
             .py_1p5()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .text_size(px(qol_theme::TEXT_CAPTION))
             .font_weight(FontWeight::SEMIBOLD)
             .child(text.into())
@@ -260,7 +403,7 @@ impl Kit {
             .flex_none()
             .w(px(15.0))
             .h(px(15.0))
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
             .flex()
             .items_center()
             .justify_center();
@@ -284,14 +427,14 @@ impl Kit {
             .flex_row()
             .gap_0p5()
             .p_0p5()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.surface_hovered));
         for (index, option) in options.iter().enumerate() {
             let active = index == selected;
             let mut segment = div()
                 .px_3()
                 .py_0p5()
-                .rounded_none()
+                .rounded(px(qol_theme::RADIUS_TIGHT))
                 .text_size(px(qol_theme::TEXT_CAPTION))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(option.clone());
@@ -315,6 +458,27 @@ impl Kit {
             .h(px(1.0))
             .bg(rgb(self.palette.border_subtle))
     }
+}
+
+fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
+    vec![
+        BoxShadow {
+            color: rgb(accent).into(),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(FOCUS_RING_EDGE),
+        },
+        BoxShadow {
+            color: rgba(halo).into(),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(FOCUS_RING_HALO),
+        },
+    ]
+}
+
+pub fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
+    Kit::new(mode, palette).focus_ring()
 }
 
 pub fn float_shadow(text_primary: u32) -> Vec<BoxShadow> {
@@ -355,6 +519,43 @@ pub fn alpha(color: u32, opacity: u8) -> u32 {
     (color << 8) | u32::from(opacity)
 }
 
+const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
+
+pub fn tile_tone(name: &str) -> u32 {
+    let hash = name.bytes().fold(0u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(byte.into())
+    });
+    TILE_TONES[(hash % TILE_TONES.len() as u32) as usize]
+}
+
 pub fn kit() -> Kit {
-    Kit::new(qol_theme::runtime_theme().system)
+    let theme = qol_theme::runtime_theme();
+    Kit::new(theme.mode, theme.system)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{focus_ring_for, FOCUS_RING_EDGE, FOCUS_RING_HALO};
+    use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
+
+    #[test]
+    fn the_focus_ring_keeps_a_solid_inner_edge_inside_a_soft_halo() {
+        for (mode, palette) in [
+            (ThemeMode::Light, LIGHT_SYSTEM),
+            (ThemeMode::Dark, DARK_SYSTEM),
+        ] {
+            let ring = focus_ring_for(mode, palette);
+            assert_eq!(ring.len(), 2);
+
+            let edge = &ring[0];
+            assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
+            assert_eq!(f32::from(edge.blur_radius), 0.0);
+            assert_eq!(edge.color.a, 1.0);
+
+            let halo = &ring[1];
+            assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
+            assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
+            assert!(halo.spread_radius > edge.spread_radius);
+        }
+    }
 }

@@ -17,14 +17,55 @@ pub const PROD_ACCENT_KEY: &str = "amber";
 
 pub const THEME_COLOR_SENTINEL: &str = "theme";
 
-pub const TEXT_NANO: f32 = 10.0;
-pub const TEXT_MICRO: f32 = 11.0;
-pub const TEXT_CAPTION: f32 = 12.0;
-pub const TEXT_BODY: f32 = 14.0;
+pub const TEXT_NANO: f32 = 11.5;
+pub const TEXT_MICRO: f32 = 12.5;
+pub const TEXT_CAPTION: f32 = 13.5;
+pub const TEXT_BODY: f32 = 15.0;
 pub const TEXT_TITLE: f32 = 17.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
 
-pub const TEXT_SCALE: [f32; 5] = [TEXT_NANO, TEXT_CAPTION, TEXT_BODY, TEXT_TITLE, TEXT_DISPLAY];
+pub const TEXT_SCALE: [f32; 6] = [
+    TEXT_NANO,
+    TEXT_MICRO,
+    TEXT_CAPTION,
+    TEXT_BODY,
+    TEXT_TITLE,
+    TEXT_DISPLAY,
+];
+
+pub const HEIGHT_INLINE: f32 = 28.0;
+pub const HEIGHT_CONTROL: f32 = 36.0;
+pub const HEIGHT_HINT_BAR: f32 = 40.0;
+pub const HEIGHT_RULE_ROW: f32 = 48.0;
+pub const HEIGHT_SETTING_ROW: f32 = 52.0;
+pub const HEIGHT_BAND: f32 = 64.0;
+
+pub const HEIGHT_LADDER: [f32; 6] = [
+    HEIGHT_INLINE,
+    HEIGHT_CONTROL,
+    HEIGHT_HINT_BAR,
+    HEIGHT_RULE_ROW,
+    HEIGHT_SETTING_ROW,
+    HEIGHT_BAND,
+];
+
+pub const LIST_ENTRY_HEIGHTS: [f32; 3] = [32.0, 40.0, 48.0];
+
+pub const RADIUS_TIGHT: f32 = 4.0;
+pub const RADIUS_CONTROL: f32 = 6.0;
+pub const RADIUS_CARD: f32 = 9.0;
+pub const RADIUS_WELL: f32 = 11.0;
+
+pub const RADIUS_LADDER: [f32; 4] = [RADIUS_TIGHT, RADIUS_CONTROL, RADIUS_CARD, RADIUS_WELL];
+
+pub const RADIUS_KEYCAP: f32 = 3.0;
+pub const RADIUS_WINDOW: f32 = 12.0;
+
+pub const TEXT_KEYCAP: f32 = 10.5;
+
+pub const SPACE_GUTTER: f32 = 20.0;
+pub const SPACE_PAD: f32 = 16.0;
+pub const SPACE_MARK: f32 = 3.0;
 
 pub fn font_ui() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -177,38 +218,48 @@ pub struct ReferencePalette {
     pub warm_slate_300: u32,
     pub orange_400: u32,
     pub accent_ink: u32,
-    pub accent_fill: u32,
+    pub accent_fill_base: u32,
     pub blue_400: u32,
     pub green_400: u32,
     pub red_500: u32,
     pub amber_500: u32,
+    pub rail_surface: u32,
+    pub rail_text: u32,
+    pub solid_fill: u32,
+    pub solid_ink: u32,
+    pub warning_ink: u32,
 }
 
 pub const DARK_REFERENCE: ReferencePalette = ReferencePalette {
     black: 0x000000,
     white: 0xffffff,
-    night_950: 0x0c0e13,
-    night_900: 0x14181f,
-    night_850: 0x171c26,
-    night_800: 0x1f2531,
-    slate_750: 0x2f3644,
+    night_950: 0x0e0f12,
+    night_900: 0x16171a,
+    night_850: 0x1d1e22,
+    night_800: 0x25262b,
+    slate_750: 0x2a2b31,
     slate_700: 0x3a4252,
     slate_650: 0x4a5268,
-    slate_600: 0x4d5870,
+    slate_600: 0x6f6c65,
     slate_550: 0x5e6a84,
-    slate_500: 0x67748f,
-    slate_300: 0xb8c0d0,
+    slate_500: 0x8b8880,
+    slate_300: 0xb3b1ac,
     slate_200: 0xd4dbea,
-    slate_100: 0xedf2fb,
+    slate_100: 0xf3f2f0,
     slate_050: 0xf8fbff,
     warm_slate_300: 0xc7d0c9,
-    orange_400: 0xffb454,
-    accent_ink: 0xffb454,
-    accent_fill: 0x2b2116,
+    orange_400: 0xe0ac3f,
+    accent_ink: 0xeec468,
+    accent_fill_base: 0x0e0f12,
     blue_400: 0x68b0ff,
     green_400: 0x4ade80,
     red_500: 0xff6b6b,
     amber_500: 0xffc107,
+    rail_surface: 0x101114,
+    rail_text: 0x9a978f,
+    solid_fill: 0xf2f0eb,
+    solid_ink: 0x16171a,
+    warning_ink: 0xeb9d55,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +280,12 @@ pub struct SystemPalette {
     pub info: u32,
     pub warning: u32,
     pub accent_fill: u32,
+    pub accent_fill_base: u32,
+    pub surface_rail: u32,
+    pub text_rail: u32,
+    pub solid_fill: u32,
+    pub solid_ink: u32,
+    pub warning_ink: u32,
 }
 
 impl SystemPalette {
@@ -249,7 +306,17 @@ impl SystemPalette {
             danger: reference.red_500,
             info: reference.blue_400,
             warning: reference.amber_500,
-            accent_fill: reference.accent_fill,
+            accent_fill: mix_const(
+                reference.accent_fill_base,
+                reference.orange_400,
+                ACCENT_FILL_MIX,
+            ),
+            accent_fill_base: reference.accent_fill_base,
+            surface_rail: reference.rail_surface,
+            text_rail: reference.rail_text,
+            solid_fill: reference.solid_fill,
+            solid_ink: reference.solid_ink,
+            warning_ink: reference.warning_ink,
         }
     }
 
@@ -257,6 +324,7 @@ impl SystemPalette {
         Self {
             accent,
             accent_ink: accent,
+            accent_fill: mix_const(self.accent_fill_base, accent, ACCENT_FILL_MIX),
             ..self
         }
     }
@@ -265,9 +333,23 @@ impl SystemPalette {
         Self {
             accent,
             accent_ink,
+            accent_fill: mix_const(self.accent_fill_base, accent, ACCENT_FILL_MIX),
             ..self
         }
     }
+}
+
+const ACCENT_FILL_MIX: u32 = 80;
+
+const fn mix_channel_const(from: u32, to: u32, permille: u32) -> u32 {
+    (from * (1000 - permille) + to * permille + 500) / 1000
+}
+
+const fn mix_const(color: u32, target: u32, permille: u32) -> u32 {
+    let red = mix_channel_const((color >> 16) & 0xff, (target >> 16) & 0xff, permille);
+    let green = mix_channel_const((color >> 8) & 0xff, (target >> 8) & 0xff, permille);
+    let blue = mix_channel_const(color & 0xff, target & 0xff, permille);
+    (red << 16) | (green << 8) | blue
 }
 
 pub const DARK_SYSTEM: SystemPalette = SystemPalette::from_reference(DARK_REFERENCE);
@@ -275,10 +357,10 @@ pub const DARK_SYSTEM: SystemPalette = SystemPalette::from_reference(DARK_REFERE
 pub const LIGHT_ACCENT_PRESETS: [AccentPreset; 6] = [
     AccentPreset {
         key: "amber",
-        label: "Harbour",
-        rgb: 0x2f74a0,
-        hover: 0x4785ad,
-        ink: 0x1f5a82,
+        label: "Amber",
+        rgb: 0xb8860b,
+        hover: 0xc79a2b,
+        ink: 0x8a6208,
     },
     AccentPreset {
         key: "green",
@@ -303,17 +385,17 @@ pub const LIGHT_ACCENT_PRESETS: [AccentPreset; 6] = [
     },
     AccentPreset {
         key: "blue",
+        label: "Harbour",
+        rgb: 0x2f74a0,
+        hover: 0x4785ad,
+        ink: 0x1f5a82,
+    },
+    AccentPreset {
+        key: "violet",
         label: "Iris",
         rgb: 0x6f5da8,
         hover: 0x8070b5,
         ink: 0x54438a,
-    },
-    AccentPreset {
-        key: "violet",
-        label: "Brass",
-        rgb: 0xa98f1c,
-        hover: 0xb89f33,
-        ink: 0x7f6a10,
     },
 ];
 
@@ -331,28 +413,33 @@ pub fn light_accent_preset(key: &str) -> Option<AccentPreset> {
 pub const LIGHT_REFERENCE: ReferencePalette = ReferencePalette {
     black: 0x000000,
     white: 0xffffff,
-    night_950: 0xe4dccb,
-    night_900: 0xfaf7f0,
-    night_850: 0xfffdf8,
-    night_800: 0xefe8d9,
-    slate_750: 0xa89a7c,
+    night_950: 0xefece4,
+    night_900: 0xfffefb,
+    night_850: 0xfaf8f3,
+    night_800: 0xefece4,
+    slate_750: 0xb2a996,
     slate_700: 0x6e6556,
     slate_650: 0x8c8270,
     slate_600: 0x8c8270,
-    slate_550: 0x6e6556,
-    slate_500: 0x6e6556,
-    slate_300: 0x4a443a,
-    slate_200: 0x4a443a,
-    slate_100: 0x2b2721,
+    slate_550: 0x6f6a60,
+    slate_500: 0x6f6a60,
+    slate_300: 0x4f4b43,
+    slate_200: 0x4f4b43,
+    slate_100: 0x1a1815,
     slate_050: 0x2b2721,
     warm_slate_300: 0x4b4334,
-    orange_400: 0x2f74a0,
-    accent_ink: 0x1f5a82,
-    accent_fill: 0xd7e8f3,
+    orange_400: 0xb8860b,
+    accent_ink: 0x8a6208,
+    accent_fill_base: 0xfaf8f3,
     blue_400: 0x2f7ba6,
     green_400: 0x3d9150,
     red_500: 0xc34a32,
     amber_500: 0xe08a00,
+    rail_surface: 0xf5f2eb,
+    rail_text: 0x57534a,
+    solid_fill: 0x201d18,
+    solid_ink: 0xfbf9f4,
+    warning_ink: 0x9e5510,
 };
 
 pub const LIGHT_SYSTEM: SystemPalette = SystemPalette::from_reference(LIGHT_REFERENCE);
@@ -620,7 +707,13 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,
             warning: DARK_REFERENCE.amber_500,
-            accent_fill: DARK_REFERENCE.accent_fill,
+            accent_fill: DARK_SYSTEM.accent_fill,
+            accent_fill_base: DARK_REFERENCE.accent_fill_base,
+            surface_rail: 0x0b0d12,
+            text_rail: DARK_REFERENCE.slate_300,
+            solid_fill: DARK_REFERENCE.slate_100,
+            solid_ink: 0x151a23,
+            warning_ink: DARK_REFERENCE.amber_500,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x12161e,
@@ -656,7 +749,13 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,
             warning: DARK_REFERENCE.amber_500,
-            accent_fill: 0x1c1830,
+            accent_fill: mix_const(0x0b0d18, 0x8a93f7, ACCENT_FILL_MIX),
+            accent_fill_base: 0x0b0d18,
+            surface_rail: 0x090b19,
+            text_rail: 0xb2b6cc,
+            solid_fill: 0xe5e7f4,
+            solid_ink: 0x141626,
+            warning_ink: DARK_REFERENCE.amber_500,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x0f1121,
@@ -747,6 +846,85 @@ pub struct CssRgba {
 
 pub const fn css_rgba_milli(rgb: u32, alpha_milli: u16) -> CssRgba {
     CssRgba { rgb, alpha_milli }
+}
+
+impl CssRgba {
+    pub const fn packed(self) -> u32 {
+        let alpha = (self.alpha_milli as u32 * 255 + 500) / 1000;
+        (self.rgb << 8) | alpha
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WashPalette {
+    pub hairline: CssRgba,
+    pub hairline_strong: CssRgba,
+    pub separator: CssRgba,
+    pub fill_hover: CssRgba,
+    pub fill_resting: CssRgba,
+    pub wash_selected: CssRgba,
+    pub wash_attention: CssRgba,
+    pub wash_invalid: CssRgba,
+    pub edge_invalid: CssRgba,
+    pub halo_success: CssRgba,
+    pub halo_attention: CssRgba,
+    pub halo_invalid: CssRgba,
+    pub accent_border: CssRgba,
+    pub accent_halo: CssRgba,
+    pub cast: CssRgba,
+}
+
+const LIGHT_WASH_INK: u32 = 0x3c301a;
+const LIGHT_FILL_INK: u32 = 0x5a4822;
+const DARK_WASH_INK: u32 = 0xfffaf0;
+
+impl WashPalette {
+    pub const fn light(system: SystemPalette) -> Self {
+        Self {
+            hairline: css_rgba_milli(LIGHT_WASH_INK, 120),
+            hairline_strong: css_rgba_milli(LIGHT_WASH_INK, 200),
+            separator: css_rgba_milli(LIGHT_WASH_INK, 85),
+            fill_hover: css_rgba_milli(LIGHT_FILL_INK, 55),
+            fill_resting: css_rgba_milli(LIGHT_FILL_INK, 95),
+            wash_selected: css_rgba_milli(LIGHT_WASH_INK, 55),
+            wash_attention: css_rgba_milli(system.warning, 75),
+            wash_invalid: css_rgba_milli(system.danger, 55),
+            edge_invalid: css_rgba_milli(system.danger, 320),
+            halo_success: css_rgba_milli(system.success, 160),
+            halo_attention: css_rgba_milli(system.warning, 160),
+            halo_invalid: css_rgba_milli(system.danger, 140),
+            accent_border: css_rgba_milli(system.accent, 340),
+            accent_halo: css_rgba_milli(system.accent, 220),
+            cast: css_rgba_milli(LIGHT_WASH_INK, 110),
+        }
+    }
+
+    pub const fn dark(system: SystemPalette) -> Self {
+        Self {
+            hairline: css_rgba_milli(DARK_WASH_INK, 90),
+            hairline_strong: css_rgba_milli(DARK_WASH_INK, 160),
+            separator: css_rgba_milli(DARK_WASH_INK, 75),
+            fill_hover: css_rgba_milli(DARK_WASH_INK, 52),
+            fill_resting: css_rgba_milli(DARK_WASH_INK, 90),
+            wash_selected: css_rgba_milli(DARK_WASH_INK, 70),
+            wash_attention: css_rgba_milli(system.warning, 100),
+            wash_invalid: css_rgba_milli(system.danger, 90),
+            edge_invalid: css_rgba_milli(system.danger, 300),
+            halo_success: css_rgba_milli(system.success, 200),
+            halo_attention: css_rgba_milli(system.warning, 200),
+            halo_invalid: css_rgba_milli(system.danger, 180),
+            accent_border: css_rgba_milli(system.accent, 380),
+            accent_halo: css_rgba_milli(system.accent, 220),
+            cast: css_rgba_milli(0x000000, 450),
+        }
+    }
+
+    pub const fn for_mode(mode: ThemeMode, system: SystemPalette) -> Self {
+        match mode {
+            ThemeMode::Light => Self::light(system),
+            ThemeMode::Dark => Self::dark(system),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1076,19 +1254,9 @@ pub struct SettingsPanelPalette {
 }
 
 impl SettingsPanelPalette {
-    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
-        let (rail_bg, rail_text, rail_text_muted) = match mode {
-            ThemeMode::Light => (
-                system.text_primary,
-                system.surface_elevated,
-                system.border_subtle,
-            ),
-            ThemeMode::Dark => (
-                system.surface_canvas,
-                system.text_primary,
-                system.text_muted,
-            ),
-        };
+    pub fn from_theme(_mode: ThemeMode, system: SystemPalette) -> Self {
+        let (rail_bg, rail_text, rail_text_muted) =
+            (system.surface_rail, system.text_rail, system.text_rail);
         Self {
             window_bg: system.surface_elevated,
             panel_border: system.border_subtle,
@@ -1099,7 +1267,7 @@ impl SettingsPanelPalette {
             rail_bg,
             rail_text,
             rail_text_muted,
-            rail_active_text: system.surface_raised,
+            rail_active_text: system.text_primary,
             dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,

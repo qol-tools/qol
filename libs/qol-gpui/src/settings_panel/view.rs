@@ -8,7 +8,7 @@ use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
 use super::object_array_row::{
-    ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome, ObjectArrayState,
+    Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome, ObjectArrayState,
 };
 use super::persistence::{panel_base, save_values};
 use super::rows::{
@@ -38,7 +38,8 @@ const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs
 const LIST_SCROLL_PIXELS_PER_NOTCH: f32 = 60.0;
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
-const BAND_TEXT_BASELINE_PAD: f32 = 13.0;
+const RULE_FROM_WIDTH: f32 = 140.0;
+const RULE_TO_WIDTH: f32 = 170.0;
 
 use std::sync::PoisonError;
 
@@ -82,6 +83,7 @@ impl SampleSignal {
 
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
+    subtitle: Option<String>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
     rows: Vec<Row>,
@@ -94,6 +96,9 @@ pub(super) struct SettingsPanelView {
     body_scroll: crate::scroll_list::SelectionScroll,
     height_cap: f32,
     panel_width: f32,
+    save_error: Option<String>,
+    filter: String,
+    filter_open: bool,
     active_control: Option<ActiveControl>,
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
@@ -109,12 +114,14 @@ pub(super) struct SettingsPanelView {
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
+    kit: crate::kit::Kit,
     stream: super::stream::StreamClient,
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
 }
 
 pub(super) struct SettingsPanelState {
+    pub(super) subtitle: Option<String>,
     pub(super) rows: Vec<Row>,
     pub(super) sections: Vec<RowSection>,
     pub(super) values: serde_json::Value,
@@ -148,6 +155,32 @@ struct WheelControl {
     popup: WindowHandle<ColorWheelPopup>,
 }
 
+fn modifiers_first(chips: &[Chip]) -> Vec<Chip> {
+    let mut ordered: Vec<Chip> = chips
+        .iter()
+        .filter(|chip| matches!(chip.tone, ChipTone::Modifier))
+        .cloned()
+        .collect();
+    ordered.extend(
+        chips
+            .iter()
+            .filter(|chip| !matches!(chip.tone, ChipTone::Modifier))
+            .cloned(),
+    );
+    ordered
+}
+
+fn shared_key_chip(rest: &[Chip]) -> Option<Chip> {
+    match rest.len() {
+        0 => None,
+        1 => rest.first().cloned(),
+        count => Some(Chip {
+            label: format!("{count} keys"),
+            tone: ChipTone::Key,
+        }),
+    }
+}
+
 impl SettingsPanelView {
     pub(super) fn new(
         panel: SettingsPanel,
@@ -173,8 +206,12 @@ impl SettingsPanelView {
             path: state.path,
             selected: 0,
             body_scroll: crate::scroll_list::SelectionScroll::new(),
+            subtitle: state.subtitle,
             height_cap: state.height_cap,
             panel_width: state.panel_width,
+            save_error: None,
+            filter: String::new(),
+            filter_open: false,
             active_control: None,
             row_bounds,
             wheel_generation: 0,
@@ -190,6 +227,7 @@ impl SettingsPanelView {
             sampler_stop: None,
             dismisser,
             palette: settings_panel_runtime(),
+            kit: crate::kit::kit(),
             stream: super::stream::StreamClient::new(
                 state
                     .daemon_port
@@ -207,7 +245,73 @@ impl SettingsPanelView {
     }
 
     fn current_visible_rows(&self) -> Vec<usize> {
-        self.section_visible_rows(self.active_section.unwrap_or(self.selected_section))
+        (0..self.sections.len())
+            .flat_map(|section| self.section_filtered_rows(section))
+            .collect()
+    }
+
+    fn filter_needle(&self) -> Option<String> {
+        let needle = self.filter.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        let matches_any = (0..self.sections.len()).any(|section| {
+            self.section_visible_rows(section)
+                .iter()
+                .any(|row| row_matches(&self.rows[*row], &needle))
+        });
+        matches_any.then_some(needle)
+    }
+
+    fn section_filtered_rows(&self, index: usize) -> Vec<usize> {
+        let visible = self.section_visible_rows(index);
+        let Some(needle) = self.filter_needle() else {
+            return visible;
+        };
+        visible
+            .into_iter()
+            .filter(|row| row_matches(&self.rows[*row], &needle))
+            .collect()
+    }
+
+    fn set_panel_filter(&mut self, next: String) {
+        self.filter = next;
+        let visible = self.current_visible_rows();
+        if !visible.contains(&self.selected) {
+            self.selected = visible.first().copied().unwrap_or(self.selected);
+        }
+        self.sync_scroll();
+    }
+
+    fn handle_panel_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
+        match key {
+            "escape" => {
+                self.filter_open = false;
+                if !self.filter.is_empty() {
+                    self.set_panel_filter(String::new());
+                }
+                true
+            }
+            "enter" | "tab" => {
+                self.filter_open = false;
+                true
+            }
+            "backspace" => {
+                let mut next = self.filter.clone();
+                next.pop();
+                self.set_panel_filter(next);
+                true
+            }
+            "up" | "down" => false,
+            _ => match key_char.filter(|text| !text.chars().any(char::is_control)) {
+                Some(text) => {
+                    let next = format!("{}{text}", self.filter);
+                    self.set_panel_filter(next);
+                    true
+                }
+                None => false,
+            },
+        }
     }
 
     fn fit_lists(&mut self) {
@@ -293,9 +397,21 @@ impl SettingsPanelView {
             candidate = next;
             if !self.section_visible_rows(candidate).is_empty() {
                 self.selected_section = candidate;
+                self.scroll_to_selected_section();
                 return;
             }
         }
+    }
+
+    fn scroll_to_selected_section(&mut self) {
+        let Some(first) = self
+            .section_visible_rows(self.selected_section)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        self.body_scroll.follow(self.body_child_index(first));
     }
 
     fn open_selected_section(&mut self) {
@@ -308,7 +424,7 @@ impl SettingsPanelView {
         };
         self.active_section = Some(target);
         self.selected = first;
-        self.body_scroll.rewind();
+        self.sync_scroll();
         self.active_control = None;
     }
 
@@ -612,6 +728,16 @@ impl SettingsPanelView {
             return;
         }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
+        if self.filter_open && self.handle_panel_filter_key(key, key_char) {
+            cx.notify();
+            return;
+        }
+        let slash = key == "/" || key_char == Some("/");
+        if !editing && !self.filter_open && slash && !event.keystroke.modifiers.modified() {
+            self.filter_open = true;
+            cx.notify();
+            return;
+        }
         if editing {
             if let Some(direction) = horizontal_step_direction(key) {
                 if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
@@ -1450,7 +1576,7 @@ impl SettingsPanelView {
         };
         let edit = match &row.control {
             RowControl::Text(value) => value.clone(),
-            RowControl::TextList(values) => values.join(", "),
+            RowControl::TextList(_) => String::new(),
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Toggle(_)
             | RowControl::Select { .. }
@@ -1494,17 +1620,21 @@ impl SettingsPanelView {
         };
         let streams = row_streams(&self.rows, self.selected);
         let action = row_action(&self.rows, self.selected);
+        let keeps_editing = matches!(
+            self.rows.get(self.selected).map(|row| &row.control),
+            Some(RowControl::TextList(_))
+        );
         let Some(row) = self.rows.get_mut(self.selected) else {
             return;
         };
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
             RowControl::TextList(values) => {
-                *values = edit
-                    .split(',')
-                    .map(|part| part.trim().to_string())
-                    .filter(|part| !part.is_empty())
-                    .collect();
+                for part in text_list_parts(&edit) {
+                    if !values.contains(&part) {
+                        values.push(part);
+                    }
+                }
             }
             RowControl::Number {
                 value,
@@ -1534,6 +1664,9 @@ impl SettingsPanelView {
             | RowControl::Unsupported { .. } => return,
         }
         self.persist();
+        if keeps_editing {
+            self.active_control = Some(ActiveControl::Edit(String::new()));
+        }
         if let Some(action) = action {
             self.dispatch_stream_action(&action, cx);
         }
@@ -1592,11 +1725,12 @@ impl SettingsPanelView {
             self.values.get("accent").cloned(),
         );
         self.values = merged_config(&self.values, &self.rows);
-        save_values(
+        self.save_error = save_values(
             &panel_base(&self.panel.plugin_id),
             self.path.as_deref(),
             &self.values,
-        );
+        )
+        .err();
         if self.panel.plugin_id == qol_conventions::CORE_PANEL_ID
             && (self.values.get("native_theme") != previous_theme.0.as_ref()
                 || self.values.get("accent") != previous_theme.1.as_ref())
@@ -1607,11 +1741,15 @@ impl SettingsPanelView {
     }
 
     fn sync_scroll(&mut self) {
-        let position = self
-            .current_visible_rows()
-            .iter()
-            .position(|index| *index == self.selected);
-        self.body_scroll.follow(position);
+        self.body_scroll
+            .follow(self.body_child_index(self.selected));
+    }
+
+    fn body_child_index(&self, row: usize) -> Option<usize> {
+        let sections: Vec<Vec<usize>> = (0..self.sections.len())
+            .map(|section| self.section_filtered_rows(section))
+            .collect();
+        body_child_offset(&sections, row)
     }
 
     fn display_value(&self, index: usize) -> String {
@@ -1764,7 +1902,7 @@ impl SettingsPanelView {
         if !selected || !self.body_has_focus() {
             return row;
         }
-        self.paint_selection(row.mx(px(-16.0)).px(px(24.0)))
+        self.paint_selection(row.rounded(px(qol_theme::RADIUS_CARD)))
     }
 
     fn mark_selected_nested<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
@@ -1775,15 +1913,7 @@ impl SettingsPanelView {
     }
 
     fn paint_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        row.relative().bg(rgb(self.palette.row_bg_selected)).child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(px(3.0))
-                .bg(rgb(self.palette.row_border_selected)),
-        )
+        self.kit.row_state(row, crate::kit::RowState::Current)
     }
 
     fn render_value_cell(&self, index: usize) -> Div {
@@ -1805,6 +1935,9 @@ impl SettingsPanelView {
                 return self.render_toggle_value(*active);
             }
             RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::TextList(values) => {
+                return self.render_count_chip(values.len(), plural(values.len(), "item"));
+            }
             RowControl::Unsupported { reason, .. } => {
                 return div()
                     .text_size(px(qol_theme::TEXT_CAPTION))
@@ -1812,7 +1945,6 @@ impl SettingsPanelView {
                     .child(format!("Unsupported: {reason}"));
             }
             RowControl::Text(_)
-            | RowControl::TextList(_)
             | RowControl::Color(_)
             | RowControl::Status { .. }
             | RowControl::List { .. }
@@ -1835,17 +1967,182 @@ impl SettingsPanelView {
             ));
         }
         if let Some(color) = self.swatch_color(index) {
-            cell = cell.child(div().w_3().h_3().rounded_none().bg(rgb(color)));
+            cell = cell.child(
+                div()
+                    .w_3()
+                    .h_3()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .bg(rgb(color)),
+            );
         }
         if let Some(accent) = self.option_accent(index) {
-            cell = cell.child(div().w_2().h_2().rounded_none().bg(rgb(accent)));
+            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
         }
-        cell.child(
-            div()
-                .text_size(px(qol_theme::TEXT_BODY))
-                .text_color(rgb(self.value_color(index)))
-                .child(self.display_value(index)),
-        )
+        cell.flex_none()
+            .w(px(value_cell_width(&self.rows[index].control)))
+            .justify_end()
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(self.value_color(index)))
+                    .child(self.display_value(index)),
+            )
+    }
+
+    fn render_text_list_well(&self, index: usize, edit: &str, cx: &mut Context<Self>) -> Div {
+        let RowControl::TextList(values) = &self.rows[index].control else {
+            return div();
+        };
+        let values = values.clone();
+        let mut tags = div().flex().flex_row().flex_wrap().gap_2();
+        for (slot, value) in values.iter().enumerate() {
+            tags = tags.child(self.render_tag(index, slot, value.clone(), cx));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .mx_2()
+            .p_3()
+            .rounded(px(qol_theme::RADIUS_CARD))
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
+            .border(px(1.))
+            .border_color(self.hairline())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(qol_theme::TEXT_MICRO))
+                    .text_color(rgb(self.kit.palette.text_muted))
+                    .child(self.rows[index].label.clone())
+                    .child(values.len().to_string()),
+            )
+            .when(!values.is_empty(), |well| well.child(tags))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .h(px(qol_theme::HEIGHT_CONTROL))
+                            .px_3()
+                            .rounded(px(qol_theme::RADIUS_CONTROL))
+                            .bg(rgb(self.palette.window_bg))
+                            .border(px(1.))
+                            .border_color(rgb(self.palette.row_border_selected))
+                            .shadow(self.kit.focus_ring())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(SharedString::from(qol_theme::font_mono()))
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
+                                    .text_color(rgb(self.palette.section_text))
+                                    .child(if edit.is_empty() {
+                                        "Add an entry".to_string()
+                                    } else {
+                                        edit.to_string()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(1.5))
+                                    .h(px(16.))
+                                    .bg(rgb(self.palette.row_border_selected)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1p5()
+                            .h(px(qol_theme::HEIGHT_CONTROL))
+                            .px_3()
+                            .rounded(px(qol_theme::RADIUS_CONTROL))
+                            .bg(rgb(self.palette.row_border_selected))
+                            .text_size(px(qol_theme::TEXT_CAPTION))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(self.palette.window_bg))
+                            .child("Add")
+                            .child("\u{21b5}"),
+                    ),
+            )
+    }
+
+    fn render_tag(
+        &self,
+        index: usize,
+        slot: usize,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(("settings-text-list-tag", slot))
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1p5()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .pl(px(10.))
+            .pr(px(6.))
+            .rounded(px(qol_theme::RADIUS_CONTROL))
+            .bg(rgb(self.palette.window_bg))
+            .border(px(1.))
+            .border_color(self.hairline())
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .text_color(rgb(self.palette.section_text))
+            .child(value)
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(18.))
+                    .h(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .bg(rgba(self.kit.washes.fill_hover.packed()))
+                    .text_color(rgb(self.kit.palette.text_muted))
+                    .child("\u{00d7}"),
+            )
+            .cursor(CursorStyle::PointingHand)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
+                this.remove_text_list_value(index, slot);
+                cx.notify();
+            }))
+    }
+
+    fn remove_text_list_value(&mut self, index: usize, slot: usize) {
+        let Some(RowControl::TextList(values)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        if slot >= values.len() {
+            return;
+        }
+        values.remove(slot);
+        self.persist();
     }
 
     fn render_toggle_value(&self, active: bool) -> Div {
@@ -1877,16 +2174,16 @@ impl SettingsPanelView {
                     .items_center()
                     .when(active, |track| track.justify_end())
                     .when(!active, |track| track.justify_start())
-                    .w(px(30.))
-                    .h(px(16.))
+                    .w(px(40.))
+                    .h(px(24.))
                     .p(px(2.))
-                    .rounded_none()
+                    .rounded_full()
                     .bg(rgb(track_color))
                     .child(
                         div()
-                            .w(px(10.))
-                            .h(px(10.))
-                            .rounded_none()
+                            .w(px(20.))
+                            .h(px(20.))
+                            .rounded_full()
                             .bg(rgb(if active {
                                 self.palette.window_bg
                             } else {
@@ -1899,12 +2196,12 @@ impl SettingsPanelView {
     fn render_select_value(&self, index: usize) -> Div {
         let mut value = div().flex().flex_row().items_center().gap_2();
         if let Some(accent) = self.option_accent(index) {
-            value = value.child(div().w_2().h_2().rounded_none().bg(rgb(accent)));
+            value = value.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
         }
         value
             .px_2()
             .py_1()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.dropdown_bg))
             .text_size(px(qol_theme::TEXT_BODY))
             .text_color(rgb(self.palette.label_text))
@@ -1942,7 +2239,7 @@ impl SettingsPanelView {
                     .relative()
                     .w(px(72.))
                     .h(px(4.))
-                    .rounded_none()
+                    .rounded_full()
                     .overflow_hidden()
                     .bg(rgb(self.palette.panel_border))
                     .child(
@@ -1952,7 +2249,7 @@ impl SettingsPanelView {
                             .top_0()
                             .h_full()
                             .w(px(fill))
-                            .rounded_none()
+                            .rounded_full()
                             .bg(rgb(self.palette.row_border_selected)),
                     ),
             );
@@ -1965,7 +2262,7 @@ impl SettingsPanelView {
                 .gap_1()
                 .px_2()
                 .py_1()
-                .rounded_none()
+                .rounded(px(qol_theme::RADIUS_CONTROL))
                 .bg(rgb(self.palette.dropdown_bg))
                 .text_size(px(qol_theme::TEXT_BODY))
                 .text_color(rgb(self.palette.label_text))
@@ -2004,7 +2301,7 @@ impl SettingsPanelView {
         control
             .px_2()
             .py_1()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .when(variant == Some("ghost"), |control| {
                 control.shadow(crate::kit::raised_shadow(self.palette.section_text))
             })
@@ -2046,9 +2343,18 @@ impl SettingsPanelView {
         options.get(*index)?.accent
     }
 
-    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
+    fn render_row(&self, index: usize, separator: bool, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
+        if separator {
+            container = container.child(
+                div()
+                    .flex_none()
+                    .mx_2()
+                    .h(px(1.))
+                    .bg(rgba(self.kit.washes.separator.packed())),
+            );
+        }
         if self.sections.len() <= 1 {
             if let Some(section) = section_label_for(&self.rows, index) {
                 container = container.child(
@@ -2084,19 +2390,20 @@ impl SettingsPanelView {
             .min_w_0()
             .flex_1()
             .flex_col()
+            .gap_0p5()
             .child(
                 div()
                     .truncate()
                     .text_size(px(qol_theme::TEXT_BODY))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(self.palette.section_text))
                     .child(label),
             )
             .when_some(row.description.clone(), |group, description| {
                 group.child(
                     div()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .text_color(rgb(self.palette.label_text))
+                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text_color(rgb(self.kit.palette.text_muted))
                         .child(description),
                 )
             });
@@ -2199,6 +2506,12 @@ impl SettingsPanelView {
             }
         }
         container = container.child(line);
+        if index == self.selected && matches!(row.control, RowControl::TextList(_)) {
+            if let Some(ActiveControl::Edit(edit)) = &self.active_control {
+                let edit = edit.clone();
+                container = container.child(self.render_text_list_well(index, &edit, cx));
+            }
+        }
         let error = match &row.control {
             RowControl::Action {
                 error: Some(error), ..
@@ -2240,7 +2553,7 @@ impl SettingsPanelView {
         div()
             .id(("settings-gamepad", index))
             .h(px(super::PANEL_GAMEPAD_HEIGHT))
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CARD))
             .border_1()
             .border_color(if selected {
                 rgb(self.palette.row_border_selected)
@@ -2269,10 +2582,12 @@ impl SettingsPanelView {
 
     fn render_section_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let section = &self.sections[index];
-        let current = self.active_section == Some(index);
-        let selected = index == self.selected_section;
         let rail_has_focus = self.active_section.is_none();
-        let active = current || (rail_has_focus && selected);
+        let active = if rail_has_focus {
+            index == self.selected_section
+        } else {
+            self.section_visible_rows(index).contains(&self.selected)
+        };
         let mut item = div()
             .id(("settings-section", index))
             .relative()
@@ -2280,8 +2595,8 @@ impl SettingsPanelView {
             .items_center()
             .w_full()
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
-            .px_4()
-            .rounded_none()
+            .px_3()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .child(
                 div()
                     .truncate()
@@ -2297,15 +2612,7 @@ impl SettingsPanelView {
             )
             .cursor(CursorStyle::PointingHand);
         if active {
-            item = item.bg(rgb(self.palette.row_border_selected)).child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(3.0))
-                    .bg(rgb(self.palette.row_bg_selected)),
-            );
+            item = self.paint_selection(item);
         }
         item = item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
@@ -2360,7 +2667,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_none();
+            .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.selected {
             container = self.mark_selected(container, true);
         }
@@ -2487,7 +2794,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_none();
+            .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.selected {
             container = self.mark_selected(container, true);
         }
@@ -2601,8 +2908,11 @@ impl SettingsPanelView {
         let RowControl::ObjectArray(state) = &row.control else {
             return div();
         };
-        let mut container = self.render_block_frame(index, row, self.display_value(index));
+        let mut container = self.render_block_frame(index, row, self.display_value(index), cx);
         let Some(draft) = state.draft.as_ref() else {
+            if state.chips(0).is_directional() {
+                container = container.child(self.render_rule_head());
+            }
             for entry in state.item_window() {
                 container = container.child(self.render_object_array_entry(index, entry, cx));
             }
@@ -2615,7 +2925,13 @@ impl SettingsPanelView {
         container.child(self.render_draft_save(index, draft.save_entry_selected(), cx))
     }
 
-    fn render_block_frame(&self, index: usize, row: &Row, value: String) -> Div {
+    fn render_block_frame(
+        &self,
+        index: usize,
+        row: &Row,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut container = div()
             .flex()
             .flex_col()
@@ -2625,12 +2941,22 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_none();
+            .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.selected {
             container = self.mark_selected(container, true);
         }
         container.child(
             div()
+                .id(("settings-block-header", index))
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if !event.standard_click() {
+                        return;
+                    }
+                    this.selected = index;
+                    this.activate(window, cx);
+                    cx.notify();
+                }))
                 .flex()
                 .flex_none()
                 .flex_row()
@@ -2685,18 +3011,27 @@ impl SettingsPanelView {
         let body = if stored {
             self.render_chip_row(state.chips(entry))
         } else {
-            div().flex().flex_row().items_center().child(
-                div()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(self.palette.state_on))
-                    .child("+ Add"),
-            )
+            div()
+                .flex_1()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(9.))
+                .min_h(px(qol_theme::HEIGHT_HINT_BAR))
+                .px(px(qol_theme::SPACE_PAD))
+                .rounded(px(qol_theme::RADIUS_CONTROL))
+                .border(px(1.))
+                .border_dashed()
+                .border_color(rgba(self.kit.washes.hairline_strong.packed()))
+                .text_size(px(qol_theme::TEXT_CAPTION))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(self.kit.palette.accent_ink))
+                .child("+")
+                .child("Add rule")
         };
         self.object_array_line(index, entry, selected)
             .child(body)
-            .when(stored, |line| {
-                line.child(self.render_entry_remove(index, entry, cx))
-            })
+            .when(stored, |line| line.child(self.render_entry_chevron()))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if !event.standard_click() {
                     return;
@@ -2706,43 +3041,13 @@ impl SettingsPanelView {
             }))
     }
 
-    fn render_entry_remove(
-        &self,
-        index: usize,
-        entry: usize,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn render_entry_chevron(&self) -> Div {
         div()
-            .id(("settings-object-remove", entry_id(index, entry)))
             .flex_none()
             .px_1p5()
-            .rounded_none()
             .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(self.palette.status_muted))
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.text_color(rgb(self.palette.state_off)))
-            .child("\u{00d7}")
-            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                cx.stop_propagation();
-                this.remove_object_array_entry(index, entry);
-                cx.notify();
-            }))
-    }
-
-    fn remove_object_array_entry(&mut self, index: usize, entry: usize) {
-        let Some(RowControl::ObjectArray(state)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
-            return;
-        };
-        state.list.selected = entry;
-        if state.remove_selected() {
-            self.persist();
-        }
-        self.sync_scroll();
+            .child("\u{203a}")
     }
 
     fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> Stateful<Div> {
@@ -2757,7 +3062,7 @@ impl SettingsPanelView {
             .h(px(super::PANEL_OBJECT_ROW_HEIGHT))
             .overflow_hidden()
             .px_2()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CONTROL))
             .cursor(CursorStyle::PointingHand);
         if selected {
             line = self.mark_selected(line, true);
@@ -2770,54 +3075,203 @@ impl SettingsPanelView {
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
+            .gap_2()
             .flex_1()
             .min_w_0()
             .overflow_hidden();
-        for chip in &chips.from {
-            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+        if !chips.is_directional() {
+            for chip in chips.from.iter().chain(&chips.rest).chain(&chips.to) {
+                row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+            }
+            for flag in &chips.flags {
+                row = row.child(self.render_chip(flag.clone(), ChipTone::Plain));
+            }
+            return row;
         }
-        for chip in &chips.rest {
-            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
-        }
-        if chips.is_directional() {
-            row = row.child(
+        let shared = shared_key_chip(&chips.rest);
+        let mut from_chips = chips.from.clone();
+        from_chips.extend(shared.clone());
+        let mut to_chips = chips.to.clone();
+        to_chips.extend(shared);
+        let from = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .flex_none()
+            .overflow_hidden()
+            .w(px(RULE_FROM_WIDTH))
+            .child(self.render_combo(&from_chips, false));
+        let to = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .flex_none()
+            .overflow_hidden()
+            .w(px(RULE_TO_WIDTH))
+            .child(self.render_combo(&to_chips, true));
+        let mut scope = div().flex().flex_row().items_center().gap_1().flex_1();
+        for flag in &chips.flags {
+            scope = scope.child(
                 div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.label_text))
-                    .child("\u{2192}"),
+                    .flex_none()
+                    .h(px(24.))
+                    .min_w(px(72.))
+                    .px_2()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .border(px(1.))
+                    .border_color(rgba(self.kit.washes.hairline.packed()))
+                    .bg(rgba(self.kit.washes.fill_resting.packed()))
+                    .text_size(px(qol_theme::TEXT_NANO))
+                    .text_color(rgb(self.kit.palette.text_secondary))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(flag.clone()),
             );
         }
-        for chip in &chips.to {
-            row = row.child(self.render_chip(chip.label.clone(), chip.tone));
+        row.child(from).child(to).child(scope)
+    }
+
+    fn render_combo(&self, chips: &[Chip], out: bool) -> Div {
+        if chips.is_empty() {
+            return div();
         }
-        for flag in &chips.flags {
-            row = row.child(self.render_chip(flag.clone(), ChipTone::Plain));
+        let ordered = modifiers_first(chips);
+        let mut combo = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .border(px(1.))
+            .border_color(rgba(
+                (if out {
+                    self.kit.washes.accent_border
+                } else {
+                    self.kit.washes.hairline_strong
+                })
+                .packed(),
+            ))
+            .bg(if out {
+                rgb(self.kit.palette.accent_fill)
+            } else {
+                rgb(self.kit.palette.surface_elevated)
+            })
+            .overflow_hidden()
+            .font_family(SharedString::from(qol_theme::font_mono()))
+            .text_size(px(qol_theme::TEXT_MICRO));
+        for (index, chip) in ordered.iter().enumerate() {
+            let mut segment = div()
+                .flex()
+                .items_center()
+                .h_full()
+                .px(px(9.))
+                .text_color(rgb(if out {
+                    self.kit.palette.accent_ink
+                } else {
+                    match chip.tone {
+                        ChipTone::Modifier => self.kit.palette.text_secondary,
+                        _ => self.kit.palette.text_primary,
+                    }
+                }));
+            if out {
+                segment = segment.font_weight(FontWeight::SEMIBOLD);
+            }
+            if index > 0 {
+                segment = segment.border_l(px(1.)).border_color(rgba(
+                    (if out {
+                        self.kit.washes.accent_border
+                    } else {
+                        self.kit.washes.hairline
+                    })
+                    .packed(),
+                ));
+            }
+            combo = combo.child(segment.child(chip.label.clone()));
         }
-        row
+        combo
+    }
+
+    fn render_rule_head(&self) -> Div {
+        let cell = |label: &str, width: Option<f32>| {
+            let mut column = div()
+                .text_size(px(qol_theme::TEXT_NANO))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(self.kit.palette.text_muted))
+                .child(label.to_string());
+            column = match width {
+                Some(width) => column.flex_none().w(px(width)),
+                None => column.flex_1(),
+            };
+            column
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(7.))
+            .px(px(qol_theme::SPACE_PAD))
+            .pb(px(7.))
+            .child(cell("FROM", Some(RULE_FROM_WIDTH)))
+            .child(cell("TO", Some(RULE_TO_WIDTH)))
+            .child(cell("SCOPE", None))
     }
 
     fn render_chip(&self, label: String, tone: ChipTone) -> Div {
-        let (text, background) = match tone {
-            ChipTone::Modifier => (self.palette.state_on, self.palette.dropdown_bg),
-            ChipTone::Key => (self.palette.section_text, self.palette.dropdown_bg),
-            ChipTone::Plain => (self.palette.label_text, self.palette.transparent_rgba),
+        self.render_keycap(label, tone, false)
+    }
+
+    fn render_keycap(&self, label: String, tone: ChipTone, out: bool) -> Div {
+        if matches!(tone, ChipTone::Plain) {
+            return div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .px_1p5()
+                .text_size(px(qol_theme::TEXT_MICRO))
+                .text_color(rgb(self.palette.label_text))
+                .child(label);
+        }
+        let (text, background, edge, cast) = if out {
+            (
+                self.kit.palette.accent_ink,
+                rgb(self.kit.palette.accent_fill),
+                self.kit.washes.accent_border,
+                self.kit.washes.accent_halo,
+            )
+        } else {
+            (
+                match tone {
+                    ChipTone::Modifier => self.kit.palette.text_secondary,
+                    _ => self.kit.palette.text_primary,
+                },
+                rgba(self.kit.washes.fill_hover.packed()),
+                self.kit.washes.hairline_strong,
+                self.kit.washes.cast,
+            )
         };
         div()
             .flex_none()
-            .px_1p5()
-            .rounded_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .min_w(px(qol_theme::HEIGHT_INLINE))
+            .px_2()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .border(px(1.))
+            .border_color(rgba(edge.packed()))
+            .bg(background)
             .shadow(vec![BoxShadow {
-                color: rgba(qol_color::with_alpha(self.palette.panel_border, 0xff)).into(),
-                offset: point(px(0.0), px(1.5)),
-                blur_radius: px(0.0),
+                color: rgba(cast.packed()).into(),
+                offset: point(px(0.0), px(1.0)),
+                blur_radius: px(2.0),
                 spread_radius: px(0.0),
             }])
-            .bg(match tone {
-                ChipTone::Plain => rgba(background),
-                _ => rgb(background),
-            })
-            .text_size(px(qol_theme::TEXT_CAPTION))
+            .font_family(SharedString::from(qol_theme::font_mono()))
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .when(out, |chip| chip.font_weight(FontWeight::SEMIBOLD))
             .text_color(rgb(text))
             .child(label)
     }
@@ -2844,7 +3298,7 @@ impl SettingsPanelView {
                     .text_color(rgb(self.palette.label_text))
                     .child(pretty_label(&field.key)),
             )
-            .child(self.render_draft_value(field, selected))
+            .child(self.render_draft_value(index, field_index, field, selected, cx))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
@@ -2854,7 +3308,14 @@ impl SettingsPanelView {
             }))
     }
 
-    fn render_draft_value(&self, field: &DraftField, selected: bool) -> Div {
+    fn render_draft_value(
+        &self,
+        index: usize,
+        field_index: usize,
+        field: &DraftField,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut value = div()
             .flex()
             .flex_row()
@@ -2873,7 +3334,12 @@ impl SettingsPanelView {
             for (option_index, option) in options.iter().enumerate() {
                 let on = flags.get(option_index).copied().unwrap_or(false);
                 let focused = selected && option_index == *cursor;
-                value = value.child(self.render_mod_chip(option.clone(), on, focused));
+                let slot = ModChipSlot {
+                    row: index,
+                    field: field_index,
+                    option: option_index,
+                };
+                value = value.child(self.render_mod_chip(slot, option.clone(), on, focused, cx));
             }
             return value;
         }
@@ -2899,11 +3365,19 @@ impl SettingsPanelView {
         )
     }
 
-    fn render_mod_chip(&self, label: String, on: bool, focused: bool) -> Div {
+    fn render_mod_chip(
+        &self,
+        slot: ModChipSlot,
+        label: String,
+        on: bool,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         div()
+            .id(("settings-mod-chip", slot.id()))
             .flex_none()
             .px_1p5()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
             .shadow(vec![BoxShadow {
                 color: rgba(qol_color::with_alpha(
                     if focused {
@@ -2929,7 +3403,16 @@ impl SettingsPanelView {
             } else {
                 self.palette.status_muted
             }))
+            .cursor(CursorStyle::PointingHand)
             .child(label)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
+                this.toggle_draft_mod(slot.row, slot.field, slot.option);
+                cx.notify();
+            }))
     }
 
     fn render_draft_save(
@@ -2994,6 +3477,18 @@ impl SettingsPanelView {
             return false;
         };
         self.object_array_is_active(index) && state.list.selected == entry
+    }
+
+    fn toggle_draft_mod(&mut self, index: usize, field_index: usize, option_index: usize) {
+        let Some(RowControl::ObjectArray(state)) =
+            self.rows.get_mut(index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let Some(draft) = state.draft.as_mut() else {
+            return;
+        };
+        draft.toggle_mod_at(field_index, option_index);
     }
 
     fn select_draft_field(&mut self, index: usize, field_index: usize) {
@@ -3061,7 +3556,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px_2()
             .py_1()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_CARD))
             .cursor(CursorStyle::PointingHand)
             .child(title);
         item_row = item_row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -3180,7 +3675,7 @@ impl SettingsPanelView {
                     .relative()
                     .w(px(72.))
                     .h(px(4.))
-                    .rounded_none()
+                    .rounded_full()
                     .overflow_hidden()
                     .bg(rgb(self.palette.panel_border))
                     .child(
@@ -3190,7 +3685,7 @@ impl SettingsPanelView {
                             .top_0()
                             .h_full()
                             .w(px(fill))
-                            .rounded_none()
+                            .rounded_full()
                             .bg(rgb(self.palette.row_border_selected)),
                     )
                     .child(
@@ -3290,7 +3785,7 @@ impl SettingsPanelView {
                 ((index as u64) << 32) | item_index as u64,
             ))
             .px_1()
-            .rounded_none()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(if selected {
                 rgb(self.palette.row_bg_selected)
             } else {
@@ -3383,11 +3878,24 @@ impl Render for SettingsPanelView {
         } else {
             Vec::new()
         };
-        let items: Vec<AnyElement> = self
-            .current_visible_rows()
-            .into_iter()
-            .map(|index| self.render_row(index, cx).into_any_element())
-            .collect();
+        let painted = self.body_has_focus().then_some(self.selected);
+        let mut items: Vec<AnyElement> = Vec::new();
+        for section in 0..self.sections.len() {
+            let visible = self.section_filtered_rows(section);
+            if visible.is_empty() {
+                continue;
+            }
+            items.push(
+                self.render_group_header(section, visible.len(), section == self.current_section())
+                    .into_any_element(),
+            );
+            for (position, index) in visible.iter().enumerate() {
+                let above = position.checked_sub(1).map(|prior| visible[prior]);
+                let separator =
+                    above.is_some_and(|prior| painted != Some(prior) && painted != Some(*index));
+                items.push(self.render_row(*index, separator, cx).into_any_element());
+            }
+        }
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
@@ -3417,128 +3925,365 @@ impl Render for SettingsPanelView {
                                 .flex_col()
                                 .h_full()
                                 .w(px(super::PANEL_RAIL_WIDTH))
-                                .pb_4()
+                                .p_2()
+                                .border_r(px(1.))
+                                .border_color(self.hairline())
                                 .bg(rgb(self.palette.rail_bg))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .px_3()
+                                        .pt(px(6.))
+                                        .pb(px(8.))
+                                        .text_size(px(qol_theme::TEXT_NANO))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(self.palette.rail_text_muted))
+                                        .child("SECTIONS"),
+                                )
                                 .children(rail),
                         )
                     })
                     .child(
                         div()
-                            .relative()
                             .flex_1()
                             .min_w_0()
                             .h_full()
+                            .flex()
+                            .flex_col()
                             .child(
                                 div()
-                                    .id("settings-panel-body")
-                                    .size_full()
-                                    .track_scroll(self.body_scroll.handle())
-                                    .overflow_y_scroll()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                    .flex_none()
                                     .px_4()
-                                    .pb_4()
-                                    .children(items),
+                                    .pt_3()
+                                    .pb_2()
+                                    .child(self.render_filter_field()),
                             )
-                            .child(crate::scrollbar::seam_track(
-                                self.body_scroll.handle().clone(),
-                                crate::kit::alpha(self.palette.panel_border, 0x48),
-                                crate::kit::alpha(self.palette.section_text, 0x8c),
-                            )),
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_h(px(0.))
+                                    .w_full()
+                                    .child(
+                                        div()
+                                            .id("settings-panel-body")
+                                            .size_full()
+                                            .track_scroll(self.body_scroll.handle())
+                                            .overflow_y_scroll()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .px_4()
+                                            .pb_4()
+                                            .children(items),
+                                    )
+                                    .child(crate::scrollbar::seam_track(
+                                        self.body_scroll.handle().clone(),
+                                        crate::kit::alpha(self.palette.panel_border, 0x48),
+                                        crate::kit::alpha(self.palette.section_text, 0x8c),
+                                    )),
+                            ),
                     ),
             )
+            .when_some(self.save_error.clone(), |root, message| {
+                root.child(self.render_failure_bar(message))
+            })
+            .child(self.render_hint_bar())
             .child(self.resize_canvas())
     }
 }
 
 impl SettingsPanelView {
-    fn current_section_label(&self) -> String {
-        self.sections
-            .get(self.active_section.unwrap_or(self.selected_section))
-            .map(|section| section.label.clone())
-            .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| self.panel.heading.clone())
+    fn panel_row_total(&self) -> usize {
+        self.current_visible_rows().len()
+    }
+
+    fn hairline(&self) -> Rgba {
+        rgba(self.kit.washes.hairline.packed())
     }
 
     fn render_band(&self) -> Div {
-        let title = self.current_section_label();
-        if self.rail_is_open() {
-            return div()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .h(px(super::PANEL_BAND_HEIGHT))
-                .panel_drag_area()
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(super::PANEL_RAIL_WIDTH))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .justify_end()
-                        .px_4()
-                        .pb(px(BAND_TEXT_BASELINE_PAD))
-                        .bg(rgb(self.palette.rail_bg))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(qol_theme::TEXT_BODY))
-                                .line_height(px(BAND_TEXT_LINE_HEIGHT))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(self.palette.rail_text))
-                                .child(self.panel.heading.clone()),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .justify_end()
-                        .px_4()
-                        .pb(px(BAND_TEXT_BASELINE_PAD))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(qol_theme::TEXT_DISPLAY))
-                                .line_height(px(BAND_TEXT_LINE_HEIGHT))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(self.palette.section_text))
-                                .child(title),
-                        ),
-                );
-        }
-        let eyebrow = (self.panel.heading != title).then(|| {
-            div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(self.palette.rail_text_muted))
-                .child(self.panel.heading.to_uppercase())
-        });
+        let total = self.panel_row_total();
         div()
             .flex_none()
             .flex()
-            .flex_col()
-            .justify_end()
-            .h(px(super::PANEL_BAND_SINGLE_HEIGHT))
-            .px_4()
-            .pb(px(BAND_TEXT_BASELINE_PAD))
-            .panel_drag_area()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(qol_theme::SPACE_GUTTER))
+            .h(px(super::PANEL_BAND_HEIGHT))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .border_b(px(1.))
+            .border_color(self.hairline())
             .bg(rgb(self.palette.rail_bg))
-            .children(eyebrow)
+            .panel_drag_area()
             .child(
                 div()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_DISPLAY))
-                    .line_height(px(BAND_TEXT_LINE_HEIGHT))
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(qol_theme::TEXT_TITLE))
+                            .line_height(px(BAND_TEXT_LINE_HEIGHT))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(self.palette.section_text))
+                            .child(self.panel.heading.clone()),
+                    )
+                    .children(self.subtitle.clone().map(|subtitle| {
+                        div()
+                            .truncate()
+                            .text_size(px(qol_theme::TEXT_MICRO))
+                            .text_color(rgb(self.kit.palette.text_muted))
+                            .child(subtitle)
+                    })),
+            )
+            .child(self.render_count_chip(total, plural(total, "setting")))
+    }
+
+    fn render_count_chip(&self, count: usize, noun: String) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1p5()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .px(px(10.))
+            .rounded(px(qol_theme::RADIUS_CONTROL))
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
+            .border(px(1.))
+            .border_color(self.hairline())
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .child(
+                div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.rail_text))
-                    .child(title),
+                    .text_color(rgb(self.palette.section_text))
+                    .child(count.to_string()),
+            )
+            .child(div().text_color(rgb(self.palette.label_text)).child(noun))
+    }
+
+    fn render_filter_field(&self) -> Div {
+        let empty = self.filter.is_empty();
+        let text = if empty {
+            "Filter settings".to_string()
+        } else {
+            self.filter.clone()
+        };
+        let field = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .h(px(super::PANEL_FILTER_HEIGHT))
+            .px(px(qol_theme::SPACE_PAD))
+            .rounded(px(qol_theme::RADIUS_WELL))
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
+            .border(px(1.))
+            .border_color(self.hairline())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(if empty {
+                        self.kit.palette.text_muted
+                    } else {
+                        self.palette.section_text
+                    }))
+                    .child(text),
+            );
+        if self.filter_open {
+            return field
+                .border_color(rgb(self.palette.row_border_selected))
+                .shadow(self.kit.focus_ring())
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.5))
+                        .h(px(16.))
+                        .bg(rgb(self.palette.row_border_selected)),
+                );
+        }
+        field.child(self.kit.keycap("/"))
+    }
+
+    fn current_section(&self) -> usize {
+        self.active_section.unwrap_or(self.selected_section)
+    }
+
+    fn render_group_header(&self, section: usize, count: usize, current: bool) -> Div {
+        let title = self
+            .sections
+            .get(section)
+            .map(|section| section.label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| self.panel.heading.clone());
+        let title_size = if current {
+            qol_theme::TEXT_BODY
+        } else {
+            qol_theme::TEXT_CAPTION
+        };
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_end()
+            .justify_between()
+            .gap_3()
+            .h(px(super::PANEL_GROUP_HEADER_HEIGHT))
+            .pb_1p5()
+            .px_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .when(current, |head| {
+                        head.child(
+                            div()
+                                .flex_none()
+                                .w(px(qol_theme::SPACE_MARK))
+                                .h(px(title_size))
+                                .rounded_full()
+                                .bg(rgb(self.kit.palette.accent)),
+                        )
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(title_size))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(if current {
+                                self.kit.palette.accent_ink
+                            } else {
+                                self.palette.label_text
+                            }))
+                            .border_b(px(2.))
+                            .border_color(if current {
+                                rgb(self.kit.palette.accent)
+                            } else {
+                                rgba(self.palette.transparent_rgba)
+                            })
+                            .pb_1()
+                            .child(title.to_uppercase()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px_2()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .bg(rgba(self.kit.washes.fill_resting.packed()))
+                    .text_size(px(qol_theme::TEXT_NANO))
+                    .text_color(rgb(self.kit.palette.text_muted))
+                    .child(format!("{count} {}", plural(count, "setting"))),
+            )
+    }
+
+    fn enter_hint(&self) -> Option<&'static str> {
+        let row = self.rows.get(self.selected)?;
+        match &row.control {
+            RowControl::Toggle(_) => Some("flip"),
+            RowControl::Action { .. } => Some("run"),
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
+            RowControl::Color(_) => Some("pick"),
+            RowControl::List { items, .. } if !items.is_empty() => Some("open"),
+            RowControl::ObjectArray(_) => Some("edit"),
+            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
+                Some("edit")
+            }
+            RowControl::Gamepad { .. } => Some("next"),
+            RowControl::List { .. }
+            | RowControl::Status { .. }
+            | RowControl::QrCode { .. }
+            | RowControl::Unsupported { .. } => None,
+        }
+    }
+
+    fn render_hint_bar(&self) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_4()
+            .h(px(super::PANEL_HINT_BAR_HEIGHT))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .border_t(px(1.))
+            .border_color(self.hairline())
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
+            .children(
+                self.enter_hint()
+                    .map(|label| self.render_hint("\u{21b5}", label)),
+            )
+            .child(self.render_hint("\u{2191}\u{2193}", "move"))
+            .child(self.render_hint("/", "filter"))
+            .child(div().flex_1())
+            .child(self.render_hint("esc", "close"))
+    }
+
+    fn render_hint(&self, key: &str, label: &str) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1p5()
+            .child(self.kit.keycap(key.to_string()))
+            .child(
+                div()
+                    .text_size(px(qol_theme::TEXT_MICRO))
+                    .text_color(rgb(self.palette.label_text))
+                    .child(label.to_string()),
+            )
+    }
+
+    fn render_failure_bar(&self, message: String) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .border_t(px(1.))
+            .border_color(self.hairline())
+            .bg(rgba(self.kit.washes.wash_invalid.packed()))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(qol_theme::SPACE_MARK))
+                    .bg(rgb(self.palette.status_danger)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px(px(qol_theme::SPACE_GUTTER))
+                    .py_2()
+                    .child(
+                        self.kit
+                            .lamp(self.palette.status_danger)
+                            .w(px(7.))
+                            .h(px(7.)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_size(px(qol_theme::TEXT_MICRO))
+                            .text_color(rgb(self.palette.status_danger))
+                            .child(message),
+                    ),
             )
     }
 
@@ -3833,6 +4578,19 @@ fn is_filter_text(character: &str) -> bool {
     !character.is_empty() && !character.chars().any(char::is_control)
 }
 
+#[derive(Clone, Copy)]
+struct ModChipSlot {
+    row: usize,
+    field: usize,
+    option: usize,
+}
+
+impl ModChipSlot {
+    fn id(self) -> u64 {
+        ((self.row as u64) << 32) | ((self.field as u16 as u64) << 16) | self.option as u16 as u64
+    }
+}
+
 fn entry_id(index: usize, entry: usize) -> u64 {
     ((index as u64) << 32) | (entry as u32) as u64
 }
@@ -3886,7 +4644,7 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
         "up" => Some(Intent::Up),
         "down" => Some(Intent::Down),
         "left" => Some(Intent::Left),
-        "enter" | "return" => Some(Intent::Activate),
+        "enter" | "return" | "space" | "right" => Some(Intent::Activate),
         "escape" => Some(Intent::Close),
         _ => None,
     }
@@ -3941,6 +4699,45 @@ fn description_wrap_lines(row: &Row, panel_width: f32) -> usize {
     chars.div_ceil(per_line.max(1)) - 1
 }
 
+fn body_child_offset(sections: &[impl AsRef<[usize]>], row: usize) -> Option<usize> {
+    let mut child = 0;
+    for section in sections {
+        let visible = section.as_ref();
+        if visible.is_empty() {
+            continue;
+        }
+        child += 1;
+        match visible.iter().position(|index| *index == row) {
+            Some(position) => return Some(child + position),
+            None => child += visible.len(),
+        }
+    }
+    None
+}
+
+fn text_list_parts(edit: &str) -> Vec<String> {
+    edit.split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn row_matches(row: &Row, needle: &str) -> bool {
+    row.label.to_lowercase().contains(needle)
+        || row
+            .description
+            .as_deref()
+            .is_some_and(|text| text.to_lowercase().contains(needle))
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        noun.to_string()
+    } else {
+        format!("{noun}s")
+    }
+}
+
 fn value_cell_width(control: &RowControl) -> f32 {
     match control {
         RowControl::Toggle(_) => 92.0,
@@ -3960,12 +4757,20 @@ fn value_cell_width(control: &RowControl) -> f32 {
 }
 
 fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
-    let entries = match state.draft.as_ref() {
-        Some(draft) => draft.entry_count(),
-        None => state.item_window().len() + 1,
+    let (entries, rule_head) = match state.draft.as_ref() {
+        Some(draft) => (draft.entry_count(), 0.0),
+        None => (
+            state.item_window().len() + 1,
+            if state.chips(0).is_directional() {
+                super::PANEL_LIST_HEADER_HEIGHT
+            } else {
+                0.0
+            },
+        ),
     };
     super::PANEL_LIST_PADDING_Y
         + list_header_height(row)
+        + rule_head
         + entries as f32 * (super::PANEL_OBJECT_ROW_HEIGHT + super::PANEL_LIST_GAP)
 }
 
@@ -4153,6 +4958,44 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(format_number(value), expected, "value: {value}");
         }
+    }
+
+    #[test]
+    fn the_panel_filter_reads_both_the_label_and_the_description() {
+        let mut row = list_row();
+        row.label = "Excluded Apps".into();
+        row.description = Some("Remapping is ignored in these apps.".into());
+
+        assert!(super::row_matches(&row, "excluded"));
+        assert!(super::row_matches(&row, "ignored"));
+        assert!(!super::row_matches(&row, "brightness"));
+    }
+
+    #[test]
+    fn a_group_header_offsets_every_row_it_precedes_in_the_scroller() {
+        let sections = [vec![0usize, 1], Vec::new(), vec![2, 3, 4]];
+
+        assert_eq!(super::body_child_offset(&sections, 0), Some(1));
+        assert_eq!(super::body_child_offset(&sections, 1), Some(2));
+        assert_eq!(super::body_child_offset(&sections, 2), Some(4));
+        assert_eq!(super::body_child_offset(&sections, 4), Some(6));
+        assert_eq!(super::body_child_offset(&sections, 5), None);
+    }
+
+    #[test]
+    fn a_text_list_drops_blank_entries_and_trims_the_rest() {
+        assert_eq!(
+            super::text_list_parts(" kitty , Terminal ,, iTerm2 "),
+            vec!["kitty", "Terminal", "iTerm2"]
+        );
+        assert!(super::text_list_parts("  , ,").is_empty());
+    }
+
+    #[test]
+    fn counts_name_their_noun_in_the_right_number() {
+        assert_eq!(super::plural(1, "setting"), "setting");
+        assert_eq!(super::plural(0, "setting"), "settings");
+        assert_eq!(super::plural(13, "item"), "items");
     }
 
     fn list_row() -> Row {
@@ -4682,8 +5525,8 @@ default = "visible"
             ("up", None, false, Some(Intent::Up)),
             ("down", None, false, Some(Intent::Down)),
             ("left", None, false, Some(Intent::Left)),
-            ("right", None, false, None),
-            ("space", None, false, None),
+            ("right", None, false, Some(Intent::Activate)),
+            ("space", None, false, Some(Intent::Activate)),
             ("5", Some("5"), false, None),
             ("-", Some("-"), false, None),
             (".", Some("."), false, None),
@@ -4704,5 +5547,15 @@ default = "visible"
                 "key {key} editing {editing}"
             );
         }
+    }
+
+    #[test]
+    fn space_and_right_activate_inactive_rows() {
+        assert_eq!(intent("space", None, false), Some(Intent::Activate));
+        assert_eq!(intent("right", None, false), Some(Intent::Activate));
+        assert_eq!(
+            intent("space", Some(" "), true),
+            Some(Intent::Insert(" ".into()))
+        );
     }
 }

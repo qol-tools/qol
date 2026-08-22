@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 pub const PHANTOM_NAV_WINDOW: Duration = Duration::from_millis(60);
 
+pub const DUPLICATE_NAV_WINDOW: Duration = Duration::from_millis(40);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavAxis {
     Horizontal,
@@ -17,6 +19,17 @@ pub fn is_phantom_reversal(
         return false;
     };
     prev != direction && Instant::now().duration_since(last) < PHANTOM_NAV_WINDOW
+}
+
+pub fn is_duplicate_step(
+    last_at: Option<Instant>,
+    last_direction: Option<f64>,
+    direction: f64,
+) -> bool {
+    let (Some(last), Some(prev)) = (last_at, last_direction) else {
+        return false;
+    };
+    prev == direction && Instant::now().duration_since(last) < DUPLICATE_NAV_WINDOW
 }
 
 #[derive(Default)]
@@ -42,11 +55,15 @@ impl PhantomNavGuard {
             NavAxis::Vertical => &mut self.vertical,
         };
         let phantom = is_phantom_reversal(state.last_at, state.last_direction, direction);
-        if !phantom {
-            state.last_direction = Some(direction);
-            state.last_at = Some(Instant::now());
+        if phantom {
+            return true;
         }
-        phantom
+        if is_duplicate_step(state.last_at, state.last_direction, direction) {
+            return true;
+        }
+        state.last_direction = Some(direction);
+        state.last_at = Some(Instant::now());
+        false
     }
 }
 
@@ -66,11 +83,23 @@ mod tests {
     }
 
     #[test]
-    fn same_direction_repeat_is_never_phantom() {
+    fn a_key_delivered_twice_moves_the_selection_once() {
+        let mut guard = PhantomNavGuard::new();
+
+        assert!(!guard.swallow(NavAxis::Vertical, 1.0));
+        assert!(
+            guard.swallow(NavAxis::Vertical, 1.0),
+            "the same key redelivered within a few milliseconds is one press"
+        );
+    }
+
+    #[test]
+    fn a_held_key_still_repeats() {
         let mut guard = PhantomNavGuard::new();
 
         for _ in 0..4 {
             assert!(!guard.swallow(NavAxis::Vertical, 1.0));
+            guard.vertical.last_at = Some(Instant::now() - Duration::from_millis(120));
         }
     }
 
@@ -92,6 +121,8 @@ mod tests {
 
         assert!(!guard.swallow(NavAxis::Vertical, 1.0));
         assert!(!guard.swallow(NavAxis::Horizontal, 1.0));
+        guard.vertical.last_at = Some(Instant::now() - Duration::from_millis(1));
+        guard.horizontal.last_at = Some(Instant::now() - Duration::from_millis(1));
         assert!(
             guard.swallow(NavAxis::Vertical, -1.0),
             "a vertical reversal must not consume the horizontal state"
@@ -108,6 +139,7 @@ mod tests {
 
         assert!(!guard.swallow(NavAxis::Vertical, 1.0));
         assert!(guard.swallow(NavAxis::Vertical, -1.0));
+        guard.vertical.last_at = Some(Instant::now() - Duration::from_millis(120));
         assert!(
             !guard.swallow(NavAxis::Vertical, 1.0),
             "the swallow must not have replaced the recorded direction"

@@ -35,6 +35,10 @@ pub fn window_geometry_session(_title: &str) -> Option<WindowGeometrySession> {
     None
 }
 
+pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds<gpui::Pixels> {
+    window.bounds()
+}
+
 pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }
@@ -57,6 +61,14 @@ pub fn sync_window_layout(
 ) -> bool {
     let backing = window_backing_scale(title);
     crate::window::resize_or_sync_scale(window, size, backing);
+    sync_window_layout_by_title(title, _origin, size)
+}
+
+pub fn sync_window_layout_by_title(
+    _title: &str,
+    _origin: gpui::Point<gpui::Pixels>,
+    _size: gpui::Size<gpui::Pixels>,
+) -> bool {
     true
 }
 

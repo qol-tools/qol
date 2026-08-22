@@ -1,10 +1,10 @@
+use gpui::prelude::FluentBuilder;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 
-use super::layout::{window_height_for_rows, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
-use super::state::{EdgeHit, NavDirection};
+use super::layout::{window_height_for_rows, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
 #[cfg(debug_assertions)]
 use super::trace;
 use super::view;
@@ -94,7 +94,7 @@ impl Render for LauncherView {
                 .w(px(WINDOW_WIDTH))
                 .h(px(window_height_for_rows(0)))
                 .overflow_hidden()
-                .rounded_none()
+                .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
                 .bg(view::bg_color());
         }
 
@@ -125,21 +125,9 @@ impl Render for LauncherView {
         if nav_cues.decayed_momentum > 0 {
             self.ensure_trail_decay_tick(cx);
         }
-        let previous_selected = nav_cues.previous_selected;
-        let edge_hit = self.state.take_edge_hit();
-        let momentum_signed = nav_cues.momentum_signed;
-        let trail_len = nav_cues.trail_len;
-        let trail_direction = nav_cues.trail_direction;
-        let (min_score, max_score) = self
-            .store
-            .results()
-            .iter()
-            .map(|scored| scored.m.score)
-            .fold((i32::MAX, i32::MIN), |(min, max), score| {
-                (min.min(score), max.max(score))
-            });
-        let results_height = visible as f32 * ROW_HEIGHT;
+        self.state.take_edge_hit();
         let target_height = window_height_for_rows(visible);
+        let results_height = target_height - HEADER_HEIGHT - qol_gpui::theme::HEIGHT_HINT_BAR;
 
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
@@ -150,17 +138,7 @@ impl Render for LauncherView {
             .map(|scored| self.store.name(scored))
             .unwrap_or("")
             .to_string();
-        let rows = self.build_visible_rows(
-            scroll_offset,
-            visible,
-            previous_selected,
-            edge_hit,
-            momentum_signed,
-            trail_len,
-            trail_direction,
-            min_score,
-            max_score,
-        );
+        let rows = self.build_visible_rows(scroll_offset, visible);
         #[cfg(debug_assertions)]
         {
             let rows_us = t1.elapsed().as_micros();
@@ -198,7 +176,7 @@ impl Render for LauncherView {
             .w(px(WINDOW_WIDTH))
             .h(px(target_height))
             .overflow_hidden()
-            .rounded_none()
+            .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
             .shadow(qol_gpui::kit::float_shadow(view::palette().text_selected))
             .flex()
             .flex_col()
@@ -215,45 +193,40 @@ impl Render for LauncherView {
                 }
             }))
             .child(view::search_bar(
-                if self.state.boost_adjusting {
-                    "Boost"
-                } else {
-                    self.state.mode.label()
-                },
-                self.state.fuzziness.label(),
                 &self.state.query,
                 self.state.launch_error.as_deref(),
                 self.state.cursor,
                 self.state.selected_range(),
                 self.state.scroll_list.selected,
                 result_count,
-                scroll_offset,
-                visible,
-                momentum_signed,
-                hidden_above,
-                hidden_below,
             ))
-            .child(
-                div()
-                    .id("launcher-results")
-                    .h(px(results_height))
-                    .w_full()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .bg(view::bg_color())
-                    .on_scroll_wheel(cx.listener(
-                        move |this: &mut Self,
-                              event: &ScrollWheelEvent,
-                              _window,
-                              cx: &mut Context<Self>| {
-                            let rows = qol_gpui::scroll_list::wheel_rows(&event.delta, ROW_HEIGHT);
-                            this.state.scroll_list.wheel_by(rows, result_count);
-                            cx.notify();
-                        },
-                    ))
-                    .children(rows),
-            )
+            .when(result_count > 0, |root| {
+                root.child(
+                    div()
+                        .id("launcher-results")
+                        .h(px(results_height))
+                        .w_full()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .py(px(super::layout::LIST_PAD_Y))
+                        .gap(px(super::layout::ROW_GAP))
+                        .bg(view::bg_color())
+                        .on_scroll_wheel(cx.listener(
+                            move |this: &mut Self,
+                                  event: &ScrollWheelEvent,
+                                  _window,
+                                  cx: &mut Context<Self>| {
+                                let rows =
+                                    qol_gpui::scroll_list::wheel_rows(&event.delta, ROW_HEIGHT);
+                                this.state.scroll_list.wheel_by(rows, result_count);
+                                cx.notify();
+                            },
+                        ))
+                        .children(rows),
+                )
+                .child(view::hint_bar())
+            })
     }
 }
 
@@ -292,23 +265,9 @@ impl LauncherView {
         None
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_visible_rows(
-        &self,
-        scroll_offset: usize,
-        visible: usize,
-        previous_selected: Option<usize>,
-        edge_hit: Option<EdgeHit>,
-        momentum_signed: i8,
-        trail_len: usize,
-        trail_direction: Option<NavDirection>,
-        min_score: i32,
-        max_score: i32,
-    ) -> Vec<Div> {
+    fn build_visible_rows(&self, scroll_offset: usize, visible: usize) -> Vec<Div> {
         let mut rows = Vec::with_capacity(visible);
-        let mut prev_score: Option<i32> = None;
         let selected = self.state.scroll_list.selected;
-
         for (i, scored) in self
             .store
             .results()
@@ -317,73 +276,13 @@ impl LauncherView {
             .skip(scroll_offset)
             .take(MAX_VISIBLE)
         {
-            let cluster_break = prev_score
-                .map(|prev| scored.m.score.saturating_sub(prev) >= 24)
-                .unwrap_or(false);
-            prev_score = Some(scored.m.score);
-
-            let is_top_row = i == scroll_offset;
-            let is_bottom_row = i + 1 == scroll_offset + visible;
-            let trail_depth = Self::trail_depth_for_row(i, selected, trail_len, trail_direction);
-            let confidence_pct = Self::confidence_pct(scored.m.score, min_score, max_score);
-
             rows.push(view::result_row(
                 scored,
                 self.store.name(scored),
-                view::RowWindowCue {
-                    selected: i == selected,
-                    previous_selected: previous_selected == Some(i),
-                    trail_depth,
-                    distance_from_selected: i.abs_diff(selected),
-                    edge_hit_top: is_top_row && matches!(edge_hit, Some(EdgeHit::Top)),
-                    edge_hit_bottom: is_bottom_row && matches!(edge_hit, Some(EdgeHit::Bottom)),
-                    momentum_signed: if i == selected { momentum_signed } else { 0 },
-                    confidence_pct,
-                    cluster_break,
-                },
+                i == selected,
                 ROW_HEIGHT,
             ));
         }
-
         rows
-    }
-
-    fn trail_depth_for_row(
-        row_index: usize,
-        selected: usize,
-        trail_len: usize,
-        trail_direction: Option<NavDirection>,
-    ) -> u8 {
-        match trail_direction {
-            Some(NavDirection::Down) => {
-                let distance = selected.saturating_sub(row_index);
-                if distance >= 1 && distance <= trail_len {
-                    (trail_len - distance + 1) as u8
-                } else {
-                    0
-                }
-            }
-            Some(NavDirection::Up) => {
-                let distance = row_index.saturating_sub(selected);
-                if distance >= 1 && distance <= trail_len {
-                    (trail_len - distance + 1) as u8
-                } else {
-                    0
-                }
-            }
-            None => 0,
-        }
-    }
-
-    fn confidence_pct(score: i32, min_score: i32, max_score: i32) -> u8 {
-        if max_score <= min_score {
-            return 100;
-        }
-
-        let numerator = (max_score - score) as f32;
-        let denominator = (max_score - min_score) as f32;
-        ((numerator / denominator) * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8
     }
 }

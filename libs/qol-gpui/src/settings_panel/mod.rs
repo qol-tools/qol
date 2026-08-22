@@ -22,30 +22,29 @@ const PANEL_WIDE_WIDTH: f32 = 680.0;
 const PANEL_GAMEPAD_WIDTH: f32 = 860.0;
 const PANEL_WIDE_DESCRIPTION_CHARS: usize = 90;
 const PANEL_RAIL_WIDTH: f32 = 190.0;
-const PANEL_RAIL_ITEM_HEIGHT: f32 = 44.0;
-const PANEL_RAIL_MAX_ITEMS: usize = 14;
-const PANEL_ROW_HEIGHT: f32 = 40.0;
-const PANEL_DESCRIBED_ROW_HEIGHT: f32 = 56.0;
-const PANEL_DESCRIPTION_LINE_HEIGHT: f32 = 14.0;
+const PANEL_RAIL_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
+const PANEL_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
+const PANEL_DESCRIBED_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
+const PANEL_DESCRIPTION_LINE_HEIGHT: f32 = 18.0;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
-const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 16.0;
-const PANEL_LIST_ITEM_HEIGHT: f32 = 48.0;
+const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 20.0;
+const PANEL_LIST_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_RULE_ROW;
 const PANEL_LIST_GAP: f32 = 4.0;
 const PANEL_LIST_PADDING_Y: f32 = 8.0;
-const PANEL_OBJECT_ROW_HEIGHT: f32 = 30.0;
+const PANEL_OBJECT_ROW_HEIGHT: f32 = qol_theme::HEIGHT_RULE_ROW;
 const PANEL_QR_CODE_HEIGHT: f32 = 180.0;
 const PANEL_QR_URL_HEIGHT: f32 = 20.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_COLUMN_GAP: f32 = 4.0;
-const PANEL_BAND_HEIGHT: f32 = 48.0;
-const PANEL_BAND_SINGLE_HEIGHT: f32 = 64.0;
+const PANEL_BAND_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
+const PANEL_GROUP_HEADER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
+const PANEL_HINT_BAR_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
+const PANEL_FILTER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
+const PANEL_FILTER_MARGIN: f32 = 20.0;
+const PANEL_MAX_HEIGHT: f32 = 720.0;
 
-fn chrome_height(sections: &[RowSection]) -> f32 {
-    if sections.len() > 1 {
-        PANEL_BAND_HEIGHT
-    } else {
-        PANEL_BAND_SINGLE_HEIGHT
-    }
+fn chrome_height(_sections: &[RowSection]) -> f32 {
+    PANEL_BAND_HEIGHT + PANEL_FILTER_HEIGHT + PANEL_FILTER_MARGIN + PANEL_HINT_BAR_HEIGHT
 }
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 
@@ -87,6 +86,7 @@ struct ActivePanel {
 
 pub struct PreparedSettingsPanel {
     panel: SettingsPanel,
+    subtitle: Option<String>,
     rows: Vec<Row>,
     sections: Vec<RowSection>,
     values: serde_json::Value,
@@ -418,6 +418,7 @@ fn prepare_panel(
     let daemon_port = persistence::daemon_port(&base);
     Ok(PreparedSettingsPanel {
         panel,
+        subtitle: resolved.description.clone(),
         rows,
         sections,
         values,
@@ -434,14 +435,16 @@ fn size_prepared_panel(
     let monitor = tracker
         .snapshot_monitor()
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
-    let available =
-        monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
+    let available = (monitor.bounds().size.height.to_f64() as f32
+        - 2.0 * crate::placement::CORNER_MARGIN)
+        .min(PANEL_MAX_HEIGHT);
     let body_width = panel_width(&prepared.rows);
     let width = body_width + rail_width(&prepared.sections);
     let height = panel_height(&prepared.rows, &prepared.sections, body_width).min(available);
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
+            subtitle: prepared.subtitle,
             rows: prepared.rows,
             sections: prepared.sections,
             values: prepared.values,
@@ -486,7 +489,7 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
 
 fn panel_height(rows: &[Row], sections: &[RowSection], width: f32) -> f32 {
     let show_section_headers = sections.len() <= 1;
-    let tallest_section = sections
+    let body = sections
         .iter()
         .map(|section| {
             let visible = section
@@ -495,19 +498,18 @@ fn panel_height(rows: &[Row], sections: &[RowSection], width: f32) -> f32 {
                 .copied()
                 .filter(|index| rows::row_is_visible(rows, *index))
                 .collect::<Vec<_>>();
+            if visible.is_empty() {
+                return 0.0;
+            }
             let rows_height = visible
                 .iter()
                 .map(|index| view::row_height(&rows[*index], width, show_section_headers))
                 .sum::<f32>();
             let gaps = (visible.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
-            rows_height + gaps
+            PANEL_GROUP_HEADER_HEIGHT + rows_height + gaps
         })
-        .fold(0.0, f32::max);
-    if sections.len() > 1 {
-        let rail = sections.len().min(PANEL_RAIL_MAX_ITEMS) as f32 * PANEL_RAIL_ITEM_HEIGHT;
-        return chrome_height(sections) + rail.max(tallest_section);
-    }
-    chrome_height(sections) + tallest_section
+        .sum::<f32>();
+    chrome_height(sections) + body
 }
 
 fn rail_width(sections: &[RowSection]) -> f32 {
@@ -561,7 +563,7 @@ fn row_fits_a_compact_panel(row: &Row) -> bool {
 mod tests {
     use super::{
         activation_decision, panel_height, panel_width, rail_width, ActivationDecision, Row,
-        RowSection, PANEL_BAND_SINGLE_HEIGHT, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
+        RowSection, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::rows::RowControl;
@@ -588,13 +590,13 @@ mod tests {
     fn overlay_controls_do_not_change_parent_panel_height() {
         let toggle = vec![row(RowControl::Toggle(false))];
         let color = vec![row(RowControl::Color("#ffffff".into()))];
-        let expected = PANEL_BAND_SINGLE_HEIGHT + PANEL_ROW_HEIGHT;
-
         let sections = vec![RowSection {
             label: "General".into(),
             description: None,
             rows: vec![0],
         }];
+        let expected =
+            super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
         assert_eq!(panel_height(&toggle, &sections, PANEL_WIDTH), expected);
         assert_eq!(panel_height(&color, &sections, PANEL_WIDTH), expected);
     }
@@ -627,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn sectioned_panels_size_for_the_section_rail() {
+    fn every_section_stacks_onto_one_page() {
         let rows = vec![
             row(RowControl::Toggle(false)),
             row(RowControl::Toggle(false)),
@@ -646,34 +648,31 @@ mod tests {
 
         assert_eq!(
             panel_height(&rows, &sections, PANEL_WIDTH),
-            super::chrome_height(&sections) + 3.0 * super::PANEL_RAIL_ITEM_HEIGHT
+            super::chrome_height(&sections)
+                + 3.0 * (super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT)
         );
         assert_eq!(rail_width(&sections), super::PANEL_RAIL_WIDTH);
         assert_eq!(rail_width(&sections[..1]), 0.0);
     }
 
     #[test]
-    fn a_long_rail_stops_growing_the_window() {
-        let rows = (0..20)
-            .map(|_| row(RowControl::Toggle(false)))
-            .collect::<Vec<_>>();
-        let sections = (0..20)
-            .map(|index| RowSection {
-                label: format!("Section {index}"),
-                description: None,
-                rows: vec![index],
-            })
-            .collect::<Vec<_>>();
+    fn a_section_with_no_visible_rows_takes_no_room() {
+        let rows = vec![row(RowControl::Toggle(false))];
+        let plain = |label: &str, rows: Vec<usize>| RowSection {
+            label: label.into(),
+            description: None,
+            rows,
+        };
+        let sections = vec![plain("One", vec![0]), plain("Empty", Vec::new())];
 
         assert_eq!(
             panel_height(&rows, &sections, PANEL_WIDTH),
-            super::chrome_height(&sections)
-                + super::PANEL_RAIL_MAX_ITEMS as f32 * super::PANEL_RAIL_ITEM_HEIGHT
+            super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT
         );
     }
 
     #[test]
-    fn sectioned_panels_size_for_their_tallest_section() {
+    fn stacked_sections_each_carry_their_own_header() {
         let rows = (0..12)
             .map(|_| row(RowControl::Toggle(false)))
             .collect::<Vec<_>>();
@@ -687,12 +686,11 @@ mod tests {
             plain("Two", (1..12).collect::<Vec<_>>()),
         ];
 
-        let menu = 39.0 + 39.0 + 4.0;
-        let tallest = 11.0 * PANEL_ROW_HEIGHT + 10.0 * 4.0;
-        assert!(tallest > menu, "the tall section must outgrow the menu");
+        let first = super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
+        let second = super::PANEL_GROUP_HEADER_HEIGHT + 11.0 * PANEL_ROW_HEIGHT + 10.0 * 4.0;
         assert_eq!(
             panel_height(&rows, &sections, PANEL_WIDTH),
-            super::chrome_height(&sections) + tallest
+            super::chrome_height(&sections) + first + second
         );
     }
 

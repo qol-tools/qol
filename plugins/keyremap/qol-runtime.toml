@@ -1,0 +1,4 @@
+schema_version = 1
+
+[action.toggle]
+description = "Flip key remapping on or off"

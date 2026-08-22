@@ -178,6 +178,10 @@ impl WindowGeometrySession {
     }
 }
 
+pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds<gpui::Pixels> {
+    window.bounds()
+}
+
 pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
     let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
@@ -232,6 +236,14 @@ pub fn sync_window_layout(
 ) -> bool {
     let backing = window_backing_scale(title);
     crate::window::resize_or_sync_scale(window, size, backing);
+    sync_window_layout_by_title(title, origin, size)
+}
+
+pub fn sync_window_layout_by_title(
+    title: &str,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
     set_window_bounds_by_title(
         title,
         origin.x.to_f64(),

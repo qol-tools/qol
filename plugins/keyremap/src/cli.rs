@@ -29,6 +29,7 @@ where
 {
     let launch = adapter.clone();
     let reload = adapter.clone();
+    let toggle = adapter.clone();
     let kill = adapter.clone();
 
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
@@ -57,6 +58,18 @@ where
                 .run_result(move |context| {
                     no_args(context)?;
                     reload.reload()
+                }),
+        )
+        .command(
+            Command::new("toggle")
+                .alias("--toggle")
+                .about("Turn key remapping on or off.")
+                .usage(format!("{BINARY_NAME} toggle"))
+                .output("The new remapping state on stderr.")
+                .exit_behavior("Exits non-zero if the new state cannot be saved.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    toggle.toggle()
                 }),
         )
         .command(
@@ -260,6 +273,7 @@ mod tests {
     struct Calls {
         launch: AtomicUsize,
         reload: AtomicUsize,
+        toggle: AtomicUsize,
         kill: AtomicUsize,
         settings: AtomicUsize,
         config: AtomicUsize,
@@ -287,6 +301,11 @@ mod tests {
 
         fn reload(&self) -> Result<CommandResult> {
             self.calls.reload.fetch_add(1, Ordering::SeqCst);
+            Ok(CommandResult::success(""))
+        }
+
+        fn toggle(&self) -> Result<CommandResult> {
+            self.calls.toggle.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
@@ -426,6 +445,8 @@ mod tests {
             vec!["run", "help"],
             vec!["help", "reload"],
             vec!["--reload", "help"],
+            vec!["help", "toggle"],
+            vec!["--toggle", "help"],
             vec!["help", "kill"],
             vec!["--kill", "help"],
             vec!["help", "settings"],
@@ -444,6 +465,7 @@ mod tests {
             assert_eq!(execution.exit_code, EXIT_SUCCESS, "{args:?}");
             assert_eq!(calls.launch.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.reload.load(Ordering::SeqCst), 0, "{args:?}");
+            assert_eq!(calls.toggle.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.kill.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.settings.load(Ordering::SeqCst), 0, "{args:?}");
         }
@@ -468,6 +490,31 @@ mod tests {
             assert_eq!(execution.exit_code, EXIT_USAGE, "{args:?}");
             assert_eq!(calls.launch.load(Ordering::SeqCst), 0, "{args:?}");
         }
+    }
+
+    #[test]
+    fn toggle_and_alias_reach_the_adapter_exactly_once() {
+        let (app, calls) = sentinel();
+
+        assert_eq!(app.execute(["toggle".to_string()]).exit_code, EXIT_SUCCESS);
+        assert_eq!(
+            app.execute(["--toggle".to_string()]).exit_code,
+            EXIT_SUCCESS
+        );
+        assert_eq!(calls.toggle.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn toggle_help_is_equivalent_and_never_reaches_the_adapter() {
+        let (app, calls) = sentinel();
+        let first = app.execute(["help".to_string(), "toggle".to_string()]);
+        let final_token = app.execute(["toggle".to_string(), "help".to_string()]);
+
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(final_token.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        assert!(first.stdout.contains("remapping on or off"));
+        assert_eq!(calls.toggle.load(Ordering::SeqCst), 0);
     }
 
     #[test]
