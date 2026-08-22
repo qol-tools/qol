@@ -328,6 +328,7 @@ fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
                     .w_full()
                     .truncate()
                     .text_size(px(qol_theme::TEXT_BODY))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(palette.text_primary))
                     .child(toast.title.clone()),
             )
@@ -335,7 +336,7 @@ fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
                 div()
                     .w_full()
                     .truncate()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_size(px(qol_theme::TEXT_MICRO))
                     .text_color(rgb(palette.text_secondary))
                     .child(toast.message.clone()),
             ),
@@ -388,8 +389,9 @@ fn toast_root(palette: ToastPalette) -> Div {
 fn tone_bar(toast: &Toast, palette: ToastPalette) -> Div {
     div()
         .flex_none()
-        .w(px(4.0))
+        .w(px(qol_theme::SPACE_MARK))
         .h_full()
+        .rounded(px(qol_theme::RADIUS_TONE_BAR))
         .bg(rgb(toast.tone.color(palette)))
 }
 

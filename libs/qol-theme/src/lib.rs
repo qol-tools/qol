@@ -21,7 +21,7 @@ pub const TEXT_NANO: f32 = 11.5;
 pub const TEXT_MICRO: f32 = 12.5;
 pub const TEXT_CAPTION: f32 = 13.5;
 pub const TEXT_BODY: f32 = 15.0;
-pub const TEXT_TITLE: f32 = 17.0;
+pub const TEXT_TITLE: f32 = 18.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
 
 pub const TEXT_SCALE: [f32; 6] = [
@@ -58,10 +58,12 @@ pub const RADIUS_WELL: f32 = 11.0;
 
 pub const RADIUS_LADDER: [f32; 4] = [RADIUS_TIGHT, RADIUS_CONTROL, RADIUS_CARD, RADIUS_WELL];
 
-pub const RADIUS_KEYCAP: f32 = 3.0;
+pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
+pub const RADIUS_THUMB: f32 = 3.0;
+pub const RADIUS_TONE_BAR: f32 = 2.0;
 pub const RADIUS_WINDOW: f32 = 12.0;
 
-pub const TEXT_KEYCAP: f32 = 10.5;
+pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 
 pub const SPACE_GUTTER: f32 = 20.0;
 pub const SPACE_PAD: f32 = 16.0;

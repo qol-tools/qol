@@ -16,8 +16,8 @@ use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
-    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, RADIUS_KEYCAP,
-    TEXT_CAPTION, TEXT_NANO,
+    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, RADIUS_THUMB, TEXT_CAPTION,
+    TEXT_NANO,
 };
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
@@ -1213,7 +1213,7 @@ impl Render for PreviewView {
                     .w(px(thumb_w))
                     .h(px(thumb_h))
                     .overflow_hidden()
-                    .rounded(px(RADIUS_KEYCAP))
+                    .rounded(px(RADIUS_THUMB))
                     .border_1()
                     .border_color(rgb(palette.thumb_border))
                     .child(self.thumbnail(thumb_w, thumb_h)),

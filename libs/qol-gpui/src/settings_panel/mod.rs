@@ -18,10 +18,10 @@ use view::{SettingsPanelState, SettingsPanelView};
 
 const PANEL_COMPACT_WIDTH: f32 = 420.0;
 const PANEL_WIDTH: f32 = 520.0;
-const PANEL_WIDE_WIDTH: f32 = 680.0;
+const PANEL_WIDE_WIDTH: f32 = 760.0;
 const PANEL_GAMEPAD_WIDTH: f32 = 860.0;
 const PANEL_WIDE_DESCRIPTION_CHARS: usize = 90;
-const PANEL_RAIL_WIDTH: f32 = 190.0;
+const PANEL_RAIL_WIDTH: f32 = 196.0;
 const PANEL_RAIL_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
 const PANEL_DESCRIBED_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
@@ -836,5 +836,20 @@ mod tests {
             wrapped_overflow > 0.0,
             "a block scroll viewport over a flex_col wrapper must keep scroll room"
         );
+    }
+}
+
+#[cfg(test)]
+mod design_conformance {
+    use super::{PANEL_RAIL_WIDTH, PANEL_WIDE_WIDTH};
+
+    #[test]
+    fn panel_wide_width_matches_deck() {
+        assert_eq!(PANEL_WIDE_WIDTH, 760.0, "deck settings mock is w760");
+    }
+
+    #[test]
+    fn rail_width_matches_deck() {
+        assert_eq!(PANEL_RAIL_WIDTH, 196.0, "deck rail is 196");
     }
 }
