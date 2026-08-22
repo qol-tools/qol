@@ -167,14 +167,13 @@ impl Kit {
             .border_color(rgba(edge.map(|tone| tone.packed()).unwrap_or(0)));
         match bar {
             None => row,
-            Some(tone) => row.child(
+            Some(tone) => row.overflow_hidden().child(
                 div()
                     .absolute()
                     .left_0()
-                    .top(px(8.0))
-                    .bottom(px(8.0))
+                    .top_0()
+                    .bottom_0()
                     .w(px(qol_theme::SPACE_MARK))
-                    .rounded_full()
                     .bg(rgb(tone)),
             ),
         }
