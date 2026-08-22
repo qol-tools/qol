@@ -39,7 +39,11 @@ pub fn search_bar(
         .gap(px(10.0))
         .bg(rgb(current_palette().bg))
         .border_b(px(1.0))
-        .border_color(rgba(kit.washes.hairline.packed()))
+        .border_color(rgba(if result_count == 0 {
+            0
+        } else {
+            kit.washes.hairline.packed()
+        }))
         .child(
             div()
                 .flex_none()
