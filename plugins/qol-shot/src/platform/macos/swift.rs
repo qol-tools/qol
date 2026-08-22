@@ -14,15 +14,11 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 pub(super) const SWIFT_PRELUDE: &str = include_str!("../macos_swift/prelude.swift");
 pub(super) const STATUS_OVERLAY_SWIFT: &str = include_str!("../macos_swift/status_overlay.swift");
-pub(super) const RECORDING_OVERLAY_SWIFT: &str =
-    include_str!("../macos_swift/recording_overlay.swift");
 pub(super) const CLIPBOARD_WRITER_SWIFT: &str =
     include_str!("../macos_swift/clipboard_writer.swift");
 pub(super) const VIDEO_COMPOSER_SWIFT: &str = include_str!("../macos_swift/video_composer.swift");
 pub(super) const STATUS_OVERLAY_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
-pub(super) const RECORDING_OVERLAY_HELPER: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/recording-overlay"));
 pub(super) const CLIPBOARD_WRITER_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/clipboard-writer"));
 pub(super) const VIDEO_COMPOSER_HELPER: &[u8] =

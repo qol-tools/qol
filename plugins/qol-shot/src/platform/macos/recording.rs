@@ -11,13 +11,10 @@ use crate::{Config, Rect};
 use super::conversion::{convert_recording, run_conversion_command};
 use super::display::{active_displays, rect_intersection, DisplayInfo};
 use super::labels::{monitor_label, path_label, rect_label};
-use super::overlay::{
-    dismiss_recording_region_overlay, show_recording_region_overlay, show_status_overlay,
-    StatusOverlayLifecycle,
-};
+use super::overlay::{show_status_overlay, StatusOverlayLifecycle};
 use super::swift::{
-    ensure_swift_helper, prewarm_swift_helper, RECORDING_OVERLAY_HELPER, RECORDING_OVERLAY_SWIFT,
-    STATUS_OVERLAY_HELPER, STATUS_OVERLAY_SWIFT, VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
+    ensure_swift_helper, prewarm_swift_helper, STATUS_OVERLAY_HELPER, STATUS_OVERLAY_SWIFT,
+    VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
 };
 use super::system::{
     capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
@@ -102,15 +99,13 @@ pub(super) fn finalization_for(output_file: &Path) -> Finalization {
     }
 }
 
-pub fn recording_started(session: &CaptureSession, _countdown_completed: bool) {
+pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {
     qol_runtime::probe!("SHOT_RECORD_NOTIFY", "stage=started");
-    show_recording_region_overlay(session);
     show_notification("Recording started", "Press your hotkey to stop", 1200);
     prewarm_recording_helpers();
 }
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
-    dismiss_recording_region_overlay();
     qol_runtime::probe!(
         "SHOT_RECORD_FINALIZE",
         "stage=stopped-entry pids={} segments={}",
@@ -177,7 +172,6 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
-    dismiss_recording_region_overlay();
     qol_runtime::probe!(
         "SHOT_RECORD_STOP_PLATFORM",
         "pids={} count={} segments={}",
@@ -718,11 +712,6 @@ fn prewarm_recording_helpers() {
         "status-overlay",
         STATUS_OVERLAY_SWIFT,
         STATUS_OVERLAY_HELPER,
-    );
-    prewarm_swift_helper(
-        "recording-overlay",
-        RECORDING_OVERLAY_SWIFT,
-        RECORDING_OVERLAY_HELPER,
     );
     prewarm_swift_helper(
         "video-composer",

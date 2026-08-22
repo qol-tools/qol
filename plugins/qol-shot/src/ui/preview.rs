@@ -1244,6 +1244,7 @@ impl Render for PreviewView {
         for (index, control) in controls.into_iter().enumerate() {
             let left = start_x + index as f32 * (CIRCLE + CIRCLE_GAP);
             let selected = index == self.selected;
+            let primary = index == 0 && !selected;
             root = root.child(
                 div()
                     .id(("shot-action", index))
@@ -1253,6 +1254,7 @@ impl Render for PreviewView {
                     .w(px(CIRCLE))
                     .h(px(CIRCLE))
                     .rounded_full()
+                    .shadow(qol_gpui::kit::float_shadow(system.text_primary))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1264,11 +1266,15 @@ impl Render for PreviewView {
                     })
                     .bg(if selected {
                         rgb(system.accent_fill)
+                    } else if primary {
+                        rgb(system.accent)
                     } else {
                         rgb(palette.action_bg)
                     })
                     .text_color(if selected {
                         rgb(system.accent_ink)
+                    } else if primary {
+                        rgb(system.solid_ink)
                     } else {
                         rgb(palette.action_glyph)
                     })

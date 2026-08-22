@@ -6,20 +6,13 @@ use std::process::Command;
 
 const PRELUDE: &str = "src/platform/macos_swift/prelude.swift";
 const STATUS_OVERLAY: &str = "src/platform/macos_swift/status_overlay.swift";
-const RECORDING_OVERLAY: &str = "src/platform/macos_swift/recording_overlay.swift";
 const CLIPBOARD_WRITER: &str = "src/platform/macos_swift/clipboard_writer.swift";
 const VIDEO_COMPOSER: &str = "src/platform/macos_swift/video_composer.swift";
 
 fn main() -> Result<(), Box<dyn Error>> {
     qol_conventions::build::emit_plugin_id();
 
-    for path in [
-        PRELUDE,
-        STATUS_OVERLAY,
-        RECORDING_OVERLAY,
-        CLIPBOARD_WRITER,
-        VIDEO_COMPOSER,
-    ] {
+    for path in [PRELUDE, STATUS_OVERLAY, CLIPBOARD_WRITER, VIDEO_COMPOSER] {
         println!("cargo:rerun-if-changed={path}");
     }
 
@@ -31,12 +24,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let target = env::var("TARGET")?;
     let swift_target = swift_target(&target)?;
     compile_helper(&out_dir, "status-overlay", STATUS_OVERLAY, swift_target)?;
-    compile_helper(
-        &out_dir,
-        "recording-overlay",
-        RECORDING_OVERLAY,
-        swift_target,
-    )?;
     compile_helper(&out_dir, "clipboard-writer", CLIPBOARD_WRITER, swift_target)?;
     compile_helper(&out_dir, "video-composer", VIDEO_COMPOSER, swift_target)?;
     Ok(())
