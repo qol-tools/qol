@@ -32,6 +32,7 @@ pub(crate) struct McpSessionServer {
     locks: super::spawn::SpawnLocks,
     ledger: super::spawn::SpawnLedger,
     spawn_model: Option<String>,
+    allowed_models: Vec<String>,
     spawn_surface: Option<SpawnSurface>,
     spawn_cap: Option<super::spawn::SpawnCapConfig>,
     round_timeout: Duration,
@@ -53,6 +54,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::system()?,
             ledger: super::spawn::SpawnLedger::system()?,
             spawn_model: super::spawn::config_spawn_model()?,
+            allowed_models: super::spawn::config_allowed_models()?,
             spawn_surface: super::spawn::config_surface()?,
             spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
@@ -76,6 +78,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
             ledger: super::spawn::SpawnLedger::with_dir(root.path().join("spawn-records")),
             spawn_model: None,
+            allowed_models: Vec::new(),
             spawn_surface: None,
             spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
@@ -102,6 +105,7 @@ impl McpSessionServer {
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
             ledger: super::spawn::SpawnLedger::with_dir(dir.join("spawn-records")),
             spawn_model: None,
+            allowed_models: Vec::new(),
             spawn_surface: None,
             spawn_cap: None,
             round_timeout: TEST_ROUND_TIMEOUT,
@@ -286,9 +290,12 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
             })
             .transpose()?;
-        let model =
-            super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
-                .map_err(|error| error.to_string())?;
+        let model = super::spawn::resolve_allowed_model_with(
+            model_flag.as_deref(),
+            self.spawn_model.clone(),
+            &self.allowed_models,
+        )
+        .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -345,9 +352,12 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
             })
             .transpose()?;
-        let model =
-            super::spawn::resolve_model_with(model_flag.as_deref(), self.spawn_model.clone())
-                .map_err(|error| error.to_string())?;
+        let model = super::spawn::resolve_allowed_model_with(
+            model_flag.as_deref(),
+            self.spawn_model.clone(),
+            &self.allowed_models,
+        )
+        .map_err(|error| error.to_string())?;
         let outcome = super::spawn::spawn_lanes(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -934,14 +944,10 @@ mod tests {
                         .as_ref()
                         .and_then(|launch| launch.args.last().cloned())
                 })?;
-            let fragments = prompt
-                .split('`')
-                .enumerate()
-                .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
-                .collect::<Vec<_>>();
-            let right = fragments.last()?;
-            let left = fragments.get(fragments.len().checked_sub(2)?)?;
-            Some(format!("implementation complete\n{left}{right}"))
+            Some(format!(
+                "implementation complete\n{}",
+                marker_in_prompt(&prompt)?
+            ))
         }
     }
 
@@ -951,9 +957,16 @@ mod tests {
             .enumerate()
             .filter_map(|(index, part)| (index % 2 == 1).then_some(part))
             .collect::<Vec<_>>();
-        let right = fragments.last()?;
-        let left = fragments.get(fragments.len().checked_sub(2)?)?;
-        Some(format!("{left}{right}"))
+        if fragments.len() >= 2 {
+            let right = fragments.last()?;
+            let left = fragments.get(fragments.len().checked_sub(2)?)?;
+            return Some(format!("{left}{right}"));
+        }
+        prompt
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("QOL_BRIDGE_DONE_"))
+            .map(str::to_owned)
     }
 
     impl SessionInventory for FakeBackend {
@@ -1538,7 +1551,7 @@ mod tests {
         );
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let mut arguments = spawn_arguments("pi", "lane-one", None, &cwd);
+        let mut arguments = spawn_arguments("codex", "lane-one", None, &cwd);
         arguments["model"] = json!("flash-x");
         arguments["title"] = json!("Lane One");
         arguments["task"] = json!("implement and test the bounded change");
@@ -1555,7 +1568,7 @@ mod tests {
         assert_eq!(outcome["session"], "v1:kitty:spawn-lane-one:200");
 
         let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
-        assert_eq!(request.program, "pi");
+        assert_eq!(request.program, "codex");
         assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 1);
         let binding: SessionBinding = outcome["session"].as_str().unwrap().parse().unwrap();
         let round = server.pending.pending_round(&binding).unwrap();

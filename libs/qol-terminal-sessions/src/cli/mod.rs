@@ -41,6 +41,35 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn transcript_supported(&self) -> bool {
+        false
+    }
+
+    fn transcript_paths(&self, _session: &SessionFacts) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    fn marked_report(&self, _paths: &[std::path::PathBuf], _marker: &str) -> Option<String> {
+        None
+    }
+
+    fn transcript_report(
+        &self,
+        _paths: &[std::path::PathBuf],
+        _since: std::time::SystemTime,
+        _marker: &str,
+    ) -> Option<String> {
+        None
+    }
+
+    fn transcript_runtime(
+        &self,
+        _paths: &[std::path::PathBuf],
+        _marker: &str,
+    ) -> Option<CliRuntimeState> {
+        None
+    }
+
     fn interrupt_key(&self) -> &'static str {
         "esc"
     }

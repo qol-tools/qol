@@ -111,6 +111,7 @@ fn resolve_surface(flag: Option<&str>, config: Option<SpawnSurface>) -> Result<S
 struct SpawnConfigFile {
     spawn_surface: Option<String>,
     spawn_model: Option<String>,
+    allowed_models: Option<Vec<String>>,
     spawn_cap: Option<bool>,
     spawn_cpu_weight: Option<u32>,
     spawn_io_weight: Option<u32>,
@@ -324,11 +325,32 @@ fn config_surface_at(path: &Path) -> Result<Option<SpawnSurface>> {
     Ok(Some(surface))
 }
 
+pub(super) fn sessions_config_path() -> Option<std::path::PathBuf> {
+    sessions_config_candidates()
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+fn sessions_config_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(config_dir) = qol_config::config_dir() {
+        candidates.push(config_dir.join("sessions.toml"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(
+            home.join(".config")
+                .join(qol_config::NAMESPACE)
+                .join("sessions.toml"),
+        );
+    }
+    candidates
+}
+
 pub(super) fn config_spawn_model() -> Result<Option<String>> {
-    let Some(config_dir) = qol_config::config_dir() else {
+    let Some(path) = sessions_config_path() else {
         return Ok(None);
     };
-    config_spawn_model_at(&config_dir.join("sessions.toml"))
+    config_spawn_model_at(&path)
 }
 
 fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
@@ -342,6 +364,48 @@ fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
     Ok(config.spawn_model)
 }
 
+pub(super) fn config_allowed_models() -> Result<Vec<String>> {
+    let Some(path) = sessions_config_path() else {
+        return Ok(Vec::new());
+    };
+    config_allowed_models_at(&path)
+}
+
+fn config_allowed_models_at(path: &Path) -> Result<Vec<String>> {
+    let encoded = match fs::read_to_string(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("failed to read allowed model config"),
+    };
+    let config: SpawnConfigFile =
+        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(allowed_models_from(
+        config.allowed_models,
+        config.spawn_model,
+    ))
+}
+
+fn allowed_models_from(allowed: Option<Vec<String>>, spawn_model: Option<String>) -> Vec<String> {
+    match allowed {
+        Some(allowed) if !allowed.is_empty() => allowed,
+        _ => spawn_model.into_iter().collect(),
+    }
+}
+
+pub(super) fn enforce_allowed_model_with(model: &str, allowed: &[String]) -> Result<()> {
+    if allowed.is_empty() || allowed.iter().any(|entry| entry == model) {
+        return Ok(());
+    }
+    bail!(
+        "model {model} is not one this host may launch. sessions.toml allows: {}. Model tiers are billed per token, so only the person paying picks one: ask them to widen allowed_models rather than passing another tier",
+        allowed.join(", ")
+    )
+}
+
+pub(super) fn enforce_allowed_model(model: &str) -> Result<()> {
+    enforce_allowed_model_with(model, &config_allowed_models()?)
+}
+
 pub(super) fn resolve_model_with(
     flag: Option<&str>,
     config: Option<String>,
@@ -350,6 +414,18 @@ pub(super) fn resolve_model_with(
         Some(model) => Some(model.to_owned()),
         None => config,
     })
+}
+
+pub(super) fn resolve_allowed_model_with(
+    flag: Option<&str>,
+    config: Option<String>,
+    allowed: &[String],
+) -> Result<Option<String>> {
+    let model = resolve_model_with(flag, config)?;
+    if let Some(model) = model.as_deref() {
+        enforce_allowed_model_with(model, allowed)?;
+    }
+    Ok(model)
 }
 
 pub(super) fn resolve_model(flag: Option<&str>) -> Result<Option<String>> {
@@ -661,6 +737,9 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     let model = resolve_model(parsed.model.as_deref())?;
+    if let Some(model) = model.as_deref() {
+        enforce_allowed_model(model)?;
+    }
     let cap = resolve_spawn_cap(config_spawn_cap()?);
     if let Some(cap) = &cap {
         qol_runtime::probe!(
@@ -1152,13 +1231,16 @@ pub(super) fn spawn_or_reuse(
                         task.expect("the background guard above guarantees a task");
                     super::bridge::validate_task(round_task)?;
                     let marker = super::bridge::CompletionMarker::generate();
+                    let joined = prepared.identity.tool.as_str()
+                        == qol_terminal_sessions::cli::PI_TOOL_ID;
                     let prompt = if resumed {
-                        super::bridge::resume_lane_prompt(round_task, &marker)
+                        super::bridge::resume_lane_prompt(round_task, &marker, joined)
                     } else {
                         super::bridge::bridge_prompt(
                             round_task,
                             &marker,
                             super::bridge::Role::Lane,
+                            joined,
                         )
                     };
                     launch.args.push(prompt);
@@ -1420,6 +1502,7 @@ fn launch_background(
         group,
         Some(identity.key.as_str()),
     )?;
+    pending.record_transcript_paths(&binding, &interpreter.transcript_paths(&facts))?;
     if let Some(group) = group {
         super::watch::register_group_member(
             trace_dir,
@@ -2782,6 +2865,41 @@ mod tests {
     }
 
     #[test]
+    fn a_model_outside_the_allowed_list_is_refused_by_name() {
+        let allowed = vec!["deepseek-v4-flash".to_owned()];
+        let error = enforce_allowed_model_with("deepseek-v4-pro", &allowed)
+            .expect_err("a tier the host does not allow must not launch");
+        let message = error.to_string();
+        assert!(message.contains("deepseek-v4-pro"), "{message}");
+        assert!(message.contains("deepseek-v4-flash"), "{message}");
+    }
+
+    #[test]
+    fn an_allowed_model_launches_and_an_empty_list_restricts_nothing() {
+        let allowed = vec!["deepseek-v4-flash".to_owned(), "kimi-k2".to_owned()];
+        assert!(enforce_allowed_model_with("deepseek-v4-flash", &allowed).is_ok());
+        assert!(enforce_allowed_model_with("kimi-k2", &allowed).is_ok());
+        assert!(enforce_allowed_model_with("deepseek-v4-pro", &[]).is_ok());
+    }
+
+    #[test]
+    fn a_configured_spawn_model_alone_becomes_the_whole_allowed_list() {
+        assert_eq!(
+            allowed_models_from(None, Some("deepseek-v4-flash".to_owned())),
+            vec!["deepseek-v4-flash".to_owned()]
+        );
+        assert_eq!(
+            allowed_models_from(Some(Vec::new()), Some("deepseek-v4-flash".to_owned())),
+            vec!["deepseek-v4-flash".to_owned()]
+        );
+        assert!(allowed_models_from(None, None).is_empty());
+        assert_eq!(
+            allowed_models_from(Some(vec!["kimi-k2".to_owned()]), Some("flash".to_owned())),
+            vec!["kimi-k2".to_owned()]
+        );
+    }
+
+    #[test]
     fn model_args_map_registered_tools_and_reject_unknown_tools() {
         for tool in ["pi", "codex", "claude", "kimi"] {
             let args = model_args(&CliToolId::new(tool).unwrap(), "flash-x").unwrap();
@@ -2911,9 +3029,10 @@ mod tests {
         assert!(prompt.contains("implement the fix"));
         assert!(prompt.contains("QOL_BRIDGE_DONE_"));
         assert!(
-            !prompt.contains(marker),
-            "the launch prompt never joins the fragments"
+            prompt.ends_with(&format!("Completion token:\n{marker}")),
+            "the pi prompt prints the joined token once, alone, at the end: {prompt}"
         );
+        assert!(!prompt.contains("fragments"), "{prompt}");
 
         let binding: SessionBinding = outcome.session.parse().unwrap();
         let round = pending.pending_round(&binding).unwrap().unwrap();

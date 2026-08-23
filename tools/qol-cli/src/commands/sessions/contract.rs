@@ -122,7 +122,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model override for the spawned session (e.g. deepseek-v4-pro); beats the spawn_model config",
+                        "description": "Model override for the spawned session. Omit it: the spawn_model config already names the tier this host launches at, and allowed_models refuses anything else, because tiers are billed per token and only the person paying picks one",
                     },
                     "title": {
                         "type": "string",

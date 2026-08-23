@@ -7,7 +7,7 @@ use crate::SessionFacts;
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    CliLaunchProgram, CliModelCatalog, CliScreenEvidence, CliSessionChangeHandler,
+    CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
     CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
     CliToolId,
 };
@@ -79,6 +79,41 @@ impl CliSessionInterpreter {
     pub fn transcript_completion(&self, session: &SessionFacts, marker: &str) -> Option<bool> {
         self.strategy_for(session)
             .transcript_completion(session, marker)
+    }
+
+    pub fn transcript_supported(&self, session: &SessionFacts) -> bool {
+        self.strategy_for(session).transcript_supported()
+    }
+
+    pub fn transcript_paths(&self, session: &SessionFacts) -> Vec<std::path::PathBuf> {
+        self.strategy_for(session).transcript_paths(session)
+    }
+
+    pub fn marked_report(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<String> {
+        self.strategies
+            .iter()
+            .find_map(|strategy| strategy.marked_report(paths, marker))
+    }
+
+    pub fn transcript_report(
+        &self,
+        paths: &[std::path::PathBuf],
+        since: std::time::SystemTime,
+        marker: &str,
+    ) -> Option<String> {
+        self.strategies
+            .iter()
+            .find_map(|strategy| strategy.transcript_report(paths, since, marker))
+    }
+
+    pub fn transcript_runtime(
+        &self,
+        paths: &[std::path::PathBuf],
+        marker: &str,
+    ) -> Option<CliRuntimeState> {
+        self.strategies
+            .iter()
+            .find_map(|strategy| strategy.transcript_runtime(paths, marker))
     }
 
     pub fn interrupt_key(&self, session: &SessionFacts) -> &'static str {

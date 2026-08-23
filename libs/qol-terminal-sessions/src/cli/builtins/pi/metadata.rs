@@ -354,11 +354,152 @@ fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
-        .any(|text| crate::marker::marker_close(text, marker));
+        .any(|text| crate::marker::marker_close_tolerant(text, marker));
     Some(terminal && text_contains)
 }
 
-fn tail_runtime(path: &Path) -> CliRuntimeState {
+struct TerminalAssistant {
+    text: String,
+    timestamp_millis: Option<i64>,
+}
+
+fn latest_terminal_assistant(path: &Path) -> Option<TerminalAssistant> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut cursor = file.metadata().ok()?.len();
+    let mut suffix = Vec::new();
+    while cursor > 0 {
+        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
+        let length = usize::try_from(cursor - start).ok()?;
+        let mut chunk = vec![0; length];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&suffix);
+        let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        let complete_from = usize::from(start > 0);
+        for line in lines[complete_from..].iter().rev() {
+            if let Some(assistant) = terminal_assistant(line) {
+                return Some(assistant);
+            }
+        }
+        suffix = lines.first().copied().unwrap_or_default().to_vec();
+        cursor = start;
+    }
+    terminal_assistant(&suffix)
+}
+
+fn terminal_assistant(line: &[u8]) -> Option<TerminalAssistant> {
+    if !memchr_contains(line, b"\"type\":\"message\"") {
+        return None;
+    }
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    let message = value.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let terminal = message
+        .get("stopReason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason != "toolUse");
+    if !terminal {
+        return None;
+    }
+    let text = message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let timestamp_millis = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|stamp| stamp.timestamp_millis());
+    Some(TerminalAssistant {
+        text,
+        timestamp_millis,
+    })
+}
+
+pub(super) fn terminal_report_after(path: &Path, since_millis: i64) -> Option<String> {
+    let assistant = latest_terminal_assistant(path)?;
+    let stamp = assistant.timestamp_millis?;
+    if stamp < since_millis {
+        return None;
+    }
+    (!assistant.text.is_empty()).then_some(assistant.text)
+}
+
+pub(super) fn marked_terminal_text(path: &Path, marker: &str) -> Option<String> {
+    let assistant = latest_terminal_assistant(path)?;
+    crate::marker::marker_close_tolerant(&assistant.text, marker)
+        .then_some(assistant.text)
+        .filter(|text| !text.is_empty())
+}
+
+pub(super) fn transcript_owned_by(path: &Path, marker: &str) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    std::io::BufRead::lines(std::io::BufReader::new(file))
+        .map_while(Result::ok)
+        .any(|line| user_message_mentions_marker(&line, marker))
+}
+
+fn user_message_mentions_marker(line: &str, marker: &str) -> bool {
+    if !memchr_contains(line.as_bytes(), b"QOL_BRIDGE_DONE") {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let Some(message) = value.get("message") else {
+        return false;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    let text = message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::marker::marker_close_tolerant(&text, marker)
+}
+
+pub(super) fn transcript_report(
+    paths: &[std::path::PathBuf],
+    since_millis: i64,
+    marker: &str,
+) -> Option<String> {
+    for path in paths {
+        if !transcript_owned_by(path, marker) {
+            continue;
+        }
+        if let Some(text) = terminal_report_after(path, since_millis) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+pub(super) fn transcript_runtime(
+    paths: &[std::path::PathBuf],
+    marker: &str,
+) -> Option<CliRuntimeState> {
+    let path = paths
+        .iter()
+        .find(|path| transcript_owned_by(path, marker))?;
+    Some(tail_runtime(path))
+}
+
+pub(super) fn tail_runtime(path: &Path) -> CliRuntimeState {
     let Some(line) = tail::last_complete_line(path) else {
         return CliRuntimeState::Ready;
     };
@@ -530,5 +671,180 @@ mod tests {
         );
         let (_root, path) = write(&[]);
         assert_eq!(marker_in_terminal_assistant_text(&path, "MARKER"), None);
+    }
+
+    #[test]
+    fn the_split_fragment_form_counts_in_terminal_assistant_text() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[(
+                "text",
+                "Completion fragments: `QOL_BRIDGE_DONE_` and `abc123`.",
+            )],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_abc123"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn marked_terminal_text_returns_the_final_message_for_a_matching_marker() {
+        use super::marked_terminal_text;
+        let (_root, path) = write(&[
+            message("user", None, &[("text", "go")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[
+                    ("thinking", "internal"),
+                    ("text", "the full report"),
+                    ("text", "QOL_BRIDGE_DONE_abc123"),
+                ],
+            ),
+        ]);
+        assert_eq!(
+            marked_terminal_text(&path, "QOL_BRIDGE_DONE_abc123").as_deref(),
+            Some("the full report\nQOL_BRIDGE_DONE_abc123")
+        );
+    }
+
+    #[test]
+    fn terminal_report_after_ignores_older_turns_and_rejects_missing_timestamps() {
+        use super::terminal_report_after;
+        let boundary = chrono::DateTime::parse_from_rfc3339("2026-08-03T09:01:00.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let (_root, path) = write(&[
+            "{\"type\":\"message\",\"timestamp\":\"2026-08-03T09:00:00.000Z\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"end_turn\",\"content\":[{\"type\":\"text\",\"text\":\"earlier\"}]}}\n"
+                .to_string(),
+        ]);
+        assert_eq!(terminal_report_after(&path, boundary), None);
+        let (_root, path) = write(&[
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"end_turn\",\"content\":[{\"type\":\"text\",\"text\":\"later\"}]}}\n"
+                .to_string(),
+        ]);
+        assert_eq!(terminal_report_after(&path, boundary), None);
+        let (_root, path) = write(&[
+            "{\"type\":\"message\",\"timestamp\":\"2026-08-03T09:05:00.000Z\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"end_turn\",\"content\":[{\"type\":\"text\",\"text\":\"fresh\"}]}}\n"
+                .to_string(),
+        ]);
+        assert_eq!(
+            terminal_report_after(&path, boundary).as_deref(),
+            Some("fresh")
+        );
+    }
+
+    fn stamped(role: &str, stop: Option<&str>, text: &str, stamp: &str) -> String {
+        let stop = stop
+            .map(|reason| format!(",\"stopReason\":\"{reason}\""))
+            .unwrap_or_default();
+        format!(
+            "{{\"type\":\"message\",\"timestamp\":\"{stamp}\",\"message\":{{\"role\":\"{role}\"{stop},\"content\":[{{\"type\":\"text\",\"text\":{}}}]}}}}\n",
+            serde_json::to_string(text).unwrap()
+        )
+    }
+
+    #[test]
+    fn a_fresh_sibling_transcript_is_never_captured_for_this_lane() {
+        use super::{transcript_owned_by, transcript_report};
+        let root = tempfile::TempDir::new().unwrap();
+        let sibling = root.path().join("2026-08-23T19-52-50-000Z_a.jsonl");
+        let own = root.path().join("2026-08-23T19-52-51-000Z_b.jsonl");
+        std::fs::write(
+            &sibling,
+            format!(
+                "{} {}",
+                stamped(
+                    "user",
+                    None,
+                    "task QOL_BRIDGE_DONE_sibling",
+                    "2026-08-23T19:52:50.000Z"
+                ),
+                stamped(
+                    "assistant",
+                    Some("end_turn"),
+                    "SIBLING REPORT QOL_BRIDGE_DONE_sibling",
+                    "2026-08-23T19:55:00.000Z"
+                ),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &own,
+            format!(
+                "{} {}",
+                stamped(
+                    "user",
+                    None,
+                    "task QOL_BRIDGE_DONE_own",
+                    "2026-08-23T19:52:51.000Z"
+                ),
+                stamped(
+                    "assistant",
+                    Some("end_turn"),
+                    "OWN REPORT QOL_BRIDGE_DONE_own",
+                    "2026-08-23T19:56:00.000Z"
+                ),
+            ),
+        )
+        .unwrap();
+        let paths = vec![sibling.clone(), own.clone()];
+        assert!(!transcript_owned_by(&sibling, "QOL_BRIDGE_DONE_own"));
+        assert!(transcript_owned_by(&own, "QOL_BRIDGE_DONE_own"));
+        let report = transcript_report(&paths, 0, "QOL_BRIDGE_DONE_own")
+            .expect("the own transcript must produce the report");
+        assert!(
+            report.contains("OWN REPORT"),
+            "the capture must be the lane's own report: {report}"
+        );
+        assert!(
+            !report.contains("SIBLING"),
+            "a sibling report must never be captured: {report}"
+        );
+    }
+
+    #[test]
+    fn the_runtime_tail_follows_the_owned_transcript_not_a_ready_sibling() {
+        use super::transcript_runtime;
+        use crate::cli::CliRuntimeState;
+        let root = tempfile::TempDir::new().unwrap();
+        let sibling = root.path().join("2026-08-23T19-52-50-000Z_a.jsonl");
+        let own = root.path().join("2026-08-23T19-52-51-000Z_b.jsonl");
+        std::fs::write(
+            &sibling,
+            format!(
+                "{} {}",
+                stamped(
+                    "user",
+                    None,
+                    "task QOL_BRIDGE_DONE_sibling",
+                    "2026-08-23T19:52:50.000Z"
+                ),
+                stamped(
+                    "assistant",
+                    Some("end_turn"),
+                    "SIBLING DONE QOL_BRIDGE_DONE_sibling",
+                    "2026-08-23T19:55:00.000Z"
+                ),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &own,
+            format!(
+                "{} {}",
+                stamped("user", None, "task QOL_BRIDGE_DONE_own", "2026-08-23T19:52:51.000Z"),
+                "{\"type\":\"message\",\"timestamp\":\"2026-08-23T19:56:00.000Z\",\"message\":{\"role\":\"tool\",\"content\":[{\"type\":\"toolResult\",\"toolUseId\":\"x\",\"content\":\"still working\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let paths = vec![sibling.clone(), own.clone()];
+        assert_eq!(
+            transcript_runtime(&paths, "QOL_BRIDGE_DONE_own"),
+            Some(CliRuntimeState::Working),
+            "the runtime must follow the lane's own tail, not the ready sibling"
+        );
     }
 }

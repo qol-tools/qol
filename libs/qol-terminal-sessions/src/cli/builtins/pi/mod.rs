@@ -81,6 +81,44 @@ impl CliSessionStrategy for PiStrategy {
         None
     }
 
+    fn transcript_supported(&self) -> bool {
+        true
+    }
+
+    fn transcript_paths(&self, session: &SessionFacts) -> Vec<std::path::PathBuf> {
+        self.metadata.subscription_paths(session)
+    }
+
+    fn marked_report(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<String> {
+        for path in paths {
+            if let Some(text) = metadata::marked_terminal_text(path, marker) {
+                return Some(text);
+            }
+        }
+        None
+    }
+
+    fn transcript_report(
+        &self,
+        paths: &[std::path::PathBuf],
+        since: std::time::SystemTime,
+        marker: &str,
+    ) -> Option<String> {
+        let since_millis = since
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|elapsed| elapsed.as_millis() as i64)?;
+        metadata::transcript_report(paths, since_millis, marker)
+    }
+
+    fn transcript_runtime(
+        &self,
+        paths: &[std::path::PathBuf],
+        marker: &str,
+    ) -> Option<CliRuntimeState> {
+        metadata::transcript_runtime(paths, marker)
+    }
+
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
         if !crate::cli::screen::pi_live(screen) {
             return CliScreenEvidence::default();

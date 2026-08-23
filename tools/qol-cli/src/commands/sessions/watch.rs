@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
@@ -68,6 +68,8 @@ struct WatchedRound {
     autoclose: bool,
     group: Option<String>,
     label: Option<String>,
+    started_at: Option<SystemTime>,
+    transcript_paths: Vec<std::path::PathBuf>,
 }
 
 impl WatchedRound {
@@ -91,6 +93,8 @@ impl WatchedRound {
             autoclose: round.autoclose,
             group: round.group,
             label: round.label,
+            started_at: round.started_at,
+            transcript_paths: round.transcript_paths,
         })
     }
 }
@@ -337,30 +341,63 @@ fn complete_seen_round(
     Ok(RoundPoll::of(false, true))
 }
 
-fn transcript_denies_marker(
-    terminals: &TerminalSessionService,
+fn capture_report(
+    paths: &[std::path::PathBuf],
     interpreter: &CliSessionInterpreter,
-    binding: &SessionBinding,
+    since: Option<SystemTime>,
     marker: &str,
-) -> bool {
-    let Ok(sessions) = terminals.discover() else {
-        return false;
-    };
-    let Some(facts) = sessions
-        .into_iter()
-        .find(|facts| facts.id == *binding.session_id())
-    else {
-        return false;
-    };
-    if interpreter.transcript_completion(&facts, marker) != Some(false) {
-        return false;
+    screen: &str,
+) -> String {
+    if let Some(report) = interpreter.marked_report(paths, marker) {
+        return cap_report(strip_trailing_marker(report, marker));
     }
-    qol_runtime::probe!(
-        "CLI_SESSION_WATCH",
-        "event=marker_denied_by_transcript session={}",
-        binding.token()
-    );
-    true
+    if let Some(report) =
+        since.and_then(|since| interpreter.transcript_report(paths, since, marker))
+    {
+        return cap_report(strip_trailing_marker(report, marker));
+    }
+    screen.to_owned()
+}
+
+fn cap_report(report: String) -> String {
+    if report.len() <= SCREEN_SNAPSHOT_MAX_BYTES {
+        return report;
+    }
+    let head = SCREEN_SNAPSHOT_MAX_BYTES * 3 / 4;
+    let mut head_cut = head;
+    while !report.is_char_boundary(head_cut) {
+        head_cut -= 1;
+    }
+    let mut tail_cut = report.len() - (SCREEN_SNAPSHOT_MAX_BYTES - head_cut);
+    while !report.is_char_boundary(tail_cut) {
+        tail_cut += 1;
+    }
+    format!(
+        "{}\n\n[...]\n\n{}",
+        &report[..head_cut],
+        &report[tail_cut..]
+    )
+}
+
+fn strip_trailing_marker(mut report: String, marker: &str) -> String {
+    let trimmed = report.trim_end();
+    let Some(last_line) = trimmed.rsplit('\n').next() else {
+        return report;
+    };
+    if last_line.is_empty() {
+        return report;
+    }
+    let strip = if let Some(index) = last_line.find("QOL_BRIDGE_DONE_") {
+        let residue = last_line[..index].trim();
+        (residue.is_empty() || residue == "Completion fragments: `")
+            && qol_terminal_sessions::marker::marker_close_tolerant(&last_line[index..], marker)
+    } else {
+        false
+    };
+    if strip {
+        report.truncate(trimmed.len() - last_line.len());
+    }
+    report
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -386,10 +423,28 @@ fn poll_round(
         Ok(screen) => screen,
         Err(_) => {
             if session_gone(terminals, &round.binding) {
-                if round.marker_seen {
-                    let last = round.last_screen.clone().unwrap_or_default();
-                    let tail = screen_tail(&last);
-                    let full_screen: &str = &last;
+                let rescue: Option<(String, bool)> = if round.marker_seen {
+                    Some((round.last_screen.clone().unwrap_or_default(), false))
+                } else if let Some(report) =
+                    interpreter.marked_report(&round.transcript_paths, &round.marker)
+                {
+                    Some((
+                        cap_report(strip_trailing_marker(report, &round.marker)),
+                        false,
+                    ))
+                } else if let Some(report) = round.started_at.and_then(|since| {
+                    interpreter.transcript_report(&round.transcript_paths, since, &round.marker)
+                }) {
+                    Some((
+                        cap_report(strip_trailing_marker(report, &round.marker)),
+                        true,
+                    ))
+                } else {
+                    None
+                };
+                if let Some((report, markerless)) = rescue {
+                    let tail = screen_tail(&report);
+                    let full_screen: &str = &report;
                     if let Some(group) = round.group.as_deref() {
                         pending.observe(&round.binding, &round.marker, true)?;
                         pending.store_screen(&round.binding, &round.marker, tail)?;
@@ -431,7 +486,7 @@ fn poll_round(
                                 &combined,
                                 round.autoclose,
                                 &delivery,
-                                false,
+                                markerless,
                             )?;
                             return Ok(RoundPoll::of(false, true));
                         }
@@ -489,7 +544,7 @@ fn poll_round(
                         tail,
                         round.autoclose,
                         &delivery,
-                        false,
+                        markerless,
                     )?;
                     return Ok(RoundPoll::of(false, true));
                 }
@@ -596,8 +651,70 @@ fn poll_round(
             &round.binding,
         );
     }
-    let marker_visible = super::marker_present(&screen, &round.marker)
-        && !transcript_denies_marker(terminals, interpreter, &round.binding, &round.marker);
+    let facts = terminals.discover().ok().and_then(|sessions| {
+        sessions
+            .into_iter()
+            .find(|facts| facts.id == *round.binding.session_id())
+    });
+    let paths = facts
+        .as_ref()
+        .map(|facts| interpreter.transcript_paths(facts))
+        .unwrap_or_default();
+    if !paths.is_empty() {
+        round.transcript_paths = paths.clone();
+    }
+    if let Some(report) = interpreter.marked_report(&paths, &round.marker) {
+        match pending.pending_round(&round.binding)? {
+            None => {
+                return Ok(RoundPoll::of(false, false));
+            }
+            Some(current) if current.completed => {
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=collected session={} source=checkpoint",
+                    round.session
+                );
+                return Ok(RoundPoll::of(false, false));
+            }
+            Some(_) => {
+                let report = cap_report(strip_trailing_marker(report, &round.marker));
+                let wake_msg = wake_message(
+                    trace_dir,
+                    &round.session,
+                    "completed",
+                    &report,
+                    &round.marker,
+                    round.autoclose,
+                    round.label.as_deref(),
+                );
+                return complete_seen_round(
+                    terminals,
+                    interpreter,
+                    pending,
+                    ledger,
+                    locks,
+                    round,
+                    out,
+                    trace_dir,
+                    sleep,
+                    &report,
+                    &wake_msg,
+                    false,
+                );
+            }
+        }
+    }
+    let transcript_tool = facts
+        .as_ref()
+        .is_some_and(|facts| interpreter.transcript_supported(facts));
+    let agreement = facts
+        .as_ref()
+        .and_then(|facts| interpreter.transcript_completion(facts, &round.marker));
+    let marker_visible = if transcript_tool {
+        super::marker_present(&screen, &round.marker) && agreement == Some(true)
+    } else {
+        super::marker_present(&screen, &round.marker) && agreement != Some(false)
+    };
     if marker_visible {
         match pending.pending_round(&round.binding)? {
             None => {
@@ -616,12 +733,18 @@ fn poll_round(
             }
             Some(_) => {
                 if round.marker_seen {
-                    let full_screen: &str = &screen;
+                    let report = capture_report(
+                        &paths,
+                        interpreter,
+                        round.started_at,
+                        &round.marker,
+                        &screen,
+                    );
                     let wake_msg = wake_message(
                         trace_dir,
                         &round.session,
                         "completed",
-                        full_screen,
+                        &report,
                         &round.marker,
                         round.autoclose,
                         round.label.as_deref(),
@@ -636,7 +759,7 @@ fn poll_round(
                         out,
                         trace_dir,
                         sleep,
-                        full_screen,
+                        &report,
                         &wake_msg,
                         false,
                     );
@@ -652,7 +775,13 @@ fn poll_round(
     } else {
         round.marker_seen = false;
     }
-    match round_runtime(terminals, interpreter, &round.binding) {
+    match round_runtime(
+        terminals,
+        interpreter,
+        &round.binding,
+        &round.transcript_paths,
+        &round.marker,
+    ) {
         CliRuntimeState::Working => {
             round.runtime_working_seen = true;
             round.ready_polls = 0;
@@ -671,17 +800,24 @@ fn poll_round(
     let finished_turn = round.runtime_working_seen && round.ready_polls >= 3;
     let screen_quiet = round.last_change.elapsed() >= config.stall_after;
     if finished_turn || screen_quiet {
+        let report = capture_report(
+            &round.transcript_paths,
+            interpreter,
+            round.started_at,
+            &round.marker,
+            &screen,
+        );
         let idle_msg = if finished_turn {
             format!(
-                "qol sessions: lane {} finished its turn without printing its completion marker.\nThe attached screen tail is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
+                "qol sessions: lane {} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
                 round.session,
-                clean_screen(screen_tail(&screen))
+                clean_screen(screen_tail(&report))
             )
         } else {
             format!(
-                "qol sessions: lane {} went idle for 15 minutes without printing its completion marker.\nThe attached screen tail is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
+                "qol sessions: lane {} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
                 round.session,
-                clean_screen(screen_tail(&screen))
+                clean_screen(screen_tail(&report))
             )
         };
         return complete_seen_round(
@@ -694,7 +830,7 @@ fn poll_round(
             out,
             trace_dir,
             sleep,
-            &screen,
+            &report,
             &idle_msg,
             true,
         );
@@ -733,6 +869,8 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.marker_seen = false;
                         round.runtime_working_seen = false;
                         round.ready_polls = 0;
+                        round.started_at = current.started_at;
+                        round.transcript_paths = current.transcript_paths;
                     }
                     remaining.push(round);
                 }
@@ -826,7 +964,12 @@ fn round_runtime(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
+    paths: &[std::path::PathBuf],
+    marker: &str,
 ) -> CliRuntimeState {
+    if let Some(runtime) = interpreter.transcript_runtime(paths, marker) {
+        return runtime;
+    }
     terminals
         .discover()
         .ok()
@@ -2304,6 +2447,77 @@ mod tests {
     }
 
     #[test]
+    fn lane_gone_on_the_first_poll_completes_from_the_checkpointed_transcript_path() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        pending
+            .record_transcript_paths(
+                &binding,
+                &[std::path::PathBuf::from("fake-transcript.jsonl")],
+            )
+            .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]).die_after_reads(0);
+        let (terminals, _) = harness(backend);
+        let tool = FakeTool::new(Transcript::Finished);
+        tool.set_report(
+            Some("the full lane report\nQOL_BRIDGE_DONE_round".to_owned()),
+            true,
+        );
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let mut attempts = 0;
+        loop {
+            let result = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            attempts += 1;
+            if !result.keep {
+                break;
+            }
+            assert!(
+                attempts < 10,
+                "round did not complete within the poll budget"
+            );
+        }
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert!(events[0]["screen"]
+            .as_str()
+            .unwrap()
+            .contains("the full lane report"));
+        assert!(pending.pending_round(&binding).unwrap().unwrap().completed);
+    }
+
+    #[test]
     fn completed_wake_text_never_instructs_the_driver() {
         let dir = tempfile::TempDir::new().unwrap();
         let closable = wake_message(
@@ -3336,7 +3550,10 @@ mod tests {
             .filter(|(kind, _)| *kind == CallKind::Ls)
             .count();
         assert_eq!(full, 27);
-        assert_eq!(ls, 58);
+        assert_eq!(
+            ls, 83,
+            "every poll reads the session facts once for the transcript gate, the strict reads stay on the tenths, and the completion adds its captures"
+        );
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "completed");
@@ -3960,6 +4177,7 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Transcript {
+        Unsupported,
         Silent,
         Working,
         Finished,
@@ -3968,6 +4186,10 @@ mod tests {
     struct FakeTool {
         tool: CliTool,
         transcript: AtomicU64,
+        report: std::sync::Mutex<Option<String>>,
+        marked: std::sync::atomic::AtomicBool,
+        owned: std::sync::atomic::AtomicBool,
+        runtime_override: std::sync::Mutex<Option<CliRuntimeState>>,
     }
 
     impl FakeTool {
@@ -3980,6 +4202,10 @@ mod tests {
             let fake = Arc::new(Self {
                 tool,
                 transcript: AtomicU64::new(0),
+                report: std::sync::Mutex::new(None),
+                marked: std::sync::atomic::AtomicBool::new(false),
+                owned: std::sync::atomic::AtomicBool::new(true),
+                runtime_override: std::sync::Mutex::new(None),
             });
             fake.set(transcript);
             fake
@@ -3987,11 +4213,25 @@ mod tests {
 
         fn set(&self, transcript: Transcript) {
             let encoded = match transcript {
-                Transcript::Silent => 0,
-                Transcript::Working => 1,
-                Transcript::Finished => 2,
+                Transcript::Unsupported => 0,
+                Transcript::Silent => 1,
+                Transcript::Working => 2,
+                Transcript::Finished => 3,
             };
             self.transcript.store(encoded, Ordering::Relaxed);
+        }
+
+        fn set_report(&self, text: Option<String>, marked: bool) {
+            *self.report.lock().unwrap() = text;
+            self.marked.store(marked, Ordering::Relaxed);
+        }
+
+        fn set_owned(&self, owned: bool) {
+            self.owned.store(owned, Ordering::Relaxed);
+        }
+
+        fn set_transcript_runtime(&self, runtime: CliRuntimeState) {
+            *self.runtime_override.lock().unwrap() = Some(runtime);
         }
     }
 
@@ -4013,8 +4253,8 @@ mod tests {
             _session: &SessionFacts,
         ) -> qol_terminal_sessions::cli::CliSessionDescriptor {
             let runtime = match self.transcript.load(Ordering::Relaxed) {
-                1 => CliRuntimeState::Working,
-                2 => CliRuntimeState::Ready,
+                2 => CliRuntimeState::Working,
+                3 => CliRuntimeState::Ready,
                 _ => CliRuntimeState::Unknown,
             };
             qol_terminal_sessions::cli::CliSessionDescriptor {
@@ -4029,12 +4269,58 @@ mod tests {
             }
         }
 
+        fn transcript_supported(&self) -> bool {
+            self.transcript.load(Ordering::Relaxed) != 0
+        }
+
+        fn transcript_paths(&self, _session: &SessionFacts) -> Vec<std::path::PathBuf> {
+            if self.transcript_supported() {
+                vec![std::path::PathBuf::from("fake-transcript.jsonl")]
+            } else {
+                Vec::new()
+            }
+        }
+
         fn transcript_completion(&self, _session: &SessionFacts, _marker: &str) -> Option<bool> {
             match self.transcript.load(Ordering::Relaxed) {
-                1 => Some(false),
-                2 => Some(true),
+                2 => Some(false),
+                3 => Some(self.marked.load(Ordering::Relaxed)),
                 _ => None,
             }
+        }
+
+        fn marked_report(&self, paths: &[std::path::PathBuf], _marker: &str) -> Option<String> {
+            if paths.is_empty() {
+                return None;
+            }
+            if self.transcript.load(Ordering::Relaxed) != 3 || !self.marked.load(Ordering::Relaxed)
+            {
+                return None;
+            }
+            self.report.lock().unwrap().clone()
+        }
+
+        fn transcript_report(
+            &self,
+            paths: &[std::path::PathBuf],
+            _since: SystemTime,
+            _marker: &str,
+        ) -> Option<String> {
+            if paths.is_empty()
+                || self.transcript.load(Ordering::Relaxed) != 3
+                || !self.owned.load(Ordering::Relaxed)
+            {
+                return None;
+            }
+            self.report.lock().unwrap().clone()
+        }
+
+        fn transcript_runtime(
+            &self,
+            _paths: &[std::path::PathBuf],
+            _marker: &str,
+        ) -> Option<CliRuntimeState> {
+            *self.runtime_override.lock().unwrap()
         }
     }
 
@@ -4117,7 +4403,7 @@ mod tests {
                 true,
                 None,
                 None,
-                Transcript::Silent,
+                Transcript::Unsupported,
                 screens,
             )
         }
@@ -4147,6 +4433,18 @@ mod tests {
 
         fn transcript(&self, transcript: Transcript) {
             self.tool.set(transcript);
+        }
+
+        fn set_report(&self, text: Option<String>, marked: bool) {
+            self.tool.set_report(text, marked);
+        }
+
+        fn set_owned(&self, owned: bool) {
+            self.tool.set_owned(owned);
+        }
+
+        fn set_transcript_runtime(&self, runtime: CliRuntimeState) {
+            self.tool.set_transcript_runtime(runtime);
         }
 
         fn poll(&mut self, sim: &SessionSim) -> RoundPoll {
@@ -4277,6 +4575,7 @@ mod tests {
         lane.poll_times(&sim, 4);
         assert!(lane.events().is_empty());
 
+        lane.set_report(Some("finished\nQOL_BRIDGE_DONE_round".to_owned()), true);
         lane.transcript(Transcript::Finished);
         lane.run(&sim);
 
@@ -4296,7 +4595,7 @@ mod tests {
             true,
             None,
             None,
-            Transcript::Silent,
+            Transcript::Unsupported,
             vec![REASONING_SCREEN.to_owned(); 4],
         );
 
@@ -4359,6 +4658,69 @@ mod tests {
     }
 
     #[test]
+    fn sim_a_foreign_transcript_is_never_captured_as_this_lanes_report() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["the lane's own screen tail".to_owned(); 8],
+        );
+        lane.set_report(Some("FOREIGN SIBLING REPORT".to_owned()), false);
+        lane.set_owned(false);
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.poll_times(&sim, 3);
+
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        assert!(
+            wakes[0].contains("the lane's own screen tail"),
+            "the capture must be the lane's own screen: {:?}",
+            wakes[0]
+        );
+        assert!(
+            !wakes[0].contains("FOREIGN"),
+            "a foreign transcript must never be delivered as this lane's report: {:?}",
+            wakes[0]
+        );
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_ready_foreign_runtime_does_not_finish_a_still_working_lane() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["working".to_owned(); 8],
+        );
+        lane.set_transcript_runtime(CliRuntimeState::Working);
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.set_transcript_runtime(CliRuntimeState::Working);
+        lane.poll_times(&sim, 4);
+
+        assert!(
+            lane.events().is_empty(),
+            "a lane whose own transcript is still working must not finish: {:?}",
+            lane.events()
+        );
+        assert!(!lane.settled(&sim));
+    }
+
+    #[test]
     fn sim_a_lane_that_never_worked_does_not_stall_on_a_ready_runtime() {
         let sim = SessionSim::new();
         let mut lane = sim.lane(
@@ -4383,6 +4745,123 @@ mod tests {
     }
 
     #[test]
+    fn sim_a_final_text_with_the_split_fragment_form_completes_from_the_transcript() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            false,
+            None,
+            None,
+            Transcript::Silent,
+            vec!["the split fragments never join on screen".to_owned(); 4],
+        );
+        lane.set_report(
+            Some(
+                "the full report\nCompletion fragments: `QOL_BRIDGE_DONE_` and `round`.".to_owned(),
+            ),
+            true,
+        );
+        lane.transcript(Transcript::Finished);
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert!(lane.settled(&sim));
+        let round = lane.open_round(&sim).unwrap();
+        let screen = round.screen.unwrap_or_default();
+        assert!(
+            screen.contains("the full report"),
+            "the report is the final message, not the scrollback: {screen}"
+        );
+        assert!(
+            !screen.contains("Completion fragments"),
+            "the echoed instruction line is stripped: {screen}"
+        );
+    }
+
+    #[test]
+    fn sim_a_finished_lane_whose_terminal_closed_is_rescued_from_the_transcript() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Silent,
+            vec!["still working".to_owned(); 2],
+        );
+        lane.set_report(Some("the full markerless report".to_owned()), false);
+        lane.transcript(Transcript::Finished);
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        assert!(
+            sim.pending.pending_round(&lane.binding).unwrap().is_some(),
+            "the rescued round keeps its checkpoint for the bridge"
+        );
+        let round = lane.open_round(&sim).unwrap();
+        assert_eq!(
+            round.screen.as_deref(),
+            Some("the full markerless report"),
+            "the rescued report is the final transcript message"
+        );
+    }
+
+    #[test]
+    fn sim_a_report_longer_than_the_viewport_is_captured_whole_from_the_transcript() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            false,
+            None,
+            None,
+            Transcript::Silent,
+            vec!["> shell prompt".to_owned(); 2],
+        );
+        let body = (0..400)
+            .map(|index| format!("report line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        lane.set_report(Some(format!("{body}\nQOL_BRIDGE_DONE_round")), true);
+        lane.transcript(Transcript::Finished);
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        let round = lane.open_round(&sim).unwrap();
+        let screen = round.screen.unwrap_or_default();
+        assert!(
+            screen.contains("report line 0\nreport line 1"),
+            "the head of the report survives: {:?}",
+            &screen[..screen.len().min(120)]
+        );
+        assert!(
+            screen.contains("report line 399"),
+            "the tail of the report survives"
+        );
+        assert!(
+            !screen.contains("shell prompt"),
+            "no scrollback leaks into the captured report: {:?}",
+            &screen[..screen.len().min(120)]
+        );
+    }
+
+    #[test]
     fn sim_the_marker_preempts_the_runtime_stall() {
         let sim = SessionSim::new();
         let mut lane = sim.lane(
@@ -4402,6 +4881,7 @@ mod tests {
         );
 
         lane.poll_times(&sim, 2);
+        lane.set_report(Some("the report\nQOL_BRIDGE_DONE_round".to_owned()), true);
         lane.transcript(Transcript::Finished);
         lane.run(&sim);
 
@@ -4446,6 +4926,9 @@ mod tests {
             Transcript::Finished,
             vec![format!("report c\n{printed}"); 4],
         );
+        lane_a.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
+        lane_b.set_report(Some("report b\nQOL_BRIDGE_DONE_b".to_owned()), true);
+        lane_c.set_report(Some(format!("report c\n{printed}")), true);
 
         lane_a.run(&sim);
         lane_b.run(&sim);
@@ -4467,8 +4950,8 @@ mod tests {
             "the mangled-marker member must leave its fragment: {combined}"
         );
         assert!(
-            combined.contains(printed),
-            "the combined report must carry the mangled marker text: {combined}"
+            !combined.contains(printed),
+            "the token line is stripped from the captured report: {combined}"
         );
     }
 
@@ -4519,7 +5002,7 @@ mod tests {
         for (index, (marker, label)) in markers.iter().zip(labels).enumerate() {
             let native = format!("{}", 7 + index);
             let screen = format!("report {label}\n{marker}");
-            lanes.push(sim.lane(
+            let lane = sim.lane(
                 &native,
                 100 + index as i32,
                 marker,
@@ -4527,8 +5010,10 @@ mod tests {
                 Some(group),
                 Some(label),
                 Transcript::Finished,
-                vec![screen; 4],
-            ));
+                vec![screen.clone(); 4],
+            );
+            lane.set_report(Some(screen), true);
+            lanes.push(lane);
         }
 
         for lane in lanes.iter_mut().take(2) {
@@ -4586,6 +5071,7 @@ mod tests {
             Transcript::Finished,
             vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
         );
+        alive.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
         let mut dead = sim.lane(
             "8",
             200,
@@ -4640,6 +5126,7 @@ mod tests {
             Transcript::Finished,
             vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 8],
         );
+        lane.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
 
         lane.run(&sim);
         assert_eq!(lane.wakes().len(), 1);

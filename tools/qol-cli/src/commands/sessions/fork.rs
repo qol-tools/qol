@@ -274,6 +274,7 @@ pub(super) fn fork(
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
+    super::spawn::enforce_allowed_model(&parsed.model)?;
     if parsed.help {
         println!("{}", help());
         return Ok(());
@@ -341,7 +342,7 @@ pub(super) struct ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork --tool TOOL --cwd PATH --key KEY --model MODEL (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--model defaults to spawn_model in sessions.toml and is refused unless allowed_models permits it, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
@@ -385,8 +386,11 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
         );
     }
     if parsed.model.is_empty() {
+        parsed.model = super::spawn::config_spawn_model()?.unwrap_or_default();
+    }
+    if parsed.model.is_empty() {
         bail!(
-            "fork requires --model: a detached architect owns its problem alone, so it launches at an explicitly chosen tier\n\n{}",
+            "fork requires --model or a spawn_model in sessions.toml so the tier is one this host may launch\n\n{}",
             help()
         );
     }
@@ -413,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn fork_args_default_to_claude_and_require_key_model_and_cwd() {
+    fn fork_args_default_to_claude_and_require_key_and_cwd() {
         let parsed = parse_args(&args(&[
             "--cwd",
             "/work",
@@ -435,7 +439,6 @@ mod tests {
         for (missing, expected) in [
             (args(&["--key", "k", "--model", "opus"]), "--cwd"),
             (args(&["--cwd", "/work", "--model", "opus"]), "--key"),
-            (args(&["--cwd", "/work", "--key", "k"]), "--model"),
         ] {
             let error = parse_args(&missing).unwrap_err().to_string();
             assert!(error.contains(expected), "{error}");

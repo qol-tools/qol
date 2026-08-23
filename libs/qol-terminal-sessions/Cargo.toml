@@ -6,6 +6,7 @@ license.workspace = true
 description = "Backend-neutral live terminal session discovery and interaction"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qol-config.workspace = true
 qol-runtime.workspace = true
 qol-watch.workspace = true

@@ -79,6 +79,8 @@ pub(super) struct PendingRound {
     pub(super) autoclose: bool,
     pub(super) group: Option<String>,
     pub(super) label: Option<String>,
+    pub(super) started_at: Option<SystemTime>,
+    pub(super) transcript_paths: Vec<PathBuf>,
 }
 
 struct PendingBridgeLock {
@@ -121,6 +123,10 @@ struct StoredCheckpoint {
     group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    transcript_paths: Vec<PathBuf>,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -147,7 +153,23 @@ impl From<StoredCheckpoint> for PendingRound {
             autoclose: stored.autoclose,
             group: stored.group,
             label: stored.label,
+            started_at: stored.started_at_ms.map(system_time_from_millis),
+            transcript_paths: stored.transcript_paths,
         }
+    }
+}
+
+fn system_time_millis(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn system_time_from_millis(millis: i64) -> SystemTime {
+    if millis > 0 {
+        UNIX_EPOCH + Duration::from_millis(millis as u64)
+    } else {
+        UNIX_EPOCH
     }
 }
 
@@ -196,7 +218,7 @@ impl PendingBridgeStore {
         driver: &str,
         autoclose: bool,
         group: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<SystemTime> {
         self.start_with_label(binding, marker, driver, autoclose, group, None)
     }
 
@@ -208,7 +230,7 @@ impl PendingBridgeStore {
         autoclose: bool,
         group: Option<&str>,
         label: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<SystemTime> {
         let _lock = self.lock(binding)?;
         if self
             .load_unlocked(binding)?
@@ -216,9 +238,22 @@ impl PendingBridgeStore {
         {
             bail!("a bridge is already pending for `{binding}`");
         }
+        let started_at = SystemTime::now();
         self.write_unlocked(
-            binding, marker, driver, false, None, autoclose, None, group, label, false,
-        )
+            binding,
+            marker,
+            driver,
+            false,
+            None,
+            autoclose,
+            None,
+            group,
+            label,
+            &[],
+            false,
+            Some(system_time_millis(started_at)),
+        )?;
+        Ok(started_at)
     }
 
     pub(super) fn observe(
@@ -244,7 +279,9 @@ impl PendingBridgeStore {
             checkpoint.wake_event.as_deref(),
             checkpoint.group.as_deref(),
             checkpoint.label.as_deref(),
+            &checkpoint.transcript_paths,
             false,
+            checkpoint.started_at_ms,
         )
     }
 
@@ -271,7 +308,9 @@ impl PendingBridgeStore {
             checkpoint.wake_event.as_deref(),
             checkpoint.group.as_deref(),
             checkpoint.label.as_deref(),
+            &checkpoint.transcript_paths,
             false,
+            checkpoint.started_at_ms,
         )
     }
 
@@ -293,7 +332,9 @@ impl PendingBridgeStore {
             checkpoint.wake_event.as_deref(),
             checkpoint.group.as_deref(),
             label,
+            &checkpoint.transcript_paths,
             false,
+            checkpoint.started_at_ms,
         )
     }
 
@@ -320,9 +361,39 @@ impl PendingBridgeStore {
             Some(event),
             checkpoint.group.as_deref(),
             checkpoint.label.as_deref(),
+            &checkpoint.transcript_paths,
             false,
+            checkpoint.started_at_ms,
         )?;
         Ok(true)
+    }
+
+    pub(super) fn record_transcript_paths(
+        &self,
+        binding: &SessionBinding,
+        paths: &[PathBuf],
+    ) -> Result<()> {
+        let _lock = self.lock(binding)?;
+        let Some(checkpoint) = self.load_unlocked(binding)? else {
+            return Ok(());
+        };
+        if checkpoint.closed || checkpoint.transcript_paths == paths {
+            return Ok(());
+        }
+        self.write_unlocked(
+            binding,
+            &checkpoint.completion_marker,
+            &checkpoint.driver,
+            checkpoint.completed,
+            checkpoint.screen.as_deref(),
+            checkpoint.autoclose,
+            checkpoint.wake_event.as_deref(),
+            checkpoint.group.as_deref(),
+            checkpoint.label.as_deref(),
+            paths,
+            false,
+            checkpoint.started_at_ms,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -337,7 +408,9 @@ impl PendingBridgeStore {
         wake_event: Option<&str>,
         group: Option<&str>,
         label: Option<&str>,
+        paths: &[PathBuf],
         closed: bool,
+        started_at_ms: Option<i64>,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -353,6 +426,8 @@ impl PendingBridgeStore {
             wake_event: wake_event.map(str::to_owned),
             group: group.map(str::to_owned),
             label: label.map(str::to_owned),
+            started_at_ms,
+            transcript_paths: paths.to_vec(),
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -414,7 +489,9 @@ impl PendingBridgeStore {
                 current.wake_event.as_deref(),
                 current.group.as_deref(),
                 current.label.as_deref(),
+                &current.transcript_paths,
                 true,
+                current.started_at_ms,
             )?;
         }
         Ok(())
@@ -434,6 +511,8 @@ impl PendingBridgeStore {
                 autoclose: checkpoint.autoclose,
                 group: checkpoint.group,
                 label: checkpoint.label,
+                started_at: checkpoint.started_at_ms.map(system_time_from_millis),
+                transcript_paths: checkpoint.transcript_paths,
             }))
     }
 
@@ -488,6 +567,8 @@ impl PendingBridgeStore {
                 autoclose: checkpoint.autoclose,
                 group: checkpoint.group,
                 label: checkpoint.label,
+                started_at: checkpoint.started_at_ms.map(system_time_from_millis),
+                transcript_paths: checkpoint.transcript_paths,
             })
             .collect::<Vec<_>>();
         rounds.sort_by(|left, right| left.session.cmp(&right.session));
@@ -808,13 +889,18 @@ pub(super) fn execute(
 
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
-    let prompt = bridge_prompt(task, &marker, role);
-    pending.start(
+    let joined = session_is_pi(interpreter, &target);
+    let prompt = bridge_prompt(task, &marker, role, joined);
+    let started_at = pending.start(
         binding,
         &marker.token,
         &driver_token(terminals),
         false,
         None,
+    )?;
+    pending.record_transcript_paths(
+        binding,
+        &transcript_paths_for(terminals, interpreter, binding),
     )?;
 
     let liveness = session_liveness(terminals, interpreter, binding);
@@ -872,18 +958,36 @@ pub(super) fn execute(
         if subscribed { "active" } else { "fallback" }
     );
 
-    let outcome = wait_for_completion(
-        terminals,
-        binding,
-        &marker.token,
-        timeout,
-        changed_rx,
-        subscribed,
-        true,
-        &session_liveness(terminals, interpreter, binding),
-        STALL_PROBE_AFTER,
-        role,
-    )?;
+    let outcome = if joined {
+        wait_for_pi_round(
+            terminals,
+            interpreter,
+            pending,
+            binding,
+            &marker.token,
+            Some(started_at),
+            timeout,
+            changed_rx,
+            subscribed,
+            true,
+            &session_liveness(terminals, interpreter, binding),
+            STALL_PROBE_AFTER,
+            role,
+        )?
+    } else {
+        wait_for_completion(
+            terminals,
+            binding,
+            &marker.token,
+            timeout,
+            changed_rx,
+            subscribed,
+            true,
+            &session_liveness(terminals, interpreter, binding),
+            STALL_PROBE_AFTER,
+            role,
+        )?
+    };
     pending.observe(binding, &marker.token, outcome.completed)?;
     if outcome.completed {
         super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
@@ -934,17 +1038,22 @@ pub(super) fn submit(
     }
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
+    let joined = session_is_pi(interpreter, &target);
     let prompt = if resume {
-        resume_lane_prompt(task, &marker)
+        resume_lane_prompt(task, &marker, joined)
     } else {
-        bridge_prompt(task, &marker, role)
+        bridge_prompt(task, &marker, role, joined)
     };
-    pending.start(
+    let _started_at = pending.start(
         binding,
         &marker.token,
         &driver_token(terminals),
         autoclose,
         None,
+    )?;
+    pending.record_transcript_paths(
+        binding,
+        &transcript_paths_for(terminals, interpreter, binding),
     )?;
     let liveness = session_liveness(terminals, interpreter, binding);
     let pre_screen = terminals
@@ -1130,10 +1239,15 @@ fn resume_owned(
         )
         .context("failed to subscribe to implementation-session changes")?;
     let subscribed = subscription.is_some();
+    let joined = session_is_pi(interpreter, &target);
     if kickstart {
         let marker = CompletionMarker::from_token(&round.completion_marker)?;
         terminals
-            .send_text(binding, &kickstart_prompt(&marker), DeliveryMode::Submit)
+            .send_text(
+                binding,
+                &kickstart_prompt(&marker, joined),
+                DeliveryMode::Submit,
+            )
             .context("bridge kickstart delivery failed")?;
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
@@ -1164,18 +1278,36 @@ fn resume_owned(
             );
         }
     }
-    let outcome = wait_for_completion(
-        terminals,
-        binding,
-        &round.completion_marker,
-        timeout,
-        changed_rx,
-        subscribed,
-        false,
-        &session_liveness(terminals, interpreter, binding),
-        STALL_PROBE_AFTER,
-        role,
-    )?;
+    let outcome = if joined {
+        wait_for_pi_round(
+            terminals,
+            interpreter,
+            pending,
+            binding,
+            &round.completion_marker,
+            round.started_at,
+            timeout,
+            changed_rx,
+            subscribed,
+            false,
+            &session_liveness(terminals, interpreter, binding),
+            STALL_PROBE_AFTER,
+            role,
+        )?
+    } else {
+        wait_for_completion(
+            terminals,
+            binding,
+            &round.completion_marker,
+            timeout,
+            changed_rx,
+            subscribed,
+            false,
+            &session_liveness(terminals, interpreter, binding),
+            STALL_PROBE_AFTER,
+            role,
+        )?
+    };
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
         super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
@@ -1369,25 +1501,192 @@ fn outcome(
     }
 }
 
-fn kickstart_prompt(marker: &CompletionMarker) -> String {
-    format!(
-        "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
-        marker.left, marker.right
-    )
+fn session_is_pi(interpreter: &CliSessionInterpreter, facts: &SessionFacts) -> bool {
+    interpreter.describe(facts).tool.id.as_str() == qol_terminal_sessions::cli::PI_TOOL_ID
 }
 
-pub(super) fn resume_lane_prompt(task: &str, marker: &CompletionMarker) -> String {
-    format!(
-        "[qol session bridge]\nThis lane key previously ran a session whose terminal is gone; this terminal is resuming that persisted session's work. Continue from the persisted state (the prior round's checkpoint and stored screen remain available via `qol sessions next`) instead of treating this as a fresh lane. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
-        marker.left, marker.right
-    )
+fn transcript_paths_for(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> Vec<PathBuf> {
+    let Ok(sessions) = terminals.discover() else {
+        return Vec::new();
+    };
+    let Some(facts) = sessions
+        .into_iter()
+        .find(|facts| facts.id == *binding.session_id())
+    else {
+        return Vec::new();
+    };
+    interpreter.transcript_paths(&facts)
 }
 
-pub(super) fn bridge_prompt(task: &str, marker: &CompletionMarker, role: Role) -> String {
+#[allow(clippy::too_many_arguments)]
+fn wait_for_pi_round(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    pending: &PendingBridgeStore,
+    binding: &SessionBinding,
+    marker: &str,
+    since: Option<SystemTime>,
+    timeout: Duration,
+    changed: mpsc::Receiver<()>,
+    mut subscribed: bool,
+    submitted: bool,
+    liveness: &dyn Fn() -> Option<bool>,
+    stall_after: Duration,
+    role: Role,
+) -> Result<BridgeOutcome> {
+    let started = Instant::now();
+    let mut reads = 0u64;
+    let mut interval = Duration::from_millis(500);
+    let mut last_signal = Instant::now();
+    let mut last_probe: Option<Instant> = None;
+    let mut cached_paths: Vec<PathBuf> = Vec::new();
+    loop {
+        reads += 1;
+        let paths = transcript_paths_for(terminals, interpreter, binding);
+        if !paths.is_empty() {
+            cached_paths = paths;
+        }
+        if let Some(round) = pending.pending_round(binding)? {
+            if round.completed {
+                let screen = round.screen.unwrap_or_default();
+                return Ok(outcome(
+                    true, submitted, false, role, binding, marker, screen, reads, started,
+                ));
+            }
+        }
+        if let Some(report) = interpreter.marked_report(&cached_paths, marker) {
+            pending.observe(binding, marker, true)?;
+            pending.store_screen(binding, marker, &report)?;
+            return Ok(outcome(
+                true, submitted, false, role, binding, marker, report, reads, started,
+            ));
+        }
+        if session_gone(terminals, binding) {
+            if let Some(report) =
+                since.and_then(|since| interpreter.transcript_report(&cached_paths, since, marker))
+            {
+                pending.observe(binding, marker, true)?;
+                pending.store_screen(binding, marker, &report)?;
+                return Ok(outcome(
+                    true, submitted, false, role, binding, marker, report, reads, started,
+                ));
+            }
+            return Ok(outcome(
+                false,
+                submitted,
+                false,
+                role,
+                binding,
+                marker,
+                String::new(),
+                reads,
+                started,
+            ));
+        }
+        if last_signal.elapsed() >= stall_after
+            && last_probe.is_none_or(|probed| probed.elapsed() >= stall_after)
+        {
+            last_probe = Some(Instant::now());
+            let activity = liveness();
+            if activity == Some(false)
+                || (activity.is_none() && last_signal.elapsed() >= stall_after * 4)
+            {
+                return Ok(outcome(
+                    false,
+                    submitted,
+                    true,
+                    role,
+                    binding,
+                    marker,
+                    String::new(),
+                    reads,
+                    started,
+                ));
+            }
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(outcome(
+                false,
+                submitted,
+                false,
+                role,
+                binding,
+                marker,
+                String::new(),
+                reads,
+                started,
+            ));
+        }
+        let remaining = timeout.saturating_sub(elapsed);
+        if subscribed {
+            match changed.recv_timeout(interval.min(remaining)) {
+                Ok(()) => {
+                    last_signal = Instant::now();
+                    interval = Duration::from_millis(500);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    interval = (interval * 2).min(Duration::from_secs(15));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => subscribed = false,
+            }
+        } else {
+            std::thread::sleep(interval.min(remaining));
+            interval = (interval * 2).min(Duration::from_secs(15));
+        }
+    }
+}
+
+fn kickstart_prompt(marker: &CompletionMarker, joined: bool) -> String {
+    if joined {
+        format!(
+            "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never observed; the session may have been interrupted. If the task is already complete, end your turn now with this completion token alone on a line of its own. Otherwise continue the task to completion and end your final response with the token.\n\nCompletion token:\n{token}",
+            token = marker.token
+        )
+    } else {
+        format!(
+            "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
+            marker.left, marker.right
+        )
+    }
+}
+
+pub(super) fn resume_lane_prompt(task: &str, marker: &CompletionMarker, joined: bool) -> String {
+    if joined {
+        format!(
+            "[qol session bridge]\nThis lane key previously ran a session whose terminal is gone; this terminal is resuming that persisted session's work. Continue from the persisted state (the prior round's checkpoint and stored report remain available via `qol sessions next`) instead of treating this as a fresh lane. When the task is genuinely complete, end your final response with this completion token alone on a line of its own.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
+            token = marker.token
+        )
+    } else {
+        format!(
+            "[qol session bridge]\nThis lane key previously ran a session whose terminal is gone; this terminal is resuming that persisted session's work. Continue from the persisted state (the prior round's checkpoint and stored screen remain available via `qol sessions next`) instead of treating this as a fresh lane. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
+            marker.left, marker.right
+        )
+    }
+}
+
+pub(super) fn bridge_prompt(
+    task: &str,
+    marker: &CompletionMarker,
+    role: Role,
+    joined: bool,
+) -> String {
     match role {
+        Role::Lane if joined => format!(
+            "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with this completion token alone on a line of its own.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
+            token = marker.token
+        ),
         Role::Lane => format!(
             "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
             marker.left, marker.right
+        ),
+        Role::Architect if joined => format!(
+            "[qol session bridge to architect]\nA request is open on this session. Your durable role record has no lane marker, so you are the architect: this message does not change your role. Treat the task below as a collaborator request: accept it into your own loop (you may plan, spawn your own lanes, review, and report with your own verdict) or decline it with a reason. Either way, end your final response with this completion token alone on a line of its own so the sender's transaction completes.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
+            token = marker.token
         ),
         Role::Architect => format!(
             "[qol session bridge to architect]\nA request is open on this session. Your durable role record has no lane marker, so you are the architect: this message does not change your role. Treat the task below as a collaborator request: accept it into your own loop (you may plan, spawn your own lanes, review, and report with your own verdict) or decline it with a reason. Either way, end your final response with the completion fragments joined with no spaces or punctuation so the sender's transaction completes.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
@@ -1408,6 +1707,11 @@ pub(super) fn validate_task(task: &str) -> Result<()> {
         .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
     {
         bail!("bridge task contains unsupported control characters");
+    }
+    if task.contains("QOL_BRIDGE_DONE_") {
+        bail!(
+            "the bridge task text contains the reserved completion-marker prefix `QOL_BRIDGE_DONE_`; the harness manages the completion token itself, so remove the marker from the task"
+        );
     }
     Ok(())
 }
@@ -1781,6 +2085,171 @@ mod tests {
         }
     }
 
+    struct PiWaitStrategy {
+        marked: std::sync::Mutex<Option<String>>,
+        since_report: std::sync::Mutex<Option<String>>,
+    }
+
+    impl CliSessionStrategy for PiWaitStrategy {
+        fn tool(&self) -> &CliTool {
+            static TOOL: std::sync::OnceLock<CliTool> = std::sync::OnceLock::new();
+            TOOL.get_or_init(|| {
+                CliTool::new(
+                    CliToolId::new("pi").unwrap(),
+                    "Pi",
+                    CliToolColor::new(1, 2, 3),
+                )
+            })
+        }
+
+        fn matches(&self, _session: &SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(&self, _session: &SessionFacts) -> CliSessionDescriptor {
+            CliSessionDescriptor {
+                tool: self.tool().clone(),
+                display_name: None,
+                external_id: None,
+                has_activity: None,
+                evidence: CliSessionEvidence::default(),
+            }
+        }
+
+        fn transcript_supported(&self) -> bool {
+            true
+        }
+
+        fn transcript_paths(&self, _session: &SessionFacts) -> Vec<PathBuf> {
+            vec![PathBuf::from("pi-transcript.jsonl")]
+        }
+
+        fn marked_report(&self, paths: &[PathBuf], _marker: &str) -> Option<String> {
+            if paths.is_empty() {
+                return None;
+            }
+            self.marked.lock().unwrap().clone()
+        }
+
+        fn transcript_report(
+            &self,
+            paths: &[PathBuf],
+            _since: SystemTime,
+            _marker: &str,
+        ) -> Option<String> {
+            if paths.is_empty() {
+                return None;
+            }
+            self.since_report.lock().unwrap().clone()
+        }
+    }
+
+    fn pi_wait_harness(
+        root: &tempfile::TempDir,
+        backend: Arc<FakeBackend>,
+        strategy: Arc<PiWaitStrategy>,
+    ) -> (
+        TerminalSessionService,
+        CliSessionInterpreter,
+        PendingBridgeStore,
+        SessionBinding,
+    ) {
+        let pending = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:7:100",
+                false,
+                None,
+            )
+            .unwrap();
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        let interpreter =
+            CliSessionInterpreter::from_strategies([strategy as Arc<dyn CliSessionStrategy>])
+                .unwrap();
+        (terminals, interpreter, pending, binding)
+    }
+
+    #[test]
+    fn the_pi_wait_completes_from_the_transcript_marked_report() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = FakeBackend::new(
+            facts(&"v1:fake:7:100".parse().unwrap()),
+            vec!["working".to_owned(); 4],
+        );
+        let strategy = Arc::new(PiWaitStrategy {
+            marked: std::sync::Mutex::new(Some("the full report".to_owned())),
+            since_report: std::sync::Mutex::new(None),
+        });
+        let (terminals, interpreter, pending, binding) = pi_wait_harness(&root, backend, strategy);
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let outcome = wait_for_pi_round(
+            &terminals,
+            &interpreter,
+            &pending,
+            &binding,
+            "QOL_BRIDGE_DONE_round",
+            None,
+            Duration::from_secs(30),
+            rx,
+            false,
+            true,
+            &|| Some(false),
+            Duration::from_secs(3600),
+            Role::Lane,
+        )
+        .unwrap();
+        assert!(outcome.completed);
+        assert_eq!(outcome.screen, "the full report");
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed);
+        assert_eq!(round.screen.as_deref(), Some("the full report"));
+    }
+
+    #[test]
+    fn the_pi_wait_rescues_a_finished_lane_whose_terminal_closed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = FakeBackend::new(
+            facts(&"v1:fake:7:100".parse().unwrap()),
+            vec!["working".to_owned(); 8],
+        );
+        let closer = Arc::clone(&backend);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            closer.mark_gone();
+        });
+        let strategy = Arc::new(PiWaitStrategy {
+            marked: std::sync::Mutex::new(None),
+            since_report: std::sync::Mutex::new(Some("the finished report".to_owned())),
+        });
+        let (terminals, interpreter, pending, binding) = pi_wait_harness(&root, backend, strategy);
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let outcome = wait_for_pi_round(
+            &terminals,
+            &interpreter,
+            &pending,
+            &binding,
+            "QOL_BRIDGE_DONE_round",
+            Some(SystemTime::now()),
+            Duration::from_secs(30),
+            rx,
+            false,
+            true,
+            &|| Some(false),
+            Duration::from_secs(3600),
+            Role::Lane,
+        )
+        .unwrap();
+        assert!(outcome.completed);
+        assert_eq!(outcome.screen, "the finished report");
+        let round = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(round.completed);
+        assert_eq!(round.screen.as_deref(), Some("the finished report"));
+    }
+
     fn grouped_lane_collected_by_the_bridge(
         root: &tempfile::TempDir,
         pending: &PendingBridgeStore,
@@ -1985,8 +2454,8 @@ mod tests {
             1
         );
         assert_eq!(get_text, outcome.reads + 2);
-        assert_eq!(ls, outcome.reads / 10 + 4);
-        assert!(ls - 3 <= outcome.reads.div_ceil(10) + 1);
+        assert_eq!(ls, outcome.reads / 10 + 5);
+        assert!(ls - 4 <= outcome.reads.div_ceil(10) + 1);
     }
 
     #[test]
@@ -2079,7 +2548,7 @@ mod tests {
     #[test]
     fn resume_lane_prompt_announces_the_resume_intent() {
         let marker = CompletionMarker::from_nonce("abc123");
-        let prompt = resume_lane_prompt("implement the bounded change", &marker);
+        let prompt = resume_lane_prompt("implement the bounded change", &marker, false);
 
         assert!(prompt.starts_with("[qol session bridge]\n"));
         assert!(prompt.contains("resuming"), "{prompt}");
@@ -2094,16 +2563,37 @@ mod tests {
         assert!(prompt.contains("abc123"));
         assert!(
             !prompt.contains(&marker.token),
-            "the prompt never joins the fragments"
+            "the split prompt never joins the fragments"
         );
+    }
+
+    #[test]
+    fn the_joined_prompt_prints_the_token_once_alone_and_never_says_fragments() {
+        let marker = CompletionMarker::from_nonce("abc123");
+        let resume = resume_lane_prompt("implement the bounded change", &marker, true);
+        assert!(resume.ends_with(&format!("Completion token:\n{}", marker.token)));
+        assert!(!resume.contains("fragments"), "{resume}");
+        assert_eq!(resume.matches(&marker.token).count(), 1);
+        let kickstart = kickstart_prompt(&marker, true);
+        assert!(kickstart.ends_with(&format!("Completion token:\n{}", marker.token)));
+        assert!(!kickstart.contains("fragments"), "{kickstart}");
+        assert_eq!(kickstart.matches(&marker.token).count(), 1);
+        for prompt in [
+            bridge_prompt("implement the bounded change", &marker, Role::Lane, true),
+            bridge_prompt("collaborator request", &marker, Role::Architect, true),
+        ] {
+            assert!(prompt.ends_with(&format!("Completion token:\n{}", marker.token)));
+            assert!(!prompt.contains("fragments"), "{prompt}");
+            assert_eq!(prompt.matches(&marker.token).count(), 1);
+        }
     }
 
     #[test]
     fn prompt_never_contains_the_joined_completion_marker() {
         let marker = CompletionMarker::from_nonce("abc123");
         for prompt in [
-            bridge_prompt("implement the bounded change", &marker, Role::Lane),
-            bridge_prompt("collaborator request", &marker, Role::Architect),
+            bridge_prompt("implement the bounded change", &marker, Role::Lane, false),
+            bridge_prompt("collaborator request", &marker, Role::Architect, false),
         ] {
             assert!(prompt.contains("QOL_BRIDGE_DONE_"));
             assert!(prompt.contains("abc123"));
@@ -2114,13 +2604,13 @@ mod tests {
     #[test]
     fn bridge_prompt_renders_the_lane_and_architect_envelopes() {
         let marker = CompletionMarker::from_nonce("abc123");
-        let lane = bridge_prompt("implement the bounded change", &marker, Role::Lane);
+        let lane = bridge_prompt("implement the bounded change", &marker, Role::Lane, false);
         assert_eq!(
             lane,
             "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\nimplement the bounded change\n\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
         );
 
-        let architect = bridge_prompt("collaborator request", &marker, Role::Architect);
+        let architect = bridge_prompt("collaborator request", &marker, Role::Architect, false);
         assert!(architect.starts_with("[qol session bridge to architect]\n"));
         assert!(architect.contains("durable role record has no lane marker"));
         assert!(architect.contains("does not change your role"));
@@ -2256,7 +2746,7 @@ mod tests {
     #[test]
     fn kickstart_prompt_reuses_the_checkpoint_marker_fragments() {
         let marker = CompletionMarker::from_token("QOL_BRIDGE_DONE_abc123").unwrap();
-        let prompt = kickstart_prompt(&marker);
+        let prompt = kickstart_prompt(&marker, false);
 
         assert!(prompt.contains("QOL_BRIDGE_DONE_"));
         assert!(prompt.contains("abc123"));
@@ -2271,6 +2761,14 @@ mod tests {
         assert!(validate_task("\u{1b}[31munsafe").is_err());
         assert!(validate_task("\0").is_err());
         assert!(validate_task("   ").is_err());
+    }
+
+    #[test]
+    fn task_validation_refuses_a_task_that_carries_the_marker_prefix() {
+        let error = validate_task("do the work, then end with the token: QOL_BRIDGE_DONE_abc123")
+            .unwrap_err();
+        assert!(error.to_string().contains("QOL_BRIDGE_DONE_"), "{error}");
+        validate_task("a plain task without any marker words").unwrap();
     }
 
     #[test]
