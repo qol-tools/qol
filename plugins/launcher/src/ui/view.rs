@@ -2,10 +2,11 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
 use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO};
 
-use super::layout::HEADER_HEIGHT;
-use crate::discovery::search::{ResultSource, Scored};
+use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
+use crate::discovery::search::{ResultSource, Scored, SearchMode};
 
 fn current_palette() -> LauncherPalette {
     launcher_runtime()
@@ -240,12 +241,26 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .collect()
 }
 
-pub fn hint_bar() -> Div {
+pub fn hint_bar(mode: SearchMode) -> Div {
     let kit = qol_gpui::kit::kit();
-    kit.hint_bar()
-        .child(kit.hint("\u{23CE}", "open"))
-        .child(kit.hint("\u{21E5}", "mode"))
-        .child(kit.hint("esc", "dismiss"))
+    let items = [
+        BarItem::Hint(HintDescriptor::new("\u{23CE}", "open", 2)),
+        BarItem::Hint(HintDescriptor::new("\u{2191}\u{2193}", "move", 2)),
+        BarItem::Hint(HintDescriptor::new("\u{21E5}", "mode", 1)),
+        BarItem::FixedWidth(estimated_chip_width(mode.label())),
+        BarItem::Hint(HintDescriptor::new("type", "search", 0)),
+        BarItem::Spacer,
+        BarItem::Hint(HintDescriptor::pinned("esc", "dismiss")),
+    ];
+    let mut bar = kit.hint_bar();
+    for item in fit_hints(WINDOW_WIDTH, &items) {
+        bar = match item {
+            BarItem::Hint(spec) => bar.child(kit.hint(spec.key, spec.label)),
+            BarItem::FixedWidth(_) => bar.child(kit.chip(mode.label(), kit.palette.accent)),
+            BarItem::Spacer => bar.child(div().flex_1()),
+        };
+    }
+    bar
 }
 
 pub fn bg_color() -> gpui::Rgba {

@@ -1,5 +1,8 @@
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, FontWeight, SharedString};
+use gpui::{
+    div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
+    FontWeight, SharedString,
+};
 use qol_theme::{SystemPalette, ThemeMode, WashPalette};
 
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
@@ -514,6 +517,27 @@ pub fn raised_shadow(text_primary: u32) -> Vec<BoxShadow> {
     ]
 }
 
+pub fn accent_left_edge(radius: f32, width: f32, accent: u32) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded_l(px(radius))
+        .border_l(px(width))
+        .border_color(rgb(accent))
+}
+
+pub const RAIL_SCRIM_START: f32 = 0.32;
+pub const RAIL_SCRIM_END: f32 = 0.5;
+pub const RAIL_SCRIM_ALPHA: u8 = 0x66;
+
+pub fn rail_scrim(surface: u32) -> Background {
+    linear_gradient(
+        90.0,
+        linear_color_stop(rgba(alpha(surface, 0x00)), RAIL_SCRIM_START),
+        linear_color_stop(rgba(alpha(surface, RAIL_SCRIM_ALPHA)), RAIL_SCRIM_END),
+    )
+}
+
 pub fn alpha(color: u32, opacity: u8) -> u32 {
     (color << 8) | u32::from(opacity)
 }
@@ -534,7 +558,10 @@ pub fn kit() -> Kit {
 
 #[cfg(test)]
 mod tests {
-    use super::{focus_ring_for, FOCUS_RING_EDGE, FOCUS_RING_HALO};
+    use super::{
+        focus_ring_for, rail_scrim, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
+        RAIL_SCRIM_END, RAIL_SCRIM_START,
+    };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 
     #[test]
@@ -556,5 +583,15 @@ mod tests {
             assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
             assert!(halo.spread_radius > edge.spread_radius);
         }
+    }
+
+    #[test]
+    fn the_rail_scrim_stays_clear_through_a_third_then_ramps_to_full_alpha() {
+        let rendered = format!("{:?}", rail_scrim(0x000000));
+        assert!(rendered.contains("LinearGradient(90"));
+        assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_START}")));
+        assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_END}")));
+        assert!(rendered.contains("a: 0.0"));
+        assert!(rendered.contains(&format!("a: {}", f32::from(RAIL_SCRIM_ALPHA) / 255.0)));
     }
 }

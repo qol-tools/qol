@@ -428,6 +428,17 @@ mod tests {
     }
 
     #[test]
+    fn every_search_mode_has_a_distinct_human_label() {
+        let labels: Vec<&str> = [SearchMode::Apps, SearchMode::Files]
+            .iter()
+            .map(|mode| mode.label())
+            .collect();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.iter().all(|label| !label.is_empty()));
+        assert_ne!(labels[0], labels[1]);
+    }
+
+    #[test]
     fn frecency_bonus_is_strongly_capped_for_non_contiguous_matches() {
         // "ter" fuzzy in "Update Manager": base_cap = (3*40).clamp(80,240) = 120, /3 = 40
         let capped = cap_frecency_bonus(2000, "Update Manager", "ter");

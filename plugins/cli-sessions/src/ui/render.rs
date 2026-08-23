@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    KeyUpEvent, SharedString, Window,
+    KeyUpEvent, Modifiers, SharedString, Window,
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
@@ -137,13 +137,17 @@ fn empty_state() -> impl IntoElement {
         )
 }
 
+fn chord(input: &str) -> String {
+    qol_hotkeys::chord::label_for(input).unwrap_or_default()
+}
+
 fn footer() -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     kit.hint_bar()
-        .child(kit.hint("\u{23CE}", "focus"))
-        .child(kit.hint("\u{2318}W", "close"))
+        .child(kit.hint(chord("enter"), "focus"))
+        .child(kit.hint(chord("platform+w"), "close"))
         .child(div().flex_1())
-        .child(kit.hint("\u{2325}S", "collapse"))
+        .child(kit.hint(chord("alt+s"), "collapse"))
 }
 
 fn subtitle_text(s: &SessionState) -> String {
@@ -244,8 +248,9 @@ enum StripAction {
     Dismiss,
 }
 
-fn strip_key_action(key: &str) -> Option<StripAction> {
+fn strip_key_action(key: &str, modifiers: &Modifiers) -> Option<StripAction> {
     match key {
+        "s" if modifiers.alt => Some(StripAction::Expand),
         "enter" | "space" | "up" => Some(StripAction::Expand),
         "escape" => Some(StripAction::Dismiss),
         _ => None,
@@ -306,7 +311,10 @@ impl SessionsView {
                 }
             }))
             .on_key_down(cx.listener(
-                |this, ev: &KeyDownEvent, window, cx| match strip_key_action(&ev.keystroke.key) {
+                |this, ev: &KeyDownEvent, window, cx| match strip_key_action(
+                    &ev.keystroke.key,
+                    &ev.keystroke.modifiers,
+                ) {
                     Some(StripAction::Expand) => {
                         if this.key_repeat_guard(&ev.keystroke.key) {
                             this.expand_panel(window, cx);
@@ -338,7 +346,7 @@ impl SessionsView {
                     .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                     .text_color(rgb(palette.text_muted))
                     .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .child("\u{2325}S"),
+                    .child(chord("alt+s")),
             )
             .into_any_element()
     }
@@ -544,19 +552,33 @@ mod tests {
 
     #[test]
     fn strip_key_mapping_keeps_the_panel_contract() {
+        let plain = Modifiers::default();
         for key in ["enter", "space", "up"] {
             assert!(
-                matches!(strip_key_action(key), Some(StripAction::Expand)),
+                matches!(strip_key_action(key, &plain), Some(StripAction::Expand)),
                 "{key}"
             );
         }
         assert!(matches!(
-            strip_key_action("escape"),
+            strip_key_action("escape", &plain),
             Some(StripAction::Dismiss)
         ));
         for key in ["tab", "down", "a", "x"] {
-            assert!(strip_key_action(key).is_none(), "{key}");
+            assert!(strip_key_action(key, &plain).is_none(), "{key}");
         }
+    }
+
+    #[test]
+    fn the_strip_answers_the_collapse_chord_it_advertises() {
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        assert!(matches!(
+            strip_key_action("s", &alt),
+            Some(StripAction::Expand)
+        ));
+        assert!(strip_key_action("s", &Modifiers::default()).is_none());
     }
 
     #[test]

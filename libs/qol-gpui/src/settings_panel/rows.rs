@@ -124,7 +124,6 @@ pub(super) enum RowControl {
     },
     List {
         query: String,
-        searchable: bool,
         filter: String,
         active_query: Option<String>,
         active_value_from: Option<String>,
@@ -134,7 +133,6 @@ pub(super) enum RowControl {
         row_subtitle: Option<String>,
         actions: Box<ListActions>,
         slider: Option<Box<ListSlider>>,
-        empty_message: String,
         items: Vec<ListItem>,
         list: ScrollList,
         error: Option<String>,
@@ -164,6 +162,7 @@ pub(super) struct Row {
     pub(super) action: Option<String>,
     pub(super) visibility: Option<RowVisibility>,
     pub(super) control: RowControl,
+    pub(super) source: usize,
 }
 
 #[derive(Debug)]
@@ -177,21 +176,26 @@ pub(super) struct RowSection {
     pub(super) label: String,
     pub(super) description: Option<String>,
     pub(super) rows: Vec<usize>,
+    pub(super) source: usize,
 }
 
-pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
+pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
     let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
     for field in &config.fields {
-        push_row(&mut rows, None, None, field, &field_values);
+        push_row(&mut rows, None, None, field, &field_values, source);
     }
     for section in &config.sections {
-        push_section_rows(&mut rows, section, &field_values);
+        push_section_rows(&mut rows, section, &field_values, source);
     }
     rows
 }
 
-pub(super) fn sections_from_resolved(config: &ResolvedConfig, rows: &[Row]) -> Vec<RowSection> {
+pub(super) fn sections_from_resolved(
+    config: &ResolvedConfig,
+    rows: &[Row],
+    source: usize,
+) -> Vec<RowSection> {
     let mut sections = Vec::new();
     let root_rows = rows
         .iter()
@@ -204,6 +208,7 @@ pub(super) fn sections_from_resolved(config: &ResolvedConfig, rows: &[Row]) -> V
             label: "General".into(),
             description: config.description.clone(),
             rows: root_rows,
+            source,
         });
     }
     sections.extend(config.sections.iter().filter_map(|section| {
@@ -220,6 +225,7 @@ pub(super) fn sections_from_resolved(config: &ResolvedConfig, rows: &[Row]) -> V
             label: section.label.clone(),
             description: section.description.clone(),
             rows: section_rows,
+            source,
         })
     }));
     sections
@@ -240,6 +246,7 @@ fn push_section_rows(
     rows: &mut Vec<Row>,
     section: &ResolvedSection,
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
+    source: usize,
 ) {
     let mut label = Some(section.label.clone());
     for field in &section.fields {
@@ -250,6 +257,7 @@ fn push_section_rows(
             label.clone(),
             field,
             field_values,
+            source,
         );
         if rows.len() > before {
             label = None;
@@ -263,6 +271,7 @@ fn push_row(
     section_label: Option<String>,
     field: &ResolvedField,
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
+    source: usize,
 ) {
     let control = control_for(field);
     let visibility = field.show_when.clone().and_then(|show_when| {
@@ -288,6 +297,7 @@ fn push_row(
         action: field.action.clone(),
         visibility,
         control,
+        source,
     });
 }
 
@@ -327,21 +337,6 @@ pub(super) fn visible_row_indices(rows: &[Row]) -> Vec<usize> {
     (0..rows.len())
         .filter(|index| row_is_visible(rows, *index))
         .collect()
-}
-
-pub(super) fn section_label_for(rows: &[Row], index: usize) -> Option<&str> {
-    let section_id = rows.get(index)?.section_id.as_deref()?;
-    let previous_visible = (0..index)
-        .rev()
-        .find(|candidate| row_is_visible(rows, *candidate));
-    if previous_visible
-        .is_some_and(|candidate| rows[candidate].section_id.as_deref() == Some(section_id))
-    {
-        return None;
-    }
-    rows.iter()
-        .find(|row| row.section_id.as_deref() == Some(section_id))
-        .and_then(|row| row.section_label.as_deref())
 }
 
 fn control_for(field: &ResolvedField) -> RowControl {
@@ -451,7 +446,6 @@ fn control_for(field: &ResolvedField) -> RowControl {
         FieldKind::List => match field.query.as_deref() {
             Some(query) => RowControl::List {
                 query: query.to_string(),
-                searchable: field.search == Some(true),
                 filter: String::new(),
                 active_query: field.active_query.clone(),
                 active_value_from: field.active_value_from.clone(),
@@ -469,10 +463,6 @@ fn control_for(field: &ResolvedField) -> RowControl {
                         values: std::collections::HashMap::new(),
                     })
                 }),
-                empty_message: field
-                    .empty_message
-                    .clone()
-                    .unwrap_or_else(|| "No items.".into()),
                 items: Vec::new(),
                 list: ScrollList::new(LIST_MAX_VISIBLE),
                 error: None,
@@ -627,7 +617,10 @@ fn merge_options(
     merged
 }
 
-pub(super) fn merged_config(base: &serde_json::Value, rows: &[Row]) -> serde_json::Value {
+pub(super) fn merged_config<'a>(
+    base: &serde_json::Value,
+    rows: impl IntoIterator<Item = &'a Row>,
+) -> serde_json::Value {
     let mut config = if base.is_object() {
         base.clone()
     } else {
@@ -723,7 +716,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
     }
 }
 
-pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
+pub(super) fn runtime_query_names<'a>(rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for row in rows {
         match &row.control {
@@ -1141,20 +1134,6 @@ pub(super) fn list_matches_filter(actions: &ListActions, item: &ListItem, filter
         .any(|action| action.label.to_lowercase().contains(&filter))
 }
 
-pub(super) fn apply_list_filter(
-    actions: &ListActions,
-    items: &[ListItem],
-    list: &mut ScrollList,
-    filter: &mut String,
-    next: String,
-) -> usize {
-    *filter = next;
-    let count = filtered_list_items(actions, items, filter).len();
-    list.reset();
-    list.sync(count);
-    count
-}
-
 fn options_from_value(value: &serde_json::Value) -> Vec<SelectOption> {
     value
         .as_array()
@@ -1217,13 +1196,12 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_list_filter, apply_runtime_query, begin_list_item_action, clear_slider_hold,
-        filtered_list_items, list_item_actions, list_items, list_slider_value, merged_config,
-        option_accent, primary_list_item_action, row_action, row_is_visible, row_streams,
-        row_value_json, rows_from_resolved, runtime_query_names, section_label_for,
-        sections_from_resolved, selected_list_item, set_config_value, stream_gated,
-        visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig, Row, RowControl,
-        SelectOption, SliderHold,
+        apply_runtime_query, begin_list_item_action, clear_slider_hold, filtered_list_items,
+        list_item_actions, list_items, list_slider_value, merged_config, option_accent,
+        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
+        rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
+        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
+        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -1311,9 +1289,12 @@ default = "202322"
 
     #[test]
     fn rows_map_every_supported_kind_with_override_values() {
-        let rows = rows_from_resolved(&resolved(serde_json::json!({
-            "capture": { "pin_border": false, "saved_feedback": "toast" }
-        })));
+        let rows = rows_from_resolved(
+            &resolved(
+                serde_json::json!({ "capture": { "pin_border": false, "saved_feedback": "toast" } }),
+            ),
+            0,
+        );
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].section_label.as_deref(), Some("Capture"));
         assert!(rows[1..].iter().all(|r| r.section_label.is_none()));
@@ -1373,7 +1354,7 @@ query = "controller_input"
         .unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
 
         assert_eq!(runtime_query_names(&rows), ["controller_input"]);
         apply_query(
@@ -1422,7 +1403,7 @@ global = "boolean"
         .unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
 
         let RowControl::ObjectArray(state) = &rows[0].control else {
             panic!("expected an object array row, got {:?}", rows[0].control);
@@ -1470,7 +1451,7 @@ switchable = "boolean"
         .unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
 
         assert_eq!(rows.len(), 1, "an empty rule list still needs its editor");
         let RowControl::ObjectArray(state) = &rows[0].control else {
@@ -1478,7 +1459,7 @@ switchable = "boolean"
         };
         assert!(state.entries.is_empty());
         assert_eq!(
-            sections_from_resolved(&resolved, &rows)
+            sections_from_resolved(&resolved, &rows, 0)
                 .iter()
                 .map(|section| section.label.clone())
                 .collect::<Vec<_>>(),
@@ -1531,7 +1512,7 @@ step = 1
         let spec = qol_config::contract::parse_spec_str(MIXED_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
 
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].section_label.as_deref(), Some("Devices"));
@@ -1580,8 +1561,8 @@ action = "switch"
         let spec = qol_config::contract::parse_spec_str(SECTION_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
-        let sections = sections_from_resolved(&resolved, &rows);
+        let rows = rows_from_resolved(&resolved, 0);
+        let sections = sections_from_resolved(&resolved, &rows, 0);
 
         assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].label, "General");
@@ -1638,19 +1619,16 @@ equals = "wide"
         let spec = qol_config::contract::parse_spec_str(CONDITIONAL_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
 
         assert_eq!(visible_row_indices(&rows), [1, 2]);
         assert!(!row_is_visible(&rows, 0));
-        assert_eq!(section_label_for(&rows, 1), Some("Appearance"));
-        assert_eq!(section_label_for(&rows, 2), None);
 
         let RowControl::Toggle(enabled) = &mut rows[1].control else {
             panic!("expected enabled toggle");
         };
         *enabled = true;
         assert_eq!(visible_row_indices(&rows), [0, 1, 2]);
-        assert_eq!(section_label_for(&rows, 0), Some("Appearance"));
 
         let RowControl::Select { index, .. } = &mut rows[2].control else {
             panic!("expected mode select");
@@ -1691,7 +1669,7 @@ default = "System Default"
         ];
         for (overrides, expected_options, expected_labels, expected_index) in cases {
             let resolved = qol_config::normalized::resolve_config(&spec, &overrides).unwrap();
-            let mut rows = rows_from_resolved(&resolved);
+            let mut rows = rows_from_resolved(&resolved, 0);
             assert_eq!(runtime_query_names(&rows), ["audio_sources"]);
             apply_query(
                 &mut rows,
@@ -1773,7 +1751,7 @@ query = "audio_sources"
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
 
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
 
         match &rows[0].control {
             RowControl::Select { options, .. } => {
@@ -1802,7 +1780,7 @@ query = "managed_device_options"
             &serde_json::json!({ "managed_devices": ["AA:00", "AA:02"] }),
         )
         .unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         assert_eq!(runtime_query_names(&rows), ["managed_device_options"]);
         apply_query(
             &mut rows,
@@ -1851,6 +1829,7 @@ query = "managed_device_options"
                 stream: None,
                 action: None,
                 visibility: None,
+                source: 0,
                 control: RowControl::Select {
                     options: vec![option("hold_to_switch", "Hold"), option("sticky", "Sticky")],
                     index: 1,
@@ -1870,6 +1849,7 @@ query = "managed_device_options"
                 stream: None,
                 action: None,
                 visibility: None,
+                source: 0,
                 control: RowControl::Number {
                     value: 4.0,
                     min: None,
@@ -2017,7 +1997,7 @@ input = { address = "{address}" }
         let spec = qol_config::contract::parse_spec_str(RUNTIME_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         assert_eq!(runtime_query_names(&rows), ["devices", "search_status"]);
 
         apply_query(
@@ -2274,7 +2254,7 @@ input = { id = "{id}", value = "{value}" }
         let spec = qol_config::contract::parse_spec_str(SLIDER_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         apply_query(
             &mut rows,
             "volumes",
@@ -2322,7 +2302,7 @@ tone_map = { light = "muted", dark = "accent" }
         let spec = qol_config::contract::parse_spec_str(STATUS_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         assert_eq!(runtime_query_names(&rows), ["theme_status"]);
 
         apply_query(
@@ -2365,6 +2345,7 @@ tone_map = { light = "muted", dark = "accent" }
             stream: None,
             action: None,
             visibility: None,
+            source: 0,
             control: RowControl::Action {
                 action: "start_search".into(),
                 active_action: None,
@@ -2423,7 +2404,7 @@ default = true
         .unwrap();
         let stored = serde_json::json!({ "enabled": false, "mode": "yes" });
         let resolved = qol_config::normalized::resolve_config(&spec, &stored).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         assert!(
             matches!(rows[1].control, RowControl::Unsupported { .. }),
             "the stored \"yes\" keeps the mode row unsupported for this session"
@@ -2469,7 +2450,7 @@ default = true
                     .iter()
                     .map(|section| section.fields.len())
                     .sum::<usize>();
-            let rows = rows_from_resolved(&resolved);
+            let rows = rows_from_resolved(&resolved, 0);
             for field in resolved
                 .fields
                 .iter()
@@ -2515,7 +2496,7 @@ value_from = "app_download_url"
         .unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved);
+        let mut rows = rows_from_resolved(&resolved, 0);
         assert_eq!(runtime_query_names(&rows), ["connection_info"]);
         let RowControl::QrCode { url, modules, .. } = &rows[0].control else {
             panic!("expected a qr code row, got {:?}", rows[0].control);
@@ -2822,7 +2803,7 @@ value_from = "app_download_url"
                 &serde_json::json!({ "value": overrides }),
             )
             .unwrap_or_else(|errors| panic!("{label}: {errors:?}"));
-            let rows = rows_from_resolved(&resolved);
+            let rows = rows_from_resolved(&resolved, 0);
             assert_eq!(rows.len(), 1, "{label}");
             assert_expected_control(&rows, &label, &expected);
         }
@@ -2862,7 +2843,7 @@ default = 5
         let spec = qol_config::contract::parse_spec_str(STREAM_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
 
         assert!(row_streams(&rows, 0));
         assert_eq!(row_action(&rows, 0).as_deref(), Some("set_color_main"));
@@ -2888,6 +2869,7 @@ default = 5
                 stream: None,
                 action: None,
                 visibility: None,
+                source: 0,
                 control: RowControl::Status {
                     query: "runtime".into(),
                     value_from: None,
@@ -2948,34 +2930,6 @@ default = 5
                 "{label}: query {query:?}"
             );
         }
-    }
-
-    #[test]
-    fn list_filter_resets_selection_to_the_first_visible_item() {
-        let actions = ListActions {
-            primary: None,
-            additional: Vec::new(),
-        };
-        let items = (0..12)
-            .map(|index| filter_item(&format!("device {index}"), None, false))
-            .collect::<Vec<_>>();
-        let mut list = crate::scroll_list::ScrollList::new(super::LIST_MAX_VISIBLE);
-        list.selected = 9;
-        list.scroll_offset = 5;
-        let mut filter = String::new();
-
-        apply_list_filter(&actions, &items, &mut list, &mut filter, "device 1".into());
-
-        assert_eq!(filter, "device 1");
-        assert_eq!(filtered_list_items(&actions, &items, &filter), [1, 10, 11]);
-        assert_eq!(
-            (list.selected, list.scroll_offset),
-            (0, 0),
-            "selection lands on the first visible item"
-        );
-
-        apply_list_filter(&actions, &items, &mut list, &mut filter, String::new());
-        assert_eq!((list.selected, list.scroll_offset), (0, 0));
     }
 
     #[test]

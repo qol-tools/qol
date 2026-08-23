@@ -1698,7 +1698,7 @@ preset has to carry it. A preset below the floor has no visible focus indicator.
     );
 }
 
-const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 19] = [
+const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 18] = [
     ("libs/qol-gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
     ("libs/qol-gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
     ("libs/qol-gpui/src/kit.rs", "ROW_HEIGHT", HEIGHT_SETTING_ROW),
@@ -1713,11 +1713,6 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 19] = [
     (
         "libs/qol-gpui/src/settings_panel/mod.rs",
         "PANEL_ROW_HEIGHT",
-        HEIGHT_SETTING_ROW,
-    ),
-    (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
-        "PANEL_DESCRIBED_ROW_HEIGHT",
         HEIGHT_SETTING_ROW,
     ),
     (

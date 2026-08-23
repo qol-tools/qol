@@ -9,6 +9,7 @@ description = "Shared app inventory and desktop entry helpers for qol-tools"
 open.workspace = true
 qol-conventions.workspace = true
 qol-platform.workspace = true
+qol-plugin-api.workspace = true
 qol-process.workspace = true
 serde.workspace = true
 shell-words = "1.1"

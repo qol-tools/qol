@@ -58,6 +58,10 @@ pub mod api_routes {
         format!("/api/plugins/{plugin_id}/actions/{action}")
     }
 
+    pub fn plugin_settings(plugin_id: &str) -> String {
+        format!("/api/plugins/{plugin_id}/settings")
+    }
+
     pub fn plugin_query(plugin_id: &str, query: &str) -> String {
         format!("/api/plugins/{plugin_id}/queries/{query}")
     }

@@ -5,6 +5,7 @@ pub mod event_router;
 pub mod format;
 pub mod gamepad;
 pub mod ghost;
+pub mod hint_bar;
 pub mod history;
 pub mod keepalive;
 pub mod kit;

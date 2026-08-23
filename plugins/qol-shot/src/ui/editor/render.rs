@@ -1,6 +1,19 @@
 use super::*;
 use qol_gpui::surface::PanelDragArea;
 
+fn chord(input: &str) -> String {
+    qol_hotkeys::chord::label_for(input).unwrap_or_default()
+}
+
+fn editor_hint() -> String {
+    format!(
+        "Drag to draw \u{00B7} {} undo \u{00B7} {} copies & closes \u{00B7} {} cancels",
+        chord("secondary+z"),
+        chord("secondary+c"),
+        chord("escape")
+    )
+}
+
 impl EditorView {
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut strokes = self.history.applied().to_vec();
@@ -122,7 +135,7 @@ impl Render for EditorView {
                 if let Some(output) = self.output_pending {
                     return output.pending_message().to_string();
                 }
-                "Drag to draw · Ctrl+Z undo · Ctrl+C copies & closes · Esc cancels".to_string()
+                editor_hint()
             })
             .into();
         div()

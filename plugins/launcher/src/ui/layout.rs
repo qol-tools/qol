@@ -7,7 +7,7 @@ pub const WINDOW_WIDTH: f32 = 500.0;
 
 pub fn window_height_for_rows(visible_rows: usize) -> f32 {
     if visible_rows == 0 {
-        return HEADER_HEIGHT;
+        return HEADER_HEIGHT + qol_gpui::theme::HEIGHT_HINT_BAR;
     }
     HEADER_HEIGHT
         + 2.0 * LIST_PAD_Y

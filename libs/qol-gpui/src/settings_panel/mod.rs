@@ -4,8 +4,6 @@ mod rows;
 mod stream;
 mod view;
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,8 +22,6 @@ const PANEL_WIDE_DESCRIPTION_CHARS: usize = 90;
 const PANEL_RAIL_WIDTH: f32 = 196.0;
 const PANEL_RAIL_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
-const PANEL_DESCRIBED_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
-const PANEL_DESCRIPTION_LINE_HEIGHT: f32 = 18.0;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
 const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 20.0;
 const PANEL_LIST_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_RULE_ROW;
@@ -40,19 +36,53 @@ const PANEL_BAND_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 const PANEL_GROUP_HEADER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_HINT_BAR_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
 const PANEL_FILTER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
-const PANEL_FILTER_MARGIN: f32 = 20.0;
 const PANEL_MAX_HEIGHT: f32 = 720.0;
 
 fn chrome_height(_sections: &[RowSection]) -> f32 {
-    PANEL_BAND_HEIGHT + PANEL_FILTER_HEIGHT + PANEL_FILTER_MARGIN + PANEL_HINT_BAR_HEIGHT
+    PANEL_BAND_HEIGHT + PANEL_HINT_BAR_HEIGHT
 }
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 
 #[derive(Clone)]
-pub struct SettingsPanel {
+pub struct PanelSource {
     pub plugin_id: String,
     pub contract: String,
     pub heading: String,
+}
+
+#[derive(Clone)]
+pub struct SettingsPanel {
+    pub sources: Vec<PanelSource>,
+    pub heading: String,
+    pub focus: Option<String>,
+}
+
+impl SettingsPanel {
+    pub fn single(plugin_id: String, contract: String, heading: String) -> SettingsPanel {
+        SettingsPanel {
+            sources: vec![PanelSource {
+                plugin_id,
+                contract,
+                heading: heading.clone(),
+            }],
+            heading,
+            focus: None,
+        }
+    }
+
+    fn focused_index(&self) -> usize {
+        self.sources
+            .iter()
+            .position(|source| self.focus.as_deref() == Some(source.plugin_id.as_str()))
+            .unwrap_or(0)
+    }
+
+    pub fn primary_plugin_id(&self) -> &str {
+        self.sources
+            .first()
+            .map(|source| source.plugin_id.as_str())
+            .unwrap_or_default()
+    }
 }
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
@@ -89,10 +119,15 @@ pub struct PreparedSettingsPanel {
     subtitle: Option<String>,
     rows: Vec<Row>,
     sections: Vec<RowSection>,
-    values: serde_json::Value,
-    path: Option<std::path::PathBuf>,
-    runtime: SettingsRuntime,
-    daemon_port: Option<u16>,
+    sources: Vec<SourceState>,
+}
+
+pub(super) struct SourceState {
+    pub(super) plugin_id: String,
+    pub(super) values: serde_json::Value,
+    pub(super) path: Option<std::path::PathBuf>,
+    pub(super) runtime: SettingsRuntime,
+    pub(super) daemon_port: Option<u16>,
 }
 
 struct PreparedPanel {
@@ -115,7 +150,25 @@ impl SettingsWindowHost {
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> bool {
-        if self.active.as_ref().map(|active| active.plugin_id.as_str()) != Some(plugin_id) {
+        if !self.active_is_open(cx) {
+            return false;
+        }
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        let retargeted = active
+            .surface
+            .handle
+            .update(cx, |root, _, cx| {
+                root.inner
+                    .update(cx, |view, cx| view.retarget_focus(plugin_id, cx))
+            })
+            .ok()
+            .unwrap_or(false);
+        if retargeted {
+            return self.present(tracker, cx);
+        }
+        if active.plugin_id != plugin_id {
             return false;
         }
         self.present(tracker, cx)
@@ -127,7 +180,7 @@ impl SettingsWindowHost {
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
-        let plugin_id = prepared.panel.plugin_id.clone();
+        let plugin_id = prepared.panel.primary_plugin_id().to_string();
         let decision = activation_decision(
             self.active.as_ref().map(|active| active.plugin_id.as_str()),
             &plugin_id,
@@ -189,7 +242,7 @@ impl SettingsWindowHost {
                 "settings window disappeared before replacement"
             ));
         };
-        let plugin_id = prepared.panel.plugin_id.clone();
+        let plugin_id = prepared.panel.primary_plugin_id().to_string();
         let heading = prepared.panel.heading.clone();
         let dismisser = active.surface.dismisser.clone();
         let visible = active.surface.is_visible();
@@ -297,53 +350,21 @@ impl SettingsRuntime {
     }
 }
 
-pub fn run_plugin_settings(
-    plugin_id: impl Into<String>,
-    heading: impl Into<String>,
-    contract: impl Into<String>,
-    runtime: SettingsRuntime,
-) -> anyhow::Result<()> {
-    run_standalone(
-        SettingsPanel {
-            plugin_id: plugin_id.into(),
-            contract: contract.into(),
-            heading: heading.into(),
-        },
-        runtime,
-    )
-}
-
-pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow::Result<()> {
-    let failure = Rc::new(RefCell::new(None));
-    let reported_failure = failure.clone();
-    Application::new().run(move |cx: &mut App| {
-        crate::platform::set_accessory_policy();
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        let tracker = MonitorTracker::start(cx);
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            if let Err(error) = open_from_async(panel, tracker, runtime, cx).await {
-                reported_failure.borrow_mut().replace(error);
-                let _ = cx.update(|cx| cx.quit());
-            }
-        })
-        .detach();
-    });
-    let failure = failure.borrow_mut().take();
-    failure.map_or(Ok(()), Err)
-}
-
 pub async fn prepare_from_async(
     panel: SettingsPanel,
     runtime: SettingsRuntime,
     cx: &AsyncApp,
 ) -> anyhow::Result<PreparedSettingsPanel> {
+    prepare_many_from_async(panel, vec![runtime], cx).await
+}
+
+pub async fn prepare_many_from_async(
+    panel: SettingsPanel,
+    runtimes: Vec<SettingsRuntime>,
+    cx: &AsyncApp,
+) -> anyhow::Result<PreparedSettingsPanel> {
     #[cfg(debug_assertions)]
-    let plugin_id = panel.plugin_id.clone();
+    let plugin_id = panel.primary_plugin_id().to_string();
     #[cfg(not(debug_assertions))]
     let plugin_id = String::new();
     #[cfg(debug_assertions)]
@@ -351,7 +372,7 @@ pub async fn prepare_from_async(
     #[cfg(not(debug_assertions))]
     let started = None::<std::time::Instant>;
     let prepared = cx
-        .background_spawn(async move { prepare_panel(panel, runtime) })
+        .background_spawn(async move { prepare_panel(panel, runtimes) })
         .await;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
@@ -386,11 +407,7 @@ pub async fn open_plugin_settings(
     cx: &AsyncApp,
 ) -> anyhow::Result<()> {
     open_from_async(
-        SettingsPanel {
-            plugin_id: plugin_id.into(),
-            contract: contract.into(),
-            heading: heading.into(),
-        },
+        SettingsPanel::single(plugin_id.into(), contract.into(), heading.into()),
         tracker,
         runtime,
         cx,
@@ -400,31 +417,91 @@ pub async fn open_plugin_settings(
 
 fn prepare_panel(
     panel: SettingsPanel,
-    runtime: SettingsRuntime,
+    runtimes: Vec<SettingsRuntime>,
 ) -> anyhow::Result<PreparedSettingsPanel> {
-    let spec = qol_config::contract::parse_spec_str(&panel.contract)
+    let focused_index = panel.focused_index();
+    let mut subtitle = None;
+    let mut prepared_sources = Vec::new();
+    for (source_index, (source, runtime)) in panel.sources.iter().zip(runtimes).enumerate() {
+        match prepare_source(source, runtime) {
+            Ok(prepared) => {
+                if source_index == focused_index {
+                    subtitle = prepared.description.clone();
+                }
+                prepared_sources.push(prepared);
+            }
+            Err(error) if panel.sources.len() > 1 => {
+                eprintln!(
+                    "[settings] skipping broken source {}: {error:#}",
+                    source.plugin_id
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut rows = Vec::new();
+    let mut sections = Vec::new();
+    let mut sources = Vec::new();
+    for (source_index, prepared) in prepared_sources.into_iter().enumerate() {
+        let base_row = rows.len();
+        for mut row in prepared.rows {
+            row.source = source_index;
+            rows.push(row);
+        }
+        for mut section in prepared.sections {
+            section.source = source_index;
+            for index in &mut section.rows {
+                *index += base_row;
+            }
+            sections.push(section);
+        }
+        sources.push(prepared.state);
+    }
+    Ok(PreparedSettingsPanel {
+        panel,
+        subtitle,
+        rows,
+        sections,
+        sources,
+    })
+}
+
+struct PreparedSource {
+    rows: Vec<Row>,
+    sections: Vec<RowSection>,
+    description: Option<String>,
+    state: SourceState,
+}
+
+fn prepare_source(
+    source: &PanelSource,
+    runtime: SettingsRuntime,
+) -> anyhow::Result<PreparedSource> {
+    let spec = qol_config::contract::parse_spec_str(&source.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
-    let base = persistence::panel_base(&panel.plugin_id);
-    let path = if panel.plugin_id == qol_conventions::CORE_PANEL_ID {
+    let base = persistence::panel_base(&source.plugin_id);
+    let path = if source.plugin_id == qol_conventions::CORE_PANEL_ID {
         None
     } else {
-        Some(persistence::config_path(&panel.plugin_id)?)
+        Some(persistence::config_path(&source.plugin_id)?)
     };
     let values = persistence::load_values(&base, path.as_deref());
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
-    let rows = rows_from_resolved(&resolved);
-    let sections = sections_from_resolved(&resolved, &rows);
     let daemon_port = persistence::daemon_port(&base);
-    Ok(PreparedSettingsPanel {
-        panel,
-        subtitle: resolved.description.clone(),
+    let rows = rows_from_resolved(&resolved, 0);
+    let sections = sections_from_resolved(&resolved, &rows, 0);
+    Ok(PreparedSource {
+        description: resolved.description.clone(),
         rows,
         sections,
-        values,
-        path,
-        runtime,
-        daemon_port,
+        state: SourceState {
+            plugin_id: source.plugin_id.clone(),
+            values,
+            path,
+            runtime,
+            daemon_port,
+        },
     })
 }
 
@@ -440,19 +517,15 @@ fn size_prepared_panel(
         .min(PANEL_MAX_HEIGHT);
     let body_width = panel_width(&prepared.rows);
     let width = body_width + rail_width(&prepared.sections);
-    let height = panel_height(&prepared.rows, &prepared.sections, body_width).min(available);
+    let height = panel_height(&prepared.rows, &prepared.sections).min(available);
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
             subtitle: prepared.subtitle,
             rows: prepared.rows,
             sections: prepared.sections,
-            values: prepared.values,
-            path: prepared.path,
+            sources: prepared.sources,
             height_cap: available,
-            panel_width: body_width,
-            runtime: prepared.runtime,
-            daemon_port: prepared.daemon_port,
         },
         size: size(px(width), px(height)),
     })
@@ -463,7 +536,7 @@ fn open_prepared(
     tracker: &MonitorTracker,
     cx: &mut App,
 ) -> anyhow::Result<ActivePanel> {
-    let plugin_id = prepared.panel.plugin_id.clone();
+    let plugin_id = prepared.panel.primary_plugin_id().to_string();
     let title = prepared.panel.heading.clone();
     let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
@@ -487,7 +560,7 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
     }
 }
 
-fn panel_height(rows: &[Row], sections: &[RowSection], width: f32) -> f32 {
+fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
     let show_section_headers = sections.len() <= 1;
     let body = sections
         .iter()
@@ -503,7 +576,7 @@ fn panel_height(rows: &[Row], sections: &[RowSection], width: f32) -> f32 {
             }
             let rows_height = visible
                 .iter()
-                .map(|index| view::row_height(&rows[*index], width, show_section_headers))
+                .map(|index| view::row_height(&rows[*index], show_section_headers))
                 .sum::<f32>();
             let gaps = (visible.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
             PANEL_GROUP_HEADER_HEIGHT + rows_height + gaps
@@ -583,6 +656,7 @@ mod tests {
             action: None,
             visibility: None,
             control,
+            source: 0,
         }
     }
 
@@ -594,11 +668,35 @@ mod tests {
             label: "General".into(),
             description: None,
             rows: vec![0],
+            source: 0,
         }];
         let expected =
             super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
-        assert_eq!(panel_height(&toggle, &sections, PANEL_WIDTH), expected);
-        assert_eq!(panel_height(&color, &sections, PANEL_WIDTH), expected);
+        assert_eq!(panel_height(&toggle, &sections), expected);
+        assert_eq!(panel_height(&color, &sections), expected);
+    }
+
+    #[test]
+    fn the_filter_overlay_never_changes_the_window_height() {
+        let rows = vec![row(RowControl::Toggle(false))];
+        let sections = vec![RowSection {
+            label: "General".into(),
+            description: None,
+            rows: vec![0],
+            source: 0,
+        }];
+        assert_eq!(
+            panel_height(&rows, &sections),
+            super::PANEL_BAND_HEIGHT
+                + super::PANEL_HINT_BAR_HEIGHT
+                + super::PANEL_GROUP_HEADER_HEIGHT
+                + PANEL_ROW_HEIGHT
+        );
+        assert_eq!(
+            super::chrome_height(&sections),
+            super::PANEL_BAND_HEIGHT + super::PANEL_HINT_BAR_HEIGHT,
+            "the chrome must not carry a filter row, so the window height cannot differ between filter states"
+        );
     }
 
     #[test]
@@ -611,6 +709,25 @@ mod tests {
 
         assert_eq!(panel_width(&regular), super::PANEL_COMPACT_WIDTH);
         assert_eq!(panel_width(&gamepad), PANEL_GAMEPAD_WIDTH);
+    }
+
+    #[test]
+    fn gamepad_rows_no_longer_resize_the_window() {
+        let plain = vec![row(RowControl::Toggle(false))];
+        let gamepad = vec![row(RowControl::Gamepad {
+            query: "controller_input".into(),
+            monitor: GamepadMonitor::default(),
+        })];
+        let sections = vec![RowSection {
+            label: "General".into(),
+            description: None,
+            rows: vec![0],
+            source: 0,
+        }];
+        assert_eq!(
+            panel_height(&gamepad, &sections),
+            panel_height(&plain, &sections)
+        );
     }
 
     #[test]
@@ -639,6 +756,7 @@ mod tests {
             label: label.into(),
             description: None,
             rows,
+            source: 0,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -647,7 +765,7 @@ mod tests {
         ];
 
         assert_eq!(
-            panel_height(&rows, &sections, PANEL_WIDTH),
+            panel_height(&rows, &sections),
             super::chrome_height(&sections)
                 + 3.0 * (super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT)
         );
@@ -662,11 +780,12 @@ mod tests {
             label: label.into(),
             description: None,
             rows,
+            source: 0,
         };
         let sections = vec![plain("One", vec![0]), plain("Empty", Vec::new())];
 
         assert_eq!(
-            panel_height(&rows, &sections, PANEL_WIDTH),
+            panel_height(&rows, &sections),
             super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT
         );
     }
@@ -680,6 +799,7 @@ mod tests {
             label: label.into(),
             description: None,
             rows,
+            source: 0,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -689,7 +809,7 @@ mod tests {
         let first = super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
         let second = super::PANEL_GROUP_HEADER_HEIGHT + 11.0 * PANEL_ROW_HEIGHT + 10.0 * 4.0;
         assert_eq!(
-            panel_height(&rows, &sections, PANEL_WIDTH),
+            panel_height(&rows, &sections),
             super::chrome_height(&sections) + first + second
         );
     }

@@ -273,10 +273,10 @@ fn reconnect_trusted_command() -> Command {
 
 fn settings_command() -> Command {
     Command::new("settings")
-        .about("Open the plugin settings.")
+        .about("Open the Bluetooth plugin settings in the qol settings surface.")
         .usage(format!("{BINARY_NAME} settings"))
         .output("No stdout on success.")
-        .exit_behavior("Exits non-zero if native and browser settings cannot be opened.")
+        .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
             crate::show_settings()?;

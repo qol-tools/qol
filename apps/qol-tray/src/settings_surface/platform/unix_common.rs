@@ -8,7 +8,7 @@ use gpui::{App, AppContext, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::SettingsActivation;
-use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHost};
+use qol_gpui::settings_panel::{PanelSource, SettingsPanel, SettingsRuntime, SettingsWindowHost};
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
@@ -481,23 +481,36 @@ async fn activate(
         }
     }
 
-    let load_plugin_id = plugin_id.clone();
     let loaded = cx
-        .background_spawn(async move { load_panel(&load_plugin_id) })
+        .background_spawn(async move { load_unified_panel() })
         .await;
     let activation = match loaded {
-        Ok((panel, runtime)) => {
-            match qol_gpui::settings_panel::prepare_from_async(panel, runtime, cx).await {
-                Ok(prepared) => {
-                    let activation_host = host.clone();
-                    cx.update(move |cx| {
-                        activation_host
-                            .borrow_mut()
-                            .activate_prepared(prepared, &tracker, cx)
-                    })
-                    .and_then(|result| result)
+        Ok((mut panel, runtimes)) => {
+            if !panel
+                .sources
+                .iter()
+                .any(|source| source.plugin_id == plugin_id)
+            {
+                Err(match load_panel(&plugin_id) {
+                    Ok(_) => {
+                        anyhow::anyhow!("plugin is not available in the unified settings panel")
+                    }
+                    Err(error) => error,
+                })
+            } else {
+                panel.focus = Some(plugin_id.clone());
+                match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx).await {
+                    Ok(prepared) => {
+                        let activation_host = host.clone();
+                        cx.update(move |cx| {
+                            activation_host
+                                .borrow_mut()
+                                .activate_prepared(prepared, &tracker, cx)
+                        })
+                        .and_then(|result| result)
+                    }
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
             }
         }
         Err(error) => Err(error),
@@ -532,16 +545,33 @@ fn load_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime
 }
 
 fn load_core_panel() -> (SettingsPanel, SettingsRuntime) {
-    let panel = SettingsPanel {
-        plugin_id: qol_conventions::CORE_PANEL_ID.to_string(),
-        contract: include_str!("core-config.toml").to_string(),
-        heading: "qol Settings".to_string(),
-    };
+    let mut panel = SettingsPanel::single(
+        qol_conventions::CORE_PANEL_ID.to_string(),
+        include_str!("core-config.toml").to_string(),
+        "qol Settings".to_string(),
+    );
+    panel.sources[0].heading = "General".to_string();
     let runtime = SettingsRuntime::tray_core();
     (panel, runtime)
 }
 
 fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
+    let (source, runtime) = load_plugin_source(plugin_id)?;
+    let mut panel = SettingsPanel::single(
+        plugin_id.to_string(),
+        source.contract,
+        format!("{} Settings", source.heading),
+    );
+    panel.sources[0].heading = source.heading;
+    Ok((panel, runtime))
+}
+
+struct PluginSettingsSource {
+    contract: String,
+    heading: String,
+}
+
+fn load_plugin_source(plugin_id: &str) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
     let plugin_root = crate::plugins::paths::resolve_plugin_root(plugin_id)?;
     let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(&plugin_root)?;
     if !manifest.capabilities.gpui {
@@ -555,18 +585,76 @@ fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, Settings
     let contract =
         std::fs::read_to_string(crate::plugins::paths::config_contract_path(&plugin_root))
             .context("failed to read the plugin settings contract")?;
-    let panel = SettingsPanel {
-        plugin_id: plugin_id.to_string(),
-        contract,
-        heading: format!("{} Settings", manifest.plugin.name),
-    };
     let mut runtime = SettingsRuntime::tray(plugin_id);
     if let Some(runtime_contract) = runtime_contract.as_ref() {
         for (name, query) in &runtime_contract.queries {
             runtime = runtime.poll_query_every(name, Duration::from_millis(query.poll_interval_ms));
         }
     }
-    Ok((panel, runtime))
+    Ok((
+        PluginSettingsSource {
+            contract,
+            heading: manifest.plugin.name.clone(),
+        },
+        runtime,
+    ))
+}
+
+fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)> {
+    let (core_panel, core_runtime) = load_core_panel();
+    let mut sources = vec![core_panel
+        .sources
+        .into_iter()
+        .next()
+        .expect("core panel has one source")];
+    let mut runtimes = vec![core_runtime];
+    let mut eligible = Vec::new();
+    for resolved in resolved_plugins()? {
+        let manifest = match crate::plugins::manifest::PluginManifest::read_from_dir(&resolved.path)
+        {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                log::warn!("unified settings skips {}: {error:#}", resolved.id);
+                continue;
+            }
+        };
+        if !manifest.capabilities.gpui || !crate::plugins::paths::has_config(&resolved.path) {
+            continue;
+        }
+        eligible.push((manifest.plugin.name.clone(), resolved.id.to_string()));
+    }
+    eligible.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, plugin_id) in eligible {
+        match load_plugin_source(&plugin_id) {
+            Ok((source, runtime)) => {
+                sources.push(PanelSource {
+                    plugin_id,
+                    contract: source.contract,
+                    heading: source.heading,
+                });
+                runtimes.push(runtime);
+            }
+            Err(error) => {
+                log::warn!("unified settings skips {plugin_id}: {error:#}");
+            }
+        }
+    }
+    Ok((
+        SettingsPanel {
+            sources,
+            heading: "qol Settings".to_string(),
+            focus: None,
+        },
+        runtimes,
+    ))
+}
+
+fn resolved_plugins() -> anyhow::Result<Vec<crate::plugins::resolver::ResolvedPlugin>> {
+    let plugins_dir = crate::plugins::PluginLoader::ensure_plugin_dir()?;
+    let config_dir = crate::paths::shared_config_dir()?;
+    let registry = crate::plugins::registry::ensure_registry_initialized(&config_dir, &plugins_dir)
+        .map_err(|error| anyhow::anyhow!("plugin registry is unavailable: {error}"))?;
+    Ok(crate::plugins::resolver::resolve_effective_registry(&registry, &config_dir).plugins)
 }
 
 fn forward_open(plugin_id: &str) -> bool {
@@ -704,9 +792,9 @@ mod tests {
     #[test]
     fn core_panel_carries_every_wired_field_in_a_valid_contract() {
         let (panel, _runtime) = super::load_core_panel();
-        assert_eq!(panel.plugin_id, qol_conventions::CORE_PANEL_ID);
+        assert_eq!(panel.primary_plugin_id(), qol_conventions::CORE_PANEL_ID);
         assert_eq!(panel.heading, "qol Settings");
-        let spec = qol_config::contract::parse_spec_str(&panel.contract)
+        let spec = qol_config::contract::parse_spec_str(&panel.sources[0].contract)
             .expect("core contract must parse");
         for (name, kind) in [
             ("native_theme", qol_config::contract::FieldKind::Select),

@@ -80,7 +80,11 @@ pub fn collect_plugin_settings_entries<'a>(
             let name = plugin.manifest.plugin.name.as_str();
             Some(LauncherEntry {
                 file_stem: format!("plugin-settings-{}", id),
-                display_name: format!("{} Settings", name),
+                display_name: format!(
+                    "{}Settings \u{203a} {}",
+                    crate::commands::QOL_COMMAND_PREFIX,
+                    name
+                ),
                 description: format!("QoL plugin settings: {}", name),
                 bundle_id: format!("com.qol-tools.plugin-settings.{}", id),
                 exec_args: vec!["exec".into(), id.to_string(), action.id],
@@ -183,7 +187,10 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_stem, "plugin-settings-foo");
-        assert_eq!(entries[0].display_name, "Foo Settings");
+        assert_eq!(
+            entries[0].display_name,
+            "QoL \u{203a} Settings \u{203a} Foo"
+        );
         assert_eq!(entries[0].bundle_id, "com.qol-tools.plugin-settings.foo");
         assert_eq!(entries[0].exec_args, ["exec", "foo", "settings"]);
         assert!(entries[0].shortcut_action.is_none());

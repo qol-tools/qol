@@ -703,19 +703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blake3"
-version = "1.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
-dependencies = [
- "arrayvec",
- "cc",
- "cfg-if",
- "constant_time_eq",
- "cpufeatures 0.3.0",
-]
-
-[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1329,12 +1316,6 @@ dependencies = [
  "once_cell",
  "tiny-keccak",
 ]
-
-[[package]]
-name = "constant_time_eq"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
@@ -5844,6 +5825,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-hotkeys",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -5956,6 +5938,7 @@ dependencies = [
  "qol-conventions",
  "qol-gpui",
  "qol-headless",
+ "qol-hotkeys",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -6350,6 +6333,7 @@ dependencies = [
  "plist",
  "qol-conventions",
  "qol-platform",
+ "qol-plugin-api",
  "qol-process",
  "serde",
  "shell-words",
@@ -6409,7 +6393,6 @@ dependencies = [
 name = "qol-dev-build"
 version = "1.0.0"
 dependencies = [
- "blake3",
  "log",
  "proptest",
  "qol-artifact",
@@ -6421,6 +6404,7 @@ dependencies = [
  "qol-workspace",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
@@ -6686,6 +6670,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-hotkeys",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",

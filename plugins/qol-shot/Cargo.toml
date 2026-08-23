@@ -20,6 +20,7 @@ futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 gpui.workspace = true
 qol-gpui.workspace = true
+qol-hotkeys.workspace = true
 qol-platform.workspace = true
 smallvec = "1.13"
 

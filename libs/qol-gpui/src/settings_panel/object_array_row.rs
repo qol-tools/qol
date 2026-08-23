@@ -178,6 +178,14 @@ impl ObjectArrayState {
         }
     }
 
+    pub(super) fn from_entries(
+        key_label: Option<String>,
+        schema: Vec<ItemField>,
+        entries: Vec<Entry>,
+    ) -> Self {
+        Self::new(key_label, schema, entries)
+    }
+
     pub(super) fn items(&self) -> Vec<Item> {
         self.entries
             .iter()
@@ -196,14 +204,8 @@ impl ObjectArrayState {
         self.entries.len() + 1
     }
 
-    pub(super) fn item_window(&self) -> std::ops::Range<usize> {
-        let last_offset = self.entries.len().saturating_sub(self.list.max_visible);
-        let start = self.list.scroll_offset.min(last_offset);
-        start..(start + self.list.max_visible).min(self.entries.len())
-    }
-
     pub(super) fn add_entry_selected(&self) -> bool {
-        self.list.selected >= self.entries.len()
+        self.list.selected == 0
     }
 
     pub(super) fn move_up(&mut self) {
@@ -220,13 +222,13 @@ impl ObjectArrayState {
         if self.add_entry_selected() {
             return false;
         }
-        self.entries.remove(self.list.selected);
+        self.entries.remove(self.list.selected - 1);
         self.list.sync(self.entry_count());
         true
     }
 
     pub(super) fn open_draft(&mut self) {
-        let replacing = (!self.add_entry_selected()).then_some(self.list.selected);
+        let replacing = (!self.add_entry_selected()).then(|| self.list.selected - 1);
         let seed = replacing.and_then(|index| self.entries.get(index));
         let mut fields = Vec::new();
         if let Some(label) = self.key_label.as_deref() {
@@ -263,7 +265,7 @@ impl ObjectArrayState {
             Some(index) if index < self.entries.len() => self.entries[index] = entry,
             _ => {
                 self.entries.push(entry);
-                self.list.selected = self.entries.len() - 1;
+                self.list.selected = self.entries.len();
             }
         }
         self.draft = None;
@@ -349,6 +351,38 @@ impl ObjectArrayState {
             );
         }
         chips
+    }
+
+    pub(super) fn summary(&self, index: usize) -> String {
+        let chips = self.chips(index);
+        if chips.is_directional() {
+            let shared = shared_key_chip(&chips.rest);
+            let mut from: Vec<&str> = chips.from.iter().map(|chip| chip.label.as_str()).collect();
+            from.extend(shared.iter().map(|chip| chip.label.as_str()));
+            let mut to: Vec<&str> = chips.to.iter().map(|chip| chip.label.as_str()).collect();
+            to.extend(shared.iter().map(|chip| chip.label.as_str()));
+            return format!("{} \u{2192} {}", from.join(" + "), to.join(" + "));
+        }
+        let mut parts: Vec<&str> = chips
+            .from
+            .iter()
+            .chain(&chips.rest)
+            .chain(&chips.to)
+            .map(|chip| chip.label.as_str())
+            .collect();
+        parts.extend(chips.flags.iter().map(String::as_str));
+        parts.join(" + ")
+    }
+}
+
+pub(super) fn shared_key_chip(rest: &[Chip]) -> Option<Chip> {
+    match rest.len() {
+        0 => None,
+        1 => rest.first().cloned(),
+        count => Some(Chip {
+            label: format!("{count} keys"),
+            tone: ChipTone::Key,
+        }),
     }
 }
 
@@ -704,14 +738,19 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_after_the_last_item_adds_a_new_one() {
+    fn the_add_row_sits_before_the_first_item() {
         let mut state = state();
         assert_eq!(state.entry_count(), 2);
-        assert!(!state.add_entry_selected());
+        assert!(state.add_entry_selected());
+        assert_eq!(state.list.selected, 0);
 
         state.move_down();
 
-        assert!(state.add_entry_selected());
+        assert!(!state.add_entry_selected());
+        state.open_draft();
+        assert_eq!(state.draft.as_ref().unwrap().replacing, Some(0));
+
+        state.move_up();
         state.open_draft();
         assert_eq!(state.draft.as_ref().unwrap().replacing, None);
     }
@@ -719,6 +758,7 @@ mod tests {
     #[test]
     fn opening_a_draft_on_an_item_seeds_every_field_from_it() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_ref().unwrap();
 
@@ -730,6 +770,7 @@ mod tests {
     #[test]
     fn committing_a_seeded_draft_replaces_the_item_in_place() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "keys");
@@ -757,7 +798,6 @@ mod tests {
     #[test]
     fn a_new_draft_appends_and_selects_the_added_item() {
         let mut state = state();
-        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "from_mods");
@@ -768,7 +808,7 @@ mod tests {
         assert!(state.commit_draft());
 
         assert_eq!(state.entries.len(), 2);
-        assert_eq!(state.list.selected, 1);
+        assert_eq!(state.list.selected, 2);
         assert_eq!(
             state.entries[1].fields.get("from_mods"),
             Some(&FieldDefault::StringArray(vec!["ctrl".into()]))
@@ -778,7 +818,6 @@ mod tests {
     #[test]
     fn a_draft_with_nothing_but_flags_is_refused_and_stays_open() {
         let mut state = state();
-        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "global");
@@ -814,11 +853,10 @@ mod tests {
     #[test]
     fn removing_the_add_entry_is_a_no_op() {
         let mut state = state();
-        state.move_down();
         assert!(!state.remove_selected());
         assert_eq!(state.entries.len(), 1);
 
-        state.move_up();
+        state.move_down();
         assert!(state.remove_selected());
         assert!(state.entries.is_empty());
         assert_eq!(state.list.selected, 0);
@@ -827,6 +865,7 @@ mod tests {
     #[test]
     fn the_modifier_cursor_stays_inside_the_option_list() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "from_mods");
@@ -857,6 +896,7 @@ mod tests {
             vec![("from_mods".to_string(), ItemFieldKind::Mods)],
             vec![item],
         );
+        state.move_down();
         state.open_draft();
 
         let DraftValue::Mods {
@@ -940,7 +980,6 @@ mod tests {
         let cases = [
             ("j", None, ObjectArrayOutcome::Ignored),
             ("down", None, ObjectArrayOutcome::Handled),
-            ("up", None, ObjectArrayOutcome::Handled),
             ("backspace", None, ObjectArrayOutcome::Persist),
             ("backspace", None, ObjectArrayOutcome::Handled),
             ("left", None, ObjectArrayOutcome::Close),
@@ -995,6 +1034,7 @@ mod tests {
     #[test]
     fn space_types_into_a_text_field_instead_of_toggling() {
         let mut state = state();
+        state.move_down();
         state.handle_key("enter", None);
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "keys");
@@ -1037,6 +1077,7 @@ mod tests {
     #[test]
     fn a_keyed_entry_edits_its_key_alongside_its_fields() {
         let mut state = app_map();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_ref().unwrap();
 
@@ -1059,7 +1100,6 @@ mod tests {
     #[test]
     fn a_keyed_entry_without_a_key_is_refused() {
         let mut state = app_map();
-        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         draft.selected = 1;
@@ -1083,6 +1123,7 @@ mod tests {
     #[test]
     fn backspace_only_edits_text_fields() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "keys");
@@ -1094,34 +1135,9 @@ mod tests {
     }
 
     #[test]
-    fn the_item_window_never_hides_a_row_to_make_space_for_the_add_entry() {
-        let mut state = ObjectArrayState::list(
-            vec![("app".to_string(), ItemFieldKind::Text)],
-            (0..OBJECT_ARRAY_MAX_VISIBLE)
-                .map(|n| {
-                    Item::from_iter([("app".to_string(), FieldDefault::String(n.to_string()))])
-                })
-                .collect(),
-        );
-
-        for _ in 0..OBJECT_ARRAY_MAX_VISIBLE {
-            state.move_down();
-        }
-
-        assert!(
-            state.add_entry_selected(),
-            "selection reached the add entry"
-        );
-        assert_eq!(
-            state.item_window(),
-            0..OBJECT_ARRAY_MAX_VISIBLE,
-            "a full page of items stays visible while the add entry is selected"
-        );
-    }
-
-    #[test]
     fn a_chip_click_turns_an_off_modifier_on_and_moves_focus() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "to_mods");
@@ -1144,6 +1160,7 @@ mod tests {
     #[test]
     fn a_second_chip_click_turns_the_modifier_back_off() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
 
@@ -1177,6 +1194,7 @@ mod tests {
     #[test]
     fn a_chip_click_on_an_out_of_range_modifier_is_a_no_op() {
         let mut state = state();
+        state.move_down();
         state.open_draft();
         let draft = state.draft.as_mut().unwrap();
         select_field(draft, "to_mods");
@@ -1205,25 +1223,20 @@ mod tests {
     }
 
     #[test]
-    fn the_item_window_follows_the_selection_past_a_full_page() {
-        let mut state = ObjectArrayState::list(
-            vec![("app".to_string(), ItemFieldKind::Text)],
-            (0..OBJECT_ARRAY_MAX_VISIBLE + 3)
-                .map(|n| {
-                    Item::from_iter([("app".to_string(), FieldDefault::String(n.to_string()))])
-                })
-                .collect(),
-        );
+    fn deleting_the_first_real_item_removes_the_right_value() {
+        let second = Item::from_iter([(
+            "from_mods".to_string(),
+            FieldDefault::StringArray(vec!["alt".into()]),
+        )]);
+        let mut state = ObjectArrayState::list(key_rule_schema(), vec![ctrl_to_cmd(), second]);
+        state.move_down();
 
-        for _ in 0..OBJECT_ARRAY_MAX_VISIBLE + 1 {
-            state.move_down();
-        }
+        assert!(state.remove_selected());
 
-        let window = state.item_window();
-        assert_eq!(window.len(), OBJECT_ARRAY_MAX_VISIBLE);
-        assert!(
-            window.contains(&state.list.selected),
-            "selection stays visible"
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(
+            state.entries[0].fields.get("from_mods"),
+            Some(&FieldDefault::StringArray(vec!["alt".into()]))
         );
     }
 }

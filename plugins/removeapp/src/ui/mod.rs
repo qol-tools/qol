@@ -29,6 +29,10 @@ const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
     / ROW_H) as usize;
 const CONTINUE_OR_QUIT_HINT: &str = "Enter to continue \u{00b7} Esc to quit";
 
+fn chord(input: &str) -> String {
+    qol_hotkeys::chord::label_for(input).unwrap_or_default()
+}
+
 fn current_palette() -> RemoveAppPalette {
     remove_app_runtime()
 }
@@ -410,7 +414,10 @@ impl RemoveAppView {
             )
             .children(self.remove_bar())
             .child(footer(
-                &[("\u{23CE}", "select"), ("\u{2318}\u{232B}", "remove")],
+                &[
+                    (chord("enter").as_str(), "select"),
+                    (chord("platform+backspace").as_str(), "remove"),
+                ],
                 Some(counter),
             ))
             .into_any_element()
@@ -483,7 +490,7 @@ impl RemoveAppView {
                         .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                         .text_size(px(qol_gpui::theme::TEXT_KEYCAP))
                         .text_color(rgb(kit.palette.danger))
-                        .child("\u{2318}\u{232B}"),
+                        .child(chord("platform+backspace")),
                 )
                 .into_any_element(),
         )

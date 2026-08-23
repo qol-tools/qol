@@ -90,9 +90,9 @@ where
         )
         .command(
             Command::new("settings")
-                .about("Open the CLI Sessions settings panel.")
+                .about("Open the CLI Sessions settings in the qol settings surface.")
                 .usage(format!("{BINARY_NAME} settings"))
-                .detail("Runs the native settings panel, falling back to the browser.")
+                .detail("Opens the unified qol settings surface.")
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
                 .run_plain_text(|context| {

@@ -312,6 +312,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cycling_the_mode_with_tab_moves_through_every_mode_and_wraps_around() {
+        let mut state = LauncherState::new();
+        assert_eq!(state.mode, SearchMode::Apps);
+
+        state.cycle_mode(false);
+        assert_eq!(state.mode, SearchMode::Files);
+
+        state.cycle_mode(false);
+        assert_eq!(state.mode, SearchMode::Apps);
+    }
+
+    #[test]
     fn slow_single_step_keeps_a_fading_motion_badge_after_trail_drops() {
         let mut state = LauncherState::new();
 

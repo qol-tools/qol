@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -8,16 +7,17 @@ use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
 use super::object_array_row::{
-    Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome, ObjectArrayState,
+    shared_key_chip, Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome,
+    ObjectArrayState,
 };
 use super::persistence::{panel_base, save_values};
 use super::rows::{
-    apply_list_filter, apply_runtime_query, begin_list_item_action, filtered_list_items,
-    list_item_actions, list_slider_value, merged_config, primary_list_item_action,
-    query_flag_value, row_action, row_streams, runtime_query_names, section_label_for,
-    selected_list_item, stream_gated, Row, RowControl, RowSection, SelectOption, SliderHold,
+    apply_runtime_query, begin_list_item_action, filtered_list_items, list_item_actions,
+    list_slider_value, merged_config, primary_list_item_action, query_flag_value, row_action,
+    row_streams, runtime_query_names, selected_list_item, stream_gated, ListActions, ListItem,
+    ListSlider, Row, RowControl, RowSection, SelectOption, SliderHold,
 };
-use super::{SettingsPanel, SettingsRuntime};
+use super::{SettingsPanel, SettingsRuntime, SourceState};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
@@ -31,15 +31,101 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const DESCRIPTION_CHAR_WIDTH: f32 = 5.8;
-const ROW_CHROME: f32 = 28.0;
+const BODY_SIDE_PADDING: f32 = 16.0;
+const GROUP_HEADER_INSET: f32 = 8.0;
+const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
-const LIST_SCROLL_PIXELS_PER_NOTCH: f32 = 60.0;
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
-const RULE_FROM_WIDTH: f32 = 140.0;
-const RULE_TO_WIDTH: f32 = 170.0;
+const RAIL_CARD_OVERLAP: f32 = 98.0;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PanelFocus {
+    Sources,
+    Body,
+}
+
+fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
+    if source_menu && sources > 1 {
+        PanelFocus::Sources
+    } else {
+        PanelFocus::Body
+    }
+}
+
+const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
+const RAIL_CARD_ACCENT: f32 = 1.5;
+const RAIL_DIM: f32 = 0.5;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct CardSliver {
+    left: f32,
+    width: f32,
+    inset: f32,
+}
+
+fn slivers_for(depth: usize) -> Vec<CardSliver> {
+    match depth {
+        0 => Vec::new(),
+        1 => vec![CardSliver {
+            left: 0.0,
+            width: 12.0,
+            inset: 8.0,
+        }],
+        _ => vec![
+            CardSliver {
+                left: 0.0,
+                width: 10.0,
+                inset: 14.0,
+            },
+            CardSliver {
+                left: 9.0,
+                width: 10.0,
+                inset: 7.0,
+            },
+        ],
+    }
+}
+
+fn deck_front_offset(depth: usize) -> f32 {
+    if depth > 1 {
+        18.0
+    } else {
+        10.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DeckMotion {
+    Push,
+    Pop,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct DeckSlide {
+    step: usize,
+    from: f32,
+    to: f32,
+}
+
+fn deck_slide(
+    step: usize,
+    motion: Option<DeckMotion>,
+    depth: usize,
+    width: f32,
+) -> Option<DeckSlide> {
+    let to = if depth == 0 {
+        0.0
+    } else {
+        deck_front_offset(depth)
+    };
+    let from = match motion {
+        Some(DeckMotion::Push) => width,
+        Some(DeckMotion::Pop) => deck_front_offset(depth + 1),
+        None => to,
+    };
+    (from != to).then_some(DeckSlide { step, from, to })
+}
 
 use std::sync::PoisonError;
 
@@ -83,24 +169,20 @@ impl SampleSignal {
 
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
+    stack: Vec<Level>,
     subtitle: Option<String>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
-    rows: Vec<Row>,
-    sections: Vec<RowSection>,
-    active_section: Option<usize>,
-    selected_section: usize,
-    values: serde_json::Value,
-    path: Option<PathBuf>,
-    selected: usize,
-    body_scroll: crate::scroll_list::SelectionScroll,
+    sources: Vec<SourceState>,
+    selected_source: usize,
+    source_menu: bool,
+    rail_transition: usize,
+    deck_transition: usize,
+    deck_motion: Option<DeckMotion>,
     height_cap: f32,
-    panel_width: f32,
     save_error: Option<String>,
     filter: String,
     filter_open: bool,
-    active_control: Option<ActiveControl>,
-    row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
     runtime_poll_generation: u64,
     slider_dispatch_generation: u64,
@@ -112,10 +194,11 @@ pub(super) struct SettingsPanelView {
     motion_tick: Option<std::time::Instant>,
     sample_signal: Option<std::sync::Arc<SampleSignal>>,
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    poll_visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
     kit: crate::kit::Kit,
-    stream: super::stream::StreamClient,
+    streams: Vec<super::stream::StreamClient>,
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
 }
@@ -124,21 +207,31 @@ pub(super) struct SettingsPanelState {
     pub(super) subtitle: Option<String>,
     pub(super) rows: Vec<Row>,
     pub(super) sections: Vec<RowSection>,
-    pub(super) values: serde_json::Value,
-    pub(super) path: Option<PathBuf>,
+    pub(super) sources: Vec<SourceState>,
     pub(super) height_cap: f32,
-    pub(super) panel_width: f32,
-    pub(super) runtime: SettingsRuntime,
-    pub(super) daemon_port: Option<u16>,
 }
 
 enum ActiveControl {
     Edit(String),
     Dropdown(Dropdown),
-    List,
     ListActions(ListActionMenu),
-    ObjectArray,
     Wheel(WheelControl),
+}
+
+struct Level {
+    rows: Vec<Row>,
+    sections: Vec<RowSection>,
+    selected: usize,
+    active_section: Option<usize>,
+    selected_section: usize,
+    body_scroll: crate::scroll_list::SelectionScroll,
+    active_control: Option<ActiveControl>,
+    row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
+    title: Option<String>,
+    origin_row: Option<usize>,
+    object_array: Option<ObjectArrayState>,
+    list_card: bool,
+    live_card: bool,
 }
 
 struct ListActionMenu {
@@ -155,32 +248,6 @@ struct WheelControl {
     popup: WindowHandle<ColorWheelPopup>,
 }
 
-fn modifiers_first(chips: &[Chip]) -> Vec<Chip> {
-    let mut ordered: Vec<Chip> = chips
-        .iter()
-        .filter(|chip| matches!(chip.tone, ChipTone::Modifier))
-        .cloned()
-        .collect();
-    ordered.extend(
-        chips
-            .iter()
-            .filter(|chip| !matches!(chip.tone, ChipTone::Modifier))
-            .cloned(),
-    );
-    ordered
-}
-
-fn shared_key_chip(rest: &[Chip]) -> Option<Chip> {
-    match rest.len() {
-        0 => None,
-        1 => rest.first().cloned(),
-        count => Some(Chip {
-            label: format!("{count} keys"),
-            tone: ChipTone::Key,
-        }),
-    }
-}
-
 impl SettingsPanelView {
     pub(super) fn new(
         panel: SettingsPanel,
@@ -191,29 +258,58 @@ impl SettingsPanelView {
         let row_bounds = (0..state.rows.len())
             .map(|_| Rc::new(Cell::new(None)))
             .collect();
-        let runtime_queries = runtime_query_names(&state.rows);
+        let focused_source = panel.focused_index();
+        let has_many_sources = state.sources.len() > 1;
+        let runtime_queries =
+            runtime_query_names(state.rows.iter().filter(|row| row.source == focused_source));
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
+        let root = Level {
+            rows: state.rows,
+            sections: state.sections,
+            selected: 0,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds,
+            title: None,
+            origin_row: None,
+            object_array: None,
+            list_card: false,
+            live_card: false,
+        };
         let mut view = Self {
             panel,
-            runtime: state.runtime,
+            runtime: state
+                .sources
+                .get(focused_source)
+                .map(|source| source.runtime.clone())
+                .unwrap_or_else(SettingsRuntime::empty),
             runtime_queries,
-            rows: state.rows,
-            active_section: initial_active_section(state.sections.len()),
-            sections: state.sections,
-            selected_section: 0,
-            values: state.values,
-            path: state.path,
-            selected: 0,
-            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            streams: state
+                .sources
+                .iter()
+                .map(|source| {
+                    super::stream::StreamClient::new(
+                        source
+                            .daemon_port
+                            .map(|port| format!("ws://127.0.0.1:{port}")),
+                    )
+                })
+                .collect(),
+            sources: state.sources,
+            selected_source: focused_source,
+            source_menu: has_many_sources,
+            rail_transition: 0,
+            deck_transition: 0,
+            deck_motion: None,
             subtitle: state.subtitle,
             height_cap: state.height_cap,
-            panel_width: state.panel_width,
             save_error: None,
             filter: String::new(),
             filter_open: false,
-            active_control: None,
-            row_bounds,
+            stack: vec![root],
             wheel_generation: 0,
             runtime_poll_generation: 0,
             slider_dispatch_generation: 0,
@@ -225,29 +321,84 @@ impl SettingsPanelView {
             motion_tick: None,
             sample_signal: None,
             sampler_stop: None,
+            poll_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dismisser,
             palette: settings_panel_runtime(),
             kit: crate::kit::kit(),
-            stream: super::stream::StreamClient::new(
-                state
-                    .daemon_port
-                    .map(|port| format!("ws://127.0.0.1:{port}")),
-            ),
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
         };
-        view.selected_section = (0..view.sections.len())
-            .find(|index| !view.section_visible_rows(*index).is_empty())
+        let focused_source = view.panel.focused_index();
+        let fallback_section = (0..view.level().sections.len())
+            .find(|index| !view.section_visible_rows(*index).is_empty());
+        let selected_section = (0..view.level().sections.len())
+            .find(|index| {
+                let section = &view.level().sections[*index];
+                section.source == focused_source && !view.section_visible_rows(*index).is_empty()
+            })
+            .or(fallback_section)
             .unwrap_or(0);
-        view.selected = view.current_visible_rows().into_iter().next().unwrap_or(0);
+        view.level_mut().selected_section = selected_section;
+        let first_visible = view.current_visible_rows().into_iter().next().unwrap_or(0);
+        view.level_mut().selected = first_visible;
+        if view.panel_names_a_source() {
+            view.descend_source_menu();
+        }
         view.resume_runtime_poll(cx);
         view
     }
 
+    fn level(&self) -> &Level {
+        self.stack.last().expect("stack never empty")
+    }
+
+    fn level_mut(&mut self) -> &mut Level {
+        self.stack.last_mut().expect("stack never empty")
+    }
+
+    fn root(&self) -> &Level {
+        self.stack.first().expect("stack never empty")
+    }
+
+    fn root_mut(&mut self) -> &mut Level {
+        self.stack.first_mut().expect("stack never empty")
+    }
+
+    fn slider_rows(&mut self) -> &mut [Row] {
+        if self.level().list_card {
+            self.root_mut().rows.as_mut_slice()
+        } else {
+            self.level_mut().rows.as_mut_slice()
+        }
+    }
+
+    fn source_for(&self, row: usize) -> Option<&SourceState> {
+        let source = self.level().rows.get(row)?.source;
+        self.sources.get(source)
+    }
+
+    fn root_source_for(&self, row: usize) -> Option<&SourceState> {
+        let source = self.root().rows.get(row)?.source;
+        self.sources.get(source)
+    }
+
+    fn stream_for(&self, row: usize) -> Option<&super::stream::StreamClient> {
+        let source = self.level().rows.get(row)?.source;
+        self.streams.get(source)
+    }
+
     fn current_visible_rows(&self) -> Vec<usize> {
-        (0..self.sections.len())
-            .flat_map(|section| self.section_filtered_rows(section))
-            .collect()
+        filtered_visible_rows(
+            &self.level().rows,
+            &self.level().sections,
+            self.sources.len(),
+            self.filter_needle().as_deref(),
+            self.selected_source,
+        )
+    }
+
+    fn filtering(&self) -> bool {
+        self.filter_needle().is_some()
     }
 
     fn filter_needle(&self) -> Option<String> {
@@ -255,12 +406,7 @@ impl SettingsPanelView {
         if needle.is_empty() {
             return None;
         }
-        let matches_any = (0..self.sections.len()).any(|section| {
-            self.section_visible_rows(section)
-                .iter()
-                .any(|row| row_matches(&self.rows[*row], &needle))
-        });
-        matches_any.then_some(needle)
+        Some(needle)
     }
 
     fn section_filtered_rows(&self, index: usize) -> Vec<usize> {
@@ -270,25 +416,38 @@ impl SettingsPanelView {
         };
         visible
             .into_iter()
-            .filter(|row| row_matches(&self.rows[*row], &needle))
+            .filter(|row| row_matches(&self.level().rows[*row], &needle))
             .collect()
     }
 
     fn set_panel_filter(&mut self, next: String) {
         self.filter = next;
         let visible = self.current_visible_rows();
-        if !visible.contains(&self.selected) {
-            self.selected = visible.first().copied().unwrap_or(self.selected);
-        }
+        let selected = self.level().selected;
+        self.level_mut().selected = match self.filtering() {
+            true => visible.first().copied().unwrap_or(selected),
+            false => clamp_selected(&visible, selected),
+        };
         self.sync_scroll();
+    }
+
+    fn open_filter(&mut self, seed: Option<String>) {
+        self.filter_open = true;
+        if self.rail_has_key_focus() {
+            self.set_source_menu(false);
+        }
+        if let Some(seed) = seed {
+            self.set_panel_filter(seed);
+        }
     }
 
     fn handle_panel_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
         match key {
             "escape" => {
                 self.filter_open = false;
-                if !self.filter.is_empty() {
-                    self.set_panel_filter(String::new());
+                self.set_panel_filter(String::new());
+                if self.sources.len() > 1 {
+                    self.set_source_menu(true);
                 }
                 true
             }
@@ -315,14 +474,17 @@ impl SettingsPanelView {
     }
 
     fn fit_lists(&mut self) {
-        let show_section_headers = self.sections.len() <= 1;
-        let budget = self.height_cap - super::chrome_height(&self.sections);
-        for section_index in 0..self.sections.len() {
+        let show_section_headers = false;
+        let budget = self.height_cap - super::chrome_height(&self.source_sections());
+        for section_index in 0..self.root().sections.len() {
+            if self.root().sections[section_index].source != self.selected_source {
+                continue;
+            }
             let visible = self.section_visible_rows(section_index);
             let mut fixed = visible.len().saturating_sub(1) as f32 * super::PANEL_COLUMN_GAP;
             let mut lists: Vec<usize> = Vec::new();
             for index in &visible {
-                let row = &self.rows[*index];
+                let row = &self.root().rows[*index];
                 let header = if show_section_headers && row.section_label.is_some() {
                     super::PANEL_SECTION_HEADER_HEIGHT
                 } else {
@@ -332,7 +494,7 @@ impl SettingsPanelView {
                     fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
                     lists.push(*index);
                 } else {
-                    fixed += row_height(row, self.panel_width, show_section_headers);
+                    fixed += row_height(row, show_section_headers);
                 }
             }
             if lists.is_empty() {
@@ -342,7 +504,7 @@ impl SettingsPanelView {
             let fit = (per_list / (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP)) as usize;
             let visible_items = fit.clamp(LIST_FIT_MIN_VISIBLE, super::rows::LIST_MAX_VISIBLE);
             for index in lists {
-                if let RowControl::List { list, .. } = &mut self.rows[index].control {
+                if let RowControl::List { list, .. } = &mut self.root_mut().rows[index].control {
                     list.max_visible = visible_items;
                 }
             }
@@ -350,113 +512,227 @@ impl SettingsPanelView {
     }
 
     fn window_height(&self) -> f32 {
-        super::panel_height(&self.rows, &self.sections, self.panel_width).clamp(
-            super::chrome_height(&self.sections) + super::PANEL_ROW_HEIGHT,
+        (0..self.sources.len().max(1))
+            .map(|source| self.source_window_height(source))
+            .fold(0.0f32, f32::max)
+    }
+
+    fn source_window_height(&self, source: usize) -> f32 {
+        let sections = self
+            .root()
+            .sections
+            .iter()
+            .filter(|section| section.source == source)
+            .cloned()
+            .collect::<Vec<_>>();
+        super::panel_height(&self.root().rows, &sections).clamp(
+            super::chrome_height(&sections) + super::PANEL_ROW_HEIGHT,
             self.height_cap,
         )
     }
 
     fn rail_is_open(&self) -> bool {
-        self.sections.len() > 1
+        rail_open(self.sources.len(), self.filtering())
     }
 
-    fn rail_sections(&self) -> Vec<usize> {
-        (0..self.sections.len())
-            .filter(|index| !self.section_visible_rows(*index).is_empty())
+    fn source_sections(&self) -> Vec<RowSection> {
+        self.rail_sections()
+            .into_iter()
+            .map(|index| self.level().sections[index].clone())
             .collect()
     }
 
-    fn section_menu_is_open(&self) -> bool {
-        self.sections.len() > 1 && self.active_section.is_none()
+    fn focus_level(&self) -> PanelFocus {
+        focus_level(self.source_menu, self.sources.len())
+    }
+
+    fn can_ascend(&self) -> bool {
+        !matches!(self.focus_level(), PanelFocus::Sources) && self.sources.len() > 1
+    }
+
+    fn ascend(&mut self) -> bool {
+        if !self.can_ascend() {
+            return false;
+        }
+        self.set_source_menu(true);
+        true
+    }
+
+    fn pop_card(&mut self, cx: &mut Context<Self>) {
+        if self.stack.len() > 1 && self.level().object_array.is_some() {
+            self.sync_object_array_to_root();
+        }
+        if self.stack.len() > 1 && self.level().live_card {
+            self.sync_live_card_to_root();
+        }
+        if pop_level(&mut self.stack).is_some() {
+            self.deck_transition = self.deck_transition.wrapping_add(1);
+            self.deck_motion = Some(DeckMotion::Pop);
+            let visible = self.current_visible_rows();
+            let selected = self.level().selected;
+            self.level_mut().selected = clamp_selected(&visible, selected);
+            self.sync_scroll();
+            cx.notify();
+        }
+    }
+
+    fn rail_sections(&self) -> Vec<usize> {
+        (0..self.level().sections.len())
+            .filter(|index| {
+                self.level().sections[*index].source == self.selected_source
+                    && !self.section_visible_rows(*index).is_empty()
+            })
+            .collect()
+    }
+
+    fn rail_has_key_focus(&self) -> bool {
+        !matches!(self.focus_level(), PanelFocus::Body)
     }
 
     fn section_visible_rows(&self, index: usize) -> Vec<usize> {
-        let Some(section) = self.sections.get(index) else {
+        let Some(section) = self.level().sections.get(index) else {
             return Vec::new();
         };
         section
             .rows
             .iter()
             .copied()
-            .filter(|row| super::rows::row_is_visible(&self.rows, *row))
+            .filter(|row| super::rows::row_is_visible(&self.level().rows, *row))
             .collect()
     }
 
-    fn step_selected_section(&mut self, direction: isize) {
-        let last = self.sections.len().saturating_sub(1);
-        let mut candidate = self.selected_section;
-        loop {
-            let next = if direction < 0 {
-                candidate.saturating_sub(1)
-            } else {
-                (candidate + 1).min(last)
-            };
-            if next == candidate {
-                return;
-            }
-            candidate = next;
-            if !self.section_visible_rows(candidate).is_empty() {
-                self.selected_section = candidate;
-                self.scroll_to_selected_section();
-                return;
-            }
-        }
-    }
-
-    fn scroll_to_selected_section(&mut self) {
-        let Some(first) = self
-            .section_visible_rows(self.selected_section)
-            .into_iter()
-            .next()
-        else {
-            return;
-        };
-        self.body_scroll.follow(self.body_child_index(first));
-    }
-
     fn open_selected_section(&mut self) {
-        if self.sections.is_empty() {
+        if self.level().sections.is_empty() {
             return;
         }
-        let target = self.selected_section.min(self.sections.len() - 1);
+        let target = self
+            .level()
+            .selected_section
+            .min(self.level().sections.len() - 1);
         let Some(first) = self.section_visible_rows(target).into_iter().next() else {
             return;
         };
-        self.active_section = Some(target);
-        self.selected = first;
+        self.level_mut().active_section = Some(target);
+        self.level_mut().selected = first;
         self.sync_scroll();
-        self.active_control = None;
+        self.level_mut().active_control = None;
     }
 
-    fn open_section_menu(&mut self) {
-        let Some(active) = self.active_section else {
-            return;
+    pub(super) fn retarget_focus(&mut self, plugin_id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(source_index) = self
+            .sources
+            .iter()
+            .position(|source| source.plugin_id == plugin_id)
+        else {
+            return false;
         };
-        self.selected_section = active;
-        self.active_section = None;
-        self.active_control = None;
-        self.body_scroll.rewind();
+        self.forget_last_visit();
+        self.select_source(source_index, cx);
+        let Some(section_index) = (0..self.level().sections.len()).find(|index| {
+            let section = &self.level().sections[*index];
+            section.source == source_index && !self.section_visible_rows(*index).is_empty()
+        }) else {
+            return false;
+        };
+        self.level_mut().selected_section = section_index;
+        if focus_enters_the_body(plugin_id) {
+            self.descend_source_menu();
+        } else {
+            self.set_source_menu(self.sources.len() > 1);
+        }
+        self.sync_scroll();
+        cx.notify();
+        true
     }
 
-    fn on_section_menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(intent) = section_menu_intent(key) else {
-            return;
+    fn panel_names_a_source(&self) -> bool {
+        let Some(focus) = self.panel.focus.as_deref() else {
+            return false;
         };
-        match intent {
-            SectionMenuIntent::Up => self.step_selected_section(-1),
-            SectionMenuIntent::Down => self.step_selected_section(1),
-            SectionMenuIntent::Open => self.open_selected_section(),
-            SectionMenuIntent::Close => {
+        focus_enters_the_body(focus) && self.sources.iter().any(|source| source.plugin_id == focus)
+    }
+
+    fn forget_last_visit(&mut self) {
+        self.stack.truncate(1);
+        self.filter.clear();
+        self.filter_open = false;
+        self.level_mut().active_control = None;
+    }
+
+    fn rail_source_level(&self) -> bool {
+        matches!(self.focus_level(), PanelFocus::Sources)
+    }
+
+    fn step_selected_source(&mut self, direction: isize, cx: &mut Context<Self>) {
+        let last = self.sources.len().saturating_sub(1);
+        let next = if direction < 0 {
+            self.selected_source.saturating_sub(1)
+        } else {
+            (self.selected_source + 1).min(last)
+        };
+        if next != self.selected_source {
+            self.select_source(next, cx);
+        }
+    }
+
+    fn select_source(&mut self, next: usize, cx: &mut Context<Self>) {
+        if next == self.selected_source {
+            return;
+        }
+        self.selected_source = next;
+        self.runtime = self
+            .sources
+            .get(next)
+            .map(|source| source.runtime.clone())
+            .unwrap_or_else(SettingsRuntime::empty);
+        self.runtime_queries =
+            runtime_query_names(self.level().rows.iter().filter(|row| row.source == next));
+        self.level_mut().active_control = None;
+        let selected_section = (0..self.level().sections.len())
+            .find(|index| {
+                self.level().sections[*index].source == next
+                    && !self.section_visible_rows(*index).is_empty()
+            })
+            .unwrap_or(0);
+        self.level_mut().selected_section = selected_section;
+        let first_visible = self.current_visible_rows().into_iter().next().unwrap_or(0);
+        self.level_mut().selected = first_visible;
+        self.level().body_scroll.rewind();
+        self.pause_runtime_poll();
+        self.resume_runtime_poll(cx);
+    }
+
+    fn descend_source_menu(&mut self) {
+        self.set_source_menu(false);
+        self.open_selected_section();
+    }
+
+    fn set_source_menu(&mut self, open: bool) {
+        if self.source_menu == open {
+            return;
+        }
+        self.source_menu = open;
+        self.rail_transition = self.rail_transition.wrapping_add(1);
+    }
+
+    fn on_rail_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        match key {
+            "up" => self.step_selected_source(-1, cx),
+            "down" => self.step_selected_source(1, cx),
+            "enter" | "return" => self.descend_source_menu(),
+            "escape" => {
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
                 return;
             }
+            _ => return,
         }
         cx.notify();
     }
 
     pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
         let initial_delay = self
+            .level()
             .rows
             .iter()
             .any(|row| {
@@ -491,6 +767,7 @@ impl SettingsPanelView {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let samples = SampledQueryResults::default();
         self.sampler_stop = Some(stop.clone());
+        let visible = self.poll_visible.clone();
         self.frame_paced_samples =
             (apply_tick <= FRAME_PACED_QUERY_INTERVAL).then(|| samples.clone());
         let frame_paced = self.frame_paced_samples.is_some();
@@ -518,6 +795,7 @@ impl SettingsPanelView {
                         runtime,
                         queries,
                         stop.clone(),
+                        visible,
                         samples.clone(),
                         async_cx.background_executor().clone(),
                     ))
@@ -532,20 +810,7 @@ impl SettingsPanelView {
                             }
                             if !batch.is_empty() {
                                 for (query, result) in batch {
-                                    apply_runtime_query(
-                                        &mut this.rows,
-                                        &query,
-                                        result,
-                                        &|index, id| {
-                                            this.slider_drag.as_ref().is_some_and(
-                                                |(drag_index, drag_id)| {
-                                                    *drag_index == index && drag_id == id
-                                                },
-                                            ) || this
-                                                .slider_pending
-                                                .contains(&(index, id.to_string()))
-                                        },
-                                    );
+                                    this.apply_query(&query, result);
                                 }
                                 cx.notify();
                             }
@@ -588,7 +853,14 @@ impl SettingsPanelView {
             .unwrap_or_default();
         self.motion_tick = Some(now);
         let mut animating = false;
-        for row in &mut self.rows {
+        if self.stack.len() > 1 {
+            for row in &mut self.root_mut().rows {
+                if let RowControl::Gamepad { monitor, .. } = &mut row.control {
+                    animating |= monitor.step_motion(dt);
+                }
+            }
+        }
+        for row in &mut self.level_mut().rows {
             if let RowControl::Gamepad { monitor, .. } = &mut row.control {
                 animating |= monitor.step_motion(dt);
             }
@@ -611,15 +883,71 @@ impl SettingsPanelView {
             }
             self.applied_query_payloads
                 .insert(query.clone(), result.clone());
-            apply_runtime_query(&mut self.rows, &query, result, &|index, id| {
-                self.slider_drag
-                    .as_ref()
-                    .is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id)
-                    || self.slider_pending.contains(&(index, id.to_string()))
-            });
+            self.apply_query(&query, result);
             changed = true;
         }
         changed
+    }
+
+    fn apply_query(&mut self, query: &str, result: Result<serde_json::Value, String>) {
+        let drag = self.slider_drag.clone();
+        let pending = self.slider_pending.clone();
+        apply_runtime_query(&mut self.root_mut().rows, query, result, &|index, id| {
+            drag.as_ref()
+                .is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id)
+                || pending.contains(&(index, id.to_string()))
+        });
+        self.sync_list_card(query);
+        self.sync_live_card(query);
+    }
+
+    fn sync_list_card(&mut self, query: &str) {
+        if self.stack.len() <= 1 || !self.level().list_card {
+            return;
+        }
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let Some(parent) = self.root().rows.get(origin_row) else {
+            return;
+        };
+        let RowControl::List {
+            query: row_query, ..
+        } = &parent.control
+        else {
+            return;
+        };
+        if row_query.as_str() != query {
+            return;
+        }
+        let (root, front) = self.stack.split_at_mut(1);
+        list_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+    }
+
+    fn sync_live_card(&mut self, query: &str) {
+        if self.stack.len() <= 1 || !self.level().live_card {
+            return;
+        }
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let Some(parent) = self.root().rows.get(origin_row) else {
+            return;
+        };
+        let row_query = match &parent.control {
+            RowControl::Gamepad { query, .. } | RowControl::QrCode { query, .. } => query,
+            _ => return,
+        };
+        if row_query != query {
+            return;
+        }
+        let (root, front) = self.stack.split_at_mut(1);
+        live_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+    }
+
+    fn sync_live_card_to_root(&mut self) {
+        let (root, front) = self.stack.split_at_mut(1);
+        live_card_sync_back(&mut root[0].rows, front.last_mut().expect("front level"));
     }
 
     pub(super) fn pause_runtime_poll(&mut self) {
@@ -667,6 +995,7 @@ impl SettingsPanelView {
         runtime: SettingsRuntime,
         queries: Vec<String>,
         stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
         latest: SampledQueryResults,
         executor: BackgroundExecutor,
     ) {
@@ -676,6 +1005,10 @@ impl SettingsPanelView {
             .collect::<Vec<_>>();
         let mut due = vec![std::time::Instant::now(); queries.len()];
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            if !visible.load(std::sync::atomic::Ordering::Relaxed) {
+                executor.timer(FRAME_PACED_QUERY_INTERVAL).await;
+                continue;
+            }
             let started = std::time::Instant::now();
             let mut fresh = Vec::new();
             for (index, query) in queries.iter().enumerate() {
@@ -702,41 +1035,69 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
-        if self.section_menu_is_open() {
-            self.on_section_menu_key(key, cx);
+        if !event.keystroke.modifiers.modified() && !self.filter_open {
+            let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
+            if !editing && self.level().active_control.is_none() {
+                if key == "/" || key_char == Some("/") {
+                    self.open_filter(None);
+                    cx.notify();
+                    return;
+                }
+                if let Some(text) = bare_filter_seed(key, key_char) {
+                    self.open_filter(Some(text));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        if self.rail_has_key_focus() {
+            self.on_rail_key(key, cx);
             return;
         }
-        if let Some(ActiveControl::Wheel(wheel)) = &self.active_control {
+        if let Some(ActiveControl::Wheel(wheel)) = &self.level().active_control {
             let popup = wheel.popup;
             let _ = popup.update(cx, |popup, popup_window, popup_cx| {
                 popup.handle_key(key, event.keystroke.modifiers.shift, popup_window, popup_cx);
             });
             return;
         }
-        if matches!(self.active_control, Some(ActiveControl::ListActions(_))) {
+        if matches!(
+            self.level().active_control,
+            Some(ActiveControl::ListActions(_))
+        ) {
             self.on_list_actions_key(key, cx);
             return;
         }
-        if matches!(self.active_control, Some(ActiveControl::Dropdown(_))) {
+        if matches!(
+            self.level().active_control,
+            Some(ActiveControl::Dropdown(_))
+        ) {
             self.on_dropdown_key(key, cx);
             return;
         }
-        if matches!(self.active_control, Some(ActiveControl::List)) {
-            self.on_list_key(key, key_char, cx);
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().object_array.is_some()
+            && self.on_object_array_key(key, key_char, cx)
+        {
             return;
         }
-        if matches!(self.active_control, Some(ActiveControl::ObjectArray)) {
-            self.on_object_array_key(key, key_char, cx);
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().list_card
+            && self.on_list_card_key(key, key_char, cx)
+        {
             return;
         }
-        let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().live_card
+            && self.on_live_card_key(key, key_char, cx)
+        {
+            return;
+        }
+        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
         if self.filter_open && self.handle_panel_filter_key(key, key_char) {
-            cx.notify();
-            return;
-        }
-        let slash = key == "/" || key_char == Some("/");
-        if !editing && !self.filter_open && slash && !event.keystroke.modifiers.modified() {
-            self.filter_open = true;
             cx.notify();
             return;
         }
@@ -754,6 +1115,16 @@ impl SettingsPanelView {
                 self.commit_edit(cx);
             }
         }
+        if !editing
+            && !self.filter_open
+            && self.level().active_control.is_none()
+            && matches!(key, "backspace" | "delete")
+            && self.remove_selected_text_list_value()
+        {
+            self.persist();
+            cx.notify();
+            return;
+        }
         let Some(intent) = intent(key, key_char, editing) else {
             return;
         };
@@ -762,67 +1133,87 @@ impl SettingsPanelView {
                 if self.nav_guard.swallow(NavAxis::Vertical, -1.0) {
                     return;
                 }
-                self.selected =
-                    adjacent_visible_row(&self.current_visible_rows(), self.selected, -1);
+                let visible = self.current_visible_rows();
+                let selected = self.level().selected;
+                self.level_mut().selected = adjacent_visible_row(&visible, selected, -1);
                 self.sync_scroll();
             }
             Intent::Down => {
                 if self.nav_guard.swallow(NavAxis::Vertical, 1.0) {
                     return;
                 }
-                self.selected =
-                    adjacent_visible_row(&self.current_visible_rows(), self.selected, 1);
+                let visible = self.current_visible_rows();
+                let selected = self.level().selected;
+                self.level_mut().selected = adjacent_visible_row(&visible, selected, 1);
                 self.sync_scroll();
             }
             Intent::Activate => self.activate(window, cx),
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
-                if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
                     edit.pop();
                     self.stream_edit();
                 }
             }
             Intent::Insert(ch) => {
-                if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
                     edit.push_str(&ch);
                     self.stream_edit();
                 }
             }
             Intent::CancelEdit => {
-                if row_streams(&self.rows, self.selected) {
-                    self.stream.close();
+                if row_streams(&self.level().rows, self.level().selected) {
+                    if let Some(stream) = self.stream_for(self.level().selected) {
+                        stream.close();
+                    }
                 }
-                self.active_control = None;
+                self.level_mut().active_control = None;
             }
             Intent::Close => {
-                if self.sections.len() > 1 {
-                    self.open_section_menu();
-                    cx.notify();
-                    return;
+                match escape_step(self.stack.len() - 1, self.filter_open, self.can_ascend()) {
+                    EscapeStep::CloseFilter => {
+                        self.handle_panel_filter_key("escape", None);
+                    }
+                    EscapeStep::PopCard => self.pop_card(cx),
+                    EscapeStep::AscendRail => {
+                        if self.ascend() {
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    EscapeStep::Dismiss => {
+                        self.pause_runtime_poll();
+                        self.dismisser.dismiss(cx);
+                        return;
+                    }
                 }
-                self.pause_runtime_poll();
-                self.dismisser.dismiss(cx);
-                return;
             }
         }
         cx.notify();
     }
 
     fn open_color_wheel(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get(index) else {
+        let Some(row) = self.level().rows.get(index) else {
             return;
         };
         let RowControl::Color(value) = &row.control else {
             return;
         };
-        let Some(anchor) = self.row_bounds.get(index).and_then(|bounds| bounds.get()) else {
+        let Some(anchor) = self
+            .level()
+            .row_bounds
+            .get(index)
+            .and_then(|bounds| bounds.get())
+        else {
             return;
         };
         let value = value.clone();
         self.close_wheel_popup(cx);
-        self.selected = index;
-        if row_streams(&self.rows, index) && !stream_gated(&self.rows) {
-            self.stream.open();
+        self.level_mut().selected = index;
+        if row_streams(&self.level().rows, index) && !stream_gated(&self.level().rows) {
+            if let Some(stream) = self.stream_for(index) {
+                stream.open();
+            }
         }
         self.sync_scroll();
         self.wheel_generation = self.wheel_generation.wrapping_add(1);
@@ -853,7 +1244,7 @@ impl SettingsPanelView {
         ) else {
             return;
         };
-        self.active_control = Some(ActiveControl::Wheel(WheelControl {
+        self.level_mut().active_control = Some(ActiveControl::Wheel(WheelControl {
             generation,
             row: index,
             value: preview,
@@ -863,33 +1254,41 @@ impl SettingsPanelView {
     }
 
     fn preview_wheel(&mut self, generation: u64, value: String, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_mut() else {
-            return;
+        let row = {
+            let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.as_mut() else {
+                return;
+            };
+            if wheel.generation != generation {
+                return;
+            }
+            wheel.row
         };
-        if wheel.generation != generation {
-            return;
-        }
-        if row_streams(&self.rows, wheel.row) && !stream_gated(&self.rows) {
+        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
             if let Some(frame) = super::stream::color_frame(&value) {
-                self.stream.send(frame);
+                if let Some(stream) = self.streams.get(self.level().rows[row].source) {
+                    stream.send(frame);
+                }
             }
         }
+        let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.as_mut() else {
+            return;
+        };
         wheel.value = value;
         cx.notify();
     }
 
     fn commit_wheel(&mut self, generation: u64, value: String, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_ref() else {
+        let Some(ActiveControl::Wheel(wheel)) = self.level().active_control.as_ref() else {
             return;
         };
         if wheel.generation != generation {
             return;
         }
         let row_index = wheel.row;
-        self.active_control = None;
-        let streams = row_streams(&self.rows, row_index);
-        let action = row_action(&self.rows, row_index);
-        let Some(row) = self.rows.get_mut(row_index) else {
+        self.level_mut().active_control = None;
+        let streams = row_streams(&self.level().rows, row_index);
+        let action = row_action(&self.level().rows, row_index);
+        let Some(row) = self.level_mut().rows.get_mut(row_index) else {
             return;
         };
         let RowControl::Color(row_value) = &mut row.control else {
@@ -897,24 +1296,28 @@ impl SettingsPanelView {
         };
         *row_value = value;
         if streams {
-            self.stream.close();
+            if let Some(stream) = self.stream_for(row_index) {
+                stream.close();
+            }
         }
         self.persist();
         if let Some(action) = action {
-            self.dispatch_stream_action(&action, cx);
+            self.dispatch_stream_action(row_index, &action, cx);
         }
         cx.notify();
     }
 
     fn close_wheel_popup(&mut self, cx: &mut App) {
-        if !matches!(self.active_control, Some(ActiveControl::Wheel(_))) {
+        if !matches!(self.level().active_control, Some(ActiveControl::Wheel(_))) {
             return;
         }
-        let Some(ActiveControl::Wheel(wheel)) = self.active_control.take() else {
+        let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.take() else {
             return;
         };
-        if row_streams(&self.rows, wheel.row) {
-            self.stream.close();
+        if row_streams(&self.level().rows, wheel.row) {
+            if let Some(stream) = self.stream_for(wheel.row) {
+                stream.close();
+            }
         }
         let _ = wheel
             .popup
@@ -922,7 +1325,8 @@ impl SettingsPanelView {
     }
 
     fn on_dropdown_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_mut() else {
+        let Some(ActiveControl::Dropdown(dropdown)) = self.level_mut().active_control.as_mut()
+        else {
             return;
         };
         let Some(event) = dropdown.handle_key(key) else {
@@ -931,151 +1335,135 @@ impl SettingsPanelView {
         match event {
             DropdownEvent::Moved => {}
             DropdownEvent::Pick(_) => self.pick_dropdown(),
-            DropdownEvent::Close => self.active_control = None,
+            DropdownEvent::Close => self.level_mut().active_control = None,
         }
         cx.notify();
     }
 
-    fn on_list_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
-        if self.handle_list_filter_key(key, key_char) {
-            cx.notify();
-            return;
-        }
-        if let Some(direction) = horizontal_step_direction(key) {
-            if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
-                return;
-            }
-            if self.step_selected_list_slider(direction, cx) {
-                cx.notify();
-                return;
-            }
-        }
-        let Some(intent) = list_intent(key) else {
-            return;
-        };
-        let guarded = match intent {
-            ListIntent::Up => self.nav_guard.swallow(NavAxis::Vertical, -1.0),
-            ListIntent::Down => self.nav_guard.swallow(NavAxis::Vertical, 1.0),
-            _ => false,
-        };
-        if guarded {
-            return;
-        }
-        if intent == ListIntent::Activate {
-            self.dispatch_list_action(cx);
-            return;
-        }
-        if intent == ListIntent::Actions {
-            self.open_list_actions();
-            cx.notify();
-            return;
-        }
-        let Some(row) = self.rows.get_mut(self.selected) else {
-            self.active_control = None;
-            return;
-        };
-        let RowControl::List {
-            actions,
-            items,
-            list,
-            filter,
-            ..
-        } = &mut row.control
-        else {
-            self.active_control = None;
-            return;
-        };
-        let count = filtered_list_items(actions, items, filter).len();
-        match intent {
-            ListIntent::Up => list.move_up(),
-            ListIntent::Down => list.move_down(count),
-            ListIntent::Close => self.active_control = None,
-            ListIntent::Activate | ListIntent::Actions => return,
-        }
-        list.sync(count);
-        cx.notify();
+    fn on_object_array_key(
+        &mut self,
+        key: &str,
+        key_char: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.on_object_array_card_key(key, key_char, cx)
     }
 
-    fn handle_list_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
-        let Some(RowControl::List {
-            searchable, filter, ..
-        }) = self.rows.get(self.selected).map(|row| &row.control)
-        else {
-            return false;
-        };
-        if !*searchable {
-            return false;
-        }
-        let next = match key {
-            "backspace" => {
-                if filter.is_empty() {
+    fn on_object_array_card_key(
+        &mut self,
+        key: &str,
+        key_char: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let selected = self.level().selected;
+        let outcome = match self.level_mut().object_array.as_mut() {
+            Some(state) if state.draft.is_some() => state.handle_key(key, key_char),
+            Some(state) => {
+                if matches!(key, "up" | "down") {
                     return false;
                 }
-                let mut next = filter.clone();
-                next.pop();
-                next
+                let count = state.entry_count();
+                state.list.selected = selected.min(count - 1);
+                state.list.sync(count);
+                state.handle_key(key, key_char)
             }
-            "escape" => {
-                if filter.is_empty() {
-                    return false;
-                }
-                String::new()
-            }
-            "space" => {
-                if filter.is_empty() {
-                    return false;
-                }
-                let mut next = filter.clone();
-                next.push(' ');
-                next
-            }
-            _ => match key_char {
-                Some(character) if is_filter_text(character) => {
-                    let mut next = filter.clone();
-                    next.push_str(character);
-                    next
-                }
-                _ => return false,
-            },
-        };
-        self.set_list_filter(next);
-        true
-    }
-
-    fn set_list_filter(&mut self, next: String) {
-        let Some(row) = self.rows.get_mut(self.selected) else {
-            return;
-        };
-        let RowControl::List {
-            actions,
-            items,
-            list,
-            filter,
-            ..
-        } = &mut row.control
-        else {
-            return;
-        };
-        apply_list_filter(actions, items, list, filter, next);
-    }
-
-    fn on_object_array_key(&mut self, key: &str, key_char: Option<&str>, cx: &mut Context<Self>) {
-        let outcome = match self.rows.get_mut(self.selected).map(|row| &mut row.control) {
-            Some(RowControl::ObjectArray(state)) => state.handle_key(key, key_char),
-            _ => ObjectArrayOutcome::Close,
+            None => return false,
         };
         match outcome {
-            ObjectArrayOutcome::Ignored => return,
+            ObjectArrayOutcome::Ignored => return false,
             ObjectArrayOutcome::Handled => {}
-            ObjectArrayOutcome::Persist => self.persist(),
-            ObjectArrayOutcome::Close => self.active_control = None,
+            ObjectArrayOutcome::Persist => {
+                self.sync_object_array_to_root();
+                self.persist();
+            }
+            ObjectArrayOutcome::Close => {
+                self.pop_card(cx);
+                return true;
+            }
         }
         self.sync_scroll();
         cx.notify();
+        true
+    }
+
+    fn on_list_card_key(
+        &mut self,
+        key: &str,
+        _key_char: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(direction) = horizontal_step_direction(key) {
+            if self.card_list_has_slider() {
+                if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
+                    return true;
+                }
+                if self.step_card_list_slider(direction, cx) {
+                    cx.notify();
+                    return true;
+                }
+            }
+            if key == "right" {
+                self.dispatch_list_card_action(cx);
+                cx.notify();
+                return true;
+            }
+            return false;
+        }
+        match key {
+            "enter" | "return" | "space" => {
+                self.dispatch_list_card_action(cx);
+                cx.notify();
+                true
+            }
+            "backspace" | "delete" => true,
+            _ => false,
+        }
+    }
+
+    fn on_live_card_key(
+        &mut self,
+        key: &str,
+        _key_char: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match key {
+            "escape" => {
+                self.pop_card(cx);
+                true
+            }
+            "enter" | "return" | "space" => {
+                if matches!(
+                    self.level()
+                        .rows
+                        .get(self.level().selected)
+                        .map(|row| &row.control),
+                    Some(RowControl::Gamepad { .. })
+                ) {
+                    self.select_next_gamepad();
+                }
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn card_list_has_slider(&self) -> bool {
+        let Some(origin_row) = self.level().origin_row else {
+            return false;
+        };
+        matches!(
+            self.root().rows.get(origin_row).map(|row| &row.control),
+            Some(RowControl::List {
+                slider: Some(_),
+                ..
+            })
+        )
     }
 
     fn on_list_actions_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(ActiveControl::ListActions(menu)) = self.active_control.as_mut() else {
+        let Some(ActiveControl::ListActions(menu)) = self.level_mut().active_control.as_mut()
+        else {
             return;
         };
         let Some(event) = menu.dropdown.handle_key(key) else {
@@ -1084,20 +1472,26 @@ impl SettingsPanelView {
         match event {
             DropdownEvent::Moved => {}
             DropdownEvent::Pick(selected) => self.dispatch_list_menu_action(selected, cx),
-            DropdownEvent::Close => self.active_control = Some(ActiveControl::List),
+            DropdownEvent::Close => self.close_list_actions_menu(),
         }
         cx.notify();
     }
 
+    fn close_list_actions_menu(&mut self) {
+        self.level_mut().active_control = None;
+    }
+
     fn pick_dropdown(&mut self) {
-        let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_ref() else {
+        let Some(ActiveControl::Dropdown(dropdown)) = self.level().active_control.as_ref() else {
             return;
         };
-        self.pick_dropdown_option(dropdown.selected());
+        let pick = dropdown.selected();
+        self.pick_dropdown_option(pick);
     }
 
     fn pick_dropdown_option(&mut self, pick: usize) {
-        let Some(row) = self.rows.get_mut(self.selected) else {
+        let selected = self.level().selected;
+        let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
         match &mut row.control {
@@ -1106,7 +1500,7 @@ impl SettingsPanelView {
                     *index = pick;
                     self.persist();
                 }
-                self.active_control = None;
+                self.level_mut().active_control = None;
             }
             RowControl::MultiSelect { selected, .. } => {
                 if let Some(flag) = selected.get_mut(pick) {
@@ -1125,12 +1519,13 @@ impl SettingsPanelView {
             | RowControl::ObjectArray(_)
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. }
-            | RowControl::Unsupported { .. } => self.active_control = None,
+            | RowControl::Unsupported { .. } => self.level_mut().active_control = None,
         }
     }
 
     fn toggle(&mut self) {
-        let Some(row) = self.rows.get_mut(self.selected) else {
+        let selected = self.level().selected;
+        let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
         if let RowControl::Toggle(value) = &mut row.control {
@@ -1140,41 +1535,77 @@ impl SettingsPanelView {
     }
 
     fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get(self.selected) else {
+        if !self.current_visible_rows().contains(&self.level().selected) {
+            return;
+        }
+        let selected = self.level().selected;
+        if let Some(state) = self.level_mut().object_array.as_mut() {
+            let count = state.entry_count();
+            state.list.selected = selected.min(count - 1);
+            state.list.sync(count);
+            state.open_draft();
+            return;
+        }
+        let Some(row) = self.level().rows.get(selected) else {
             return;
         };
         match &row.control {
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { options, index, .. } => {
-                self.active_control = Some(ActiveControl::Dropdown(Dropdown::open(
-                    options.len(),
-                    *index,
-                )));
+                let count = options.len();
+                let initial = *index;
+                self.level_mut().active_control =
+                    Some(ActiveControl::Dropdown(Dropdown::open(count, initial)));
             }
             RowControl::MultiSelect { options, .. } => {
-                self.active_control =
-                    Some(ActiveControl::Dropdown(Dropdown::open(options.len(), 0)));
+                let count = options.len();
+                self.level_mut().active_control =
+                    Some(ActiveControl::Dropdown(Dropdown::open(count, 0)));
             }
-            RowControl::Color(_) => self.open_color_wheel(self.selected, window, cx),
+            RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
             RowControl::Status { .. } => {}
             RowControl::List { items, .. } if !items.is_empty() => {
-                self.active_control = Some(ActiveControl::List)
+                self.open_list_card(selected);
+                cx.notify();
             }
             RowControl::List { .. } => {}
-            RowControl::ObjectArray(_) => self.active_control = Some(ActiveControl::ObjectArray),
-            RowControl::Gamepad { .. } => self.select_next_gamepad(),
-            RowControl::QrCode { .. } => {}
+            RowControl::ObjectArray(_) => {
+                self.open_object_array_card(selected);
+                cx.notify();
+            }
+            RowControl::Gamepad { .. } | RowControl::QrCode { .. } => {
+                self.open_live_card(selected);
+                cx.notify();
+            }
             RowControl::Unsupported { .. } => {}
-            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
-                self.begin_edit()
+            RowControl::Number { .. } | RowControl::Text(_) => self.begin_edit(),
+            RowControl::TextList(_) => {
+                self.open_text_list_card(selected);
+                cx.notify();
             }
         }
     }
 
     fn select_next_gamepad(&mut self) {
-        let Some(RowControl::Gamepad { monitor, .. }) =
-            self.rows.get_mut(self.selected).map(|row| &mut row.control)
+        if self.level().live_card {
+            if let Some(origin_row) = self.level().origin_row {
+                if let Some(RowControl::Gamepad { monitor, .. }) = self
+                    .root_mut()
+                    .rows
+                    .get_mut(origin_row)
+                    .map(|row| &mut row.control)
+                {
+                    monitor.select_next();
+                }
+            }
+        }
+        let selected = self.level().selected;
+        let Some(RowControl::Gamepad { monitor, .. }) = self
+            .level_mut()
+            .rows
+            .get_mut(selected)
+            .map(|row| &mut row.control)
         else {
             return;
         };
@@ -1182,6 +1613,13 @@ impl SettingsPanelView {
     }
 
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
+        let row_index = self.level().selected;
+        let Some(runtime) = self
+            .source_for(row_index)
+            .map(|source| source.runtime.clone())
+        else {
+            return;
+        };
         let Some(RowControl::Action {
             action,
             active_action,
@@ -1191,7 +1629,11 @@ impl SettingsPanelView {
             pending,
             error,
             ..
-        }) = self.rows.get_mut(self.selected).map(|row| &mut row.control)
+        }) = self
+            .level_mut()
+            .rows
+            .get_mut(row_index)
+            .map(|row| &mut row.control)
         else {
             return;
         };
@@ -1206,18 +1648,16 @@ impl SettingsPanelView {
         .clone();
         *pending = true;
         *error = None;
-        let row_index = self.selected;
         let refresh_query = active_query.clone();
         let refresh_value_from = active_value_from.clone();
         #[cfg(debug_assertions)]
-        let plugin_id = self.panel.plugin_id.clone();
+        let plugin_id = self.panel.primary_plugin_id().to_string();
         #[cfg(debug_assertions)]
         let dispatched_action = action.clone();
         let rearm_poll_generation = refresh_query.is_some().then(|| {
             self.pause_runtime_poll();
             self.runtime_poll_generation
         });
-        let runtime = self.runtime.clone();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -1240,25 +1680,21 @@ impl SettingsPanelView {
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     let (result, refreshed) = result;
-                    if let Some(RowControl::Action { pending, error, .. }) =
-                        this.rows.get_mut(row_index).map(|row| &mut row.control)
+                    if let Some(RowControl::Action { pending, error, .. }) = this
+                        .level_mut()
+                        .rows
+                        .get_mut(row_index)
+                        .map(|row| &mut row.control)
                     {
                         *pending = false;
                         *error = result.err();
                     }
                     if let Some((query, result)) = refreshed {
-                        apply_runtime_query(&mut this.rows, &query, result, &|index, id| {
-                            this.slider_drag
-                                .as_ref()
-                                .is_some_and(|(drag_index, drag_id)| {
-                                    *drag_index == index && drag_id == id
-                                })
-                                || this.slider_pending.contains(&(index, id.to_string()))
-                        });
+                        this.apply_query(&query, result);
                     }
                     #[cfg(debug_assertions)]
                     if let Some(RowControl::Action { active, error, .. }) =
-                        this.rows.get(row_index).map(|row| &row.control)
+                        this.level().rows.get(row_index).map(|row| &row.control)
                     {
                         qol_runtime::probe!(
                             "SETTINGS_ACTION_STATE",
@@ -1279,64 +1715,46 @@ impl SettingsPanelView {
         .detach();
     }
 
-    fn dispatch_list_action(&mut self, cx: &mut Context<Self>) {
-        let row_index = self.selected;
+    fn dispatch_list_card_action(&mut self, cx: &mut Context<Self>) {
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let slot = self.level().selected;
         let Some(RowControl::List {
             actions,
             items,
-            list,
             filter,
             ..
-        }) = self.rows.get(row_index).map(|row| &row.control)
+        }) = self.root().rows.get(origin_row).map(|row| &row.control)
         else {
             return;
         };
-        let Some(item) = selected_list_item(actions, items, filter, list.selected) else {
+        let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return;
         };
         let Some(action) = primary_list_item_action(actions, item) else {
             return;
         };
         let item_id = item.id.clone();
-        self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
+        self.dispatch_resolved_list_action(origin_row, &item_id, action, cx);
     }
 
-    fn select_list_item(&mut self, row_index: usize, slot: usize) {
-        let Some(RowControl::List {
-            actions,
-            items,
-            list,
-            filter,
-            ..
-        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
-        else {
+    fn open_list_card_actions(&mut self) {
+        let Some(origin_row) = self.level().origin_row else {
             return;
         };
-        let count = filtered_list_items(actions, items, filter).len();
-        if slot >= count {
-            return;
-        }
-        self.selected = row_index;
-        list.selected = slot;
-        list.sync(count);
-        self.active_control = Some(ActiveControl::List);
-        self.sync_scroll();
-    }
-
-    fn open_list_actions(&mut self) {
-        let row_index = self.selected;
+        let slot = self.level().selected;
         let Some(RowControl::List {
             actions,
             items,
-            list,
             filter,
             ..
-        }) = self.rows.get(row_index).map(|row| &row.control)
+        }) = self.root().rows.get(origin_row).map(|row| &row.control)
         else {
             return;
         };
         let Some(item) =
-            selected_list_item(actions, items, filter, list.selected).filter(|item| !item.pending)
+            selected_list_item(actions, items, filter, slot).filter(|item| !item.pending)
         else {
             return;
         };
@@ -1344,8 +1762,8 @@ impl SettingsPanelView {
         if resolved.len() < 2 {
             return;
         }
-        self.active_control = Some(ActiveControl::ListActions(ListActionMenu {
-            row: row_index,
+        self.level_mut().active_control = Some(ActiveControl::ListActions(ListActionMenu {
+            row: origin_row,
             item_id: item.id.clone(),
             dropdown: Dropdown::open(resolved.len(), 0),
             actions: resolved,
@@ -1353,16 +1771,16 @@ impl SettingsPanelView {
     }
 
     fn dispatch_list_menu_action(&mut self, selected: usize, cx: &mut Context<Self>) {
-        let Some(ActiveControl::ListActions(menu)) = self.active_control.take() else {
+        let Some(ActiveControl::ListActions(menu)) = self.level_mut().active_control.take() else {
             return;
         };
         let row_index = menu.row;
         let item_id = menu.item_id;
         let Some(action) = menu.actions.into_iter().nth(selected) else {
-            self.active_control = Some(ActiveControl::List);
+            self.close_list_actions_menu();
             return;
         };
-        self.active_control = Some(ActiveControl::List);
+        self.close_list_actions_menu();
         self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
     }
 
@@ -1373,8 +1791,17 @@ impl SettingsPanelView {
         action: ResolvedRowAction,
         cx: &mut Context<Self>,
     ) {
-        let Some(RowControl::List { actions, items, .. }) =
-            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        let Some(runtime) = self
+            .root_source_for(row_index)
+            .map(|source| source.runtime.clone())
+        else {
+            return;
+        };
+        let Some(RowControl::List { actions, items, .. }) = self
+            .root_mut()
+            .rows
+            .get_mut(row_index)
+            .map(|row| &mut row.control)
         else {
             return;
         };
@@ -1388,7 +1815,6 @@ impl SettingsPanelView {
             return;
         };
         let item_id = item.id.clone();
-        let runtime = self.runtime.clone();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -1409,8 +1835,11 @@ impl SettingsPanelView {
     }
 
     fn set_list_action_error(&mut self, row_index: usize, item_id: &str, error: String) {
-        let Some(RowControl::List { items, .. }) =
-            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        let Some(RowControl::List { items, .. }) = self
+            .root_mut()
+            .rows
+            .get_mut(row_index)
+            .map(|row| &mut row.control)
         else {
             return;
         };
@@ -1421,43 +1850,34 @@ impl SettingsPanelView {
         item.error = Some(error);
     }
 
-    fn step_selected_list_slider(&mut self, direction: f64, cx: &mut Context<Self>) -> bool {
-        let row_index = self.selected;
+    fn step_card_list_slider(&mut self, direction: f64, cx: &mut Context<Self>) -> bool {
+        let Some(origin_row) = self.level().origin_row else {
+            return false;
+        };
+        let slot = self.level().selected;
         let Some(RowControl::List {
             actions,
             slider,
             items,
-            list,
             filter,
             ..
-        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
+        }) = self
+            .root_mut()
+            .rows
+            .get_mut(origin_row)
+            .map(|row| &mut row.control)
         else {
             return false;
         };
         let Some(slider) = slider else {
             return false;
         };
-        let Some(item) = selected_list_item(actions, items, filter, list.selected) else {
+        let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return false;
         };
-        let current = list_slider_value(&slider.spec, &slider.values, item);
-        let next = stepped_slider_value(
-            current,
-            direction,
-            slider.spec.min,
-            slider.spec.max,
-            slider.spec.step,
-        );
-        slider.values.insert(
-            item.id.clone(),
-            SliderHold {
-                value: next,
-                dispatched: None,
-                until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
-            },
-        );
+        step_list_slider(slider, item, direction);
         let item_id = item.id.clone();
-        self.schedule_slider_dispatch(row_index, &item_id, cx);
+        self.schedule_slider_dispatch(origin_row, &item_id, cx);
         true
     }
 
@@ -1468,8 +1888,10 @@ impl SettingsPanelView {
         fraction: f32,
         cx: &mut Context<Self>,
     ) {
-        let Some(RowControl::List { slider, items, .. }) =
-            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        let Some(RowControl::List { slider, items, .. }) = self
+            .slider_rows()
+            .get_mut(row_index)
+            .map(|row| &mut row.control)
         else {
             return;
         };
@@ -1526,26 +1948,19 @@ impl SettingsPanelView {
     }
 
     fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
-        self.slider_pending
-            .remove(&(row_index, item_id.to_string()));
-        let Some(RowControl::List { slider, items, .. }) =
-            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        let Some(runtime) = self
+            .root_source_for(row_index)
+            .map(|source| source.runtime.clone())
         else {
             return;
         };
-        let Some(slider) = slider else {
+        self.slider_pending
+            .remove(&(row_index, item_id.to_string()));
+        let Some((action, item_id)) =
+            resolve_list_slider_dispatch(self.slider_rows(), row_index, item_id)
+        else {
             return;
         };
-        let Some(item) = items.iter().find(|item| item.id == item_id) else {
-            return;
-        };
-        let value = list_slider_value(&slider.spec, &slider.values, item);
-        if let Some(hold) = slider.values.get_mut(item_id) {
-            hold.dispatched = Some(value);
-        }
-        let action = resolve_slider_action(&slider.spec, &item.data, value);
-        let item_id = item.id.clone();
-        let runtime = self.runtime.clone();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -1557,7 +1972,7 @@ impl SettingsPanelView {
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if let Err(error) = result {
                         this.set_list_action_error(row_index, &item_id, error);
-                        super::rows::clear_slider_hold(&mut this.rows, row_index, &item_id);
+                        super::rows::clear_slider_hold(this.slider_rows(), row_index, &item_id);
                     }
                     cx.notify();
                 });
@@ -1567,14 +1982,14 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
-        let Some(row) = self.rows.get(self.selected) else {
+        let Some(row) = self.level().rows.get(self.level().selected) else {
             return;
         };
         let edit = match &row.control {
             RowControl::Text(value) => value.clone(),
-            RowControl::TextList(_) => String::new(),
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Toggle(_)
+            | RowControl::TextList(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
             | RowControl::Color(_)
@@ -1586,52 +2001,51 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         };
-        self.active_control = Some(ActiveControl::Edit(edit));
-        if row_streams(&self.rows, self.selected) && !stream_gated(&self.rows) {
-            self.stream.open();
+        self.level_mut().active_control = Some(ActiveControl::Edit(edit));
+        if row_streams(&self.level().rows, self.level().selected)
+            && !stream_gated(&self.level().rows)
+        {
+            if let Some(stream) = self.stream_for(self.level().selected) {
+                stream.open();
+            }
         }
     }
 
     fn step_number_edit(&mut self, direction: f64) -> bool {
-        let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() else {
-            return false;
-        };
         let Some(RowControl::Number {
             value,
             min,
             max,
             step,
-        }) = self.rows.get(self.selected).map(|row| &row.control)
+        }) = self
+            .level()
+            .rows
+            .get(self.level().selected)
+            .map(|row| &row.control)
         else {
             return false;
         };
-        *edit = stepped_number(edit, *value, *min, *max, (*step).unwrap_or(1.0), direction);
+        let (value, min, max, step) = (*value, *min, *max, *step);
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
+            return false;
+        };
+        *edit = stepped_number(edit, value, min, max, step.unwrap_or(1.0), direction);
         self.stream_edit();
         true
     }
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Edit(edit)) = self.active_control.take() else {
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
             return;
         };
-        let streams = row_streams(&self.rows, self.selected);
-        let action = row_action(&self.rows, self.selected);
-        let keeps_editing = matches!(
-            self.rows.get(self.selected).map(|row| &row.control),
-            Some(RowControl::TextList(_))
-        );
-        let Some(row) = self.rows.get_mut(self.selected) else {
+        let streams = row_streams(&self.level().rows, self.level().selected);
+        let action = row_action(&self.level().rows, self.level().selected);
+        let selected = self.level().selected;
+        let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
-            RowControl::TextList(values) => {
-                for part in text_list_parts(&edit) {
-                    if !values.contains(&part) {
-                        values.push(part);
-                    }
-                }
-            }
             RowControl::Number {
                 value,
                 min,
@@ -1644,10 +2058,13 @@ impl SettingsPanelView {
                 };
                 *value = parsed;
                 if streams {
-                    self.stream.close();
+                    if let Some(stream) = self.stream_for(self.level().selected) {
+                        stream.close();
+                    }
                 }
             }
             RowControl::Toggle(_)
+            | RowControl::TextList(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
             | RowControl::Color(_)
@@ -1659,25 +2076,251 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         }
+        self.sync_text_list_to_root();
         self.persist();
-        if keeps_editing {
-            self.active_control = Some(ActiveControl::Edit(String::new()));
-        }
         if let Some(action) = action {
-            self.dispatch_stream_action(&action, cx);
+            self.dispatch_stream_action(self.level().selected, &action, cx);
         }
         cx.notify();
     }
 
-    fn stream_edit(&mut self) {
-        let Some(ActiveControl::Edit(edit)) = self.active_control.as_ref() else {
+    fn push_card(&mut self, child: Level) {
+        self.deck_transition = self.deck_transition.wrapping_add(1);
+        self.deck_motion = Some(DeckMotion::Push);
+        push_level(&mut self.stack, child);
+    }
+
+    fn open_text_list_card(&mut self, row_index: usize) {
+        let Some(row) = self.level().rows.get(row_index) else {
             return;
         };
-        if !row_streams(&self.rows, self.selected) || stream_gated(&self.rows) {
+        let RowControl::TextList(values) = &row.control else {
+            return;
+        };
+        let label = row.label.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        let values = values.clone();
+        let rows = text_list_child_rows(&label, &config_key, source, &values);
+        let section = RowSection {
+            label: label.clone(),
+            description: None,
+            rows: (0..rows.len()).collect(),
+            source,
+        };
+        let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
+        let child = Level {
+            rows,
+            sections: vec![section],
+            selected: initial_card_selection(values.len()),
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds,
+            title: Some(label),
+            origin_row: Some(row_index),
+            object_array: None,
+            list_card: false,
+            live_card: false,
+        };
+        self.push_card(child);
+        self.sync_scroll();
+    }
+
+    fn open_list_card(&mut self, row_index: usize) {
+        let Some(row) = self.level().rows.get(row_index) else {
+            return;
+        };
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            list,
+            ..
+        } = &row.control
+        else {
+            return;
+        };
+        let label = row.label.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        let child = list_card_level(
+            ListCardOrigin {
+                label: &label,
+                config_key: &config_key,
+                source,
+                row: row_index,
+            },
+            actions,
+            items,
+            filter,
+            list.selected,
+        );
+        self.push_card(child);
+        self.sync_scroll();
+    }
+
+    fn open_object_array_card(&mut self, row_index: usize) {
+        let Some(row) = self.level().rows.get(row_index) else {
+            return;
+        };
+        let RowControl::ObjectArray(state) = &row.control else {
+            return;
+        };
+        let label = row.label.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        let child = ObjectArrayState::from_entries(
+            state.key_label.clone(),
+            state.schema.clone(),
+            state.entries.clone(),
+        );
+        let level = object_array_card_level(&label, &config_key, source, child, row_index);
+        self.push_card(level);
+        self.sync_scroll();
+    }
+
+    fn open_live_card(&mut self, row_index: usize) {
+        let Some(row) = self.level().rows.get(row_index) else {
+            return;
+        };
+        let control = match &row.control {
+            RowControl::Gamepad { query, monitor } => RowControl::Gamepad {
+                query: query.clone(),
+                monitor: monitor.clone(),
+            },
+            RowControl::QrCode {
+                query,
+                value_from,
+                url,
+                modules,
+                error,
+            } => RowControl::QrCode {
+                query: query.clone(),
+                value_from: value_from.clone(),
+                url: url.clone(),
+                modules: modules.clone(),
+                error: error.clone(),
+            },
+            _ => return,
+        };
+        let label = row.label.clone();
+        let description = row.description.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        let child = live_card_level(&label, description, &config_key, source, control, row_index);
+        self.push_card(child);
+        self.sync_scroll();
+    }
+
+    fn sync_text_list_to_root(&mut self) {
+        if self.stack.len() <= 1 {
             return;
         }
-        let Some(RowControl::Number { min, max, step, .. }) =
-            self.rows.get(self.selected).map(|row| &row.control)
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let add_value = self
+            .level()
+            .rows
+            .first()
+            .and_then(|row| match &row.control {
+                RowControl::Text(value) if !value.is_empty() => Some(value.clone()),
+                _ => None,
+            });
+        let mut values = self
+            .level()
+            .rows
+            .iter()
+            .skip(1)
+            .filter_map(|row| match &row.control {
+                RowControl::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        let added = add_value.is_some();
+        if let Some(value) = add_value {
+            values.push(value);
+        }
+        let Some(row) = self.root().rows.get(origin_row) else {
+            return;
+        };
+        let label = row.label.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        if let Some(RowControl::TextList(stored)) = self
+            .root_mut()
+            .rows
+            .get_mut(origin_row)
+            .map(|row| &mut row.control)
+        {
+            *stored = values.clone();
+        }
+        let rows = text_list_child_rows(&label, &config_key, source, &values);
+        let section = RowSection {
+            label: label.clone(),
+            description: None,
+            rows: (0..rows.len()).collect(),
+            source,
+        };
+        let level = self.level_mut();
+        level.rows = rows;
+        level.sections = vec![section];
+        level.row_bounds = (0..level.rows.len())
+            .map(|_| Rc::new(Cell::new(None)))
+            .collect();
+        level.selected = if added {
+            level.rows.len() - 1
+        } else {
+            level.selected.min(level.rows.len() - 1)
+        };
+    }
+
+    fn sync_object_array_to_root(&mut self) {
+        if self.stack.len() <= 1 {
+            return;
+        }
+        let (root, front) = self.stack.split_at_mut(1);
+        object_array_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+    }
+
+    fn remove_selected_text_list_value(&mut self) -> bool {
+        if self.stack.len() <= 1 || self.level().origin_row.is_none() {
+            return false;
+        }
+        let selected = self.level().selected;
+        if selected == 0 {
+            return false;
+        }
+        let Some(RowControl::Text(value)) = self
+            .level_mut()
+            .rows
+            .get_mut(selected)
+            .map(|row| &mut row.control)
+        else {
+            return false;
+        };
+        *value = String::new();
+        self.sync_text_list_to_root();
+        true
+    }
+
+    fn stream_edit(&mut self) {
+        let Some(ActiveControl::Edit(edit)) = self.level().active_control.as_ref() else {
+            return;
+        };
+        if !row_streams(&self.level().rows, self.level().selected)
+            || stream_gated(&self.level().rows)
+        {
+            return;
+        }
+        let Some(RowControl::Number { min, max, step, .. }) = self
+            .level()
+            .rows
+            .get(self.level().selected)
+            .map(|row| &row.control)
         else {
             return;
         };
@@ -1686,21 +2329,29 @@ impl SettingsPanelView {
         };
         let level = value.clamp(0.0, 255.0) as u8;
         let hex = self.stream_hex();
-        if let Some(frame) = super::stream::brightness_frame(level, &hex) {
-            self.stream.send(frame);
+        if let Some(stream) = self.stream_for(self.level().selected) {
+            if let Some(frame) = super::stream::brightness_frame(level, &hex) {
+                stream.send(frame);
+            }
         }
     }
 
     fn stream_hex(&self) -> String {
-        self.values
+        let Some(source) = self.source_for(self.level().selected) else {
+            return format!("{:06x}", self.palette.live_color_fallback);
+        };
+        source
+            .values
             .get("live_color_hex")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
     }
 
-    fn dispatch_stream_action(&self, action: &str, cx: &mut Context<Self>) {
-        let runtime = self.runtime.clone();
+    fn dispatch_stream_action(&self, row: usize, action: &str, cx: &mut Context<Self>) {
+        let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
+            return;
+        };
         let action = action.to_string();
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
@@ -1716,51 +2367,77 @@ impl SettingsPanelView {
     }
 
     fn persist(&mut self) {
+        let Some(source_index) = self
+            .root()
+            .rows
+            .get(self.root().selected)
+            .map(|row| row.source)
+        else {
+            return;
+        };
+        let Some(source) = self.sources.get(source_index) else {
+            return;
+        };
         let previous_theme = (
-            self.values.get("native_theme").cloned(),
-            self.values.get("accent").cloned(),
+            source.values.get("native_theme").cloned(),
+            source.values.get("accent").cloned(),
         );
-        self.values = merged_config(&self.values, &self.rows);
+        let rows = self
+            .root()
+            .rows
+            .iter()
+            .filter(|row| row.source == source_index);
+        let merged = merged_config(&source.values, rows);
+        let Some(source) = self.sources.get_mut(source_index) else {
+            return;
+        };
+        source.values = merged;
         self.save_error = save_values(
-            &panel_base(&self.panel.plugin_id),
-            self.path.as_deref(),
-            &self.values,
+            &panel_base(&source.plugin_id),
+            source.path.as_deref(),
+            &source.values,
         )
         .err();
-        if self.panel.plugin_id == qol_conventions::CORE_PANEL_ID
-            && (self.values.get("native_theme") != previous_theme.0.as_ref()
-                || self.values.get("accent") != previous_theme.1.as_ref())
+        if source.plugin_id == qol_conventions::CORE_PANEL_ID
+            && (source.values.get("native_theme") != previous_theme.0.as_ref()
+                || source.values.get("accent") != previous_theme.1.as_ref())
         {
-            let (native, accent) = theme_override_values(&self.values);
+            let (native, accent) = theme_override_values(&source.values);
             qol_theme::set_runtime_theme_override(native, accent);
         }
     }
 
     fn sync_scroll(&mut self) {
-        self.body_scroll
-            .follow(self.body_child_index(self.selected));
+        let selected = self.level().selected;
+        let child = self.body_child_index(selected);
+        self.level().body_scroll.follow(child);
     }
 
     fn body_child_index(&self, row: usize) -> Option<usize> {
-        let sections: Vec<Vec<usize>> = (0..self.sections.len())
-            .map(|section| self.section_filtered_rows(section))
-            .collect();
-        body_child_offset(&sections, row)
+        let groups = self.body_groups();
+        let headers = groups
+            .iter()
+            .map(|(title, rows)| {
+                let labels = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect::<Vec<_>>();
+                !header_is_redundant(title, &labels)
+            })
+            .collect::<Vec<_>>();
+        let sections = groups.into_iter().map(|(_, rows)| rows).collect::<Vec<_>>();
+        body_child_offset(&sections, &headers, row)
     }
 
     fn display_value(&self, index: usize) -> String {
-        if index == self.selected {
-            match &self.active_control {
+        if index == self.level().selected {
+            match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
-                Some(ActiveControl::Dropdown(_))
-                | Some(ActiveControl::List)
-                | Some(ActiveControl::ListActions(_))
-                | Some(ActiveControl::ObjectArray)
-                | None => {}
+                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::ListActions(_)) | None => {}
             }
         }
-        match &self.rows[index].control {
+        match &self.level().rows[index].control {
             RowControl::Toggle(value) => binary_state_label(*value).into(),
             RowControl::Select { options, index, .. } => options
                 .get(*index)
@@ -1783,11 +2460,12 @@ impl SettingsPanelView {
             }
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Text(value) => {
-                text_or_placeholder(value, self.rows[index].placeholder.as_deref())
+                text_or_placeholder(value, self.level().rows[index].placeholder.as_deref())
             }
-            RowControl::TextList(values) => {
-                text_or_placeholder(&values.join(", "), self.rows[index].placeholder.as_deref())
-            }
+            RowControl::TextList(values) => text_or_placeholder(
+                &values.join(", "),
+                self.level().rows[index].placeholder.as_deref(),
+            ),
             RowControl::Color(value) => color_display(value),
             RowControl::Action {
                 active_action,
@@ -1839,10 +2517,12 @@ impl SettingsPanelView {
     }
 
     fn value_color(&self, index: usize) -> u32 {
-        if index == self.selected && matches!(self.active_control, Some(ActiveControl::Edit(_))) {
+        if index == self.level().selected
+            && matches!(self.level().active_control, Some(ActiveControl::Edit(_)))
+        {
             return self.palette.label_text;
         }
-        match &self.rows[index].control {
+        match &self.level().rows[index].control {
             RowControl::Toggle(value) => binary_state_color(self.palette, *value),
             RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
@@ -1891,29 +2571,44 @@ impl SettingsPanelView {
     }
 
     fn body_has_focus(&self) -> bool {
-        self.active_section.is_some() || self.sections.len() <= 1
+        matches!(self.focus_level(), PanelFocus::Body)
     }
 
     fn mark_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
         if !selected || !self.body_has_focus() {
             return row;
         }
-        self.paint_selection(row.rounded(px(qol_theme::RADIUS_CARD)))
-    }
-
-    fn mark_selected_nested<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
-        if !selected || !self.body_has_focus() {
-            return row;
-        }
-        self.paint_selection(row)
+        self.paint_body_selection(row)
     }
 
     fn paint_selection<E: Styled + ParentElement>(&self, row: E) -> E {
         self.kit.row_state(row, crate::kit::RowState::Current)
     }
 
+    fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
+        row.relative()
+            .ml(px(-BODY_SIDE_PADDING))
+            .pl(px(BODY_SIDE_PADDING + 8.0))
+            .rounded_none()
+            .rounded_r(px(qol_theme::RADIUS_CARD))
+            .bg(rgba(self.kit.washes.wash_selected.packed()))
+            .border(px(1.0))
+            .border_color(rgba(self.kit.washes.hairline.packed()))
+            .border_l(px(0.))
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(4.0))
+                    .bg(rgb(self.palette.row_border_selected)),
+            )
+    }
+
     fn render_value_cell(&self, index: usize) -> Div {
-        match &self.rows[index].control {
+        match &self.level().rows[index].control {
             RowControl::Toggle(active) => return self.render_toggle_value(*active),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
                 return self.render_select_value(index);
@@ -1926,7 +2621,7 @@ impl SettingsPanelView {
                 ..
             } => return self.render_number_value(index, *value, *min, *max, *step),
             RowControl::Action { active, .. }
-                if self.rows[index].variant.as_deref() == Some("toggle") =>
+                if self.level().rows[index].variant.as_deref() == Some("toggle") =>
             {
                 return self.render_toggle_value(*active);
             }
@@ -1949,7 +2644,7 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. } => {}
         }
         let mut cell = div().flex().flex_row().items_center().gap_2();
-        if let RowControl::Status { tone, .. } = self.rows[index].control {
+        if let RowControl::Status { tone, .. } = self.level().rows[index].control {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
                 self.display_value(index),
@@ -1975,7 +2670,7 @@ impl SettingsPanelView {
             cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
         }
         cell.flex_none()
-            .w(px(value_cell_width(&self.rows[index].control)))
+            .w(px(value_cell_width(&self.level().rows[index].control)))
             .justify_end()
             .child(
                 div()
@@ -1985,160 +2680,6 @@ impl SettingsPanelView {
                     .text_color(rgb(self.value_color(index)))
                     .child(self.display_value(index)),
             )
-    }
-
-    fn render_text_list_well(&self, index: usize, edit: &str, cx: &mut Context<Self>) -> Div {
-        let RowControl::TextList(values) = &self.rows[index].control else {
-            return div();
-        };
-        let values = values.clone();
-        let mut tags = div().flex().flex_row().flex_wrap().gap_2();
-        for (slot, value) in values.iter().enumerate() {
-            tags = tags.child(self.render_tag(index, slot, value.clone(), cx));
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .mx_2()
-            .p_3()
-            .rounded(px(qol_theme::RADIUS_CARD))
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .border(px(1.))
-            .border_color(self.hairline())
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .text_size(px(qol_theme::TEXT_MICRO))
-                    .text_color(rgb(self.kit.palette.text_muted))
-                    .child(self.rows[index].label.clone())
-                    .child(values.len().to_string()),
-            )
-            .when(!values.is_empty(), |well| well.child(tags))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .h(px(qol_theme::HEIGHT_CONTROL))
-                            .px_3()
-                            .rounded(px(qol_theme::RADIUS_CONTROL))
-                            .bg(rgb(self.palette.window_bg))
-                            .border(px(1.))
-                            .border_color(rgb(self.palette.row_border_selected))
-                            .shadow(self.kit.focus_ring())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(SharedString::from(qol_theme::font_mono()))
-                                    .text_size(px(qol_theme::TEXT_CAPTION))
-                                    .text_color(rgb(self.palette.section_text))
-                                    .child(if edit.is_empty() {
-                                        "Add an entry".to_string()
-                                    } else {
-                                        edit.to_string()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(1.5))
-                                    .h(px(16.))
-                                    .bg(rgb(self.palette.row_border_selected)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1p5()
-                            .h(px(qol_theme::HEIGHT_CONTROL))
-                            .px_3()
-                            .rounded(px(qol_theme::RADIUS_CONTROL))
-                            .bg(rgb(self.palette.row_border_selected))
-                            .text_size(px(qol_theme::TEXT_CAPTION))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(self.palette.window_bg))
-                            .child("Add")
-                            .child("\u{21b5}"),
-                    ),
-            )
-    }
-
-    fn render_tag(
-        &self,
-        index: usize,
-        slot: usize,
-        value: String,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        div()
-            .id(("settings-text-list-tag", slot))
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_1p5()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .pl(px(10.))
-            .pr(px(6.))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .bg(rgb(self.palette.window_bg))
-            .border(px(1.))
-            .border_color(self.hairline())
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .text_color(rgb(self.palette.section_text))
-            .child(value)
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(18.))
-                    .h(px(18.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgba(self.kit.washes.fill_hover.packed()))
-                    .text_color(rgb(self.kit.palette.text_muted))
-                    .child("\u{00d7}"),
-            )
-            .cursor(CursorStyle::PointingHand)
-            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                cx.stop_propagation();
-                this.remove_text_list_value(index, slot);
-                cx.notify();
-            }))
-    }
-
-    fn remove_text_list_value(&mut self, index: usize, slot: usize) {
-        let Some(RowControl::TextList(values)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
-            return;
-        };
-        if slot >= values.len() {
-            return;
-        }
-        values.remove(slot);
-        self.persist();
     }
 
     fn render_toggle_value(&self, active: bool) -> Div {
@@ -2202,9 +2743,9 @@ impl SettingsPanelView {
         step: Option<f64>,
     ) -> Div {
         let mut cell = div().flex().flex_row().items_center().gap_2();
-        if self.rows[index].variant.as_deref() == Some("slider") {
-            let edit = if index == self.selected {
-                match &self.active_control {
+        if self.level().rows[index].variant.as_deref() == Some("slider") {
+            let edit = if index == self.level().selected {
+                match &self.level().active_control {
                     Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
                     _ => None,
                 }
@@ -2246,7 +2787,7 @@ impl SettingsPanelView {
                 .text_size(px(qol_theme::TEXT_BODY))
                 .text_color(rgb(self.palette.label_text))
                 .child(self.display_value(index))
-                .children(number_unit(&self.rows[index].id).map(|unit| {
+                .children(number_unit(&self.level().rows[index].id).map(|unit| {
                     div()
                         .text_size(px(qol_theme::TEXT_CAPTION))
                         .text_color(rgb(self.palette.status_muted))
@@ -2256,7 +2797,7 @@ impl SettingsPanelView {
     }
 
     fn render_action_value(&self, index: usize) -> Div {
-        let variant = self.rows[index].variant.as_deref();
+        let variant = self.level().rows[index].variant.as_deref();
         let (background, text) = match variant {
             Some("ghost") => (rgb(self.palette.dropdown_bg), self.palette.label_text),
             Some("danger") => (
@@ -2292,22 +2833,20 @@ impl SettingsPanelView {
     }
 
     fn action_is_busy(&self, index: usize) -> bool {
-        action_shows_spinner(&self.rows[index])
+        action_shows_spinner(&self.level().rows[index])
     }
 
     fn swatch_color(&self, index: usize) -> Option<u32> {
-        let RowControl::Color(value) = &self.rows[index].control else {
+        let RowControl::Color(value) = &self.level().rows[index].control else {
             return None;
         };
-        let text = if index == self.selected {
-            match &self.active_control {
+        let text = if index == self.level().selected {
+            match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => edit,
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
-                Some(ActiveControl::Dropdown(_))
-                | Some(ActiveControl::List)
-                | Some(ActiveControl::ListActions(_))
-                | Some(ActiveControl::ObjectArray)
-                | None => value,
+                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::ListActions(_)) | None => {
+                    value
+                }
             }
         } else {
             value
@@ -2316,44 +2855,29 @@ impl SettingsPanelView {
     }
 
     fn option_accent(&self, index: usize) -> Option<u32> {
-        let RowControl::Select { options, index, .. } = &self.rows[index].control else {
+        let RowControl::Select { options, index, .. } = &self.level().rows[index].control else {
             return None;
         };
         options.get(*index)?.accent
     }
 
-    fn render_row(&self, index: usize, separator: bool, cx: &mut Context<Self>) -> Div {
-        let row = &self.rows[index];
+    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
+        let row = &self.level().rows[index];
         let mut container = div().flex().flex_col().gap_1();
-        if separator {
-            container = container.child(
-                div()
-                    .flex_none()
-                    .mx_2()
-                    .h(px(1.))
-                    .bg(rgba(self.kit.washes.separator.packed())),
-            );
-        }
-        if self.sections.len() <= 1 {
-            if let Some(section) = section_label_for(&self.rows, index) {
-                container = container.child(
-                    div()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .text_color(rgb(self.palette.section_text))
-                        .child(section.to_string()),
-                );
-            }
+
+        if self.level().list_card {
+            return container.child(self.render_list_card_item(index, cx));
         }
         if matches!(row.control, RowControl::List { .. }) {
-            return container.child(self.render_list(index, cx));
+            return container.child(self.render_list(index));
         }
         if matches!(row.control, RowControl::ObjectArray(_)) {
             return container.child(self.render_object_array(index, cx));
         }
-        if matches!(row.control, RowControl::QrCode { .. }) {
+        if matches!(row.control, RowControl::QrCode { .. }) && self.level().live_card {
             return container.child(self.render_qr_code(index));
         }
-        if matches!(row.control, RowControl::Gamepad { .. }) {
+        if matches!(row.control, RowControl::Gamepad { .. }) && self.level().live_card {
             return container.child(self.render_gamepad(index, cx));
         }
         let label = match &row.control {
@@ -2364,29 +2888,42 @@ impl SettingsPanelView {
             } => label.clone(),
             _ => row.label.clone(),
         };
-        let label_group = div()
-            .flex()
-            .min_w_0()
-            .flex_1()
-            .flex_col()
-            .gap_0p5()
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(self.palette.section_text))
-                    .child(label),
-            )
-            .when_some(row.description.clone(), |group, description| {
-                group.child(
+        let card_chips = self.object_array_card_chips(index);
+        let has_chips = card_chips.is_some();
+        let label_group = match card_chips {
+            Some(chips) => div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .min_w_0()
+                .flex_1()
+                .child(self.render_chip_row(chip_row_parts(&chips))),
+            None => div()
+                .flex()
+                .min_w_0()
+                .flex_1()
+                .flex_col()
+                .gap_0p5()
+                .child(
                     div()
-                        .text_size(px(qol_theme::TEXT_MICRO))
-                        .text_color(rgb(self.kit.palette.text_muted))
-                        .child(description),
+                        .truncate()
+                        .text_size(px(qol_theme::TEXT_BODY))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(self.palette.section_text))
+                        .child(label),
                 )
-            });
-        let selected = index == self.selected;
+                .when_some(row.description.clone(), |group, description| {
+                    group.child(
+                        div()
+                            .truncate()
+                            .text_size(px(qol_theme::TEXT_MICRO))
+                            .text_color(rgb(self.kit.palette.text_muted))
+                            .child(description),
+                    )
+                }),
+        };
+        let selected = index == self.level().selected;
         let mut line = div()
             .id(("settings-row", index))
             .flex()
@@ -2394,14 +2931,18 @@ impl SettingsPanelView {
             .items_center()
             .justify_between()
             .gap_3()
-            .h(px(row_body_height(row, self.panel_width)))
+            .h(px(row_body_height(row, false)))
             .px_2()
             .py_1()
             .rounded_none()
-            .child(label_group)
-            .child(self.render_value_cell(index));
+            .child(label_group);
+        let mut value_cell = if has_chips {
+            None
+        } else {
+            Some(self.render_value_cell(index))
+        };
         line = self.mark_selected(line, selected);
-        let row_bounds = Rc::clone(&self.row_bounds[index]);
+        let row_bounds = Rc::clone(&self.level().row_bounds[index]);
         line = line.relative().child(
             canvas(
                 move |bounds, _, _| row_bounds.set(Some(bounds)),
@@ -2412,24 +2953,21 @@ impl SettingsPanelView {
         );
         if !matches!(
             row.control,
-            RowControl::Status { .. }
-                | RowControl::List { .. }
-                | RowControl::Unsupported { .. }
-                | RowControl::QrCode { .. }
+            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
         ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
                     if !event.standard_click() {
                         return;
                     }
-                    this.selected = index;
+                    this.level_mut().selected = index;
                     this.activate(window, cx);
                     cx.notify();
                 },
             ));
         }
         if selected {
-            if let Some(ActiveControl::Dropdown(dropdown)) = &self.active_control {
+            if let Some(ActiveControl::Dropdown(dropdown)) = &self.level().active_control {
                 let items = match &row.control {
                     RowControl::Select { options, .. } => Some(dropdown_items(options)),
                     RowControl::MultiSelect {
@@ -2463,7 +3001,7 @@ impl SettingsPanelView {
                 };
                 if let Some(items) = items {
                     let view = cx.weak_entity();
-                    line = line.child(dropdown.render_items_clickable(
+                    let menu = dropdown.render_items_clickable(
                         format!("settings-options-{index}"),
                         &items,
                         self.dropdown_style(),
@@ -2480,17 +3018,15 @@ impl SettingsPanelView {
                                 });
                             });
                         },
-                    ));
+                    );
+                    value_cell = value_cell.map(|cell| div().relative().child(menu).child(cell));
                 }
             }
         }
-        container = container.child(line);
-        if index == self.selected && matches!(row.control, RowControl::TextList(_)) {
-            if let Some(ActiveControl::Edit(edit)) = &self.active_control {
-                let edit = edit.clone();
-                container = container.child(self.render_text_list_well(index, &edit, cx));
-            }
+        if let Some(cell) = value_cell {
+            line = line.child(cell);
         }
+        container = container.child(line);
         let error = match &row.control {
             RowControl::Action {
                 error: Some(error), ..
@@ -2513,11 +3049,11 @@ impl SettingsPanelView {
     }
 
     fn render_gamepad(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
-        let row = &self.rows[index];
+        let row = &self.level().rows[index];
         let RowControl::Gamepad { monitor, .. } = &row.control else {
             return div().id(("settings-gamepad-empty", index));
         };
-        let selected = index == self.selected;
+        let selected = index == self.level().selected;
         let palette = GamepadPalette {
             surface: self.palette.window_bg,
             raised: self.palette.dropdown_bg,
@@ -2525,6 +3061,7 @@ impl SettingsPanelView {
             text: self.palette.section_text,
             text_muted: self.palette.label_text,
             accent: self.palette.row_border_selected,
+            info: self.palette.status_info,
             success: self.palette.status_success,
             warning: self.palette.status_warning,
             danger: self.palette.status_danger,
@@ -2544,8 +3081,8 @@ impl SettingsPanelView {
                 if !event.standard_click() {
                     return;
                 }
-                let already_selected = this.selected == index;
-                this.selected = index;
+                let already_selected = this.level().selected == index;
+                this.level_mut().selected = index;
                 if already_selected {
                     this.select_next_gamepad();
                 }
@@ -2559,16 +3096,11 @@ impl SettingsPanelView {
             ))
     }
 
-    fn render_section_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let section = &self.sections[index];
-        let rail_has_focus = self.active_section.is_none();
-        let active = if rail_has_focus {
-            index == self.selected_section
-        } else {
-            self.section_visible_rows(index).contains(&self.selected)
-        };
+    fn render_source_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = self.plugin_title(index);
+        let active = index == self.selected_source;
         let mut item = div()
-            .id(("settings-section", index))
+            .id(("settings-source", index))
             .relative()
             .flex()
             .items_center()
@@ -2587,40 +3119,33 @@ impl SettingsPanelView {
                     } else {
                         self.palette.rail_text_muted
                     }))
-                    .child(section.label.clone()),
+                    .child(label),
             )
             .cursor(CursorStyle::PointingHand);
         if active {
             item = self.paint_selection(item);
         }
-        item = item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+        item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
                 return;
             }
-            this.selected_section = index;
-            this.open_selected_section();
+            this.select_source(index, cx);
+            this.descend_source_menu();
             cx.notify();
-        }));
-        item
+        }))
     }
 
-    fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
-        let row = &self.rows[index];
+    fn render_list(&self, index: usize) -> Div {
+        let row = &self.level().rows[index];
         let RowControl::List {
             active_label,
             active: runtime_active,
-            empty_message,
-            items,
-            list,
             filter,
-            actions,
-            error,
             ..
         } = &row.control
         else {
             return div();
         };
-        let filtered = filtered_list_items(actions, items, filter);
         let mut header_status = div().flex().items_center().gap_2();
         if *runtime_active {
             header_status = header_status.child(
@@ -2642,12 +3167,13 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row, self.panel_width)))
+            .h(px(row_body_height(row, false)))
+            .justify_center()
             .overflow_hidden()
             .px_2()
             .py_1()
             .rounded(px(qol_theme::RADIUS_CARD));
-        if index == self.selected {
+        if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
         container = container.child(
@@ -2689,72 +3215,11 @@ impl SettingsPanelView {
                 )
                 .child(header_status),
         );
-        if let Some(error) = error {
-            return container.child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.state_off))
-                    .child(error.clone()),
-            );
-        }
-        if items.is_empty() {
-            return container.child(
-                div()
-                    .py_2()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(self.palette.label_text))
-                    .child(empty_message.clone()),
-            );
-        }
-        if filtered.is_empty() {
-            return container.child(
-                div()
-                    .py_2()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(self.palette.label_text))
-                    .child("No matching results."),
-            );
-        }
-        let rendered_items: Vec<Stateful<Div>> = list
-            .visible_range(filtered.len())
-            .map(|slot| self.render_list_item(index, filtered[slot], slot, cx))
-            .collect();
-        container.child(
-            div()
-                .id(("settings-list-items", index))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .flex_none()
-                .on_scroll_wheel(cx.listener(
-                    move |this: &mut SettingsPanelView, event: &ScrollWheelEvent, _window, cx| {
-                        let Some(RowControl::List {
-                            actions,
-                            items,
-                            list,
-                            filter,
-                            ..
-                        }) = this.rows.get_mut(index).map(|row| &mut row.control)
-                        else {
-                            return;
-                        };
-                        let count = filtered_list_items(actions, items, filter).len();
-                        let notches = match event.delta {
-                            ScrollDelta::Lines(lines) => lines.y,
-                            ScrollDelta::Pixels(pixels) => {
-                                pixels.y.to_f64() as f32 / LIST_SCROLL_PIXELS_PER_NOTCH
-                            }
-                        };
-                        list.scroll_by(-notches, count);
-                        cx.notify();
-                    },
-                ))
-                .children(rendered_items),
-        )
+        container
     }
 
     fn render_qr_code(&self, index: usize) -> Div {
-        let row = &self.rows[index];
+        let row = &self.level().rows[index];
         let RowControl::QrCode {
             url,
             modules,
@@ -2769,12 +3234,12 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row, self.panel_width)))
+            .h(px(row_body_height(row, true)))
             .overflow_hidden()
             .px_2()
             .py_1()
             .rounded(px(qol_theme::RADIUS_CARD));
-        if index == self.selected {
+        if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
         container = container.child(
@@ -2883,25 +3348,58 @@ impl SettingsPanelView {
     }
 
     fn render_object_array(&self, index: usize, cx: &mut Context<Self>) -> Div {
-        let row = &self.rows[index];
-        let RowControl::ObjectArray(state) = &row.control else {
+        let row = &self.level().rows[index];
+        let RowControl::ObjectArray(_) = &row.control else {
             return div();
         };
-        let mut container = self.render_block_frame(index, row, self.display_value(index), cx);
-        let Some(draft) = state.draft.as_ref() else {
-            if state.chips(0).is_directional() {
-                container = container.child(self.render_rule_head());
-            }
-            for entry in state.item_window() {
-                container = container.child(self.render_object_array_entry(index, entry, cx));
-            }
-            let add = state.entries.len();
-            return container.child(self.render_object_array_entry(index, add, cx));
-        };
+        self.render_block_frame(index, row, self.display_value(index), cx)
+    }
+
+    fn object_array_card_chips(&self, index: usize) -> Option<ItemChips> {
+        let state = self.level().object_array.as_ref()?;
+        if index == 0 || index > state.entries.len() {
+            return None;
+        }
+        Some(state.chips(index - 1))
+    }
+
+    fn render_chip_row(&self, parts: Vec<ChipRowPart>) -> Div {
+        let mut strip = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .overflow_hidden();
+        for part in parts {
+            strip = strip.child(match part {
+                ChipRowPart::Arrow => div()
+                    .flex_none()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_color(rgb(self.palette.status_muted))
+                    .child("\u{2192}"),
+                ChipRowPart::Chip(chip) => match chip.tone {
+                    ChipTone::Modifier | ChipTone::Key => self.kit.keycap(chip.label),
+                    ChipTone::Plain => self.kit.chip(chip.label, self.kit.palette.text_secondary),
+                },
+            });
+        }
+        strip
+    }
+
+    fn render_object_array_card_draft(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.stack.len() <= 1 {
+            return None;
+        }
+        let state = self.level().object_array.as_ref()?;
+        let draft = state.draft.as_ref()?;
+        let mut container = div().flex().flex_col().gap_1();
+        let index = self.level().selected;
         for (field_index, field) in draft.fields.iter().enumerate() {
             container = container.child(self.render_draft_field(index, field_index, field, cx));
         }
-        container.child(self.render_draft_save(index, draft.save_entry_selected(), cx))
+        container = container.child(self.render_draft_save(index, draft.save_entry_selected(), cx));
+        Some(container)
     }
 
     fn render_block_frame(
@@ -2916,12 +3414,13 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(row_body_height(row, self.panel_width)))
+            .h(px(row_body_height(row, false)))
+            .justify_center()
             .overflow_hidden()
             .px_2()
             .py_1()
             .rounded(px(qol_theme::RADIUS_CARD));
-        if index == self.selected {
+        if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
         container.child(
@@ -2932,7 +3431,7 @@ impl SettingsPanelView {
                     if !event.standard_click() {
                         return;
                     }
-                    this.selected = index;
+                    this.level_mut().selected = index;
                     this.activate(window, cx);
                     cx.notify();
                 }))
@@ -2971,64 +3470,6 @@ impl SettingsPanelView {
         )
     }
 
-    fn object_array_is_active(&self, index: usize) -> bool {
-        index == self.selected && matches!(self.active_control, Some(ActiveControl::ObjectArray))
-    }
-
-    fn render_object_array_entry(
-        &self,
-        index: usize,
-        entry: usize,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let RowControl::ObjectArray(state) = &self.rows[index].control else {
-            return div().id(("settings-object-empty", entry_id(index, entry)));
-        };
-        let active = self.object_array_is_active(index);
-        let selected = active && entry == state.list.selected;
-        let stored = entry < state.entries.len();
-        let body = if stored {
-            self.render_chip_row(state.chips(entry))
-        } else {
-            div()
-                .flex_1()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(9.))
-                .min_h(px(qol_theme::HEIGHT_HINT_BAR))
-                .px(px(qol_theme::SPACE_PAD))
-                .rounded(px(qol_theme::RADIUS_CONTROL))
-                .border(px(1.))
-                .border_dashed()
-                .border_color(rgba(self.kit.washes.hairline_strong.packed()))
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(self.kit.palette.accent_ink))
-                .child("+")
-                .child("Add rule")
-        };
-        self.object_array_line(index, entry, selected)
-            .child(body)
-            .when(stored, |line| line.child(self.render_entry_chevron()))
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                this.select_object_array_entry(index, entry, window, cx);
-                cx.notify();
-            }))
-    }
-
-    fn render_entry_chevron(&self) -> Div {
-        div()
-            .flex_none()
-            .px_1p5()
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .text_color(rgb(self.palette.status_muted))
-            .child("\u{203a}")
-    }
-
     fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> Stateful<Div> {
         let mut line = div()
             .id(("settings-object-entry", entry_id(index, entry)))
@@ -3049,210 +3490,25 @@ impl SettingsPanelView {
         line
     }
 
-    fn render_chip_row(&self, chips: ItemChips) -> Div {
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden();
-        if !chips.is_directional() {
-            for chip in chips.from.iter().chain(&chips.rest).chain(&chips.to) {
-                row = row.child(self.render_chip(chip.label.clone(), chip.tone));
-            }
-            for flag in &chips.flags {
-                row = row.child(self.render_chip(flag.clone(), ChipTone::Plain));
-            }
-            return row;
+    fn object_array_state(&self, index: usize) -> Option<&ObjectArrayState> {
+        if let Some(state) = self.level().object_array.as_ref() {
+            return Some(state);
         }
-        let shared = shared_key_chip(&chips.rest);
-        let mut from_chips = chips.from.clone();
-        from_chips.extend(shared.clone());
-        let mut to_chips = chips.to.clone();
-        to_chips.extend(shared);
-        let from = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .flex_none()
-            .overflow_hidden()
-            .w(px(RULE_FROM_WIDTH))
-            .child(self.render_combo(&from_chips, false));
-        let to = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .flex_none()
-            .overflow_hidden()
-            .w(px(RULE_TO_WIDTH))
-            .child(self.render_combo(&to_chips, true));
-        let mut scope = div().flex().flex_row().items_center().gap_1().flex_1();
-        for flag in &chips.flags {
-            scope = scope.child(
-                div()
-                    .flex_none()
-                    .h(px(24.))
-                    .min_w(px(72.))
-                    .px_2()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .border(px(1.))
-                    .border_color(rgba(self.kit.washes.hairline.packed()))
-                    .bg(rgba(self.kit.washes.fill_resting.packed()))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .text_color(rgb(self.kit.palette.text_secondary))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(flag.clone()),
-            );
+        match &self.level().rows[index].control {
+            RowControl::ObjectArray(state) => Some(state),
+            _ => None,
         }
-        row.child(from).child(to).child(scope)
     }
 
-    fn render_combo(&self, chips: &[Chip], out: bool) -> Div {
-        if chips.is_empty() {
-            return div();
+    fn object_array_state_mut(&mut self, index: usize) -> Option<&mut ObjectArrayState> {
+        let level = self.level_mut();
+        if level.object_array.is_some() {
+            return level.object_array.as_mut();
         }
-        let ordered = modifiers_first(chips);
-        let mut combo = div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .border(px(1.))
-            .border_color(rgba(
-                (if out {
-                    self.kit.washes.accent_border
-                } else {
-                    self.kit.washes.hairline_strong
-                })
-                .packed(),
-            ))
-            .bg(if out {
-                rgb(self.kit.palette.accent_fill)
-            } else {
-                rgb(self.kit.palette.surface_elevated)
-            })
-            .overflow_hidden()
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_MICRO));
-        for (index, chip) in ordered.iter().enumerate() {
-            let mut segment = div()
-                .flex()
-                .items_center()
-                .h_full()
-                .px(px(9.))
-                .text_color(rgb(if out {
-                    self.kit.palette.accent_ink
-                } else {
-                    match chip.tone {
-                        ChipTone::Modifier => self.kit.palette.text_secondary,
-                        _ => self.kit.palette.text_primary,
-                    }
-                }));
-            if out {
-                segment = segment.font_weight(FontWeight::SEMIBOLD);
-            }
-            if index > 0 {
-                segment = segment.border_l(px(1.)).border_color(rgba(
-                    (if out {
-                        self.kit.washes.accent_border
-                    } else {
-                        self.kit.washes.hairline
-                    })
-                    .packed(),
-                ));
-            }
-            combo = combo.child(segment.child(chip.label.clone()));
+        match &mut level.rows[index].control {
+            RowControl::ObjectArray(state) => Some(state),
+            _ => None,
         }
-        combo
-    }
-
-    fn render_rule_head(&self) -> Div {
-        let cell = |label: &str, width: Option<f32>| {
-            let mut column = div()
-                .text_size(px(qol_theme::TEXT_NANO))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(self.kit.palette.text_muted))
-                .child(label.to_string());
-            column = match width {
-                Some(width) => column.flex_none().w(px(width)),
-                None => column.flex_1(),
-            };
-            column
-        };
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(7.))
-            .px(px(qol_theme::SPACE_PAD))
-            .pb(px(7.))
-            .child(cell("FROM", Some(RULE_FROM_WIDTH)))
-            .child(cell("TO", Some(RULE_TO_WIDTH)))
-            .child(cell("SCOPE", None))
-    }
-
-    fn render_chip(&self, label: String, tone: ChipTone) -> Div {
-        self.render_keycap(label, tone, false)
-    }
-
-    fn render_keycap(&self, label: String, tone: ChipTone, out: bool) -> Div {
-        if matches!(tone, ChipTone::Plain) {
-            return div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .px_1p5()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .text_color(rgb(self.palette.label_text))
-                .child(label);
-        }
-        let (text, background, edge, cast) = if out {
-            (
-                self.kit.palette.accent_ink,
-                rgb(self.kit.palette.accent_fill),
-                self.kit.washes.accent_border,
-                self.kit.washes.accent_halo,
-            )
-        } else {
-            (
-                match tone {
-                    ChipTone::Modifier => self.kit.palette.text_secondary,
-                    _ => self.kit.palette.text_primary,
-                },
-                rgba(self.kit.washes.fill_hover.packed()),
-                self.kit.washes.hairline_strong,
-                self.kit.washes.cast,
-            )
-        };
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .min_w(px(qol_theme::HEIGHT_INLINE))
-            .px_2()
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .border(px(1.))
-            .border_color(rgba(edge.packed()))
-            .bg(background)
-            .shadow(vec![BoxShadow {
-                color: rgba(cast.packed()).into(),
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-            }])
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .when(out, |chip| chip.font_weight(FontWeight::SEMIBOLD))
-            .text_color(rgb(text))
-            .child(label)
     }
 
     fn render_draft_field(
@@ -3262,7 +3518,7 @@ impl SettingsPanelView {
         field: &DraftField,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let RowControl::ObjectArray(state) = &self.rows[index].control else {
+        let Some(state) = self.object_array_state(index) else {
             return div().id(("settings-draft-empty", entry_id(index, field_index)));
         };
         let selected = state
@@ -3423,45 +3679,8 @@ impl SettingsPanelView {
             }))
     }
 
-    fn select_object_array_entry(
-        &mut self,
-        index: usize,
-        entry: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let reactivate = self.selected != index;
-        self.selected = index;
-        if reactivate {
-            self.activate(window, cx);
-        }
-        let already_selected = !reactivate && self.object_array_entry_selected(index, entry);
-        let Some(RowControl::ObjectArray(state)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
-            return;
-        };
-        state.list.selected = entry;
-        state.list.sync(state.entry_count());
-        if already_selected {
-            state.open_draft();
-        }
-        self.active_control = Some(ActiveControl::ObjectArray);
-        self.sync_scroll();
-    }
-
-    fn object_array_entry_selected(&self, index: usize, entry: usize) -> bool {
-        let Some(RowControl::ObjectArray(state)) = self.rows.get(index).map(|row| &row.control)
-        else {
-            return false;
-        };
-        self.object_array_is_active(index) && state.list.selected == entry
-    }
-
     fn toggle_draft_mod(&mut self, index: usize, field_index: usize, option_index: usize) {
-        let Some(RowControl::ObjectArray(state)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
+        let Some(state) = self.object_array_state_mut(index) else {
             return;
         };
         let Some(draft) = state.draft.as_mut() else {
@@ -3471,9 +3690,7 @@ impl SettingsPanelView {
     }
 
     fn select_draft_field(&mut self, index: usize, field_index: usize) {
-        let Some(RowControl::ObjectArray(state)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
+        let Some(state) = self.object_array_state_mut(index) else {
             return;
         };
         let Some(draft) = state.draft.as_mut() else {
@@ -3483,155 +3700,24 @@ impl SettingsPanelView {
     }
 
     fn commit_object_array_draft(&mut self, index: usize) {
-        let Some(RowControl::ObjectArray(state)) =
-            self.rows.get_mut(index).map(|row| &mut row.control)
-        else {
+        let Some(state) = self.object_array_state_mut(index) else {
             return;
         };
         if state.commit_draft() {
+            self.sync_object_array_to_root();
             self.persist();
         }
         self.sync_scroll();
     }
 
-    fn list_item_selected(&self, index: usize, slot: usize) -> bool {
-        if !matches!(
-            self.active_control,
-            Some(ActiveControl::List) | Some(ActiveControl::ListActions(_))
-        ) {
-            return false;
-        }
-        self.rows.get(index).is_some_and(
-            |row| matches!(&row.control, RowControl::List { list, .. } if list.selected == slot),
-        )
-    }
-
-    fn render_list_item(
+    fn render_list_slider_element(
         &self,
-        index: usize,
-        item_index: usize,
-        slot: usize,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let RowControl::List { actions, items, .. } = &self.rows[index].control else {
-            return div().id((
-                "settings-list-item-empty",
-                ((index as u64) << 32) | item_index as u64,
-            ));
-        };
-        let item = &items[item_index];
-        let selected = self.list_item_selected(index, slot);
-        let action = primary_list_item_action(actions, item);
-        let title = self.render_list_item_title(index, item_index, slot, item, action, cx);
-        let mut item_row = div()
-            .id((
-                "settings-list-item",
-                ((index as u64) << 32) | item_index as u64,
-            ))
-            .flex()
-            .flex_col()
-            .flex_none()
-            .h(px(super::PANEL_LIST_ITEM_HEIGHT))
-            .overflow_hidden()
-            .px_2()
-            .py_1()
-            .rounded(px(qol_theme::RADIUS_CARD))
-            .cursor(CursorStyle::PointingHand)
-            .child(title);
-        item_row = item_row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-            if !event.standard_click() {
-                return;
-            }
-            this.select_list_item(index, slot);
-            cx.notify();
-        }));
-        if selected {
-            item_row = self.mark_selected_nested(item_row, true);
-        }
-        let Some(detail) = item.error.as_ref().or(item.subtitle.as_ref()) else {
-            return item_row;
-        };
-        item_row.child(
-            div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .text_color(rgb(if item.error.is_some() {
-                    self.palette.state_off
-                } else {
-                    self.palette.label_text
-                }))
-                .child(detail.clone()),
-        )
-    }
-
-    fn render_list_item_title(
-        &self,
-        index: usize,
-        item_index: usize,
-        slot: usize,
+        row_index: usize,
+        slider: &ListSlider,
         item: &super::rows::ListItem,
-        action: Option<qol_config::contract::ResolvedRowAction>,
+        value: f64,
         cx: &mut Context<Self>,
     ) -> Div {
-        let badge = item.badge.as_ref().map(|label| {
-            StatusIndicator::new(
-                (
-                    "settings-list-item-status",
-                    ((index as u64) << 32) | item_index as u64,
-                ),
-                label.clone(),
-                rgb(status_tone_color(self.palette, item.effective_badge_tone())),
-            )
-        });
-        let has_slider = matches!(
-            &self.rows[index].control,
-            RowControl::List {
-                slider: Some(_),
-                ..
-            }
-        );
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .overflow_hidden()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(self.palette.section_text))
-                    .child(item.label.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .children(badge)
-                    .child(self.render_list_action(index, item_index, slot, item, action, cx))
-                    .when(has_slider, |cell| {
-                        cell.child(self.render_list_slider(index, item, cx))
-                    }),
-            )
-    }
-
-    fn render_list_slider(
-        &self,
-        index: usize,
-        item: &super::rows::ListItem,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let RowControl::List { slider, .. } = &self.rows[index].control else {
-            return div();
-        };
-        let Some(slider) = slider else {
-            return div();
-        };
-        let value = list_slider_value(&slider.spec, &slider.values, item);
         let fill = slider_fraction(value, Some(slider.spec.min), Some(slider.spec.max)) * 72.0;
         let percent = slider_percent_label(slider.spec.min, slider.spec.max, value);
         let item_id = item.id.clone();
@@ -3684,15 +3770,15 @@ impl SettingsPanelView {
                             let fraction = (((event.position.x - bounds.left()).to_f64()
                                 / bounds.size.width.to_f64())
                             .clamp(0.0, 1.0)) as f32;
-                            this.slider_drag = Some((index, id_for_down.clone()));
-                            this.set_list_slider_value(index, &id_for_down, fraction, cx);
+                            this.slider_drag = Some((row_index, id_for_down.clone()));
+                            this.set_list_slider_value(row_index, &id_for_down, fraction, cx);
                             cx.stop_propagation();
                             cx.notify();
                         }),
                     )
                     .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                         if !event.dragging()
-                            || this.slider_drag.as_ref() != Some(&(index, id_for_move.clone()))
+                            || this.slider_drag.as_ref() != Some(&(row_index, id_for_move.clone()))
                         {
                             return;
                         }
@@ -3702,13 +3788,13 @@ impl SettingsPanelView {
                         let fraction = (((event.position.x - bounds.left()).to_f64()
                             / bounds.size.width.to_f64())
                         .clamp(0.0, 1.0)) as f32;
-                        this.set_list_slider_value(index, &id_for_move, fraction, cx);
+                        this.set_list_slider_value(row_index, &id_for_move, fraction, cx);
                         cx.notify();
                     }))
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                            if this.slider_drag.as_ref() == Some(&(index, id_for_up.clone())) {
+                            if this.slider_drag.as_ref() == Some(&(row_index, id_for_up.clone())) {
                                 this.slider_drag = None;
                             }
                         }),
@@ -3716,7 +3802,9 @@ impl SettingsPanelView {
                     .on_mouse_up_out(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                            if this.slider_drag.as_ref() == Some(&(index, id_for_up_out.clone())) {
+                            if this.slider_drag.as_ref()
+                                == Some(&(row_index, id_for_up_out.clone()))
+                            {
                                 this.slider_drag = None;
                             }
                         }),
@@ -3730,39 +3818,110 @@ impl SettingsPanelView {
             )
     }
 
-    fn render_list_action(
+    fn render_list_card_item(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let Some(origin_row) = self.level().origin_row else {
+            return div().id(("settings-list-card-empty", index));
+        };
+        let Some(RowControl::List {
+            actions,
+            slider,
+            items,
+            filter,
+            ..
+        }) = self.root().rows.get(origin_row).map(|row| &row.control)
+        else {
+            return div().id(("settings-list-card-empty", index));
+        };
+        let Some(item) = selected_list_item(actions, items, filter, index) else {
+            return div().id(("settings-list-card-empty", index));
+        };
+        let selected = index == self.level().selected;
+        let mut line = div()
+            .id(("settings-list-card-item", index))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .h(px(row_body_height(&self.level().rows[index], false)))
+            .px_2()
+            .py_1()
+            .rounded_none()
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(self.palette.section_text))
+                    .child(item.label.clone()),
+            )
+            .child(self.render_list_card_value(item))
+            .child(self.render_list_card_action(index, origin_row, item, selected, cx));
+        line = line.when_some(
+            slider.as_deref().and_then(|slider| {
+                list_card_slider_value(slider, actions, items, filter, index)
+                    .map(|value| (slider, value))
+            }),
+            |line, (slider, value)| {
+                line.child(self.render_list_slider_element(origin_row, slider, item, value, cx))
+            },
+        );
+        line = self.mark_selected(line, selected);
+        line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.level_mut().selected = index;
+            cx.notify();
+        }))
+    }
+
+    fn render_list_card_value(&self, item: &ListItem) -> Div {
+        let text = list_item_value_text(item);
+        let color = if item.error.is_some() {
+            self.palette.state_off
+        } else if item.badge.is_some() {
+            status_tone_color(self.palette, item.effective_badge_tone())
+        } else {
+            self.palette.label_text
+        };
+        div()
+            .flex_none()
+            .text_size(px(qol_theme::TEXT_BODY))
+            .text_color(rgb(color))
+            .child(text)
+    }
+
+    fn render_list_card_action(
         &self,
         index: usize,
-        item_index: usize,
-        slot: usize,
-        item: &super::rows::ListItem,
-        action: Option<qol_config::contract::ResolvedRowAction>,
+        origin_row: usize,
+        item: &ListItem,
+        selected: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        let selected = self.list_item_selected(index, slot);
+        let Some(RowControl::List { actions, .. }) =
+            self.root().rows.get(origin_row).map(|row| &row.control)
+        else {
+            return div();
+        };
         let mut cell = div().flex().flex_none().flex_row().items_center().gap_2();
         if item.pending {
             cell = cell.child(Spinner::new(
-                (
-                    "settings-list-action-spinner",
-                    ((index as u64) << 32) | item_index as u64,
-                ),
+                ("settings-list-card-spinner", index),
                 rgb(self.palette.state_on),
             ));
         }
-        let Some(action) = action else {
+        let Some(action) = primary_list_item_action(actions, item) else {
             return cell;
         };
-        let action_count = match &self.rows[index].control {
-            RowControl::List { actions, .. } => list_item_actions(actions, item).len(),
-            _ => 0,
-        };
+        let action_count = list_item_actions(actions, item).len();
         let label = list_action_affordance(&action.label, action_count);
         let mut affordance = div()
-            .id((
-                "settings-list-action",
-                ((index as u64) << 32) | item_index as u64,
-            ))
+            .id(("settings-list-card-action", index))
             .px_1()
             .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(if selected {
@@ -3788,26 +3947,28 @@ impl SettingsPanelView {
                         return;
                     }
                     cx.stop_propagation();
-                    this.select_list_item(index, slot);
+                    this.level_mut().selected = index;
                     if action_count > 1 {
-                        this.open_list_actions();
+                        this.open_list_card_actions();
                         cx.notify();
                         return;
                     }
-                    this.dispatch_list_action(cx);
+                    this.dispatch_list_card_action(cx);
                     cx.notify();
                 }));
         }
-        if let Some(ActiveControl::ListActions(menu)) = &self.active_control {
-            if menu.row == index && menu.item_id == item.id {
+        let open_menu = match &self.level().active_control {
+            Some(ActiveControl::ListActions(menu))
+                if menu.row == origin_row && menu.item_id == item.id =>
+            {
                 let labels = menu
                     .actions
                     .iter()
                     .map(|action| action.label.clone())
                     .collect::<Vec<_>>();
                 let view = cx.weak_entity();
-                affordance = affordance.child(menu.dropdown.render_clickable(
-                    format!("settings-list-actions-{index}-{item_index}"),
+                Some(menu.dropdown.render_clickable(
+                    format!("settings-list-card-actions-{index}"),
                     &labels,
                     self.dropdown_style(),
                     move |selected, event, _, cx| {
@@ -3820,10 +3981,14 @@ impl SettingsPanelView {
                             cx.notify();
                         });
                     },
-                ));
+                ))
             }
-        }
-        cell.child(affordance)
+            _ => None,
+        };
+        let Some(menu) = open_menu else {
+            return cell.child(affordance);
+        };
+        cell.child(div().relative().child(menu).child(affordance))
     }
 }
 
@@ -3845,34 +4010,39 @@ impl Focusable for SettingsPanelView {
 impl Render for SettingsPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.palette = settings_panel_runtime();
+        self.poll_visible.store(
+            window.is_window_active(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
         }
         self.fit_lists();
         let rail: Vec<AnyElement> = if self.rail_is_open() {
-            self.rail_sections()
-                .into_iter()
-                .map(|index| self.render_section_menu_item(index, cx).into_any_element())
+            (0..self.sources.len())
+                .map(|index| self.render_source_menu_item(index, cx).into_any_element())
                 .collect()
         } else {
             Vec::new()
         };
-        let painted = self.body_has_focus().then_some(self.selected);
         let mut items: Vec<AnyElement> = Vec::new();
-        for section in 0..self.sections.len() {
-            let visible = self.section_filtered_rows(section);
-            if visible.is_empty() {
-                continue;
-            }
-            items.push(
-                self.render_group_header(section, visible.len())
-                    .into_any_element(),
-            );
-            for (position, index) in visible.iter().enumerate() {
-                let above = position.checked_sub(1).map(|prior| visible[prior]);
-                let separator =
-                    above.is_some_and(|prior| painted != Some(prior) && painted != Some(*index));
-                items.push(self.render_row(*index, separator, cx).into_any_element());
+        if let Some(draft_body) = self.render_object_array_card_draft(cx) {
+            items.push(draft_body.into_any_element());
+        } else {
+            for (title, rows) in self.body_groups() {
+                let labels: Vec<&str> = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect();
+                if !header_is_redundant(&title, &labels) {
+                    items.push(
+                        self.render_group_header(&title, rows.len())
+                            .into_any_element(),
+                    );
+                }
+                for index in rows {
+                    items.push(self.render_row(index, cx).into_any_element());
+                }
             }
         }
         div()
@@ -3888,71 +4058,7 @@ impl Render for SettingsPanelView {
             .shadow(crate::kit::float_shadow(self.palette.section_text))
             .bg(rgb(self.palette.window_bg))
             .child(self.render_band())
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .when(self.rail_is_open(), |row| {
-                        row.child(
-                            div()
-                                .id("settings-section-rail")
-                                .flex_none()
-                                .flex()
-                                .flex_col()
-                                .h_full()
-                                .w(px(super::PANEL_RAIL_WIDTH))
-                                .p_2()
-                                .border_r(px(1.))
-                                .border_color(self.hairline())
-                                .bg(rgb(self.palette.rail_bg))
-                                .children(rail),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .px_4()
-                                    .pt_3()
-                                    .pb_2()
-                                    .child(self.render_filter_field()),
-                            )
-                            .child(
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_h(px(0.))
-                                    .w_full()
-                                    .child(
-                                        div()
-                                            .id("settings-panel-body")
-                                            .size_full()
-                                            .track_scroll(self.body_scroll.handle())
-                                            .overflow_y_scroll()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .px_4()
-                                            .pb_4()
-                                            .children(items),
-                                    )
-                                    .child(crate::scrollbar::seam_track(
-                                        self.body_scroll.handle().clone(),
-                                        crate::kit::alpha(self.palette.panel_border, 0x48),
-                                        crate::kit::alpha(self.palette.section_text, 0x8c),
-                                    )),
-                            ),
-                    ),
-            )
+            .child(self.render_content(window.viewport_size().width.to_f64() as f32, rail, items))
             .when_some(self.save_error.clone(), |root, message| {
                 root.child(self.render_failure_bar(message))
             })
@@ -3962,6 +4068,204 @@ impl Render for SettingsPanelView {
 }
 
 impl SettingsPanelView {
+    fn render_card(&self, level_index: usize, items: Vec<AnyElement>) -> Div {
+        let front = level_index + 1 == self.stack.len();
+        div().flex_1().min_w_0().h_full().flex().flex_col().child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h(px(0.))
+                .w_full()
+                .child(
+                    div()
+                        .id(("settings-panel-body", level_index))
+                        .size_full()
+                        .track_scroll(self.stack[level_index].body_scroll.handle())
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px(px(BODY_SIDE_PADDING))
+                        .pb_4()
+                        .when(front && self.filter_open, |body| {
+                            body.pt(px(FILTER_OVERLAY_HEIGHT))
+                        })
+                        .children(items),
+                )
+                .when(front, |frame| {
+                    frame.child(crate::scrollbar::seam_track(
+                        self.stack[level_index].body_scroll.handle().clone(),
+                        crate::kit::alpha(self.palette.panel_border, 0x48),
+                        crate::kit::alpha(self.palette.section_text, 0x8c),
+                    ))
+                })
+                .when(self.filter_open && front, |frame| {
+                    frame.child(self.render_filter_overlay())
+                }),
+        )
+    }
+
+    fn render_content(&self, width: f32, rail: Vec<AnyElement>, items: Vec<AnyElement>) -> Div {
+        let depth = self.stack.len() - 1;
+        let card = self.render_card(self.stack.len() - 1, items);
+        let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
+        if !self.rail_is_open() {
+            let slide = deck_slide(self.deck_transition, self.deck_motion, depth, width);
+            let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
+            if depth == 0 {
+                let card = match slide {
+                    Some(slide) => card
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .with_animation(
+                            ("settings-card-deck-slide", slide.step),
+                            deck_ease(),
+                            move |card, delta| {
+                                card.left(px(slide.from + (slide.to - slide.from) * delta))
+                            },
+                        )
+                        .into_any_element(),
+                    None => card.into_any_element(),
+                };
+                return base.child(card);
+            }
+            return base.child(self.render_deck(depth, card, slide));
+        }
+        let entering = !self.rail_source_level();
+        let progress = move |delta: f32| if entering { delta } else { 1.0 - delta };
+        let step = self.rail_transition;
+        let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
+        base.relative()
+            .child(
+                div()
+                    .id("settings-section-rail")
+                    .flex_none()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .h_full()
+                    .w(px(super::PANEL_RAIL_WIDTH))
+                    .p_2()
+                    .children(rail)
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .bg(crate::kit::rail_scrim(self.palette.window_bg))
+                            .with_animation(
+                                ("settings-rail-scrim", step),
+                                ease(),
+                                move |scrim, delta| scrim.opacity(progress(delta)),
+                            ),
+                    )
+                    .with_animation(("settings-rail-dim", step), ease(), move |rail, delta| {
+                        rail.opacity(1.0 - RAIL_DIM * progress(delta))
+                    }),
+            )
+            .child(match depth {
+                0 => card
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .bg(rgb(self.palette.window_bg))
+                    .border_t(px(1.))
+                    .border_r(px(1.))
+                    .border_b(px(1.))
+                    .border_color(self.hairline())
+                    .shadow(crate::kit::float_shadow(self.palette.section_text))
+                    .child(
+                        crate::kit::accent_left_edge(
+                            qol_theme::RADIUS_CARD,
+                            RAIL_CARD_ACCENT,
+                            self.palette.row_border_selected,
+                        )
+                        .with_animation(
+                            ("settings-card-accent", step),
+                            ease(),
+                            move |edge, delta| {
+                                let reached = progress(delta);
+                                edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                                    .border_l(px(RAIL_CARD_ACCENT * reached))
+                            },
+                        ),
+                    )
+                    .with_animation(("settings-card-slide", step), ease(), move |card, delta| {
+                        let reached = progress(delta);
+                        card.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                            .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                    }),
+                _ => self
+                    .render_deck(depth, card, None)
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .with_animation(("settings-card-slide", step), ease(), move |deck, delta| {
+                        let reached = progress(delta);
+                        deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                    }),
+            })
+    }
+
+    fn render_deck(&self, depth: usize, card: Div, slide: Option<DeckSlide>) -> Div {
+        let card = card
+            .absolute()
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .left(px(deck_front_offset(depth)))
+            .bg(rgb(self.palette.window_bg))
+            .border_t(px(1.))
+            .border_r(px(1.))
+            .border_b(px(1.))
+            .border_color(self.hairline())
+            .rounded_l(px(qol_theme::RADIUS_CARD))
+            .shadow(crate::kit::float_shadow(self.palette.section_text))
+            .child(crate::kit::accent_left_edge(
+                qol_theme::RADIUS_CARD,
+                RAIL_CARD_ACCENT,
+                self.palette.row_border_selected,
+            ));
+        let card = match slide {
+            Some(slide) => card
+                .with_animation(
+                    ("settings-card-deck-slide", slide.step),
+                    Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint()),
+                    move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
+                )
+                .into_any_element(),
+            None => card.into_any_element(),
+        };
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .children(slivers_for(depth).into_iter().map(|sliver| {
+                div()
+                    .absolute()
+                    .left(px(sliver.left))
+                    .w(px(sliver.width))
+                    .top(px(sliver.inset))
+                    .bottom(px(sliver.inset))
+                    .bg(rgb(self.palette.window_bg))
+                    .border_t(px(1.))
+                    .border_r(px(1.))
+                    .border_b(px(1.))
+                    .border_color(self.hairline())
+                    .rounded_l(px(qol_theme::RADIUS_CARD))
+                    .child(crate::kit::accent_left_edge(
+                        qol_theme::RADIUS_CARD,
+                        RAIL_CARD_ACCENT,
+                        self.palette.row_border_selected,
+                    ))
+            }))
+            .child(card)
+    }
+
     fn panel_row_total(&self) -> usize {
         self.current_visible_rows().len()
     }
@@ -3972,6 +4276,9 @@ impl SettingsPanelView {
 
     fn render_band(&self) -> Div {
         let total = self.panel_row_total();
+        let mut trail = self.trail();
+        let title = trail.pop().unwrap_or_else(|| self.panel.heading.clone());
+        let subtitle_fits = self.stack.len() == 1;
         div()
             .flex_none()
             .flex()
@@ -3991,6 +4298,26 @@ impl SettingsPanelView {
                     .flex()
                     .flex_col()
                     .gap_0p5()
+                    .when(!trail.is_empty(), |group| {
+                        group.child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_0p5()
+                                .text_size(px(qol_theme::TEXT_NANO))
+                                .text_color(rgb(self.kit.palette.text_muted))
+                                .children(trail.into_iter().map(|label| {
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .child(div().truncate().max_w(px(160.)).child(label))
+                                        .child("\u{203A}")
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .truncate()
@@ -3998,15 +4325,17 @@ impl SettingsPanelView {
                             .line_height(px(BAND_TEXT_LINE_HEIGHT))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(self.palette.section_text))
-                            .child(self.panel.heading.clone()),
+                            .child(title),
                     )
-                    .children(self.subtitle.clone().map(|subtitle| {
-                        div()
-                            .truncate()
-                            .text_size(px(qol_theme::TEXT_MICRO))
-                            .text_color(rgb(self.kit.palette.text_muted))
-                            .child(subtitle)
-                    })),
+                    .when(subtitle_fits, |group| {
+                        group.children(self.subtitle.clone().map(|subtitle| {
+                            div()
+                                .truncate()
+                                .text_size(px(qol_theme::TEXT_MICRO))
+                                .text_color(rgb(self.kit.palette.text_muted))
+                                .child(subtitle)
+                        }))
+                    }),
             )
             .child(self.render_count_chip(total, plural(total, "setting")))
     }
@@ -4068,8 +4397,8 @@ impl SettingsPanelView {
             );
         if self.filter_open {
             return field
+                .bg(rgb(self.palette.window_bg))
                 .border_color(rgb(self.palette.row_border_selected))
-                .shadow(self.kit.focus_ring())
                 .child(
                     div()
                         .flex_none()
@@ -4081,13 +4410,81 @@ impl SettingsPanelView {
         field.child(self.kit.keycap("/"))
     }
 
-    fn render_group_header(&self, section: usize, count: usize) -> Div {
-        let title = self
+    fn render_filter_overlay(&self) -> Div {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .px_4()
+            .pt_3()
+            .pb_2()
+            .bg(rgb(self.palette.window_bg))
+            .child(self.render_filter_field())
+    }
+
+    fn body_groups(&self) -> Vec<(String, Vec<usize>)> {
+        if !self.filtering() {
+            return (0..self.level().sections.len())
+                .filter(|section| self.level().sections[*section].source == self.selected_source)
+                .map(|section| {
+                    let visible = self.section_filtered_rows(section);
+                    (self.section_title(section), visible)
+                })
+                .filter(|(_, rows)| !rows.is_empty())
+                .collect();
+        }
+        let mut groups = Vec::new();
+        for source in 0..self.sources.len() {
+            let mut rows = Vec::new();
+            for section in 0..self.level().sections.len() {
+                if self.level().sections[section].source == source {
+                    rows.extend(self.section_filtered_rows(section));
+                }
+            }
+            if rows.is_empty() {
+                continue;
+            }
+            groups.push((self.plugin_title(source), rows));
+        }
+        groups
+    }
+
+    fn section_title(&self, section: usize) -> String {
+        self.level()
             .sections
             .get(section)
             .map(|section| section.label.clone())
             .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| self.panel.heading.clone());
+            .unwrap_or_else(|| self.panel.heading.clone())
+    }
+
+    fn trail(&self) -> Vec<String> {
+        let cards = self
+            .stack
+            .iter()
+            .skip(1)
+            .map(|level| level.title.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        let plugin = (self.sources.len() > 1 && !self.filtering())
+            .then(|| self.plugin_title(self.selected_source));
+        crumb_labels(&self.panel.heading, plugin, cards)
+    }
+
+    fn plugin_title(&self, source: usize) -> String {
+        self.panel
+            .sources
+            .get(source)
+            .map(|source| source.heading.clone())
+            .unwrap_or_else(|| {
+                self.sources
+                    .get(source)
+                    .map(|source| source.plugin_id.clone())
+                    .unwrap_or_default()
+            })
+    }
+
+    fn render_group_header(&self, title: &str, count: usize) -> Div {
         div()
             .flex_none()
             .flex()
@@ -4097,7 +4494,13 @@ impl SettingsPanelView {
             .gap_3()
             .h(px(super::PANEL_GROUP_HEADER_HEIGHT))
             .pb_1p5()
-            .px_2()
+            .ml(px(-BODY_SIDE_PADDING))
+            .mr(px(-BODY_SIDE_PADDING))
+            .pl(px(GROUP_HEADER_INSET))
+            .pr(px(BODY_SIDE_PADDING))
+            .border_b(px(1.))
+            .border_color(self.hairline())
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
             .child(
                 div()
                     .flex()
@@ -4128,7 +4531,10 @@ impl SettingsPanelView {
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
-        let row = self.rows.get(self.selected)?;
+        if self.level().list_card {
+            return Some("run");
+        }
+        let row = self.level().rows.get(self.level().selected)?;
         match &row.control {
             RowControl::Toggle(_) => Some("flip"),
             RowControl::Action { .. } => Some("run"),
@@ -4148,7 +4554,7 @@ impl SettingsPanelView {
     }
 
     fn render_hint_bar(&self) -> Div {
-        div()
+        let mut bar = div()
             .flex_none()
             .flex()
             .flex_row()
@@ -4163,10 +4569,18 @@ impl SettingsPanelView {
                 self.enter_hint()
                     .map(|label| self.render_hint("\u{21b5}", label)),
             )
-            .child(self.render_hint("\u{2191}\u{2193}", "move"))
-            .child(self.render_hint("/", "filter"))
-            .child(div().flex_1())
-            .child(self.render_hint("esc", "close"))
+            .child(self.render_hint("\u{2191}\u{2193}", "move"));
+        if self.filtering() {
+            bar = bar
+                .child(self.render_hint("esc", "back to plugins"))
+                .child(div().flex_1());
+        } else {
+            bar = bar
+                .child(self.render_hint("type", "search every plugin"))
+                .child(div().flex_1())
+                .child(self.render_hint("esc", "close"));
+        }
+        bar
     }
 
     fn render_hint(&self, key: &str, label: &str) -> Div {
@@ -4417,6 +4831,58 @@ fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
     format!("{:.0}%", fraction * 100.0)
 }
 
+fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
+    let current = list_slider_value(&slider.spec, &slider.values, item);
+    let next = stepped_slider_value(
+        current,
+        direction,
+        slider.spec.min,
+        slider.spec.max,
+        slider.spec.step,
+    );
+    slider.values.insert(
+        item.id.clone(),
+        SliderHold {
+            value: next,
+            dispatched: None,
+            until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
+        },
+    );
+}
+
+fn list_card_slider_value(
+    slider: &ListSlider,
+    actions: &ListActions,
+    items: &[ListItem],
+    filter: &str,
+    slot: usize,
+) -> Option<f64> {
+    let item = selected_list_item(actions, items, filter, slot)?;
+    Some(list_slider_value(&slider.spec, &slider.values, item))
+}
+
+fn resolve_list_slider_dispatch(
+    rows: &mut [Row],
+    row_index: usize,
+    item_id: &str,
+) -> Option<(ResolvedRowAction, String)> {
+    let RowControl::List { slider, items, .. } =
+        rows.get_mut(row_index).map(|row| &mut row.control)?
+    else {
+        return None;
+    };
+    let slider = slider.as_mut()?;
+    let item = items.iter().find(|item| item.id == item_id)?;
+    let value = list_slider_value(&slider.spec, &slider.values, item);
+    if let Some(hold) = slider.values.get_mut(item_id) {
+        hold.dispatched = Some(value);
+    }
+    Some((
+        resolve_slider_action(&slider.spec, &item.data, value),
+        item.id.clone(),
+    ))
+}
+
 fn binary_state_label(active: bool) -> &'static str {
     if active {
         "On"
@@ -4491,48 +4957,6 @@ enum Intent {
     CancelEdit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SectionMenuIntent {
-    Up,
-    Down,
-    Open,
-    Close,
-}
-
-fn section_menu_intent(key: &str) -> Option<SectionMenuIntent> {
-    match key {
-        "up" => Some(SectionMenuIntent::Up),
-        "down" => Some(SectionMenuIntent::Down),
-        "enter" | "return" | "space" | "right" => Some(SectionMenuIntent::Open),
-        "escape" => Some(SectionMenuIntent::Close),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ListIntent {
-    Up,
-    Down,
-    Activate,
-    Actions,
-    Close,
-}
-
-fn list_intent(key: &str) -> Option<ListIntent> {
-    match key {
-        "up" => Some(ListIntent::Up),
-        "down" => Some(ListIntent::Down),
-        "enter" | "return" => Some(ListIntent::Activate),
-        "space" | "right" => Some(ListIntent::Actions),
-        "escape" => Some(ListIntent::Close),
-        _ => None,
-    }
-}
-
-fn is_filter_text(character: &str) -> bool {
-    !character.is_empty() && !character.chars().any(char::is_control)
-}
-
 #[derive(Clone, Copy)]
 struct ModChipSlot {
     row: usize,
@@ -4598,22 +5022,25 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     match key {
         "up" => Some(Intent::Up),
         "down" => Some(Intent::Down),
-        "enter" | "return" | "space" | "right" => Some(Intent::Activate),
+        "enter" | "return" | "space" => Some(Intent::Activate),
         "escape" => Some(Intent::Close),
         _ => None,
     }
 }
 
-pub(super) fn row_height(row: &Row, panel_width: f32, show_section_headers: bool) -> f32 {
+pub(super) fn row_height(row: &Row, show_section_headers: bool) -> f32 {
     let header = if show_section_headers && row.section_label.is_some() {
         super::PANEL_SECTION_HEADER_HEIGHT
     } else {
         0.0
     };
-    row_body_height(row, panel_width) + header
+    row_body_height(row, false) + header
 }
 
-pub(super) fn row_body_height(row: &Row, panel_width: f32) -> f32 {
+pub(super) fn row_body_height(row: &Row, expanded: bool) -> f32 {
+    if !expanded {
+        return super::PANEL_ROW_HEIGHT;
+    }
     if matches!(row.control, RowControl::Gamepad { .. }) {
         return super::PANEL_GAMEPAD_HEIGHT;
     }
@@ -4624,43 +5051,23 @@ pub(super) fn row_body_height(row: &Row, panel_width: f32) -> f32 {
             + super::PANEL_QR_URL_HEIGHT
             + 2.0 * super::PANEL_LIST_GAP;
     }
-    if let RowControl::ObjectArray(state) = &row.control {
-        return object_array_body_height(row, state);
-    }
-    if let RowControl::List { list, .. } = &row.control {
-        return super::PANEL_LIST_PADDING_Y
-            + list_header_height(row)
-            + list.max_visible as f32 * (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP);
-    }
-    if row.description.is_some() {
-        return super::PANEL_DESCRIBED_ROW_HEIGHT
-            + description_wrap_lines(row, panel_width) as f32
-                * super::PANEL_DESCRIPTION_LINE_HEIGHT;
-    }
     super::PANEL_ROW_HEIGHT
 }
 
-fn description_wrap_lines(row: &Row, panel_width: f32) -> usize {
-    let Some(description) = row.description.as_deref() else {
-        return 0;
-    };
-    let chars = description.chars().count();
-    if chars == 0 {
-        return 0;
-    }
-    let column = panel_width - ROW_CHROME - value_cell_width(&row.control);
-    let per_line = (column / DESCRIPTION_CHAR_WIDTH) as usize;
-    chars.div_ceil(per_line.max(1)) - 1
-}
-
-fn body_child_offset(sections: &[impl AsRef<[usize]>], row: usize) -> Option<usize> {
+fn body_child_offset(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+) -> Option<usize> {
     let mut child = 0;
-    for section in sections {
+    for (section_index, section) in sections.iter().enumerate() {
         let visible = section.as_ref();
         if visible.is_empty() {
             continue;
         }
-        child += 1;
+        if headers.get(section_index).copied().unwrap_or(true) {
+            child += 1;
+        }
         match visible.iter().position(|index| *index == row) {
             Some(position) => return Some(child + position),
             None => child += visible.len(),
@@ -4669,11 +5076,469 @@ fn body_child_offset(sections: &[impl AsRef<[usize]>], row: usize) -> Option<usi
     None
 }
 
-fn text_list_parts(edit: &str) -> Vec<String> {
-    edit.split(',')
-        .map(|part| part.trim().to_string())
-        .filter(|part| !part.is_empty())
+fn text_list_child_rows(_label: &str, key: &str, source: usize, values: &[String]) -> Vec<Row> {
+    let mut rows = vec![Row {
+        id: "text_list_add".into(),
+        section_id: None,
+        section_label: None,
+        label: "+ Add".into(),
+        description: None,
+        placeholder: None,
+        variant: None,
+        config_key: key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control: RowControl::Text(String::new()),
+    }];
+    rows.extend(values.iter().enumerate().map(|(index, value)| Row {
+        id: format!("text_list_item_{index}"),
+        section_id: None,
+        section_label: None,
+        label: value.clone(),
+        description: None,
+        placeholder: None,
+        variant: None,
+        config_key: key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control: RowControl::Text(value.clone()),
+    }));
+    rows
+}
+
+fn object_array_child_rows(
+    _label: &str,
+    key: &str,
+    source: usize,
+    state: &ObjectArrayState,
+) -> Vec<Row> {
+    let mut rows = vec![Row {
+        id: "object_array_add".into(),
+        section_id: None,
+        section_label: None,
+        label: "+ Add".into(),
+        description: None,
+        placeholder: None,
+        variant: None,
+        config_key: key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control: RowControl::Text(String::new()),
+    }];
+    rows.extend((0..state.entries.len()).map(|index| {
+        let summary = state.summary(index);
+        Row {
+            id: format!("object_array_item_{index}"),
+            section_id: None,
+            section_label: None,
+            label: summary.clone(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: key.to_string(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source,
+            control: RowControl::Text(summary),
+        }
+    }));
+    rows
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChipRowPart {
+    Chip(Chip),
+    Arrow,
+}
+
+fn chip_row_parts(chips: &ItemChips) -> Vec<ChipRowPart> {
+    let mut parts = Vec::new();
+    if chips.is_directional() {
+        parts.extend(chips.from.iter().cloned().map(ChipRowPart::Chip));
+        if let Some(shared) = shared_key_chip(&chips.rest) {
+            parts.push(ChipRowPart::Chip(shared));
+        }
+        parts.push(ChipRowPart::Arrow);
+        parts.extend(chips.to.iter().cloned().map(ChipRowPart::Chip));
+    } else {
+        parts.extend(
+            chips
+                .from
+                .iter()
+                .chain(&chips.rest)
+                .chain(&chips.to)
+                .cloned()
+                .map(ChipRowPart::Chip),
+        );
+    }
+    parts.extend(chips.flags.iter().map(|flag| {
+        ChipRowPart::Chip(Chip {
+            label: flag.clone(),
+            tone: ChipTone::Plain,
+        })
+    }));
+    parts
+}
+
+fn initial_card_selection(count: usize) -> usize {
+    if count == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+fn object_array_card_level(
+    label: &str,
+    config_key: &str,
+    source: usize,
+    state: ObjectArrayState,
+    origin_row: usize,
+) -> Level {
+    let selected = initial_card_selection(state.entries.len());
+    let mut state = state;
+    state.list.selected = selected;
+    state.list.sync(state.entry_count());
+    let rows = object_array_child_rows(label, config_key, source, &state);
+    let section = RowSection {
+        label: label.to_string(),
+        description: None,
+        rows: (0..rows.len()).collect(),
+        source,
+    };
+    let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
+    Level {
+        rows,
+        sections: vec![section],
+        selected,
+        active_section: None,
+        selected_section: 0,
+        body_scroll: crate::scroll_list::SelectionScroll::new(),
+        active_control: None,
+        row_bounds,
+        title: Some(label.to_string()),
+        origin_row: Some(origin_row),
+        object_array: Some(state),
+        list_card: false,
+        live_card: false,
+    }
+}
+
+fn sync_object_array_level(level: &mut Level, label: &str, config_key: &str, source: usize) {
+    let Some(state) = level.object_array.as_ref() else {
+        return;
+    };
+    let selected = state.list.selected;
+    let rows = object_array_child_rows(label, config_key, source, state);
+    let section = RowSection {
+        label: label.to_string(),
+        description: None,
+        rows: (0..rows.len()).collect(),
+        source,
+    };
+    level.rows = rows;
+    level.sections = vec![section];
+    level.row_bounds = (0..level.rows.len())
+        .map(|_| Rc::new(Cell::new(None)))
+        .collect();
+    level.selected = selected.min(level.rows.len() - 1);
+}
+
+fn object_array_card_sync(root_rows: &mut [Row], level: &mut Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let Some(RowControl::ObjectArray(stored)) =
+        root_rows.get_mut(origin_row).map(|row| &mut row.control)
+    else {
+        return;
+    };
+    let Some(child) = level.object_array.as_ref() else {
+        return;
+    };
+    *stored = ObjectArrayState::from_entries(
+        child.key_label.clone(),
+        child.schema.clone(),
+        child.entries.clone(),
+    );
+    let Some(row) = root_rows.get(origin_row) else {
+        return;
+    };
+    let label = row.label.clone();
+    let config_key = row.config_key.clone();
+    let source = row.source;
+    sync_object_array_level(level, &label, &config_key, source);
+}
+
+fn list_item_value_text(item: &ListItem) -> String {
+    item.error
+        .clone()
+        .or_else(|| item.badge.clone())
+        .or_else(|| item.subtitle.clone())
+        .unwrap_or_default()
+}
+
+fn list_card_child_rows(
+    _label: &str,
+    key: &str,
+    source: usize,
+    items: &[ListItem],
+    visible: &[usize],
+) -> Vec<Row> {
+    visible
+        .iter()
+        .map(|item_index| {
+            let item = &items[*item_index];
+            Row {
+                id: item.id.clone(),
+                section_id: None,
+                section_label: None,
+                label: item.label.clone(),
+                description: None,
+                placeholder: None,
+                variant: None,
+                config_key: key.to_string(),
+                default: qol_config::contract::FieldDefault::String(String::new()),
+                stream: None,
+                action: None,
+                visibility: None,
+                source,
+                control: RowControl::Text(list_item_value_text(item)),
+            }
+        })
         .collect()
+}
+
+struct ListCardOrigin<'a> {
+    label: &'a str,
+    config_key: &'a str,
+    source: usize,
+    row: usize,
+}
+
+fn list_card_level(
+    origin: ListCardOrigin,
+    actions: &ListActions,
+    items: &[ListItem],
+    filter: &str,
+    selected_slot: usize,
+) -> Level {
+    let ListCardOrigin {
+        label,
+        config_key,
+        source,
+        row: origin_row,
+    } = origin;
+    let visible = filtered_list_items(actions, items, filter);
+    let rows = list_card_child_rows(label, config_key, source, items, &visible);
+    let section = RowSection {
+        label: label.to_string(),
+        description: None,
+        rows: (0..rows.len()).collect(),
+        source,
+    };
+    let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
+    let selected = selected_slot.min(rows.len().saturating_sub(1));
+    Level {
+        rows,
+        sections: vec![section],
+        selected,
+        active_section: None,
+        selected_section: 0,
+        body_scroll: crate::scroll_list::SelectionScroll::new(),
+        active_control: None,
+        row_bounds,
+        title: Some(label.to_string()),
+        origin_row: Some(origin_row),
+        object_array: None,
+        list_card: true,
+        live_card: false,
+    }
+}
+
+fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let selected = level.selected;
+    let selected_id = level.rows.get(selected).map(|row| row.id.clone());
+    let (label, config_key, source) = {
+        let Some(parent) = root_rows.get(origin_row) else {
+            return;
+        };
+        (
+            parent.label.clone(),
+            parent.config_key.clone(),
+            parent.source,
+        )
+    };
+    let Some(RowControl::List {
+        actions,
+        items,
+        filter,
+        list,
+        ..
+    }) = root_rows.get_mut(origin_row).map(|row| &mut row.control)
+    else {
+        return;
+    };
+    let visible = filtered_list_items(actions, items, filter);
+    let visible_ids = visible
+        .iter()
+        .map(|slot| items[*slot].id.clone())
+        .collect::<Vec<_>>();
+    let next = match selected_id {
+        Some(id) => visible_ids
+            .iter()
+            .position(|candidate| candidate == &id)
+            .unwrap_or_else(|| selected.min(visible.len().saturating_sub(1))),
+        None => selected.min(visible.len().saturating_sub(1)),
+    };
+    list.selected = next;
+    list.sync(visible.len());
+    let rows = list_card_child_rows(&label, &config_key, source, items, &visible);
+    let section = RowSection {
+        label: label.clone(),
+        description: None,
+        rows: (0..rows.len()).collect(),
+        source,
+    };
+    level.rows = rows;
+    level.sections = vec![section];
+    level.row_bounds = (0..level.rows.len())
+        .map(|_| Rc::new(Cell::new(None)))
+        .collect();
+    level.selected = next;
+}
+
+fn live_card_level(
+    label: &str,
+    description: Option<String>,
+    config_key: &str,
+    source: usize,
+    control: RowControl,
+    origin_row: usize,
+) -> Level {
+    let row = Row {
+        id: "live_card_body".into(),
+        section_id: None,
+        section_label: None,
+        label: label.to_string(),
+        description,
+        placeholder: None,
+        variant: None,
+        config_key: config_key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control,
+    };
+    let section = RowSection {
+        label: label.to_string(),
+        description: None,
+        rows: vec![0],
+        source,
+    };
+    Level {
+        rows: vec![row],
+        sections: vec![section],
+        selected: 0,
+        active_section: None,
+        selected_section: 0,
+        body_scroll: crate::scroll_list::SelectionScroll::new(),
+        active_control: None,
+        row_bounds: vec![Rc::new(Cell::new(None))],
+        title: Some(label.to_string()),
+        origin_row: Some(origin_row),
+        object_array: None,
+        list_card: false,
+        live_card: true,
+    }
+}
+
+fn live_card_sync(root_rows: &mut [Row], level: &mut Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let Some(parent) = root_rows.get(origin_row) else {
+        return;
+    };
+    let Some(row) = level.rows.first_mut() else {
+        return;
+    };
+    match (&parent.control, &mut row.control) {
+        (
+            RowControl::Gamepad { query, monitor },
+            RowControl::Gamepad {
+                query: row_query,
+                monitor: row_monitor,
+            },
+        ) => {
+            *row_query = query.clone();
+            *row_monitor = monitor.clone();
+        }
+        (
+            RowControl::QrCode {
+                query,
+                value_from,
+                url,
+                modules,
+                error,
+            },
+            RowControl::QrCode {
+                query: row_query,
+                value_from: row_value_from,
+                url: row_url,
+                modules: row_modules,
+                error: row_error,
+            },
+        ) => {
+            *row_query = query.clone();
+            *row_value_from = value_from.clone();
+            *row_url = url.clone();
+            *row_modules = modules.clone();
+            *row_error = error.clone();
+        }
+        _ => {}
+    }
+}
+
+fn live_card_sync_back(root_rows: &mut [Row], level: &Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let Some(parent) = root_rows.get_mut(origin_row) else {
+        return;
+    };
+    let Some(row) = level.rows.first() else {
+        return;
+    };
+    if let (
+        RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        },
+        RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        },
+    ) = (&mut parent.control, &row.control)
+    {
+        *root_monitor = card_monitor.clone();
+    }
 }
 
 fn row_matches(row: &Row, needle: &str) -> bool {
@@ -4684,12 +5549,125 @@ fn row_matches(row: &Row, needle: &str) -> bool {
             .is_some_and(|text| text.to_lowercase().contains(needle))
 }
 
+fn bare_filter_seed(key: &str, key_char: Option<&str>) -> Option<String> {
+    if matches!(
+        key,
+        "space"
+            | "enter"
+            | "return"
+            | "escape"
+            | "tab"
+            | "backspace"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+    ) {
+        return None;
+    }
+    key_char
+        .filter(|text| text.chars().count() == 1 && !text.chars().any(char::is_control))
+        .map(str::to_string)
+}
+
+fn rail_open(sources: usize, filtering: bool) -> bool {
+    sources > 1 && !filtering
+}
+
+fn filtered_visible_rows(
+    rows: &[Row],
+    sections: &[RowSection],
+    source_count: usize,
+    needle: Option<&str>,
+    selected_source: usize,
+) -> Vec<usize> {
+    let filtering = needle.is_some();
+    let mut out = Vec::new();
+    for source in 0..source_count {
+        if !filtering && source != selected_source {
+            continue;
+        }
+        for section in sections.iter().filter(|section| section.source == source) {
+            let visible = section
+                .rows
+                .iter()
+                .copied()
+                .filter(|index| super::rows::row_is_visible(rows, *index));
+            match needle {
+                Some(needle) => {
+                    out.extend(visible.filter(|index| row_matches(&rows[*index], needle)));
+                }
+                None => out.extend(visible),
+            }
+        }
+    }
+    out
+}
+
+fn clamp_selected(visible: &[usize], selected: usize) -> usize {
+    if visible.contains(&selected) {
+        selected
+    } else {
+        visible.first().copied().unwrap_or(selected)
+    }
+}
+
+fn push_level(stack: &mut Vec<Level>, child: Level) {
+    stack.push(child);
+}
+
+fn pop_level(stack: &mut Vec<Level>) -> Option<Level> {
+    if stack.len() == 1 {
+        return None;
+    }
+    stack.pop()
+}
+
+#[derive(Debug, PartialEq)]
+enum EscapeStep {
+    CloseFilter,
+    PopCard,
+    AscendRail,
+    Dismiss,
+}
+
+fn escape_step(depth: usize, filter_open: bool, rail_can_ascend: bool) -> EscapeStep {
+    if filter_open {
+        return EscapeStep::CloseFilter;
+    }
+    if depth > 0 {
+        return EscapeStep::PopCard;
+    }
+    if rail_can_ascend {
+        return EscapeStep::AscendRail;
+    }
+    EscapeStep::Dismiss
+}
+
+fn focus_enters_the_body(plugin_id: &str) -> bool {
+    plugin_id != qol_conventions::CORE_PANEL_ID
+}
+
+fn crumb_labels(heading: &str, plugin: Option<String>, parents: Vec<String>) -> Vec<String> {
+    let mut labels = vec![heading.to_string()];
+    labels.extend(plugin.filter(|title| title != heading));
+    labels.extend(parents);
+    labels
+}
+
 fn plural(count: usize, noun: &str) -> String {
     if count == 1 {
         noun.to_string()
     } else {
         format!("{noun}s")
     }
+}
+
+fn header_is_redundant(title: &str, labels: &[&str]) -> bool {
+    if labels.len() != 1 {
+        return false;
+    }
+    title.trim().to_lowercase() == labels[0].trim().to_lowercase()
 }
 
 fn value_cell_width(control: &RowControl) -> f32 {
@@ -4708,24 +5686,6 @@ fn value_cell_width(control: &RowControl) -> f32 {
         RowControl::Unsupported { .. } => 200.0,
         RowControl::Gamepad { .. } => 200.0,
     }
-}
-
-fn object_array_body_height(row: &Row, state: &ObjectArrayState) -> f32 {
-    let (entries, rule_head) = match state.draft.as_ref() {
-        Some(draft) => (draft.entry_count(), 0.0),
-        None => (
-            state.item_window().len() + 1,
-            if state.chips(0).is_directional() {
-                super::PANEL_LIST_HEADER_HEIGHT
-            } else {
-                0.0
-            },
-        ),
-    };
-    super::PANEL_LIST_PADDING_Y
-        + list_header_height(row)
-        + rule_head
-        + entries as f32 * (super::PANEL_OBJECT_ROW_HEIGHT + super::PANEL_LIST_GAP)
 }
 
 fn list_header_height(row: &Row) -> f32 {
@@ -4759,26 +5719,24 @@ fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) ->
     visible[next]
 }
 
-fn initial_active_section(section_count: usize) -> Option<usize> {
-    if section_count == 1 {
-        return Some(0);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, color_display, description_wrap_lines, format_number,
-        horizontal_step_direction, initial_active_section, intent, is_filter_text,
-        list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
-        parsed_number, row_body_height, section_menu_intent, slider_fraction, slider_percent_label,
-        slider_value_from_fraction, stepped_number, stepped_slider_value, text_or_placeholder,
-        Intent, ListIntent, Row, RowControl, SectionMenuIntent,
+        binary_state_label, clamp_selected, color_display, crumb_labels, deck_slide, escape_step,
+        focus_level, format_number, header_is_redundant, horizontal_step_direction, intent,
+        list_action_affordance, list_card_slider_value, list_slider_value, live_card_level,
+        live_card_sync, live_card_sync_back, number_preview, number_unit, parsed_color,
+        parsed_number, pop_level, push_level, row_body_height, selected_list_item, slider_fraction,
+        slider_percent_label, slider_value_from_fraction, slivers_for, step_list_slider,
+        stepped_number, stepped_slider_value, text_or_placeholder, CardSliver, ChipRowPart,
+        DeckMotion, DeckSlide, EscapeStep, Intent, Level, ObjectArrayState, Row, RowControl,
+        RowSection, SliderHold,
     };
+    use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
+    use crate::settings_panel::object_array_row::{Chip, ChipTone, Entry, Item, ItemChips};
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
 
     fn rows(headers: &[bool]) -> Vec<Row> {
@@ -4797,13 +5755,14 @@ mod tests {
                 stream: None,
                 action: None,
                 visibility: None,
+                source: 0,
                 control: RowControl::Toggle(false),
             })
             .collect()
     }
 
     #[test]
-    fn description_wrap_lines_pin_the_observed_alt_tab_rows() {
+    fn long_descriptions_stay_inside_the_fixed_row_height() {
         let icon = Row {
             id: "icon".into(),
             section_id: None,
@@ -4817,6 +5776,7 @@ mod tests {
             stream: None,
             action: None,
             visibility: None,
+            source: 0,
             control: RowControl::Select {
                 options: vec![],
                 index: 0,
@@ -4839,6 +5799,7 @@ mod tests {
             stream: None,
             action: None,
             visibility: None,
+            source: 0,
             control: RowControl::Number {
                 value: 1.5,
                 min: None,
@@ -4862,27 +5823,20 @@ mod tests {
             stream: None,
             action: None,
             visibility: None,
+            source: 0,
             control: RowControl::Toggle(false),
         };
         assert_eq!(
-            description_wrap_lines(&icon, crate::settings_panel::PANEL_WIDTH),
-            0
+            row_body_height(&icon, false),
+            super::super::PANEL_ROW_HEIGHT
         );
         assert_eq!(
-            description_wrap_lines(&card, crate::settings_panel::PANEL_WIDTH),
-            0
+            row_body_height(&card, false),
+            super::super::PANEL_ROW_HEIGHT
         );
         assert_eq!(
-            description_wrap_lines(&dynamic, crate::settings_panel::PANEL_WIDTH),
-            1
-        );
-        assert_eq!(
-            row_body_height(&dynamic, crate::settings_panel::PANEL_WIDTH),
-            super::super::PANEL_DESCRIBED_ROW_HEIGHT + super::super::PANEL_DESCRIPTION_LINE_HEIGHT
-        );
-        assert_eq!(
-            row_body_height(&card, crate::settings_panel::PANEL_WIDTH),
-            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+            row_body_height(&dynamic, false),
+            super::super::PANEL_ROW_HEIGHT
         );
     }
 
@@ -4925,24 +5879,140 @@ mod tests {
         assert!(!super::row_matches(&row, "brightness"));
     }
 
+    fn labeled_row(label: &str, source: usize) -> Row {
+        let mut row = rows(&[false]).remove(0);
+        row.label = label.into();
+        row.source = source;
+        row
+    }
+
+    fn source_section(label: &str, source: usize, rows: Vec<usize>) -> RowSection {
+        RowSection {
+            label: label.into(),
+            description: None,
+            rows,
+            source,
+        }
+    }
+
+    #[test]
+    fn a_bare_letter_opens_the_filter_and_seeds_it() {
+        assert_eq!(super::bare_filter_seed("a", Some("a")), Some("a".into()));
+        assert_eq!(super::bare_filter_seed("7", Some("7")), Some("7".into()));
+        assert_eq!(super::bare_filter_seed("ä", Some("ä")), Some("ä".into()));
+        for (key, ch, label) in [
+            ("space", Some(" "), "space activates the row"),
+            ("enter", Some("\r"), "enter activates the row"),
+            ("return", Some("\r"), "return activates the row"),
+            ("escape", Some("\u{1b}"), "escape closes the panel"),
+            ("tab", Some("\t"), "tab moves focus"),
+            ("backspace", None, "backspace is not filter text"),
+            ("up", None, "arrows navigate"),
+            ("down", None, "arrows navigate"),
+            ("left", None, "arrows navigate"),
+            ("right", None, "arrows navigate"),
+        ] {
+            assert_eq!(super::bare_filter_seed(key, ch), None, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_needle_that_matches_nothing_shows_nothing_rather_than_the_whole_panel() {
+        let rows = vec![labeled_row("Reconnect", 0), labeled_row("Brightness", 1)];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1]),
+        ];
+        assert!(
+            super::filtered_visible_rows(&rows, &sections, 2, Some("zzz"), 0).is_empty(),
+            "a needle with no hits must leave the body empty, not fall back to the unfiltered panel"
+        );
+        assert!(
+            !super::rail_open(2, true),
+            "the rail stays away while a query is on screen, hits or no hits"
+        );
+    }
+
+    #[test]
+    fn a_filter_needle_gathers_matching_rows_from_every_source() {
+        let rows = vec![
+            labeled_row("Reconnect", 0),
+            labeled_row("Reconnect interval", 1),
+            labeled_row("Brightness", 1),
+        ];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1, 2]),
+        ];
+        assert_eq!(
+            super::filtered_visible_rows(&rows, &sections, 2, Some("reconnect"), 0),
+            vec![0, 1],
+            "a needle matching two sources must return rows from both"
+        );
+        assert_eq!(
+            super::filtered_visible_rows(&rows, &sections, 2, None, 0),
+            vec![0],
+            "without a needle only the selected source's rows are visible"
+        );
+    }
+
+    #[test]
+    fn filtering_suppresses_the_rail() {
+        assert!(!super::rail_open(2, true));
+        assert!(super::rail_open(2, false));
+        assert!(!super::rail_open(1, false));
+        assert!(!super::rail_open(1, true));
+    }
+
+    #[test]
+    fn escape_clears_the_filter_and_lands_back_on_the_selected_source() {
+        let rows = vec![
+            labeled_row("Reconnect", 0),
+            labeled_row("Reconnect interval", 1),
+        ];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1]),
+        ];
+        let mut selected = 1;
+        let filtering = super::filtered_visible_rows(&rows, &sections, 2, Some("reconnect"), 0);
+        assert_eq!(filtering, vec![0, 1]);
+        selected = super::clamp_selected(&filtering, selected);
+        assert_eq!(selected, 1);
+        let cleared = super::filtered_visible_rows(&rows, &sections, 2, None, 0);
+        assert_eq!(cleared, vec![0]);
+        selected = super::clamp_selected(&cleared, selected);
+        assert_eq!(
+            selected, 0,
+            "the cursor must land on the selected source's row"
+        );
+        assert_eq!(rows[selected].source, 0);
+    }
+
     #[test]
     fn a_group_header_offsets_every_row_it_precedes_in_the_scroller() {
         let sections = [vec![0usize, 1], Vec::new(), vec![2, 3, 4]];
 
-        assert_eq!(super::body_child_offset(&sections, 0), Some(1));
-        assert_eq!(super::body_child_offset(&sections, 1), Some(2));
-        assert_eq!(super::body_child_offset(&sections, 2), Some(4));
-        assert_eq!(super::body_child_offset(&sections, 4), Some(6));
-        assert_eq!(super::body_child_offset(&sections, 5), None);
-    }
-
-    #[test]
-    fn a_text_list_drops_blank_entries_and_trims_the_rest() {
         assert_eq!(
-            super::text_list_parts(" kitty , Terminal ,, iTerm2 "),
-            vec!["kitty", "Terminal", "iTerm2"]
+            super::body_child_offset(&sections, &[true, true, true], 0),
+            Some(1)
         );
-        assert!(super::text_list_parts("  , ,").is_empty());
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 1),
+            Some(2)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 2),
+            Some(4)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 4),
+            Some(6)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 5),
+            None
+        );
     }
 
     #[test]
@@ -4966,9 +6036,9 @@ mod tests {
             stream: None,
             action: None,
             visibility: None,
+            source: 0,
             control: RowControl::List {
                 query: "items".into(),
-                searchable: false,
                 filter: String::new(),
                 active_query: None,
                 active_value_from: None,
@@ -4981,7 +6051,6 @@ mod tests {
                     additional: Vec::new(),
                 }),
                 slider: None,
-                empty_message: "No items".into(),
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
                 error: None,
@@ -4990,28 +6059,119 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_expand_only_the_rows_that_render_them() {
+    fn descriptions_never_change_row_height() {
         let mut plain = rows(&[false]).remove(0);
-        let plain_height = row_body_height(&plain, crate::settings_panel::PANEL_WIDTH);
+        let plain_height = row_body_height(&plain, false);
         plain.description = Some("Helpful context".into());
 
         assert_eq!(plain_height, super::super::PANEL_ROW_HEIGHT);
         assert_eq!(
-            row_body_height(&plain, crate::settings_panel::PANEL_WIDTH),
-            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+            row_body_height(&plain, false),
+            super::super::PANEL_ROW_HEIGHT
         );
 
         let mut list = list_row();
-        let plain_list_height = row_body_height(&list, crate::settings_panel::PANEL_WIDTH);
+        let plain_list_height = row_body_height(&list, false);
         list.description = Some("Live devices".into());
-        let full_list_height = super::super::PANEL_LIST_PADDING_Y
-            + super::super::PANEL_LIST_HEADER_HEIGHT
-            + super::super::rows::LIST_MAX_VISIBLE as f32
-                * (super::super::PANEL_LIST_ITEM_HEIGHT + super::super::PANEL_LIST_GAP);
-        assert_eq!(plain_list_height, full_list_height);
+        assert_eq!(plain_list_height, super::super::PANEL_ROW_HEIGHT);
         assert_eq!(
-            row_body_height(&list, crate::settings_panel::PANEL_WIDTH),
-            full_list_height + super::super::PANEL_LIST_DESCRIPTION_HEIGHT
+            row_body_height(&list, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn every_control_rests_at_the_fixed_row_height() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.toggle]
+type = "boolean"
+default = true
+
+[field.number]
+type = "number"
+default = 1
+
+[field.text]
+type = "string"
+default = "d"
+
+[field.text_list]
+type = "string_array"
+default = []
+
+[field.multi_select]
+type = "string_array"
+options = ["a", "b"]
+default = ["a"]
+
+[field.select]
+type = "select"
+options = ["a", "b"]
+default = "a"
+
+[field.color]
+type = "color"
+default = "202322"
+
+[field.action]
+type = "action"
+action = "go"
+
+[field.status]
+type = "status"
+query = "status_query"
+value_from = "state"
+
+[field.list]
+type = "list"
+query = "list_query"
+row_label = "{name}"
+
+[field.object_array]
+type = "object_array"
+default = []
+
+[field.object_array.item.fields]
+app = "string"
+
+[field.gamepad]
+type = "gamepad"
+query = "controller_input"
+
+[field.qr]
+type = "qr_code"
+query = "connection_info"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        assert_eq!(rows.len(), 13);
+        for row in &rows {
+            assert_eq!(
+                row_body_height(row, false),
+                super::super::PANEL_ROW_HEIGHT,
+                "{} must rest at the fixed row height",
+                row.id
+            );
+        }
+        let broken = qol_config::contract::parse_spec_str(
+            "schema_version = 1\n\n[field.broken]\ntype = \"boolean\"\ndefault = true\n",
+        )
+        .unwrap();
+        let resolved = qol_config::normalized::resolve_config(
+            &broken,
+            &serde_json::json!({ "broken": "yes" }),
+        )
+        .unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        assert_eq!(
+            row_body_height(&rows[0], false),
+            super::super::PANEL_ROW_HEIGHT
         );
     }
 
@@ -5039,7 +6199,7 @@ default = "visible"
         let spec = qol_config::contract::parse_spec_str(SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved);
+        let rows = rows_from_resolved(&resolved, 0);
         let visible = visible_row_indices(&rows);
 
         assert_eq!(adjacent_visible_row(&visible, 0, 1), 2);
@@ -5047,55 +6207,11 @@ default = "visible"
     }
 
     #[test]
-    fn list_intent_activates_enter_instead_of_closing_navigation() {
-        let cases = [
-            ("up", Some(ListIntent::Up)),
-            ("down", Some(ListIntent::Down)),
-            ("enter", Some(ListIntent::Activate)),
-            ("return", Some(ListIntent::Activate)),
-            ("space", Some(ListIntent::Actions)),
-            ("right", Some(ListIntent::Actions)),
-            ("escape", Some(ListIntent::Close)),
-            ("left", None),
-            ("tab", None),
-        ];
-        for (key, expected) in cases {
-            assert_eq!(list_intent(key), expected, "key: {key}");
-        }
-    }
-
-    #[test]
     fn escape_is_the_only_key_that_goes_back() {
         for key in ["left", "right", "up", "down"] {
             assert_ne!(intent(key, None, false), Some(Intent::Close), "key: {key}");
-            assert_ne!(list_intent(key), Some(ListIntent::Close), "key: {key}");
-            assert_ne!(
-                section_menu_intent(key),
-                Some(SectionMenuIntent::Close),
-                "key: {key}"
-            );
         }
         assert_eq!(intent("escape", None, false), Some(Intent::Close));
-        assert_eq!(list_intent("escape"), Some(ListIntent::Close));
-        assert_eq!(
-            section_menu_intent("escape"),
-            Some(SectionMenuIntent::Close)
-        );
-    }
-
-    #[test]
-    fn section_menu_left_arrow_stays_in_the_panel() {
-        let cases = [
-            ("up", Some(SectionMenuIntent::Up)),
-            ("down", Some(SectionMenuIntent::Down)),
-            ("enter", Some(SectionMenuIntent::Open)),
-            ("right", Some(SectionMenuIntent::Open)),
-            ("escape", Some(SectionMenuIntent::Close)),
-            ("left", None),
-        ];
-        for (key, expected) in cases {
-            assert_eq!(section_menu_intent(key), expected, "key: {key}");
-        }
     }
 
     #[test]
@@ -5173,10 +6289,22 @@ default = "visible"
     }
 
     #[test]
-    fn multiple_contract_sections_open_in_the_shared_section_menu() {
-        let cases = [(0, None), (1, Some(0)), (2, None), (8, None)];
-        for (count, expected) in cases {
-            assert_eq!(initial_active_section(count), expected, "count: {count}");
+    fn every_navigation_level_reads_from_one_focus_rule() {
+        use super::PanelFocus::{Body, Sources};
+        let cases = [
+            (true, 4, Sources),
+            (true, 2, Sources),
+            (true, 1, Body),
+            (true, 0, Body),
+            (false, 4, Body),
+            (false, 1, Body),
+        ];
+        for (source_menu, sources, expected) in cases {
+            assert_eq!(
+                focus_level(source_menu, sources),
+                expected,
+                "source_menu={source_menu} sources={sources}"
+            );
         }
     }
 
@@ -5423,26 +6551,6 @@ default = "visible"
     }
 
     #[test]
-    fn control_characters_never_reach_the_list_filter() {
-        for (character, expected, label) in [
-            ("\n", false, "macOS reports enter as a newline key_char"),
-            ("\r", false, "carriage return is the same activation key"),
-            ("\t", false, "tab moves focus and is not filter text"),
-            ("\u{1b}", false, "escape closes the list"),
-            ("", false, "an empty key_char adds nothing"),
-            ("a", true, "a letter is filter text"),
-            (" ", true, "a space is filter text once the filter is open"),
-            ("ä", true, "non-ascii text is filter text"),
-        ] {
-            assert_eq!(is_filter_text(character), expected, "{label}");
-        }
-        assert!(
-            matches!(list_intent("enter"), Some(super::ListIntent::Activate)),
-            "enter stays the activation intent once the filter declines it"
-        );
-    }
-
-    #[test]
     fn right_then_left_within_phantom_window_steps_slider_once() {
         let mut guard = PhantomNavGuard::new();
         let (min, max, step) = (0.0, 100.0, 10.0);
@@ -5513,7 +6621,7 @@ default = "visible"
             ("up", None, false, Some(Intent::Up)),
             ("down", None, false, Some(Intent::Down)),
             ("left", None, false, None),
-            ("right", None, false, Some(Intent::Activate)),
+            ("right", None, false, None),
             ("space", None, false, Some(Intent::Activate)),
             ("5", Some("5"), false, None),
             ("-", Some("-"), false, None),
@@ -5538,12 +6646,1112 @@ default = "visible"
     }
 
     #[test]
-    fn space_and_right_activate_inactive_rows() {
+    fn only_enter_and_space_activate_a_row() {
         assert_eq!(intent("space", None, false), Some(Intent::Activate));
-        assert_eq!(intent("right", None, false), Some(Intent::Activate));
+        assert_eq!(intent("enter", None, false), Some(Intent::Activate));
+        assert_eq!(intent("right", None, false), None);
+        assert_eq!(intent("left", None, false), None);
         assert_eq!(
             intent("space", Some(" "), true),
             Some(Intent::Insert(" ".into()))
         );
+    }
+
+    #[test]
+    fn header_is_redundant_matches_a_single_identical_row_label() {
+        assert!(header_is_redundant("Character Rules", &["Character Rules"]));
+    }
+
+    #[test]
+    fn header_is_redundant_ignores_case_and_padding() {
+        assert!(header_is_redundant(
+            " character RULES ",
+            &["Character Rules"]
+        ));
+        assert!(header_is_redundant(
+            "Character Rules",
+            &["  character rules  "]
+        ));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_for_a_differing_label() {
+        assert!(!header_is_redundant("Character Rules", &["Key Remapping"]));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_with_more_than_one_row() {
+        assert!(!header_is_redundant(
+            "Character Rules",
+            &["Character Rules", "Key Remapping"]
+        ));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_without_rows() {
+        assert!(!header_is_redundant("Character Rules", &[]));
+    }
+
+    fn level(selected: usize) -> Level {
+        Level {
+            rows: Vec::new(),
+            sections: Vec::new(),
+            selected,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds: Vec::new(),
+            title: None,
+            origin_row: None,
+            object_array: None,
+            list_card: false,
+            live_card: false,
+        }
+    }
+
+    #[test]
+    fn pop_restores_the_parent_level_untouched() {
+        let mut parent = level(3);
+        parent.rows = rows(&[false, false]);
+        parent.sections = vec![source_section("Devices", 0, vec![0, 1])];
+        let parent_sections = parent.sections.clone();
+        let child = level(7);
+        let mut stack = vec![parent, child];
+        let popped = pop_level(&mut stack).unwrap();
+        assert_eq!(popped.selected, 7);
+        assert!(popped.sections.is_empty());
+        let root = stack.last().unwrap();
+        assert_eq!(root.selected, 3);
+        assert_eq!(root.rows.len(), 2);
+        assert_eq!(root.sections, parent_sections);
+        assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn the_root_level_never_pops() {
+        let mut stack = vec![level(3)];
+        assert!(pop_level(&mut stack).is_none());
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].selected, 3);
+    }
+
+    #[test]
+    fn push_then_pop_is_identity() {
+        let mut stack = vec![level(3)];
+        push_level(&mut stack, level(9));
+        let popped = pop_level(&mut stack).unwrap();
+        assert_eq!(popped.selected, 9);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].selected, 3);
+    }
+
+    fn gamepad_row() -> Row {
+        Row {
+            id: "input".into(),
+            section_id: None,
+            section_label: None,
+            label: "Controller Input".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "input".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+        }
+    }
+
+    fn qr_row() -> Row {
+        Row {
+            id: "pair".into(),
+            section_id: None,
+            section_label: None,
+            label: "Pair".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "connection_info".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::QrCode {
+                query: "connection_info".into(),
+                value_from: Some("url".into()),
+                url: Some("https://example.com/pair".into()),
+                modules: vec![true, false, true, false],
+                error: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_live_card_level_names_the_row_and_carries_its_control() {
+        let level = live_card_level(
+            "Controller Input",
+            Some("The active controller".into()),
+            "input",
+            1,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            3,
+        );
+        assert_eq!(level.title.as_deref(), Some("Controller Input"));
+        assert_eq!(level.origin_row, Some(3));
+        assert!(level.live_card);
+        assert!(!level.list_card);
+        assert_eq!(level.selected, 0);
+        assert_eq!(level.sections.len(), 1);
+        assert_eq!(level.sections[0].rows, vec![0]);
+        assert_eq!(level.rows.len(), 1);
+        assert_eq!(level.rows[0].label, "Controller Input");
+        assert_eq!(
+            level.rows[0].description.as_deref(),
+            Some("The active controller")
+        );
+        let RowControl::Gamepad { query, .. } = &level.rows[0].control else {
+            panic!("expected gamepad control on the card");
+        };
+        assert_eq!(query, "controller_input");
+    }
+
+    #[test]
+    fn live_card_sync_mirrors_root_gamepad_state_into_the_card() {
+        let mut root = vec![gamepad_row()];
+        let RowControl::Gamepad { monitor, .. } = &mut root[0].control else {
+            panic!("expected gamepad monitor");
+        };
+        monitor.apply_query(Ok(serde_json::json!({
+            "available": true,
+            "items": [
+                {
+                    "name": "alpha",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+                {
+                    "name": "beta",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+            ],
+        })));
+        let mut card = live_card_level(
+            "Controller Input",
+            None,
+            "input",
+            0,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            0,
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        assert_eq!(
+            card_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("alpha")
+        );
+        let RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        } = &mut root[0].control
+        else {
+            panic!("expected root gamepad monitor");
+        };
+        root_monitor.select_next();
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        assert_eq!(
+            card_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn live_card_sync_mirrors_root_qr_state_into_the_card() {
+        let mut root = vec![qr_row()];
+        let mut card = live_card_level(
+            "Pair",
+            None,
+            "connection_info",
+            0,
+            RowControl::QrCode {
+                query: "connection_info".into(),
+                value_from: None,
+                url: None,
+                modules: Vec::new(),
+                error: Some("stale".into()),
+            },
+            0,
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::QrCode {
+            value_from,
+            url,
+            modules,
+            error,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card qr code row");
+        };
+        assert_eq!(value_from.as_deref(), Some("url"));
+        assert_eq!(url.as_deref(), Some("https://example.com/pair"));
+        assert_eq!(modules, &vec![true, false, true, false]);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn live_card_sync_back_returns_the_cycled_monitor_to_the_root() {
+        let mut root = vec![gamepad_row()];
+        let RowControl::Gamepad { monitor, .. } = &mut root[0].control else {
+            panic!("expected gamepad monitor");
+        };
+        monitor.apply_query(Ok(serde_json::json!({
+            "available": true,
+            "items": [
+                {
+                    "name": "alpha",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+                {
+                    "name": "beta",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+            ],
+        })));
+        let mut card = live_card_level(
+            "Controller Input",
+            None,
+            "input",
+            0,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            0,
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &mut card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        card_monitor.select_next();
+        live_card_sync_back(&mut root, &card);
+        let RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        } = &root[0].control
+        else {
+            panic!("expected root gamepad monitor");
+        };
+        assert_eq!(
+            root_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn text_list_child_rows_builds_the_add_row_first_then_one_row_per_value() {
+        let values = vec![
+            "com.kitty.app".to_string(),
+            "com.apple.Terminal".to_string(),
+            "com.googlecode.iterm2".to_string(),
+        ];
+        let rows = super::text_list_child_rows("Excluded apps", "excluded_apps", 2, &values);
+        assert_eq!(rows.len(), 4);
+        let add = &rows[0];
+        assert_eq!(add.label, "+ Add");
+        assert!(matches!(&add.control, RowControl::Text(stored) if stored.is_empty()));
+        for (index, value) in values.iter().enumerate() {
+            let row = &rows[index + 1];
+            assert_eq!(row.label, *value);
+            assert!(matches!(&row.control, RowControl::Text(stored) if stored == value));
+            assert_eq!(row.config_key, "excluded_apps");
+            assert_eq!(row.source, 2);
+        }
+        let round_trip: Vec<String> = rows
+            .iter()
+            .filter_map(|row| match &row.control {
+                RowControl::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .filter(|value| !value.is_empty())
+            .collect();
+        assert_eq!(round_trip, values);
+    }
+
+    #[test]
+    fn deleting_the_first_real_text_list_item_removes_its_value() {
+        let values = vec![
+            "com.kitty.app".to_string(),
+            "com.apple.Terminal".to_string(),
+        ];
+        let mut rows = super::text_list_child_rows("Excluded apps", "excluded_apps", 0, &values);
+        let RowControl::Text(first) = &mut rows[1].control else {
+            unreachable!();
+        };
+        *first = String::new();
+        let kept: Vec<String> = rows
+            .iter()
+            .filter_map(|row| match &row.control {
+                RowControl::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .filter(|value| !value.is_empty())
+            .collect();
+        assert_eq!(kept, vec!["com.apple.Terminal".to_string()]);
+    }
+
+    fn object_array_state() -> ObjectArrayState {
+        ObjectArrayState::from_entries(
+            None,
+            vec![(
+                "app".to_string(),
+                qol_config::object_array::ItemFieldKind::Text,
+            )],
+            vec![
+                Entry {
+                    key: None,
+                    fields: Item::from_iter([(
+                        "app".to_string(),
+                        qol_config::contract::FieldDefault::String("idea".into()),
+                    )]),
+                },
+                Entry {
+                    key: None,
+                    fields: Item::from_iter([(
+                        "app".to_string(),
+                        qol_config::contract::FieldDefault::String("zed".into()),
+                    )]),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn object_array_card_rows_build_the_add_row_first_then_one_row_per_entry() {
+        let state = object_array_state();
+        let rows = super::object_array_child_rows("Rules", "rules", 1, &state);
+        assert_eq!(rows.len(), 3);
+        let add = &rows[0];
+        assert_eq!(add.label, "+ Add");
+        assert!(matches!(&add.control, RowControl::Text(stored) if stored.is_empty()));
+        for (index, row) in rows.iter().skip(1).enumerate() {
+            assert_eq!(row.label, state.summary(index));
+            assert!(matches!(
+                &row.control,
+                RowControl::Text(stored) if stored == &state.summary(index)
+            ));
+            assert_eq!(row.config_key, "rules");
+            assert_eq!(row.source, 1);
+        }
+    }
+
+    #[test]
+    fn an_empty_object_array_card_selects_the_add_row() {
+        let empty = ObjectArrayState::from_entries(
+            None,
+            vec![(
+                "app".to_string(),
+                qol_config::object_array::ItemFieldKind::Text,
+            )],
+            Vec::new(),
+        );
+        let level = super::object_array_card_level("Rules", "rules", 0, empty, 3);
+        assert_eq!(level.selected, 0);
+        assert_eq!(level.object_array.as_ref().unwrap().list.selected, 0);
+
+        let level = super::object_array_card_level("Rules", "rules", 0, object_array_state(), 3);
+        assert_eq!(level.selected, 1);
+        assert_eq!(level.object_array.as_ref().unwrap().list.selected, 1);
+    }
+
+    #[test]
+    fn a_fresh_card_selects_the_first_item_or_the_add_row() {
+        assert_eq!(super::initial_card_selection(0), 0);
+        assert_eq!(super::initial_card_selection(3), 1);
+    }
+
+    #[test]
+    fn removing_an_entry_rebuilds_the_card_rows_and_clamps_selection() {
+        let state = object_array_state();
+        let mut level = super::object_array_card_level("Rules", "rules", 0, state, 3);
+        assert_eq!(level.selected, 1);
+        level.selected = 2;
+        let child = level.object_array.as_mut().unwrap();
+        child.list.selected = 2;
+        assert!(child.remove_selected());
+        super::sync_object_array_level(&mut level, "Rules", "rules", 0);
+        let child = level.object_array.as_ref().unwrap();
+        assert_eq!(level.rows.len(), 2);
+        assert_eq!(level.rows[0].label, "+ Add");
+        assert_eq!(level.rows[1].label, child.summary(0));
+        assert_eq!(level.selected, 1);
+    }
+
+    #[test]
+    fn a_synced_root_row_holds_the_child_entries_in_order() {
+        let mut root = level(0);
+        root.rows = rows(&[false, false]);
+        root.rows[1].control = RowControl::ObjectArray(ObjectArrayState::from_entries(
+            None,
+            vec![(
+                "app".to_string(),
+                qol_config::object_array::ItemFieldKind::Text,
+            )],
+            Vec::new(),
+        ));
+        let mut child =
+            super::object_array_card_level("Rules", "rules", 0, object_array_state(), 1);
+        super::object_array_card_sync(&mut root.rows, &mut child);
+        let RowControl::ObjectArray(stored) = &root.rows[1].control else {
+            panic!("root row holds an object array");
+        };
+        let entries = child.object_array.as_ref().unwrap().entries.clone();
+        assert_eq!(stored.entries, entries);
+    }
+
+    #[test]
+    fn an_entry_summary_spells_out_the_well_display() {
+        let state = ObjectArrayState::from_entries(
+            None,
+            vec![
+                (
+                    "from_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "to_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "keys".to_string(),
+                    qol_config::object_array::ItemFieldKind::StringArray,
+                ),
+            ],
+            vec![Entry {
+                key: None,
+                fields: Item::from_iter([
+                    (
+                        "from_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["ctrl".into()]),
+                    ),
+                    (
+                        "to_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["cmd".into()]),
+                    ),
+                    (
+                        "keys".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["c".into()]),
+                    ),
+                ]),
+            }],
+        );
+        assert_eq!(state.summary(0), "ctrl + c \u{2192} cmd + c");
+    }
+
+    #[test]
+    fn an_entry_summary_compresses_shared_keys_like_the_well() {
+        let state = ObjectArrayState::from_entries(
+            None,
+            vec![
+                (
+                    "from_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "to_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "keys".to_string(),
+                    qol_config::object_array::ItemFieldKind::StringArray,
+                ),
+            ],
+            vec![Entry {
+                key: None,
+                fields: Item::from_iter([
+                    (
+                        "from_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["ctrl".into()]),
+                    ),
+                    (
+                        "to_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["cmd".into()]),
+                    ),
+                    (
+                        "keys".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec![
+                            "c".into(),
+                            "v".into(),
+                        ]),
+                    ),
+                ]),
+            }],
+        );
+        assert_eq!(state.summary(0), "ctrl + 2 keys \u{2192} cmd + 2 keys");
+    }
+
+    #[test]
+    fn a_directional_chip_row_renders_the_same_chips_item_chips_produces() {
+        let state = ObjectArrayState::from_entries(
+            None,
+            vec![
+                (
+                    "from_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "to_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "keys".to_string(),
+                    qol_config::object_array::ItemFieldKind::StringArray,
+                ),
+                (
+                    "global".to_string(),
+                    qol_config::object_array::ItemFieldKind::Boolean,
+                ),
+            ],
+            vec![Entry {
+                key: None,
+                fields: Item::from_iter([
+                    (
+                        "from_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["ctrl".into()]),
+                    ),
+                    (
+                        "to_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["cmd".into()]),
+                    ),
+                    (
+                        "keys".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec![
+                            "c".into(),
+                            "v".into(),
+                        ]),
+                    ),
+                    (
+                        "global".to_string(),
+                        qol_config::contract::FieldDefault::Boolean(true),
+                    ),
+                ]),
+            }],
+        );
+        let chips = state.chips(0);
+        assert!(chips.is_directional());
+        assert_eq!(
+            super::chip_row_parts(&chips),
+            vec![
+                ChipRowPart::Chip(Chip {
+                    label: "ctrl".into(),
+                    tone: ChipTone::Modifier
+                }),
+                ChipRowPart::Chip(Chip {
+                    label: "2 keys".into(),
+                    tone: ChipTone::Key
+                }),
+                ChipRowPart::Arrow,
+                ChipRowPart::Chip(Chip {
+                    label: "cmd".into(),
+                    tone: ChipTone::Modifier
+                }),
+                ChipRowPart::Chip(Chip {
+                    label: "global".into(),
+                    tone: ChipTone::Plain
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_non_directional_chip_row_renders_in_order_without_an_arrow() {
+        let chips = ItemChips {
+            from: vec![Chip {
+                label: "idea".into(),
+                tone: ChipTone::Key,
+            }],
+            rest: Vec::new(),
+            to: Vec::new(),
+            flags: vec!["wired".into()],
+        };
+        assert_eq!(
+            super::chip_row_parts(&chips),
+            vec![
+                ChipRowPart::Chip(Chip {
+                    label: "idea".into(),
+                    tone: ChipTone::Key
+                }),
+                ChipRowPart::Chip(Chip {
+                    label: "wired".into(),
+                    tone: ChipTone::Plain
+                }),
+            ]
+        );
+    }
+
+    fn listed_row(items: Vec<super::super::rows::ListItem>) -> Row {
+        let mut row = list_row();
+        let RowControl::List { items: stored, .. } = &mut row.control else {
+            unreachable!();
+        };
+        *stored = items;
+        row
+    }
+
+    fn list_item(id: &str, name: &str) -> super::super::rows::ListItem {
+        super::super::rows::ListItem {
+            id: id.into(),
+            label: name.into(),
+            subtitle: None,
+            accent: None,
+            badge: None,
+            badge_tone: None,
+            data: serde_json::Value::Null,
+            pending: false,
+            error: None,
+        }
+    }
+
+    fn list_card_fixture() -> (Vec<Row>, Level) {
+        let mut root = level(0);
+        root.rows = vec![listed_row(vec![
+            list_item("a", "Alpha"),
+            list_item("b", "Beta"),
+            list_item("c", "Gamma"),
+        ])];
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            list,
+            ..
+        } = &root.rows[0].control
+        else {
+            unreachable!();
+        };
+        let child = super::list_card_level(
+            super::ListCardOrigin {
+                label: "Devices",
+                config_key: "devices",
+                source: 0,
+                row: 0,
+            },
+            actions,
+            items,
+            filter,
+            list.selected,
+        );
+        (root.rows, child)
+    }
+
+    #[test]
+    fn list_card_child_rows_builds_one_row_per_item() {
+        let items = vec![
+            super::super::rows::ListItem {
+                id: "aa:bb".into(),
+                label: "Headphones".into(),
+                subtitle: Some("Sony WH-1000XM4".into()),
+                accent: None,
+                badge: Some("Connected".into()),
+                badge_tone: None,
+                data: serde_json::Value::Null,
+                pending: false,
+                error: None,
+            },
+            list_item("cc:dd", "Keyboard"),
+        ];
+        let rows = super::list_card_child_rows("Devices", "devices", 2, &items, &[0, 1]);
+        assert_eq!(rows.len(), 2);
+        for (slot, row) in rows.iter().enumerate() {
+            assert_eq!(row.label, items[slot].label);
+            assert_eq!(row.id, items[slot].id);
+            assert_eq!(row.config_key, "devices");
+            assert_eq!(row.source, 2);
+        }
+        assert!(matches!(
+            &rows[0].control,
+            RowControl::Text(value) if value == "Connected"
+        ));
+        assert!(matches!(
+            &rows[1].control,
+            RowControl::Text(value) if value.is_empty()
+        ));
+    }
+
+    #[test]
+    fn a_list_card_rebuild_keeps_the_selection_on_the_same_item() {
+        let (mut rows, mut child) = list_card_fixture();
+        child.selected = 1;
+        super::super::rows::apply_runtime_query(
+            &mut rows,
+            "items",
+            Ok(serde_json::json!({"items": [
+                {"id": "c", "name": "Gamma"},
+                {"id": "a", "name": "Alpha"},
+                {"id": "b", "name": "Beta"},
+            ]})),
+            &|_, _| false,
+        );
+        super::list_card_sync(&mut rows, &mut child);
+        assert_eq!(child.rows.len(), 3);
+        assert_eq!(child.selected, 2);
+        assert_eq!(child.rows[child.selected].id, "b");
+        let RowControl::List {
+            list: root_list, ..
+        } = &rows[0].control
+        else {
+            unreachable!();
+        };
+        assert_eq!(root_list.selected, 2);
+    }
+
+    #[test]
+    fn a_list_card_rebuild_clamps_when_the_selected_item_disappears() {
+        let (mut rows, mut child) = list_card_fixture();
+        child.selected = 1;
+        super::super::rows::apply_runtime_query(
+            &mut rows,
+            "items",
+            Ok(serde_json::json!({"items": [
+                {"id": "a", "name": "Alpha"},
+                {"id": "c", "name": "Gamma"},
+            ]})),
+            &|_, _| false,
+        );
+        super::list_card_sync(&mut rows, &mut child);
+        assert_eq!(child.rows.len(), 2);
+        assert_eq!(child.selected, 1);
+        assert_eq!(child.rows[child.selected].id, "c");
+        super::super::rows::apply_runtime_query(
+            &mut rows,
+            "items",
+            Ok(serde_json::json!({"items": []})),
+            &|_, _| false,
+        );
+        super::list_card_sync(&mut rows, &mut child);
+        assert_eq!(child.rows.len(), 0);
+        assert_eq!(child.selected, 0);
+        let RowControl::List {
+            list: root_list, ..
+        } = &rows[0].control
+        else {
+            unreachable!();
+        };
+        assert_eq!(root_list.selected, 0);
+    }
+
+    fn list_item_with_value(id: &str, name: &str, level: f64) -> super::super::rows::ListItem {
+        let mut item = list_item(id, name);
+        item.data = serde_json::json!({ "level": level });
+        item
+    }
+
+    fn slider_list_row() -> Row {
+        let mut row = listed_row(vec![
+            list_item_with_value("a", "Alpha", 0.3),
+            list_item_with_value("b", "Beta", 0.8),
+        ]);
+        let RowControl::List { slider, .. } = &mut row.control else {
+            unreachable!();
+        };
+        *slider = Some(Box::new(super::super::rows::ListSlider {
+            spec: qol_config::contract::RowSliderSpec {
+                value_from: "level".into(),
+                min: 0.0,
+                max: 1.0,
+                step: 0.1,
+                action: "set_level".into(),
+                input: None,
+            },
+            values: std::collections::HashMap::new(),
+        }));
+        row
+    }
+
+    fn slider_card_fixture() -> (Vec<Row>, Level) {
+        let mut root = level(0);
+        root.rows = vec![slider_list_row()];
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            list,
+            ..
+        } = &root.rows[0].control
+        else {
+            unreachable!();
+        };
+        let child = super::list_card_level(
+            super::ListCardOrigin {
+                label: "Devices",
+                config_key: "devices",
+                source: 0,
+                row: 0,
+            },
+            actions,
+            items,
+            filter,
+            list.selected,
+        );
+        (root.rows, child)
+    }
+
+    #[test]
+    fn a_card_slider_row_exposes_the_same_value_list_slider_value_returns() {
+        let (mut rows, mut child) = slider_card_fixture();
+        child.selected = 1;
+        let RowControl::List {
+            actions,
+            slider,
+            items,
+            filter,
+            ..
+        } = &mut rows[0].control
+        else {
+            unreachable!();
+        };
+        slider.as_mut().unwrap().values.insert(
+            "b".into(),
+            SliderHold {
+                value: 0.55,
+                dispatched: Some(0.55),
+                until: std::time::Instant::now() + super::SLIDER_HOLD_DURATION,
+            },
+        );
+        let slider = slider.as_deref().unwrap();
+        let held = list_slider_value(&slider.spec, &slider.values, &items[1]);
+        assert_eq!(
+            held, 0.55,
+            "the hold wins over the item data while it lasts"
+        );
+        assert_eq!(
+            list_card_slider_value(slider, actions, items, filter, child.selected),
+            Some(held),
+            "the card row for the selected slot shows the root list value for its item"
+        );
+        assert_eq!(
+            list_card_slider_value(slider, actions, items, filter, 0),
+            Some(list_slider_value(&slider.spec, &slider.values, &items[0])),
+        );
+    }
+
+    #[test]
+    fn card_slider_stepping_lands_on_the_item_the_well_would_step() {
+        let (mut rows, mut child) = slider_card_fixture();
+        let RowControl::List {
+            actions,
+            slider,
+            items,
+            filter,
+            list,
+            ..
+        } = &mut rows[0].control
+        else {
+            unreachable!();
+        };
+        child.selected = 1;
+        list.selected = child.selected;
+        let card_item = selected_list_item(actions, items, filter, child.selected).unwrap();
+        let well_item = selected_list_item(actions, items, filter, list.selected).unwrap();
+        assert_eq!(card_item.id, "b");
+        assert_eq!(well_item.id, card_item.id);
+        let slider = slider.as_mut().unwrap();
+        step_list_slider(slider, card_item, 1.0);
+        let hold = slider
+            .values
+            .get(&well_item.id)
+            .expect("the step records the hold under the id the well would step");
+        assert_eq!(hold.value, 0.9);
+    }
+
+    #[test]
+    fn pushing_a_text_list_child_popping_leaves_the_root_untouched() {
+        let mut root = level(2);
+        root.rows = rows(&[false, false, false]);
+        root.sections = vec![source_section("Devices", 0, vec![0, 1, 2])];
+        let root_sections = root.sections.clone();
+        let values = vec![
+            "com.kitty.app".to_string(),
+            "com.apple.Terminal".to_string(),
+            "com.googlecode.iterm2".to_string(),
+        ];
+        let child = Level {
+            rows: super::text_list_child_rows("Excluded apps", "excluded_apps", 0, &values),
+            sections: vec![source_section("Excluded apps", 0, (0..4).collect())],
+            selected: 0,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds: Vec::new(),
+            title: Some("Excluded apps".into()),
+            origin_row: Some(1),
+            object_array: None,
+            list_card: false,
+            live_card: false,
+        };
+        let mut stack = vec![root];
+        push_level(&mut stack, child);
+        assert_eq!(stack.len(), 2);
+        let popped = pop_level(&mut stack).unwrap();
+        assert_eq!(popped.title.as_deref(), Some("Excluded apps"));
+        assert_eq!(popped.origin_row, Some(1));
+        assert_eq!(popped.rows.len(), 4);
+        assert_eq!(stack.len(), 1);
+        let root = stack.last().unwrap();
+        assert_eq!(root.rows.len(), 3);
+        assert_eq!(root.selected, 2);
+        assert_eq!(root.sections, root_sections);
+    }
+
+    #[test]
+    fn escape_prefers_the_filter_over_everything() {
+        assert_eq!(escape_step(2, true, true), EscapeStep::CloseFilter);
+    }
+
+    #[test]
+    fn escape_pops_one_card_before_touching_the_rail() {
+        assert_eq!(escape_step(1, false, true), EscapeStep::PopCard);
+        assert_eq!(escape_step(2, false, false), EscapeStep::PopCard);
+    }
+
+    #[test]
+    fn escape_at_the_root_ascends_then_dismisses() {
+        assert_eq!(escape_step(0, false, true), EscapeStep::AscendRail);
+        assert_eq!(escape_step(0, false, false), EscapeStep::Dismiss);
+    }
+
+    #[test]
+    fn popping_reclamps_the_parent_cursor() {
+        let mut parent = level(9);
+        parent.rows = rows(&[false, false]);
+        parent.sections = vec![source_section("Devices", 0, vec![0, 1])];
+        let mut stack = vec![parent, level(7)];
+        pop_level(&mut stack).unwrap();
+        let root = stack.last().unwrap();
+        let visible = super::filtered_visible_rows(&root.rows, &root.sections, 1, None, 0);
+        let selected = clamp_selected(&visible, root.selected);
+        assert_eq!(selected, 0);
+        assert!(visible.contains(&selected));
+    }
+
+    #[test]
+    fn a_dropped_group_header_does_not_shift_the_scroll_target() {
+        let sections = vec![vec![0usize, 1], vec![2, 3]];
+        assert_eq!(
+            super::body_child_offset(&sections, &[false, true], 3),
+            Some(4)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true], 3),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn the_trail_names_the_plugin_between_the_panel_and_the_open_card() {
+        assert_eq!(
+            crumb_labels(
+                "qol settings",
+                Some("Key remap".to_string()),
+                vec!["Excluded apps".to_string()]
+            ),
+            vec!["qol settings", "Key remap", "Excluded apps"]
+        );
+    }
+
+    #[test]
+    fn a_single_plugin_panel_does_not_repeat_its_own_name_in_the_trail() {
+        assert_eq!(
+            crumb_labels("Key remap", Some("Key remap".to_string()), Vec::new()),
+            vec!["Key remap"]
+        );
+    }
+
+    #[test]
+    fn deck_slivers_follow_the_one_window_depth_geometry() {
+        assert_eq!(slivers_for(0), Vec::new());
+        assert_eq!(
+            slivers_for(1),
+            vec![CardSliver {
+                left: 0.0,
+                width: 12.0,
+                inset: 8.0
+            }]
+        );
+        let depth_two = slivers_for(2);
+        assert_eq!(
+            depth_two,
+            vec![
+                CardSliver {
+                    left: 0.0,
+                    width: 10.0,
+                    inset: 14.0
+                },
+                CardSliver {
+                    left: 9.0,
+                    width: 10.0,
+                    inset: 7.0
+                },
+            ]
+        );
+        assert_eq!(slivers_for(3), depth_two);
+        assert_eq!(slivers_for(7), depth_two);
+    }
+
+    #[test]
+    fn deck_slide_maps_counter_and_direction_to_key_and_opposite_starts() {
+        let push = deck_slide(7, Some(DeckMotion::Push), 1, 520.0).unwrap();
+        let pop = deck_slide(8, Some(DeckMotion::Pop), 1, 520.0).unwrap();
+        assert_ne!(push.step, pop.step);
+        assert_eq!(push.step, 7);
+        assert_eq!(pop.step, 8);
+        assert_eq!(push.from, 520.0);
+        assert_eq!(pop.from, 18.0);
+        assert!(push.from > pop.from);
+        assert_eq!(push.to, pop.to);
+        assert_eq!(
+            deck_slide(9, Some(DeckMotion::Pop), 0, 520.0),
+            Some(DeckSlide {
+                step: 9,
+                from: 10.0,
+                to: 0.0,
+            })
+        );
+        assert_eq!(deck_slide(10, None, 2, 520.0), None);
     }
 }

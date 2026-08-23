@@ -7,6 +7,11 @@ use crate::scroll_list::{wheel_rows, ScrollList};
 pub const DROPDOWN_MAX_VISIBLE: usize = 10;
 pub const ROW_H: f32 = 26.0;
 const MENU_ID: &str = "dropdown-menu";
+const MENU_MIN_WIDTH: f32 = 214.0;
+const MENU_PAD: f32 = 5.0;
+const ITEM_GAP: f32 = 10.0;
+const ITEM_PAD_X: f32 = 10.0;
+const SWATCH_SIZE: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DropdownStyle {
@@ -142,30 +147,41 @@ impl Dropdown {
             .map(|(index, item)| {
                 let selected = index == list.selected;
                 let mut row = div()
-                    .relative()
-                    .h(px(ROW_H))
-                    .px_2()
-                    .py_1()
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .h(px(qol_theme::LIST_ENTRY_HEIGHTS[0]))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(ITEM_GAP))
+                    .px(px(ITEM_PAD_X))
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(if selected {
                         style.text_selected
                     } else {
                         style.text
-                    }))
-                    .child(item.label.clone());
-                if selected {
-                    row = row.bg(rgb(style.bg_selected)).child(
+                    }));
+                if let Some(accent) = item.accent {
+                    row = row.child(
                         div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(3.0))
-                            .bg(rgb(style.accent)),
+                            .w(px(SWATCH_SIZE))
+                            .h(px(SWATCH_SIZE))
+                            .flex_none()
+                            .rounded(px(qol_theme::RADIUS_TONE_BAR))
+                            .bg(rgb(accent)),
                     );
                 }
-                if let Some(accent) = item.accent {
-                    row = row.border_l_2().border_color(rgb(accent));
+                row = row.child(item.label.clone());
+                if selected {
+                    row = row
+                        .bg(rgb(style.bg_selected))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(
+                            div()
+                                .ml_auto()
+                                .text_size(px(qol_theme::TEXT_NANO))
+                                .text_color(rgb(style.accent))
+                                .child("✓"),
+                        );
                 }
                 let Some((id, on_click)) = on_click.clone() else {
                     return row.into_any_element();
@@ -182,31 +198,54 @@ impl Dropdown {
         let count = items.len();
         drop(list);
         deferred(
-            anchored().snap_to_window_with_margin(px(8.0)).child(
-                div()
-                    .id(MENU_ID)
-                    .flex()
-                    .flex_col()
-                    .min_w(px(160.0))
-                    .rounded(px(qol_theme::RADIUS_CARD))
-                    .shadow(crate::kit::float_shadow(style.text))
-                    .bg(rgb(style.bg))
-                    .on_scroll_wheel(move |event, window, _cx| {
-                        let mut list = menu_list.borrow_mut();
-                        list.wheel_by(wheel_rows(&event.delta, ROW_H), count);
-                        window.refresh();
-                    })
-                    .children(rows),
-            ),
+            anchored()
+                .anchor(Corner::TopLeft)
+                .offset(menu_drop_offset())
+                .snap_to_window_with_margin(px(8.0))
+                .child(
+                    div()
+                        .id(MENU_ID)
+                        .flex()
+                        .flex_col()
+                        .min_w(px(MENU_MIN_WIDTH))
+                        .p(px(MENU_PAD))
+                        .rounded(px(qol_theme::RADIUS_CARD))
+                        .border_1()
+                        .border_color(rgb(style.border))
+                        .shadow(crate::kit::float_shadow(style.text))
+                        .bg(rgb(style.bg))
+                        .on_scroll_wheel(move |event, window, _cx| {
+                            let mut list = menu_list.borrow_mut();
+                            list.wheel_by(wheel_rows(&event.delta, ROW_H), count);
+                            window.refresh();
+                        })
+                        .children(rows),
+                ),
         )
     }
+}
+
+fn menu_drop_offset() -> Point<Pixels> {
+    point(px(0.0), px(qol_theme::LIST_ENTRY_HEIGHTS[0]))
 }
 
 type DropdownClick = dyn Fn(usize, &ClickEvent, &mut Window, &mut App);
 
 #[cfg(test)]
 mod tests {
-    use super::{Dropdown, DropdownEvent};
+    use super::{menu_drop_offset, Dropdown, DropdownEvent};
+    use gpui::px;
+
+    #[test]
+    fn menu_drop_offset_clears_the_control_and_keeps_its_left_edge() {
+        let offset = menu_drop_offset();
+        assert_eq!(offset.x, px(0.0), "menu keeps the control's left edge");
+        assert_eq!(
+            offset.y,
+            px(qol_theme::LIST_ENTRY_HEIGHTS[0]),
+            "menu drops one list-entry row below the anchor"
+        );
+    }
 
     #[test]
     fn open_seeds_selection_and_scrolls_it_into_view() {

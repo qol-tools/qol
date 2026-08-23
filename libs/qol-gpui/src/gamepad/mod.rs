@@ -17,6 +17,7 @@ pub struct GamepadPalette {
     pub text: u32,
     pub text_muted: u32,
     pub accent: u32,
+    pub info: u32,
     pub success: u32,
     pub warning: u32,
     pub danger: u32,

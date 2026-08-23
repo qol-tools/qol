@@ -1,3 +1,4 @@
+pub mod chord;
 pub mod grammar;
 pub mod keycode;
 

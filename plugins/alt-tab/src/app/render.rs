@@ -380,14 +380,16 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
 fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div> {
     let system = &snap.system;
     let kit = qol_gpui::kit::kit();
-    let selected_card = |el: Stateful<Div>| {
-        el.bg(rgb(snap.palette.card_bg))
-            .border_1()
-            .border_color(rgba(kit.washes.accent_border.packed()))
-            .shadow(kit.focus_ring())
-    };
     if selected {
-        return selected_card(el);
+        let card = el
+            .border_1()
+            .border_color(rgb(snap.palette.card_selected_border))
+            .shadow(kit.focus_ring());
+        return if snap.transparent_bg {
+            card.bg(rgba(snap.palette.card_selected_rgba))
+        } else {
+            card.bg(rgb(snap.palette.card_selected_bg))
+        };
     }
     let base = el.border_1().border_color(rgb(system.border_subtle));
     if snap.transparent_bg {
@@ -397,7 +399,7 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
         return base.bg(rgb(snap.palette.card_bg));
     }
     base.bg(rgb(snap.palette.card_bg)).hover(|mut h| {
-        h.background = Some(rgb(system.surface_hovered).into());
+        h.background = Some(rgb(snap.palette.card_hover_bg).into());
         h
     })
 }

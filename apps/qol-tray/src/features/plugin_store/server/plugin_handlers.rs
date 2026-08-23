@@ -29,6 +29,7 @@ pub(super) fn routes() -> Router<AppState> {
             "/plugins/{id}/actions/{action}",
             post(execute_plugin_action),
         )
+        .route("/plugins/{id}/settings", post(open_settings_surface))
         .route("/plugins/{id}/queries/{query}", get(query_plugin_handler))
         .route("/push-status", get(get_push_status))
         .route("/install/{id}", post(install_plugin))
@@ -185,6 +186,28 @@ pub(super) async fn execute_plugin_action(
                 }),
             )
         }
+    }
+}
+
+pub(super) async fn open_settings_surface(Path(id): Path<String>) -> (StatusCode, String) {
+    if validate_plugin_id(&id).is_err() {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string());
+    }
+    let worker_id = id.clone();
+    match tokio::task::spawn_blocking(move || crate::settings_surface::request(&worker_id)).await {
+        Ok(Ok(true)) => (StatusCode::OK, "Settings surface requested".to_string()),
+        Ok(Ok(false)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Native settings host is unavailable on this platform".to_string(),
+        ),
+        Ok(Err(error)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Native settings host failed: {error:#}"),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Settings host handler crashed: {error}"),
+        ),
     }
 }
 

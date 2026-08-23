@@ -225,8 +225,8 @@ impl Render for LauncherView {
                         ))
                         .children(rows),
                 )
-                .child(view::hint_bar())
             })
+            .child(view::hint_bar(self.state.mode))
     }
 }
 
