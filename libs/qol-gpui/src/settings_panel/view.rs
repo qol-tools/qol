@@ -439,16 +439,18 @@ impl SettingsPanelView {
     }
 
     fn on_section_menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        match key {
-            "up" => self.step_selected_section(-1),
-            "down" => self.step_selected_section(1),
-            "enter" | "return" | "space" | "right" => self.open_selected_section(),
-            "escape" | "left" => {
+        let Some(intent) = section_menu_intent(key) else {
+            return;
+        };
+        match intent {
+            SectionMenuIntent::Up => self.step_selected_section(-1),
+            SectionMenuIntent::Down => self.step_selected_section(1),
+            SectionMenuIntent::Open => self.open_selected_section(),
+            SectionMenuIntent::Close => {
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
                 return;
             }
-            _ => return,
         }
         cx.notify();
     }
@@ -771,12 +773,6 @@ impl SettingsPanelView {
                 self.selected =
                     adjacent_visible_row(&self.current_visible_rows(), self.selected, 1);
                 self.sync_scroll();
-            }
-            Intent::Left => {
-                if self.sections.len() > 1 {
-                    self.open_section_menu();
-                    cx.notify();
-                }
             }
             Intent::Activate => self.activate(window, cx),
             Intent::CommitEdit => self.commit_edit(cx),
@@ -4487,13 +4483,30 @@ fn list_action_affordance(primary: &str, action_count: usize) -> String {
 enum Intent {
     Up,
     Down,
-    Left,
     Activate,
     CommitEdit,
     Backspace,
     Insert(String),
     Close,
     CancelEdit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionMenuIntent {
+    Up,
+    Down,
+    Open,
+    Close,
+}
+
+fn section_menu_intent(key: &str) -> Option<SectionMenuIntent> {
+    match key {
+        "up" => Some(SectionMenuIntent::Up),
+        "down" => Some(SectionMenuIntent::Down),
+        "enter" | "return" | "space" | "right" => Some(SectionMenuIntent::Open),
+        "escape" => Some(SectionMenuIntent::Close),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4511,7 +4524,7 @@ fn list_intent(key: &str) -> Option<ListIntent> {
         "down" => Some(ListIntent::Down),
         "enter" | "return" => Some(ListIntent::Activate),
         "space" | "right" => Some(ListIntent::Actions),
-        "escape" | "left" => Some(ListIntent::Close),
+        "escape" => Some(ListIntent::Close),
         _ => None,
     }
 }
@@ -4585,7 +4598,6 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     match key {
         "up" => Some(Intent::Up),
         "down" => Some(Intent::Down),
-        "left" => Some(Intent::Left),
         "enter" | "return" | "space" | "right" => Some(Intent::Activate),
         "escape" => Some(Intent::Close),
         _ => None,
@@ -4761,9 +4773,9 @@ mod tests {
         binary_state_label, color_display, description_wrap_lines, format_number,
         horizontal_step_direction, initial_active_section, intent, is_filter_text,
         list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
-        parsed_number, row_body_height, slider_fraction, slider_percent_label,
+        parsed_number, row_body_height, section_menu_intent, slider_fraction, slider_percent_label,
         slider_value_from_fraction, stepped_number, stepped_slider_value, text_or_placeholder,
-        Intent, ListIntent, Row, RowControl,
+        Intent, ListIntent, Row, RowControl, SectionMenuIntent,
     };
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
@@ -5044,11 +5056,45 @@ default = "visible"
             ("space", Some(ListIntent::Actions)),
             ("right", Some(ListIntent::Actions)),
             ("escape", Some(ListIntent::Close)),
-            ("left", Some(ListIntent::Close)),
+            ("left", None),
             ("tab", None),
         ];
         for (key, expected) in cases {
             assert_eq!(list_intent(key), expected, "key: {key}");
+        }
+    }
+
+    #[test]
+    fn escape_is_the_only_key_that_goes_back() {
+        for key in ["left", "right", "up", "down"] {
+            assert_ne!(intent(key, None, false), Some(Intent::Close), "key: {key}");
+            assert_ne!(list_intent(key), Some(ListIntent::Close), "key: {key}");
+            assert_ne!(
+                section_menu_intent(key),
+                Some(SectionMenuIntent::Close),
+                "key: {key}"
+            );
+        }
+        assert_eq!(intent("escape", None, false), Some(Intent::Close));
+        assert_eq!(list_intent("escape"), Some(ListIntent::Close));
+        assert_eq!(
+            section_menu_intent("escape"),
+            Some(SectionMenuIntent::Close)
+        );
+    }
+
+    #[test]
+    fn section_menu_left_arrow_stays_in_the_panel() {
+        let cases = [
+            ("up", Some(SectionMenuIntent::Up)),
+            ("down", Some(SectionMenuIntent::Down)),
+            ("enter", Some(SectionMenuIntent::Open)),
+            ("right", Some(SectionMenuIntent::Open)),
+            ("escape", Some(SectionMenuIntent::Close)),
+            ("left", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(section_menu_intent(key), expected, "key: {key}");
         }
     }
 
@@ -5466,7 +5512,7 @@ default = "visible"
         let cases = [
             ("up", None, false, Some(Intent::Up)),
             ("down", None, false, Some(Intent::Down)),
-            ("left", None, false, Some(Intent::Left)),
+            ("left", None, false, None),
             ("right", None, false, Some(Intent::Activate)),
             ("space", None, false, Some(Intent::Activate)),
             ("5", Some("5"), false, None),
