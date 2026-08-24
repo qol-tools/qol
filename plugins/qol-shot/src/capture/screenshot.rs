@@ -423,7 +423,7 @@ fn spawn_file_write(rect: Rect, path: PathBuf) -> (CaptureFileReady, CaptureFile
 }
 
 fn swap_red_blue(data: &mut [u8]) {
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 }

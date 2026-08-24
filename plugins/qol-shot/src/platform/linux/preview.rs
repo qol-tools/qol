@@ -86,7 +86,7 @@ fn force_opaque_bgra(data: &mut [u8]) {
 }
 
 fn force_opaque_bgra_scalar(data: &mut [u8]) {
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
     }
 }
@@ -259,7 +259,7 @@ impl Drop for MappedSegment<'_> {
 }
 
 fn bgra_to_rgba(data: &mut [u8]) {
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 }

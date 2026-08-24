@@ -354,7 +354,7 @@ fn union_bounds(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
 }
 
 fn bgra_to_rgba(data: &mut [u8]) {
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 }
