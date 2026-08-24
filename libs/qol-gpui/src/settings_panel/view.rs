@@ -57,6 +57,77 @@ const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(18
 const RAIL_CARD_ACCENT: f32 = 1.5;
 const RAIL_DIM: f32 = 0.5;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TransitionAction {
+    Animate,
+    Snap,
+}
+
+#[derive(Debug, Default)]
+struct TransitionTracker {
+    step: usize,
+    started: Option<std::time::Instant>,
+    snapped: bool,
+}
+
+impl TransitionTracker {
+    fn state_changed(&mut self, changed: bool, now: std::time::Instant) {
+        let Some(action) = transition_policy(transition_in_flight(self.started, now), changed)
+        else {
+            return;
+        };
+        match action {
+            TransitionAction::Animate => {
+                self.step = self.step.wrapping_add(1);
+                self.started = Some(now);
+                self.snapped = false;
+            }
+            TransitionAction::Snap => self.snapped = true,
+        }
+    }
+}
+
+fn transition_policy(in_flight: bool, state_changed: bool) -> Option<TransitionAction> {
+    if !state_changed {
+        return None;
+    }
+    if in_flight {
+        return Some(TransitionAction::Snap);
+    }
+    Some(TransitionAction::Animate)
+}
+
+fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    started.is_some_and(|started| now.duration_since(started) < RAIL_TRANSITION)
+}
+
+fn query_is_due(due: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    due.is_none_or(|due| due <= now)
+}
+
+fn due_query_indices(due: &[Option<std::time::Instant>], now: std::time::Instant) -> Vec<usize> {
+    due.iter()
+        .enumerate()
+        .filter_map(|(index, due)| query_is_due(*due, now).then_some(index))
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct HeightCache {
+    revision: u64,
+    cached: Option<f32>,
+}
+
+impl HeightCache {
+    fn value(&mut self, revision: u64, compute: impl FnOnce() -> f32) -> f32 {
+        if self.cached.is_none() || self.revision != revision {
+            self.revision = revision;
+            self.cached = Some(compute());
+        }
+        self.cached.unwrap()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct CardSliver {
     left: f32,
@@ -176,10 +247,12 @@ pub(super) struct SettingsPanelView {
     sources: Vec<SourceState>,
     selected_source: usize,
     source_menu: bool,
-    rail_transition: usize,
-    deck_transition: usize,
+    rail_transition: TransitionTracker,
+    deck_transition: TransitionTracker,
     deck_motion: Option<DeckMotion>,
     height_cap: f32,
+    height_revision: u64,
+    height_cache: HeightCache,
     save_error: Option<String>,
     filter: String,
     filter_open: bool,
@@ -301,11 +374,13 @@ impl SettingsPanelView {
             sources: state.sources,
             selected_source: focused_source,
             source_menu: has_many_sources,
-            rail_transition: 0,
-            deck_transition: 0,
+            rail_transition: TransitionTracker::default(),
+            deck_transition: TransitionTracker::default(),
             deck_motion: None,
             subtitle: state.subtitle,
             height_cap: state.height_cap,
+            height_revision: 0,
+            height_cache: HeightCache::default(),
             save_error: None,
             filter: String::new(),
             filter_open: false,
@@ -474,72 +549,33 @@ impl SettingsPanelView {
     }
 
     fn fit_lists(&mut self) {
-        let show_section_headers = false;
-        let budget = self.height_cap - super::chrome_height(&self.source_sections());
-        for section_index in 0..self.root().sections.len() {
-            if self.root().sections[section_index].source != self.selected_source {
-                continue;
-            }
-            let visible = self.section_visible_rows(section_index);
-            let mut fixed = visible.len().saturating_sub(1) as f32 * super::PANEL_COLUMN_GAP;
-            let mut lists: Vec<usize> = Vec::new();
-            for index in &visible {
-                let row = &self.root().rows[*index];
-                let header = if show_section_headers && row.section_label.is_some() {
-                    super::PANEL_SECTION_HEADER_HEIGHT
-                } else {
-                    0.0
-                };
-                if matches!(row.control, RowControl::List { .. }) {
-                    fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
-                    lists.push(*index);
-                } else {
-                    fixed += row_height(row, show_section_headers);
-                }
-            }
-            if lists.is_empty() {
-                continue;
-            }
-            let per_list = ((budget - fixed) / lists.len() as f32).max(0.0);
-            let fit = (per_list / (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP)) as usize;
-            let visible_items = fit.clamp(LIST_FIT_MIN_VISIBLE, super::rows::LIST_MAX_VISIBLE);
-            for index in lists {
-                if let RowControl::List { list, .. } = &mut self.root_mut().rows[index].control {
-                    list.max_visible = visible_items;
-                }
+        for (index, visible_items) in list_fit_updates(
+            &self.root().rows,
+            &self.root().sections,
+            self.selected_source,
+            self.height_cap,
+        ) {
+            if let RowControl::List { list, .. } = &mut self.root_mut().rows[index].control {
+                list.max_visible = visible_items;
             }
         }
     }
 
-    fn window_height(&self) -> f32 {
-        (0..self.sources.len().max(1))
-            .map(|source| self.source_window_height(source))
-            .fold(0.0f32, f32::max)
-    }
-
-    fn source_window_height(&self, source: usize) -> f32 {
-        let sections = self
-            .root()
-            .sections
-            .iter()
-            .filter(|section| section.source == source)
-            .cloned()
-            .collect::<Vec<_>>();
-        super::panel_height(&self.root().rows, &sections).clamp(
-            super::chrome_height(&sections) + super::PANEL_ROW_HEIGHT,
-            self.height_cap,
-        )
+    fn window_height(&mut self) -> f32 {
+        let revision = self.height_revision;
+        self.height_cache.value(revision, || {
+            let rows = &self.stack[0].rows;
+            let sections = &self.stack[0].sections;
+            let source_count = self.sources.len();
+            let height_cap = self.height_cap;
+            (0..source_count.max(1))
+                .map(|source| source_window_height_for(rows, sections, source, height_cap))
+                .fold(0.0f32, f32::max)
+        })
     }
 
     fn rail_is_open(&self) -> bool {
         rail_open(self.sources.len(), self.filtering())
-    }
-
-    fn source_sections(&self) -> Vec<RowSection> {
-        self.rail_sections()
-            .into_iter()
-            .map(|index| self.level().sections[index].clone())
-            .collect()
     }
 
     fn focus_level(&self) -> PanelFocus {
@@ -566,7 +602,8 @@ impl SettingsPanelView {
             self.sync_live_card_to_root();
         }
         if pop_level(&mut self.stack).is_some() {
-            self.deck_transition = self.deck_transition.wrapping_add(1);
+            self.deck_transition
+                .state_changed(true, std::time::Instant::now());
             self.deck_motion = Some(DeckMotion::Pop);
             let visible = self.current_visible_rows();
             let selected = self.level().selected;
@@ -574,15 +611,6 @@ impl SettingsPanelView {
             self.sync_scroll();
             cx.notify();
         }
-    }
-
-    fn rail_sections(&self) -> Vec<usize> {
-        (0..self.level().sections.len())
-            .filter(|index| {
-                self.level().sections[*index].source == self.selected_source
-                    && !self.section_visible_rows(*index).is_empty()
-            })
-            .collect()
     }
 
     fn rail_has_key_focus(&self) -> bool {
@@ -680,6 +708,7 @@ impl SettingsPanelView {
             return;
         }
         self.selected_source = next;
+        self.height_revision += 1;
         self.runtime = self
             .sources
             .get(next)
@@ -708,11 +737,10 @@ impl SettingsPanelView {
     }
 
     fn set_source_menu(&mut self, open: bool) {
-        if self.source_menu == open {
-            return;
-        }
+        let changed = self.source_menu != open;
         self.source_menu = open;
-        self.rail_transition = self.rail_transition.wrapping_add(1);
+        self.rail_transition
+            .state_changed(changed, std::time::Instant::now());
     }
 
     fn on_rail_key(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -897,6 +925,7 @@ impl SettingsPanelView {
                 .is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id)
                 || pending.contains(&(index, id.to_string()))
         });
+        self.height_revision += 1;
         self.sync_list_card(query);
         self.sync_live_card(query);
     }
@@ -922,6 +951,7 @@ impl SettingsPanelView {
         }
         let (root, front) = self.stack.split_at_mut(1);
         list_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
     }
 
     fn sync_live_card(&mut self, query: &str) {
@@ -943,11 +973,13 @@ impl SettingsPanelView {
         }
         let (root, front) = self.stack.split_at_mut(1);
         live_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
     }
 
     fn sync_live_card_to_root(&mut self) {
         let (root, front) = self.stack.split_at_mut(1);
         live_card_sync_back(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
     }
 
     pub(super) fn pause_runtime_poll(&mut self) {
@@ -975,11 +1007,8 @@ impl SettingsPanelView {
         while signal.wait_for_request() {
             let started = std::time::Instant::now();
             let mut fresh = Vec::new();
-            for (index, query) in queries.iter().enumerate() {
-                let frame_paced = intervals[index] <= FRAME_PACED_QUERY_INTERVAL;
-                if !frame_paced && due[index].is_some_and(|due| due > started) {
-                    continue;
-                }
+            for index in due_query_indices(&due, started) {
+                let query = &queries[index];
                 fresh.push((query.clone(), runtime.query(query)));
                 due[index] = Some(started + intervals[index]);
             }
@@ -2085,7 +2114,8 @@ impl SettingsPanelView {
     }
 
     fn push_card(&mut self, child: Level) {
-        self.deck_transition = self.deck_transition.wrapping_add(1);
+        self.deck_transition
+            .state_changed(true, std::time::Instant::now());
         self.deck_motion = Some(DeckMotion::Push);
         push_level(&mut self.stack, child);
     }
@@ -2257,6 +2287,7 @@ impl SettingsPanelView {
             .map(|row| &mut row.control)
         {
             *stored = values.clone();
+            self.height_revision += 1;
         }
         let rows = text_list_child_rows(&label, &config_key, source, &values);
         let section = RowSection {
@@ -2284,6 +2315,7 @@ impl SettingsPanelView {
         }
         let (root, front) = self.stack.split_at_mut(1);
         object_array_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
     }
 
     fn remove_selected_text_list_value(&mut self) -> bool {
@@ -2367,6 +2399,7 @@ impl SettingsPanelView {
     }
 
     fn persist(&mut self) {
+        self.height_revision += 1;
         let Some(source_index) = self
             .root()
             .rows
@@ -4110,7 +4143,11 @@ impl SettingsPanelView {
         let card = self.render_card(self.stack.len() - 1, items);
         let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
         if !self.rail_is_open() {
-            let slide = deck_slide(self.deck_transition, self.deck_motion, depth, width);
+            let slide = if self.deck_transition.snapped {
+                None
+            } else {
+                deck_slide(self.deck_transition.step, self.deck_motion, depth, width)
+            };
             let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
             if depth == 0 {
                 let card = match slide {
@@ -4135,37 +4172,44 @@ impl SettingsPanelView {
         }
         let entering = !self.rail_source_level();
         let progress = move |delta: f32| if entering { delta } else { 1.0 - delta };
-        let step = self.rail_transition;
+        let step = self.rail_transition.step;
+        let snapped = self.rail_transition.snapped;
         let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
-        base.relative()
-            .child(
-                div()
-                    .id("settings-section-rail")
-                    .flex_none()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .h_full()
-                    .w(px(super::PANEL_RAIL_WIDTH))
-                    .p_2()
-                    .children(rail)
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .bg(crate::kit::rail_scrim(self.palette.window_bg))
-                            .with_animation(
-                                ("settings-rail-scrim", step),
-                                ease(),
-                                move |scrim, delta| scrim.opacity(progress(delta)),
-                            ),
-                    )
-                    .with_animation(("settings-rail-dim", step), ease(), move |rail, delta| {
-                        rail.opacity(1.0 - RAIL_DIM * progress(delta))
-                    }),
-            )
-            .child(match depth {
-                0 => card
+        let rail_column = div()
+            .id("settings-section-rail")
+            .flex_none()
+            .relative()
+            .flex()
+            .flex_col()
+            .h_full()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .p_2()
+            .children(rail);
+        let scrim = div()
+            .absolute()
+            .inset_0()
+            .bg(crate::kit::rail_scrim(self.palette.window_bg));
+        let rail_column = if snapped {
+            let reached = progress(1.0);
+            rail_column
+                .child(scrim.opacity(reached))
+                .opacity(1.0 - RAIL_DIM * reached)
+                .into_any_element()
+        } else {
+            rail_column
+                .child(scrim.with_animation(
+                    ("settings-rail-scrim", step),
+                    ease(),
+                    move |scrim, delta| scrim.opacity(progress(delta)),
+                ))
+                .with_animation(("settings-rail-dim", step), ease(), move |rail, delta| {
+                    rail.opacity(1.0 - RAIL_DIM * progress(delta))
+                })
+                .into_any_element()
+        };
+        base.relative().child(rail_column).child(match depth {
+            0 => {
+                let card = card
                     .absolute()
                     .right_0()
                     .top_0()
@@ -4175,39 +4219,64 @@ impl SettingsPanelView {
                     .border_r(px(1.))
                     .border_b(px(1.))
                     .border_color(self.hairline())
-                    .shadow(crate::kit::float_shadow(self.palette.section_text))
-                    .child(
-                        crate::kit::accent_left_edge(
-                            qol_theme::RADIUS_CARD,
-                            RAIL_CARD_ACCENT,
-                            self.palette.row_border_selected,
-                        )
-                        .with_animation(
-                            ("settings-card-accent", step),
-                            ease(),
-                            move |edge, delta| {
-                                let reached = progress(delta);
-                                edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                    .border_l(px(RAIL_CARD_ACCENT * reached))
-                            },
-                        ),
+                    .shadow(crate::kit::float_shadow(self.palette.section_text));
+                let accent = crate::kit::accent_left_edge(
+                    qol_theme::RADIUS_CARD,
+                    RAIL_CARD_ACCENT,
+                    self.palette.row_border_selected,
+                );
+                if snapped {
+                    let reached = progress(1.0);
+                    card.child(
+                        accent
+                            .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                            .border_l(px(RAIL_CARD_ACCENT * reached)),
                     )
+                    .left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                    .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                    .into_any_element()
+                } else {
+                    card.child(accent.with_animation(
+                        ("settings-card-accent", step),
+                        ease(),
+                        move |edge, delta| {
+                            let reached = progress(delta);
+                            edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                                .border_l(px(RAIL_CARD_ACCENT * reached))
+                        },
+                    ))
                     .with_animation(("settings-card-slide", step), ease(), move |card, delta| {
                         let reached = progress(delta);
                         card.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
                             .rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                    }),
-                _ => self
+                    })
+                    .into_any_element()
+                }
+            }
+            _ => {
+                let deck = self
                     .render_deck(depth, card, None)
                     .absolute()
                     .right_0()
                     .top_0()
-                    .bottom_0()
-                    .with_animation(("settings-card-slide", step), ease(), move |deck, delta| {
-                        let reached = progress(delta);
-                        deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
-                    }),
-            })
+                    .bottom_0();
+                if snapped {
+                    let reached = progress(1.0);
+                    deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        .into_any_element()
+                } else {
+                    deck.with_animation(
+                        ("settings-card-slide", step),
+                        ease(),
+                        move |deck, delta| {
+                            let reached = progress(delta);
+                            deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        },
+                    )
+                    .into_any_element()
+                }
+            }
+        })
     }
 
     fn render_deck(&self, depth: usize, card: Div, slide: Option<DeckSlide>) -> Div {
@@ -4639,7 +4708,7 @@ impl SettingsPanelView {
             )
     }
 
-    fn resize_canvas(&self) -> impl IntoElement {
+    fn resize_canvas(&mut self) -> impl IntoElement {
         let dismisser = self.dismisser.clone();
         let target = self.window_height();
         canvas(
@@ -5035,6 +5104,75 @@ pub(super) fn row_height(row: &Row, show_section_headers: bool) -> f32 {
         0.0
     };
     row_body_height(row, false) + header
+}
+
+fn list_fit_updates(
+    rows: &[Row],
+    sections: &[RowSection],
+    selected_source: usize,
+    height_cap: f32,
+) -> Vec<(usize, usize)> {
+    let show_section_headers = false;
+    let budget = height_cap - super::chrome_height(&[]);
+    let mut updates = Vec::new();
+    for section in sections {
+        if section.source != selected_source {
+            continue;
+        }
+        let visible = section
+            .rows
+            .iter()
+            .copied()
+            .filter(|index| super::rows::row_is_visible(rows, *index))
+            .collect::<Vec<_>>();
+        let mut fixed = visible.len().saturating_sub(1) as f32 * super::PANEL_COLUMN_GAP;
+        let mut lists: Vec<usize> = Vec::new();
+        for index in &visible {
+            let row = &rows[*index];
+            let header = if show_section_headers && row.section_label.is_some() {
+                super::PANEL_SECTION_HEADER_HEIGHT
+            } else {
+                0.0
+            };
+            if matches!(row.control, RowControl::List { .. }) {
+                fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
+                lists.push(*index);
+            } else {
+                fixed += row_height(row, show_section_headers);
+            }
+        }
+        if lists.is_empty() {
+            continue;
+        }
+        let per_list = ((budget - fixed) / lists.len() as f32).max(0.0);
+        let fit = (per_list / (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP)) as usize;
+        let visible_items = fit.clamp(LIST_FIT_MIN_VISIBLE, super::rows::LIST_MAX_VISIBLE);
+        for index in lists {
+            if let RowControl::List { list, .. } = &rows[index].control {
+                if list.max_visible != visible_items {
+                    updates.push((index, visible_items));
+                }
+            }
+        }
+    }
+    updates
+}
+
+fn source_window_height_for(
+    rows: &[Row],
+    sections: &[RowSection],
+    source: usize,
+    height_cap: f32,
+) -> f32 {
+    let sections = sections
+        .iter()
+        .filter(|section| section.source == source)
+        .cloned()
+        .collect::<Vec<_>>();
+    super::panel_height(rows, &sections).clamp(
+        super::chrome_height(&sections) + super::PANEL_ROW_HEIGHT,
+        height_cap,
+    )
 }
 
 pub(super) fn row_body_height(row: &Row, expanded: bool) -> f32 {
@@ -5723,15 +5861,17 @@ fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) ->
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, clamp_selected, color_display, crumb_labels, deck_slide, escape_step,
-        focus_level, format_number, header_is_redundant, horizontal_step_direction, intent,
-        list_action_affordance, list_card_slider_value, list_slider_value, live_card_level,
-        live_card_sync, live_card_sync_back, number_preview, number_unit, parsed_color,
-        parsed_number, pop_level, push_level, row_body_height, selected_list_item, slider_fraction,
-        slider_percent_label, slider_value_from_fraction, slivers_for, step_list_slider,
-        stepped_number, stepped_slider_value, text_or_placeholder, CardSliver, ChipRowPart,
-        DeckMotion, DeckSlide, EscapeStep, Intent, Level, ObjectArrayState, Row, RowControl,
-        RowSection, SliderHold,
+        binary_state_label, clamp_selected, color_display, crumb_labels, deck_slide,
+        due_query_indices, escape_step, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_action_affordance, list_card_slider_value,
+        list_fit_updates, list_slider_value, live_card_level, live_card_sync, live_card_sync_back,
+        number_preview, number_unit, parsed_color, parsed_number, pop_level, push_level,
+        query_is_due, row_body_height, selected_list_item, slider_fraction, slider_percent_label,
+        slider_value_from_fraction, slivers_for, source_window_height_for, step_list_slider,
+        stepped_number, stepped_slider_value, text_or_placeholder, transition_in_flight,
+        transition_policy, CardSliver, ChipRowPart, DeckMotion, DeckSlide, EscapeStep, HeightCache,
+        Intent, Level, ObjectArrayState, Row, RowControl, RowSection, SliderHold, TransitionAction,
+        TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -7753,5 +7893,213 @@ default = "visible"
             })
         );
         assert_eq!(deck_slide(10, None, 2, 520.0), None);
+    }
+
+    #[test]
+    fn transition_policy_decides_animate_snap_or_nothing() {
+        let cases = [
+            (false, false, None),
+            (true, false, None),
+            (false, true, Some(TransitionAction::Animate)),
+            (true, true, Some(TransitionAction::Snap)),
+        ];
+        for (in_flight, state_changed, expected) in cases {
+            assert_eq!(
+                transition_policy(in_flight, state_changed),
+                expected,
+                "in_flight: {in_flight} state_changed: {state_changed}"
+            );
+        }
+    }
+
+    #[test]
+    fn frame_paced_100ms_query_with_16ms_requests_keeps_its_interval() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let interval = std::time::Duration::from_millis(100);
+        let mut due = vec![None];
+        let mut runs = 0;
+        let mut tick = 0u64;
+        while tick <= 1000 {
+            if !due_query_indices(&due, at(tick)).is_empty() {
+                runs += 1;
+                due[0] = Some(at(tick) + interval);
+            }
+            tick += 16;
+        }
+        assert!(
+            (9..=11).contains(&runs),
+            "a 100ms query asked every 16ms must run ~10x/sec, ran {runs}"
+        );
+    }
+
+    #[test]
+    fn frame_paced_queries_never_bypass_the_due_gate() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let intervals = [
+            std::time::Duration::from_millis(8),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(1000),
+        ];
+        let mut due = vec![None; 3];
+        let mut runs = [0usize; 3];
+        let mut tick = 0u64;
+        while tick <= 1000 {
+            for index in due_query_indices(&due, at(tick)) {
+                runs[index] += 1;
+                due[index] = Some(at(tick) + intervals[index]);
+            }
+            tick += 16;
+        }
+        assert!((57..=66).contains(&runs[0]), "8ms query ran {}x", runs[0]);
+        assert!((9..=11).contains(&runs[1]), "100ms query ran {}x", runs[1]);
+        assert_eq!(runs[2], 1, "1000ms query ran {}x", runs[2]);
+    }
+
+    #[test]
+    fn first_request_with_no_due_time_always_runs() {
+        let now = std::time::Instant::now();
+        assert!(query_is_due(None, now));
+        assert_eq!(due_query_indices(&[None], now), vec![0]);
+    }
+
+    #[test]
+    fn exactly_due_runs_and_one_millisecond_early_does_not() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        assert!(query_is_due(Some(at(100)), at(100)));
+        assert!(query_is_due(Some(at(100)), at(101)));
+        assert!(!query_is_due(Some(at(100)), at(99)));
+        assert_eq!(
+            due_query_indices(&[Some(at(100))], at(99)),
+            Vec::<usize>::new()
+        );
+        assert_eq!(due_query_indices(&[Some(at(100))], at(100)), vec![0]);
+    }
+
+    #[test]
+    fn transition_in_flight_window_uses_the_rail_duration() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        assert!(!transition_in_flight(None, at(0)));
+        assert!(transition_in_flight(Some(epoch), at(0)));
+        assert!(transition_in_flight(Some(epoch), at(179)));
+        assert!(!transition_in_flight(Some(epoch), at(180)));
+        assert!(!transition_in_flight(Some(epoch), at(181)));
+    }
+
+    #[test]
+    fn transition_tracker_bumps_once_per_burst_and_snaps_while_in_flight() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let mut tracker = TransitionTracker::default();
+
+        tracker.state_changed(true, at(0));
+        assert_eq!(tracker.step, 1, "first state change animates");
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, Some(at(0)));
+
+        tracker.state_changed(true, at(60));
+        assert_eq!(
+            tracker.step, 1,
+            "in-flight change must not bump the counter"
+        );
+        assert!(tracker.snapped);
+        assert_eq!(tracker.started, Some(at(0)));
+
+        tracker.state_changed(true, at(120));
+        assert_eq!(tracker.step, 1, "in-flight change must not restart");
+        assert!(tracker.snapped);
+
+        tracker.state_changed(true, at(300));
+        assert_eq!(tracker.step, 2, "change after the window animates again");
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, Some(at(300)));
+    }
+
+    #[test]
+    fn transition_tracker_ignores_unchanged_state() {
+        let mut tracker = TransitionTracker::default();
+        tracker.state_changed(false, std::time::Instant::now());
+        assert_eq!(tracker.step, 0);
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, None);
+    }
+
+    #[test]
+    fn height_cache_recomputes_only_when_the_revision_changes() {
+        let mut cache = HeightCache::default();
+        let computes = std::cell::Cell::new(0);
+        let compute = || {
+            computes.set(computes.get() + 1);
+            128.0
+        };
+        assert_eq!(cache.value(0, compute), 128.0);
+        assert_eq!(cache.value(0, compute), 128.0);
+        assert_eq!(computes.get(), 1, "same revision serves the cached height");
+        assert_eq!(cache.value(1, compute), 128.0);
+        assert_eq!(computes.get(), 2, "new revision recomputes");
+        assert_eq!(cache.value(1, compute), 128.0);
+        assert_eq!(
+            computes.get(),
+            2,
+            "same revision stays cached after recompute"
+        );
+    }
+
+    #[test]
+    fn list_fit_updates_report_only_unfitted_lists() {
+        let mut rows = vec![list_row()];
+        let sections = vec![RowSection {
+            label: "Section".into(),
+            description: None,
+            rows: vec![0],
+            source: 0,
+        }];
+        assert_eq!(
+            list_fit_updates(&rows, &sections, 0, 720.0),
+            Vec::new(),
+            "a list already at the fit target is left untouched"
+        );
+        let RowControl::List { list, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        list.max_visible = 3;
+        let updates = list_fit_updates(&rows, &sections, 0, 720.0);
+        assert_eq!(updates, vec![(0, super::super::rows::LIST_MAX_VISIBLE)]);
+        for (index, visible_items) in updates {
+            if let RowControl::List { list, .. } = &mut rows[index].control {
+                list.max_visible = visible_items;
+            }
+        }
+        assert_eq!(
+            list_fit_updates(&rows, &sections, 0, 720.0),
+            Vec::new(),
+            "applying the updates settles the list"
+        );
+    }
+
+    #[test]
+    fn source_window_height_for_clamps_to_the_height_cap() {
+        let rows = vec![list_row(), list_row()];
+        let sections = vec![RowSection {
+            label: "Section".into(),
+            description: None,
+            rows: vec![0, 1],
+            source: 0,
+        }];
+        let uncapped = source_window_height_for(&rows, &sections, 0, 720.0);
+        assert_eq!(
+            source_window_height_for(&rows, &sections, 0, uncapped - 40.0),
+            uncapped - 40.0,
+            "a cap below the natural height is applied"
+        );
+        assert!(uncapped <= 720.0);
+        let without_sections = source_window_height_for(&rows, &sections, 1, 720.0);
+        assert!(
+            without_sections > 0.0 && without_sections < uncapped,
+            "a source without sections still contributes its floor height"
+        );
     }
 }
