@@ -18,16 +18,7 @@ impl CursorPlatform for Platform {
     fn create_effect(&self) -> Box<dyn CursorEffect> {
         runtime::create_effect()
     }
-}
 
-pub fn recover() {
-    if let Some((root, windows)) = crate::cursor::journal::journaled_scale() {
-        display::x11::recover_scale(root, &windows);
-        crate::cursor::journal::clear_journal();
-    }
-}
-
-impl CursorPlatform for Platform {
     fn install_signal_handlers(&self) {
         register(libc::SIGTERM);
         register(libc::SIGINT);
@@ -39,6 +30,13 @@ impl CursorPlatform for Platform {
 
     fn external_stop_requested(&self) -> bool {
         EXTERNAL_STOP.load(Ordering::Relaxed)
+    }
+}
+
+pub fn recover() {
+    if let Some((root, windows)) = crate::cursor::journal::journaled_scale() {
+        display::x11::recover_scale(root, &windows);
+        crate::cursor::journal::clear_journal();
     }
 }
 

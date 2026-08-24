@@ -167,9 +167,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-
-    /// Serializes the two sandbox tests that mutate PATH and XDG_CONFIG_HOME.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::ENV_LOCK;
 
     struct Sandbox {
         root: std::path::PathBuf,

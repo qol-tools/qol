@@ -84,8 +84,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::ENV_LOCK;
 
     const SCHEMA: &str = "org.gnome.desktop.interface";
     const KEY: &str = "color-scheme";
@@ -191,7 +190,8 @@ mod tests {
         sandbox.with_env(|| {
             seed_baseline("prefer-dark");
             restore_on_exit(resident());
-            let log = std::fs::read_to_string(sandbox.root.join("gsettings.log")).unwrap();
+            let log = std::fs::read_to_string(sandbox.root.join("gsettings.log"))
+                .unwrap_or_default();
             assert_eq!(
                 log, "",
                 "a resident exit must never write the host"

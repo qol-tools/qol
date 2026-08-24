@@ -277,10 +277,10 @@ impl Drop for CursorSession {
 }
 
 fn window_ids(windows: &[xlib::Window]) -> Vec<u64> {
-    windows.iter().map(|window| *window as u64).collect()
+    windows.to_vec()
 }
 
-pub(super) fn recover_scale(root: u64, windows: &[u64]) {
+pub(crate) fn recover_scale(root: u64, windows: &[u64]) {
     unsafe { xlib::XSetErrorHandler(Some(log_x_error)) };
     let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
     if display.is_null() {

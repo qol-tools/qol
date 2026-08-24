@@ -8,6 +8,9 @@ mod session;
 mod settings;
 mod theme;
 
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn main() -> std::process::ExitCode {
     cli::exit_code(std::env::args().skip(1))
 }
