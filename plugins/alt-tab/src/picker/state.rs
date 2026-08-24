@@ -708,6 +708,9 @@ mod set_windows_tests {
         picker.select_index(5);
         assert_eq!(picker.selected_index, Some(1));
 
+        let _serial = crate::actions::ACTIVATOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         picker.activate_selected_target();
     }
 

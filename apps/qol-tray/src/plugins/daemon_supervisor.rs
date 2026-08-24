@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 
 const SUPERVISION_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+const SUPPRESSION_COOLDOWN_TICKS: u64 = 12;
 const STABLE_TICKS: u64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +128,7 @@ struct TickOutcome {
     retriable_dead: Vec<PluginId>,
 }
 
-fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &SupervisorState) -> TickOutcome {
+fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &mut SupervisorState) -> TickOutcome {
     let mut outcome = TickOutcome::default();
     for snap in snapshots {
         if snap.expectation != DaemonExpectation::Supervised {
@@ -213,6 +214,7 @@ enum LastSeen {
 struct PluginRecord {
     consecutive_failures: u32,
     last_failure_tick: Option<u64>,
+    suppressed_since: Option<u64>,
     last_pid: Option<u32>,
     probation_start: Option<u64>,
     stable: bool,
@@ -231,11 +233,23 @@ impl SupervisorState {
         self.tick += 1;
     }
 
-    fn can_retry(&self, plugin_id: &PluginId) -> bool {
-        self.records
-            .get(plugin_id)
-            .map_or(0, |record| record.consecutive_failures)
-            < MAX_CONSECUTIVE_FAILURES
+    fn can_retry(&mut self, plugin_id: &PluginId) -> bool {
+        let Some(record) = self.records.get_mut(plugin_id) else {
+            return true;
+        };
+        if record.consecutive_failures < MAX_CONSECUTIVE_FAILURES {
+            return true;
+        }
+        let Some(suppressed_since) = record.suppressed_since else {
+            return false;
+        };
+        if self.tick.saturating_sub(suppressed_since) < SUPPRESSION_COOLDOWN_TICKS {
+            return false;
+        }
+        record.consecutive_failures = 0;
+        record.last_failure_tick = None;
+        record.suppressed_since = None;
+        true
     }
 
     fn record_failure(&mut self, plugin_id: &PluginId) {
@@ -250,7 +264,8 @@ impl SupervisorState {
         }
         record.last_failure_tick = Some(tick);
         record.consecutive_failures += 1;
-        if record.consecutive_failures == MAX_CONSECUTIVE_FAILURES {
+        if record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+            record.suppressed_since = Some(tick);
             log::error!(
                 "Daemon supervisor: plugin {} hit {} consecutive failures, suppressing",
                 plugin_id,
@@ -276,6 +291,7 @@ impl SupervisorState {
             record.stable = true;
             record.consecutive_failures = 0;
             record.last_failure_tick = None;
+            record.suppressed_since = None;
         }
     }
 
@@ -410,6 +426,72 @@ mod tests {
             !state.can_retry(&p),
             "should suppress after {} failures",
             MAX_CONSECUTIVE_FAILURES
+        );
+    }
+
+    #[test]
+    fn suppression_rearms_after_cooldown_ticks() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
+            state.record_failure(&p);
+        }
+        assert!(!state.can_retry(&p), "suppressed at failure threshold");
+
+        for _ in 0..(SUPPRESSION_COOLDOWN_TICKS - 1) {
+            state.begin_tick();
+        }
+        assert!(
+            !state.can_retry(&p),
+            "still suppressed before the cooldown elapses"
+        );
+
+        state.begin_tick();
+        assert!(
+            state.can_retry(&p),
+            "cooldown elapsed: suppression must re-arm retries"
+        );
+        let record = state.records.get(&p).expect("record exists");
+        assert_eq!(record.consecutive_failures, 0, "re-arm resets the counter");
+        assert_eq!(
+            record.suppressed_since, None,
+            "re-arm clears the suppression marker"
+        );
+
+        for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
+            state.record_failure(&p);
+        }
+        assert!(
+            !state.can_retry(&p),
+            "a second crash storm suppresses again"
+        );
+        for _ in 0..SUPPRESSION_COOLDOWN_TICKS {
+            state.begin_tick();
+        }
+        assert!(
+            state.can_retry(&p),
+            "a second cooldown re-arms again (full loop)"
+        );
+    }
+
+    #[test]
+    fn suppression_holds_within_cooldown() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
+            state.record_failure(&p);
+        }
+        for _ in 0..SUPPRESSION_COOLDOWN_TICKS.saturating_sub(1) {
+            state.begin_tick();
+        }
+        assert!(
+            !state.can_retry(&p),
+            "fewer than SUPPRESSION_COOLDOWN_TICKS must not re-arm"
         );
     }
 
@@ -616,7 +698,7 @@ mod tests {
             .last_seen = Some(LastSeen::Dead);
 
         let snapshots = vec![snapshot("plugin-recovered", Some(alive_pid()))];
-        let outcome = classify_snapshots(&snapshots, &state);
+        let outcome = classify_snapshots(&snapshots, &mut state);
 
         assert_eq!(outcome.alive, vec![(recovered_id.clone(), alive_pid())]);
         assert_eq!(outcome.fresh_recoveries, vec![recovered_id]);
@@ -648,7 +730,7 @@ mod tests {
             snapshot("plugin-stale-dead", None),
         ];
 
-        let outcome = classify_snapshots(&snapshots, &state);
+        let outcome = classify_snapshots(&snapshots, &mut state);
         assert_eq!(outcome.alive, vec![(alive_id, alive_pid())]);
         assert_eq!(outcome.fresh_deaths, vec![fresh_dead_id.clone()]);
         assert_eq!(outcome.retriable_dead, vec![fresh_dead_id, stale_dead_id]);
@@ -665,7 +747,7 @@ mod tests {
         }
 
         let snapshots = vec![snapshot("plugin-exhausted", None)];
-        let outcome = classify_snapshots(&snapshots, &state);
+        let outcome = classify_snapshots(&snapshots, &mut state);
 
         assert!(
             outcome.fresh_deaths.is_empty(),
@@ -689,7 +771,7 @@ mod tests {
         state.records.entry(dying.clone()).or_default().last_seen = Some(LastSeen::Alive);
 
         let snapshots = vec![snapshot("plugin-dying", None)];
-        let outcome = classify_snapshots(&snapshots, &state);
+        let outcome = classify_snapshots(&snapshots, &mut state);
 
         assert_eq!(
             outcome.fresh_deaths,

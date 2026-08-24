@@ -1,5 +1,5 @@
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
@@ -13,7 +13,7 @@ mod trace;
 
 const REASSERT_STEPS_MS: [u64; 5] = [16, 24, 40, 60, 100];
 
-static ACTIVATOR: OnceLock<Sender<u32>> = OnceLock::new();
+static ACTIVATOR: Mutex<Option<Sender<u32>>> = Mutex::new(None);
 
 pub struct Platform;
 
@@ -65,10 +65,25 @@ pub fn activate_window(window_id: u32) -> bool {
     if window_id == 0 {
         return false;
     }
-    ACTIVATOR
-        .get_or_init(start_activator)
+    activate_window_with(window_id, start_activator)
+}
+
+fn activate_window_with(window_id: u32, starter: impl Fn() -> Sender<u32>) -> bool {
+    let mut slot = ACTIVATOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = Some(starter());
+    }
+    let sent = slot
+        .as_ref()
+        .expect("activator slot was just filled")
         .send(window_id)
-        .is_ok()
+        .is_ok();
+    if !sent {
+        *slot = None;
+    }
+    sent
 }
 
 pub fn cancel_pending_activation() {}
@@ -91,15 +106,22 @@ fn run_activator(rx: Receiver<u32>) {
             target = newer;
         }
         match activator.drive(target, &rx) {
-            Some(newer) => target = newer,
-            None => {
+            DriveOutcome::Newer(newer) => target = newer,
+            DriveOutcome::Park => {
                 let Ok(next) = rx.recv() else {
                     return;
                 };
                 target = next;
             }
+            DriveOutcome::Dead => return,
         }
     }
+}
+
+enum DriveOutcome {
+    Newer(u32),
+    Park,
+    Dead,
 }
 
 struct Activator {
@@ -121,41 +143,46 @@ impl Activator {
         })
     }
 
-    fn drive(&self, target: u32, rx: &Receiver<u32>) -> Option<u32> {
-        let time = self.send_activate(target);
+    fn drive(&self, target: u32, rx: &Receiver<u32>) -> DriveOutcome {
+        let Some(time) = self.send_activate(target) else {
+            return DriveOutcome::Dead;
+        };
         trace::activating(&self.conn, target, time);
         for step_ms in REASSERT_STEPS_MS {
             match rx.recv_timeout(Duration::from_millis(step_ms)) {
-                Ok(newer) => return Some(newer),
-                Err(RecvTimeoutError::Disconnected) => return None,
+                Ok(newer) => return DriveOutcome::Newer(newer),
+                Err(RecvTimeoutError::Disconnected) => return DriveOutcome::Dead,
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if self.active_window() == Some(target) {
-                return None;
+            match self.active_window() {
+                Err(()) => return DriveOutcome::Dead,
+                Ok(Some(active)) if active == target => return DriveOutcome::Park,
+                _ => {}
             }
-            self.send_activate(target);
+            if self.send_activate(target).is_none() {
+                return DriveOutcome::Dead;
+            }
         }
-        None
+        DriveOutcome::Park
     }
 
-    fn send_activate(&self, window_id: u32) -> u32 {
+    fn send_activate(&self, window_id: u32) -> Option<u32> {
         let time = server_now().unwrap_or(0);
         let event = ClientMessageEvent::new(32, window_id, self.active_atom, [2, time, 0, 0, 0]);
         let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-        let _ = self.conn.send_event(false, self.root, mask, event);
-        let _ = self.conn.flush();
-        time
+        self.conn.send_event(false, self.root, mask, event).ok()?;
+        self.conn.flush().ok()?;
+        Some(time)
     }
 
-    fn active_window(&self) -> Option<u32> {
+    fn active_window(&self) -> Result<Option<u32>, ()> {
         let reply = self
             .conn
             .get_property(false, self.root, self.active_atom, AtomEnum::WINDOW, 0, 1)
-            .ok()?
+            .map_err(|_| ())?
             .reply()
-            .ok()?;
-        let mut values = reply.value32()?;
-        values.next()
+            .map_err(|_| ())?;
+        Ok(reply.value32().and_then(|mut values| values.next()))
     }
 }
 
@@ -316,6 +343,66 @@ fn send_to_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn reset_activator_slot() {
+        *ACTIVATOR
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    #[test]
+    fn dead_activator_is_rearmed_on_next_call() {
+        let _serial = crate::actions::ACTIVATOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_activator_slot();
+        let calls = AtomicUsize::new(0);
+        let (live_tx, live_rx) = mpsc::channel();
+        let starter = || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let (tx, rx) = mpsc::channel();
+                drop(rx);
+                tx
+            } else {
+                live_tx.clone()
+            }
+        };
+        assert!(
+            !activate_window_with(11, starter),
+            "first call uses the dead activator and must fail"
+        );
+        assert!(
+            activate_window_with(22, starter),
+            "second call must spawn a fresh activator"
+        );
+        assert_eq!(
+            live_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(22),
+            "the re-armed activator must deliver the window id"
+        );
+        reset_activator_slot();
+    }
+
+    #[test]
+    fn healthy_activator_passes_window_id() {
+        let _serial = crate::actions::ACTIVATOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_activator_slot();
+        let (tx, rx) = mpsc::channel();
+        let starter = move || tx.clone();
+        assert!(
+            activate_window_with(77, starter),
+            "healthy activator accepts the message"
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Ok(77),
+            "the window id must arrive unchanged"
+        );
+        reset_activator_slot();
+    }
 
     #[test]
     fn close_window_payload_uses_ewmh_field_order() {

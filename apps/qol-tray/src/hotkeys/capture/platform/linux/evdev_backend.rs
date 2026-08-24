@@ -8,12 +8,13 @@ use evdev::{
     uinput::VirtualDevice, AttributeSet, AttributeSetRef, Device, EventSummary, EventType,
     InputEvent, KeyCode, SynchronizationCode,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const VIRTUAL_KEYBOARD_NAME: &str = "qol-tray-virtual-keyboard";
+const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(super) fn keycode_name(code: u16) -> &'static str {
     const ESC: u16 = KeyCode::KEY_ESC.0;
@@ -183,37 +184,32 @@ pub(super) fn install(
     install_panic_safety_hook();
 
     let matcher = Arc::new(Mutex::new(BindingMatcher::new(bindings)));
+    let grabbed = Arc::new(Mutex::new(HashMap::<PathBuf, HashSet<u16>>::new()));
     let keyboards = open_keyboards()?;
     if keyboards.is_empty() {
         anyhow::bail!("no keyboard input devices found under /dev/input");
     }
     let keyboard_count = keyboards.len();
+    let to_grab = {
+        let guard = grabbed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let paths: HashSet<PathBuf> = guard.keys().cloned().collect();
+        devices_to_grab(
+            &paths,
+            keyboards.into_iter().map(|(path, _)| path).collect(),
+        )
+    };
     let mut grabbed_keyboards = Vec::new();
     let mut held_at_grab: Vec<u16> = Vec::new();
-    for (path, mut device) in keyboards {
-        let grab_time = SystemTime::now();
-        if let Err(error) = device.grab() {
-            log::warn!("evdev: failed to grab {}: {error}", path.display());
+    for path in to_grab {
+        let Some(keyboard) = grab_keyboard(path, &grabbed) else {
             continue;
-        }
-        log::info!("evdev: grabbed {}", path.display());
-        let held = device.get_key_state().unwrap_or_default();
-        #[cfg(debug_assertions)]
-        {
-            let device_name = device.name().unwrap_or("unknown").to_owned();
-            if held.iter().next().is_some() {
-                qol_runtime::probe!(
-                    "HOTKEY_CAPTURE",
-                    "event=held_at_grab dev={} keys={}",
-                    device_name,
-                    key_list(&held)
-                );
-            }
-        }
-        for code in held.iter() {
+        };
+        for code in keyboard.held.iter() {
             held_at_grab.push(code.0);
         }
-        grabbed_keyboards.push((path, device, grab_time, held));
+        grabbed_keyboards.push(keyboard);
     }
 
     if grabbed_keyboards.is_empty() {
@@ -229,28 +225,34 @@ pub(super) fn install(
         guard.seed_held(held_at_grab);
     }
 
-    let key_caps = merged_key_capabilities(
+    let key_caps = Arc::new(Mutex::new(merged_key_capabilities(
         grabbed_keyboards
             .iter()
-            .filter_map(|(_, device, _, _)| device.supported_keys()),
-    );
-    let virtual_device = Arc::new(Mutex::new(build_virtual_device(&key_caps)?));
+            .filter_map(|keyboard| keyboard.device.supported_keys()),
+    )));
+    let virtual_device = Arc::new(Mutex::new(build_virtual_device(
+        &key_caps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )?));
     let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
 
-    for (path, device, grab_time, held) in grabbed_keyboards {
+    for keyboard in grabbed_keyboards {
         let matcher = matcher.clone();
         let virtual_device = virtual_device.clone();
         let on_fire = on_fire.clone();
+        let grabbed = grabbed.clone();
 
         std::thread::spawn(move || {
             run_reader(
-                path,
-                device,
-                grab_time,
-                held,
+                keyboard.path,
+                keyboard.device,
+                keyboard.grab_time,
+                keyboard.held,
                 matcher,
                 virtual_device,
                 on_fire,
+                grabbed,
             );
         });
     }
@@ -277,9 +279,173 @@ pub(super) fn install(
         );
     }
 
-    spawn_reload_thread(matcher, reload_rx, rebuild, on_fire);
+    spawn_reload_thread(matcher.clone(), reload_rx, rebuild, on_fire.clone());
+    spawn_rescan_thread(grabbed, matcher, virtual_device, key_caps, on_fire);
 
     Ok(())
+}
+
+fn devices_to_grab(grabbed: &HashSet<PathBuf>, discovered: Vec<PathBuf>) -> Vec<PathBuf> {
+    discovered
+        .into_iter()
+        .filter(|path| !grabbed.contains(path))
+        .collect()
+}
+
+struct GrabbedKeyboard {
+    path: PathBuf,
+    device: RawDevice,
+    grab_time: SystemTime,
+    held: AttributeSet<KeyCode>,
+}
+
+fn grab_keyboard(
+    path: PathBuf,
+    grabbed: &Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
+) -> Option<GrabbedKeyboard> {
+    let Ok(mut device) = RawDevice::open(&path) else {
+        log::warn!("evdev: failed to open {} (unplugged?)", path.display());
+        return None;
+    };
+    let grab_time = SystemTime::now();
+    if let Err(error) = device.grab() {
+        log::warn!("evdev: failed to grab {}: {error}", path.display());
+        return None;
+    }
+    log::info!("evdev: grabbed {}", path.display());
+    let held = device.get_key_state().unwrap_or_default();
+    #[cfg(debug_assertions)]
+    {
+        let device_name = device.name().unwrap_or("unknown").to_owned();
+        if held.iter().next().is_some() {
+            qol_runtime::probe!(
+                "HOTKEY_CAPTURE",
+                "event=held_at_grab dev={} keys={}",
+                device_name,
+                key_list(&held)
+            );
+        }
+    }
+    {
+        let mut guard = grabbed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held_codes: HashSet<u16> = held.iter().map(|key| key.0).collect();
+        if guard.insert(path.clone(), held_codes).is_some() {
+            let _ = device.ungrab();
+            return None;
+        }
+    }
+    Some(GrabbedKeyboard {
+        path,
+        device,
+        grab_time,
+        held,
+    })
+}
+
+fn spawn_rescan_thread(
+    grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
+    matcher: Arc<Mutex<BindingMatcher>>,
+    virtual_device: Arc<Mutex<VirtualDevice>>,
+    key_caps: Arc<Mutex<AttributeSet<KeyCode>>>,
+    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
+) {
+    std::thread::Builder::new()
+        .name("hotkey-capture-linux-rescan".into())
+        .spawn(move || loop {
+            std::thread::sleep(RESCAN_INTERVAL);
+            let Ok(keyboards) = open_keyboards() else {
+                log::warn!("evdev: rescan discovery failed");
+                continue;
+            };
+            let to_grab = {
+                let guard = grabbed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let paths: HashSet<PathBuf> = guard.keys().cloned().collect();
+                devices_to_grab(
+                    &paths,
+                    keyboards.into_iter().map(|(path, _)| path).collect(),
+                )
+            };
+            for path in to_grab {
+                let Some(keyboard) = grab_keyboard(path, &grabbed) else {
+                    continue;
+                };
+                log::info!("evdev: rescan grabbed {}", keyboard.path.display());
+                if let Ok(mut guard) = matcher.lock() {
+                    guard.seed_held(keyboard.held.iter().map(|key| key.0));
+                }
+                merge_capabilities(&keyboard, &key_caps, &virtual_device, &keyboard.path);
+                let matcher = matcher.clone();
+                let virtual_device = virtual_device.clone();
+                let on_fire = on_fire.clone();
+                let grabbed = grabbed.clone();
+                let path = keyboard.path;
+                let path_display = path.display().to_string();
+                let spawn_result = std::thread::Builder::new()
+                    .name("hotkey-capture-linux-reader".into())
+                    .spawn(move || {
+                        run_reader(
+                            path,
+                            keyboard.device,
+                            keyboard.grab_time,
+                            keyboard.held,
+                            matcher,
+                            virtual_device,
+                            on_fire,
+                            grabbed,
+                        );
+                    });
+                if let Err(error) = spawn_result {
+                    log::error!("evdev: failed to spawn reader thread for {path_display}: {error}");
+                }
+            }
+        })
+        .map(|_| ())
+        .unwrap_or_else(|error| {
+            log::error!("failed to spawn evdev hotkey rescan thread: {error}");
+        });
+}
+
+fn merge_capabilities(
+    keyboard: &GrabbedKeyboard,
+    key_caps: &Mutex<AttributeSet<KeyCode>>,
+    virtual_device: &Mutex<VirtualDevice>,
+    path: &std::path::Path,
+) {
+    let Ok(mut caps) = key_caps.lock() else {
+        log::error!("evdev: key caps lock poisoned; skipping capability merge");
+        return;
+    };
+    let before = caps.iter().count();
+    if let Some(keys) = keyboard.device.supported_keys() {
+        for code in keys.iter() {
+            caps.insert(code);
+        }
+    }
+    if caps.iter().count() == before {
+        return;
+    }
+    match build_virtual_device(&caps) {
+        Ok(new_device) => {
+            if let Ok(mut vd) = virtual_device.lock() {
+                *vd = new_device;
+                log::info!(
+                    "evdev: virtual device rebuilt with {} key capabilities after grabbing {}",
+                    caps.iter().count(),
+                    path.display()
+                );
+            }
+        }
+        Err(error) => {
+            log::error!(
+                "evdev: virtual device rebuild failed after grabbing {}: {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 fn spawn_reload_thread(
@@ -327,6 +493,7 @@ fn spawn_reload_thread(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_reader(
     path: PathBuf,
     mut device: RawDevice,
@@ -335,6 +502,7 @@ fn run_reader(
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<VirtualDevice>>,
     on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
+    grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
 ) {
     let device_name = device.name().unwrap_or("unknown").to_owned();
     let mut known_held: HashSet<u16> = initial_held.iter().map(|key| key.0).collect();
@@ -382,6 +550,18 @@ fn run_reader(
     }
     if let Err(error) = device.ungrab() {
         log::warn!("evdev: ungrab on reader exit failed: {error}");
+    }
+    let to_release: Vec<u16> = {
+        let mut guard = grabbed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let re_seeded: HashSet<u16> = guard.get(&path).cloned().unwrap_or_default();
+        let to_release: Vec<u16> = known_held.difference(&re_seeded).copied().collect();
+        guard.remove(&path);
+        to_release
+    };
+    for code in to_release {
+        replay_state(&virtual_device, &matcher, &device_name, code, 0);
     }
 }
 
@@ -465,7 +645,13 @@ fn open_keyboards() -> Result<Vec<(PathBuf, RawDevice)>> {
         if !is_keyboard(&device) {
             continue;
         }
-        let device = RawDevice::open(&path)?;
+        let Ok(device) = RawDevice::open(&path) else {
+            log::warn!(
+                "evdev: failed to open {} during discovery (unplugged?)",
+                path.display()
+            );
+            continue;
+        };
         keyboards.push((path, device));
     }
     Ok(keyboards)
@@ -538,6 +724,26 @@ mod tests {
         ] {
             assert!(keys.contains(key), "missing virtual keyboard key {key:?}");
         }
+    }
+
+    #[test]
+    fn devices_to_grab_returns_replugged_nodes_only() {
+        let grabbed: HashSet<PathBuf> = HashSet::from([PathBuf::from("/dev/input/event3")]);
+        let discovered = vec![
+            PathBuf::from("/dev/input/event3"),
+            PathBuf::from("/dev/input/event30"),
+        ];
+        assert_eq!(
+            devices_to_grab(&grabbed, discovered),
+            vec![PathBuf::from("/dev/input/event30")]
+        );
+    }
+
+    #[test]
+    fn devices_to_grab_is_idempotent() {
+        let grabbed: HashSet<PathBuf> = HashSet::from([PathBuf::from("/dev/input/event3")]);
+        let discovered = vec![PathBuf::from("/dev/input/event3")];
+        assert!(devices_to_grab(&grabbed, discovered).is_empty());
     }
 
     #[test]

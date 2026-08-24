@@ -1,5 +1,8 @@
 mod platform;
 
+#[cfg(test)]
+pub(crate) static ACTIVATOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use platform::CloseWindowResult;
 
 pub fn activate_window(window_id: u32) {
