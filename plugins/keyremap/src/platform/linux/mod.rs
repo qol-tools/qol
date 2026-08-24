@@ -23,6 +23,10 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
+    fn toggle(&self) -> Result<CommandResult> {
+        Ok(unsupported())
+    }
+
     fn kill(&self) -> Result<CommandResult> {
         Ok(unsupported())
     }
