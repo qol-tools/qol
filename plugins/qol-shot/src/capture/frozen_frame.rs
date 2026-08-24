@@ -446,8 +446,10 @@ mod tests {
         assert_eq!((width, height), (360, 180));
         assert_eq!(pixels.len(), 360 * 180 * 4);
         assert!(pixels
-            .chunks_exact(4)
-            .all(|pixel| pixel == [40, 20, 10, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel == &[40, 20, 10, 255]));
     }
 
     #[test]

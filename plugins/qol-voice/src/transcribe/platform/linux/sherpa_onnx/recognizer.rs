@@ -125,7 +125,9 @@ fn recognizer_config(
 
 pub(super) fn append_pcm(audio: &mut Vec<f32>, pcm: &[u8]) {
     audio.extend(
-        pcm.chunks_exact(2)
+        pcm.as_chunks::<2>()
+            .0
+            .iter()
             .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / 32768.0),
     );
 }

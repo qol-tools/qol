@@ -184,7 +184,9 @@ fn sample_frames(pcm: &[u8], channels: u16) -> u64 {
 
 fn signal_level(pcm: &[u8]) -> u16 {
     let samples = pcm
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]));
     let (squared_sum, count) = samples.fold((0.0, 0_usize), |acc, sample| {
         let normalized = f64::from(sample) / 32768.0;

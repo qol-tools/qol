@@ -139,7 +139,9 @@ fn capture_probe_pcm(device_name: &str, duration_ms: u64) -> Result<Vec<u8>, Lis
 
 fn probe_report(device_id: String, pcm: Vec<u8>) -> AudioInputProbe {
     let samples = pcm
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
         .collect::<Vec<_>>();
     let count = u64::try_from(samples.len()).unwrap_or(u64::MAX);

@@ -30,7 +30,7 @@ async fn load_icon_rgba(bundle_id: String) -> HttpResult<(Vec<u8>, u32, u32)> {
 }
 
 fn swap_bgra_channels(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 }

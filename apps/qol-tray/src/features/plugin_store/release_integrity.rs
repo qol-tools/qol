@@ -113,7 +113,7 @@ fn expected_sha256(asset: &GitHubAsset) -> Result<[u8; 32]> {
         anyhow::bail!("release asset '{}' has an invalid SHA-256", asset.name);
     }
     let mut decoded = [0_u8; 32];
-    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         decoded[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
     }
     Ok(decoded)
