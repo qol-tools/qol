@@ -430,9 +430,34 @@ where
     F: FnMut(u8, String),
 {
     codesign_debug_binaries(plugin_id, path);
+    persist_fingerprint_sidecar(plugin_id, path);
     on_progress(100, "Build complete".to_string());
     log::info!("Cargo build succeeded for {}", plugin_id);
     super::finished_build(plugin_id, combined)
+}
+
+fn persist_fingerprint_sidecar(plugin_id: &str, path: &Path) {
+    let Ok(fingerprint) = crate::fingerprint_plugin(path) else {
+        log::warn!(
+            "[dev-build] event=fingerprint_failed plugin_id={} reason=compute_failed",
+            plugin_id
+        );
+        return;
+    };
+    let Some(binary) = crate::plugin_binary_path(path) else {
+        log::warn!(
+            "[dev-build] event=fingerprint_failed plugin_id={} reason=no_binary",
+            plugin_id
+        );
+        return;
+    };
+    if let Err(error) = crate::write_fingerprint_sidecar(&binary, &fingerprint) {
+        log::warn!(
+            "[dev-build] event=fingerprint_failed plugin_id={} reason=write: {}",
+            plugin_id,
+            error
+        );
+    }
 }
 
 fn failed_spawn(plugin_id: &str, error: std::io::Error) -> BuildResult {
