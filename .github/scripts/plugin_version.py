@@ -825,9 +825,23 @@ def initial_release_plan(unit: ReleaseUnit) -> ReleasePlan:
     )
 
 
+def assert_manifest_parity(units: list[ReleaseUnit]) -> None:
+    for unit in units:
+        if unit.plugin_version is not None and unit.cargo_version != unit.plugin_version:
+            raise RuntimeError(
+                f"Manifest versions differ for {unit.id}: "
+                f"cargo={unit.cargo_version} plugin={unit.plugin_version}"
+            )
+
+
+def check_manifest_parity(root: Path, selected: str | None) -> None:
+    assert_manifest_parity(discover_release_units(root, load_packages(root), selected))
+
+
 def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     packages = load_packages(root)
     units = discover_release_units(root, packages, selected)
+    assert_manifest_parity(units)
     commits_by_range: dict[str, list[Commit]] = {}
     changed_paths_cache: dict[str, list[str]] = {}
     closure_cache: dict[str, set[str]] = {}
@@ -836,12 +850,6 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     plans: list[ReleasePlan] = []
 
     for unit in units:
-        if unit.plugin_version is not None and unit.cargo_version != unit.plugin_version:
-            raise RuntimeError(
-                f"Manifest versions differ for {unit.id}: "
-                f"cargo={unit.cargo_version} plugin={unit.plugin_version}"
-            )
-
         prefix = f"{unit.id}-v"
         tag = last_tag(root, prefix) or highest_version_tag(existing_tags(root, prefix), prefix)
         if tag is None:
@@ -920,9 +928,15 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--tag-file")
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    parser.add_argument("--check-manifests", action="store_true")
     args = parser.parse_args()
 
     root = Path.cwd().resolve()
+    if args.check_manifests:
+        check_manifest_parity(root, args.plugin_id)
+        print("Plugin manifest versions agree with their Cargo manifests")
+        return 0
+
     plans = compute_plans(root, args.plugin_id)
     manifest_changed = apply_plans(root, plans) if args.apply else False
 

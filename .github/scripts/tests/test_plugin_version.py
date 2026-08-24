@@ -96,6 +96,46 @@ class DiscoverPluginsTests(unittest.TestCase):
             pv.discover_plugins(self.root, package_map("first", "second"), None)
 
 
+class ManifestParityTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "plugins").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _units(self):
+        return pv.discover_plugins(self.root, package_map("qol-shot", "keyremap"), None)
+
+    def test_matching_manifests_pass(self):
+        write_plugin(self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap")
+        pv.assert_manifest_parity(self._units())
+
+    def test_plugin_toml_bumped_alone_is_rejected(self):
+        crate = write_plugin(
+            self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap"
+        )
+        (crate / "plugin.toml").write_text(
+            (crate / "plugin.toml").read_text().replace('version = "1.29.0"', 'version = "1.30.0"')
+        )
+        with self.assertRaises(RuntimeError) as caught:
+            pv.assert_manifest_parity(self._units())
+        self.assertIn("plugin-keyremap", str(caught.exception))
+        self.assertIn("cargo=1.29.0", str(caught.exception))
+        self.assertIn("plugin=1.30.0", str(caught.exception))
+
+    def test_cargo_toml_bumped_alone_is_rejected(self):
+        crate = write_plugin(
+            self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap"
+        )
+        (crate / "Cargo.toml").write_text(
+            (crate / "Cargo.toml").read_text().replace('version = "1.29.0"', 'version = "1.30.0"')
+        )
+        with self.assertRaises(RuntimeError):
+            pv.assert_manifest_parity(self._units())
+
+
 class InitialReleasePlanTests(unittest.TestCase):
     def _plugin(self, plugin_id: str, version: str) -> "pv.ReleaseUnit":
         return pv.ReleaseUnit(

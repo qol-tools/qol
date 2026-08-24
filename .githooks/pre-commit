@@ -10,6 +10,23 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 node "$root/.githooks/single-source-guard.mjs" || exit 1
 
+staged_plugin_manifest=0
+while IFS= read -r -d '' path; do
+  case "$path" in
+    plugins/*/plugin.toml|plugins/*/Cargo.toml|apps/*/Cargo.toml) staged_plugin_manifest=1 ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [ "$staged_plugin_manifest" = 1 ] && command -v python3 >/dev/null 2>&1; then
+  if ! parity_error="$(python3 "$root/.github/scripts/plugin_version.py" --check-manifests 2>&1 >/dev/null)"; then
+    printf '\n%s\n' "$parity_error" >&2
+    printf '\n  pre-commit rejected: a release unit'"'"'s plugin.toml and Cargo.toml disagree\n' >&2
+    printf '  fix    : set both to the same version, and Cargo.lock with them\n' >&2
+    printf '  then re-stage the changes and commit again\n\n' >&2
+    exit 1
+  fi
+fi
+
 command -v cargo >/dev/null 2>&1 || exit 0
 
 reject() {
