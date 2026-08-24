@@ -120,7 +120,9 @@ impl Render for LauncherView {
         let scroll_offset = visible_range.start;
         let nav_cues = self.state.nav_cues();
         self.apply_focus_gravity_if_idle(result_count, visible, nav_cues.decayed_momentum, cx);
+        #[cfg(debug_assertions)]
         let hidden_above = visible_range.start;
+        #[cfg(debug_assertions)]
         let hidden_below = result_count.saturating_sub(visible_range.end);
         if nav_cues.decayed_momentum > 0 {
             self.ensure_trail_decay_tick(cx);
