@@ -41,7 +41,7 @@ async fn serve_plugin_file(
 async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Response {
     let ui_path = match resolve_safe_ui_file(plugins_dir, plugin_id, file_path).await {
         Ok(path) => path,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     log::debug!("Serving plugin file: {:?}", ui_path);
 
@@ -58,34 +58,48 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
-async fn canonicalize_or_not_found(path: &Path) -> Result<PathBuf, Response> {
+async fn canonicalize_or_not_found(path: &Path) -> Result<PathBuf, Box<Response>> {
     tokio::fs::canonicalize(path)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "File not found").into_response())
+        .map_err(|_| Box::new((StatusCode::NOT_FOUND, "File not found").into_response()))
 }
 
-async fn validate_dir_entry(path: &Path) -> Result<(), Response> {
+async fn validate_dir_entry(path: &Path) -> Result<(), Box<Response>> {
     let meta = match tokio::fs::symlink_metadata(path).await {
         Ok(meta) => meta,
-        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+        Err(_) => {
+            return Err(Box::new(
+                (StatusCode::NOT_FOUND, "File not found").into_response(),
+            ))
+        }
     };
     if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     }
     Ok(())
 }
 
-async fn validate_file_entry(path: &Path) -> Result<(), Response> {
+async fn validate_file_entry(path: &Path) -> Result<(), Box<Response>> {
     let meta = match tokio::fs::symlink_metadata(path).await {
         Ok(meta) => meta,
-        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+        Err(_) => {
+            return Err(Box::new(
+                (StatusCode::NOT_FOUND, "File not found").into_response(),
+            ))
+        }
     };
     if meta.file_type().is_symlink() {
         log::warn!("Symlink rejected: {:?}", path);
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     }
     if !meta.is_file() {
-        return Err((StatusCode::NOT_FOUND, "File not found").into_response());
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "File not found").into_response(),
+        ));
     }
     Ok(())
 }
@@ -94,10 +108,12 @@ async fn verify_path_chain(
     canonical_plugin_root: &Path,
     ui_root: &Path,
     ui_path: &Path,
-) -> Result<PathBuf, Response> {
+) -> Result<PathBuf, Box<Response>> {
     let canonical_ui_root = canonicalize_or_not_found(ui_root).await?;
     if !canonical_ui_root.starts_with(canonical_plugin_root) {
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     }
     let canonical_ui_path = canonicalize_or_not_found(ui_path).await?;
     if !canonical_ui_path.starts_with(&canonical_ui_root) {
@@ -106,7 +122,9 @@ async fn verify_path_chain(
             canonical_ui_path,
             canonical_ui_root
         );
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     }
     Ok(canonical_ui_path)
 }
@@ -115,14 +133,16 @@ async fn resolve_safe_ui_file(
     plugins_dir: &Path,
     plugin_id: &str,
     file_path: &str,
-) -> Result<PathBuf, Response> {
+) -> Result<PathBuf, Box<Response>> {
     if !super::validation::is_safe_plugin_id(plugin_id) || !is_safe_subpath(file_path) {
         log::warn!(
             "Unsafe path: plugin_id={}, file_path={}",
             plugin_id,
             file_path
         );
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     }
     let plugin_root = plugin_paths::resolve_plugin_root_from_plugins_dir(plugins_dir, plugin_id);
     let ui_root = plugin_root.join("ui");
@@ -132,7 +152,9 @@ async fn resolve_safe_ui_file(
     validate_file_entry(&ui_path).await?;
     let Some(canonical_plugin_root) = plugin_paths::canonical_plugin_root(plugins_dir, plugin_id)
     else {
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+        return Err(Box::new(
+            (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        ));
     };
     verify_path_chain(&canonical_plugin_root, &ui_root, &ui_path).await
 }

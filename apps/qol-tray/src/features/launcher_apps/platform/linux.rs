@@ -11,10 +11,7 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create applications dir {}", dir.display()))?;
 
-    let expected: HashSet<String> = entries
-        .iter()
-        .map(|entry| desktop_filename(entry))
-        .collect();
+    let expected: HashSet<String> = entries.iter().map(desktop_filename).collect();
 
     for entry in entries {
         write_desktop_file(&dir, entry, target)?;

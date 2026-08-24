@@ -25,17 +25,17 @@ pub(crate) async fn import_config(
         };
     match import_bundle(&state, bundle).await {
         Ok(result) => Json(result).into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
 async fn import_bundle(
     state: &super::ProfileHttpState,
     bundle: crate::features::profile::core::ProfileImportBundle,
-) -> Result<crate::features::profile::core::ApplyProfileResult, Response> {
+) -> Result<crate::features::profile::core::ApplyProfileResult, Box<Response>> {
     let result = crate::features::profile::core::apply_import_bundle(&state.plugins_dir, &bundle)
         .await
-        .map_err(import_server_error)?;
+        .map_err(|error| Box::new(import_server_error(error)))?;
     super::reload_after_profile_apply(state);
     Ok(result)
 }

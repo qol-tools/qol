@@ -894,7 +894,7 @@ mod lifecycle_tests {
     ) -> Probe {
         Arc::new(move || {
             let _ = started.send(());
-            gate.lock().unwrap().recv().unwrap();
+            let _ = gate.lock().unwrap().recv();
             (Observation::NotLoaded, PolicyIntent::None)
         })
     }
@@ -1165,6 +1165,7 @@ mod lifecycle_tests {
         );
 
         let _ = gate_tx.send(());
+        drop(gate_tx);
         restart_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("the replacement watcher must start automatically once the supervisor retires the old generation, without a second stop call");
@@ -1225,6 +1226,7 @@ mod lifecycle_tests {
         stopper_b.join().unwrap();
 
         let _ = gate_tx.send(());
+        drop(gate_tx);
         assert!(
             wait_until_idle(Duration::from_secs(5)),
             "the supervisor must retire the generation after the gate release"
