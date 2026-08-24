@@ -6,3 +6,4 @@ __pycache__/
 verify/reports/
 /reports/
 tools/qol-memory/
+/target-linux/
