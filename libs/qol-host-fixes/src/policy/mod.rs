@@ -441,12 +441,29 @@ pub(crate) mod test_support {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         clear_test_seams();
+        force_resident_host();
         std::env::set_var(
             "QOL_POLICY_LOCK_NAMESPACE",
             format!("tests-{}", std::process::id()),
         );
         test_dir();
         guard
+    }
+
+    pub(crate) fn force_resident_host() {
+        static DIR: OnceLock<PathBuf> = OnceLock::new();
+        let dir = DIR.get_or_init(|| {
+            let dir =
+                std::env::temp_dir().join(format!("qol-policy-residency-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            dir
+        });
+        std::env::set_var(crate::residency::DEVICE_ID_REMAP, "qol-policy-tests");
+        std::env::set_var(crate::residency::CONFIG_DIR_REMAP, dir);
+        crate::residency::HostResidency::write_to(dir, crate::residency::HostResidency::Resident)
+            .unwrap_or_else(|error| {
+                panic!("failed to mark the policy test host resident: {error:#}")
+            });
     }
 
     pub(crate) fn reset_dir() {
@@ -476,6 +493,8 @@ pub(crate) mod test_support {
             "QOL_RESIDENT_SANDBOX_CARRIER",
             "QOL_STAGED_REMOVE_SWAP",
             "QOL_ACTIVE_REMOVE_SWAP",
+            crate::residency::DEVICE_ID_REMAP,
+            crate::residency::CONFIG_DIR_REMAP,
         ] {
             std::env::remove_var(name);
         }
@@ -606,6 +625,25 @@ mod tests {
                 .refuse_unless_resident(HostResidency::Resident)
                 .unwrap_or_else(|error| panic!("{} was refused: {error:#}", policy.id()));
         }
+    }
+
+    #[test]
+    fn enable_wires_the_portable_gate_through_current_resolution() {
+        let _guard = test_support::serialized();
+        let empty = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os(crate::residency::CONFIG_DIR_REMAP);
+        std::env::set_var(crate::residency::CONFIG_DIR_REMAP, empty.path());
+        let error = ResidentPolicy::nvidia()
+            .enable(&ResidencyOwnerId::parse("test-owner").unwrap())
+            .unwrap_err();
+        match previous {
+            Some(value) => std::env::set_var(crate::residency::CONFIG_DIR_REMAP, value),
+            None => std::env::remove_var(crate::residency::CONFIG_DIR_REMAP),
+        }
+        assert!(
+            error.to_string().contains("this host is portable"),
+            "{error:#}"
+        );
     }
 
     fn serialized_journal_tests() -> std::sync::MutexGuard<'static, ()> {
