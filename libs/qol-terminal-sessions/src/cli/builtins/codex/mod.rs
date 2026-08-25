@@ -59,6 +59,7 @@ impl CliSessionStrategy for CodexStrategy {
             tool: self.tool.clone(),
             display_name: metadata.thread_name.or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
+            external_id_authoritative: false,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
                 runtime: metadata.runtime,

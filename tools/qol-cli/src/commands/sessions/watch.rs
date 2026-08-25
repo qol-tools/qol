@@ -65,6 +65,7 @@ struct WatchedRound {
     runtime_working_seen: bool,
     ready_polls: u32,
     external_id_captured: bool,
+    external_id_attempts: u32,
     autoclose: bool,
     group: Option<String>,
     label: Option<String>,
@@ -90,12 +91,40 @@ impl WatchedRound {
             runtime_working_seen: false,
             ready_polls: 0,
             external_id_captured: false,
+            external_id_attempts: 0,
             autoclose: round.autoclose,
             group: round.group,
             label: round.label,
             started_at: round.started_at,
             transcript_paths: round.transcript_paths,
         })
+    }
+
+    fn capture_external_id_bounded(
+        &mut self,
+        terminals: &TerminalSessionService,
+        interpreter: &CliSessionInterpreter,
+        ledger: &SpawnLedger,
+        locks: &SpawnLocks,
+    ) -> bool {
+        if self.external_id_captured || self.external_id_attempts >= EXTERNAL_ID_MAX_ATTEMPTS {
+            return self.external_id_captured;
+        }
+        self.external_id_attempts += 1;
+        let captured = matches!(
+            super::spawn::capture_lane_external_id(
+                terminals,
+                interpreter,
+                ledger,
+                locks,
+                &self.binding,
+                &self.marker,
+                self.started_at,
+            ),
+            super::spawn::ExternalIdCapture::Authoritative
+        );
+        self.external_id_captured = captured;
+        captured
     }
 }
 
@@ -168,6 +197,8 @@ pub(super) fn watch(
     result
 }
 
+const EXTERNAL_ID_MAX_ATTEMPTS: u32 = 5;
+
 struct RoundPoll {
     keep: bool,
     changed: bool,
@@ -208,13 +239,7 @@ fn complete_seen_round(
     markerless: bool,
 ) -> Result<RoundPoll> {
     if !round.external_id_captured {
-        round.external_id_captured = super::spawn::capture_lane_external_id(
-            terminals,
-            interpreter,
-            ledger,
-            locks,
-            &round.binding,
-        );
+        round.capture_external_id_bounded(terminals, interpreter, ledger, locks);
     }
     let base = completion_event_base(markerless);
     let tail = screen_tail(screen);
@@ -560,12 +585,16 @@ fn poll_round(
                         ),
                         round.label.as_deref(),
                     )?;
+                    let outcome = match pending.pending_round(&round.binding)? {
+                        Some(pending) if pending.completed => GroupOutcome::Completed,
+                        _ => GroupOutcome::Gone,
+                    };
                     settle_group_member(
                         trace_dir,
                         group,
                         &round.session,
                         round.label.as_deref(),
-                        GroupOutcome::Gone,
+                        outcome,
                     )?;
                     let combined = maybe_deliver_group_combined(
                         pending,
@@ -643,13 +672,7 @@ fn poll_round(
         }
     };
     if !round.external_id_captured {
-        round.external_id_captured = super::spawn::capture_lane_external_id(
-            terminals,
-            interpreter,
-            ledger,
-            locks,
-            &round.binding,
-        );
+        round.capture_external_id_bounded(terminals, interpreter, ledger, locks);
     }
     let facts = terminals.discover().ok().and_then(|sessions| {
         sessions
@@ -1086,18 +1109,50 @@ fn member_path(trace_dir: &std::path::Path, group: &str, session: &str) -> std::
     member_dir(trace_dir, group).join(format!("{}.json", sanitize_token(session)))
 }
 
+fn read_group_member(path: &std::path::Path) -> Option<GroupMember> {
+    let encoded = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<GroupMember>(&encoded).ok()
+}
+
+fn publish_group_member(path: &std::path::Path, member: &GroupMember) -> Result<()> {
+    let dir = path.parent().expect("member path always has a parent");
+    fs::create_dir_all(dir).context("failed to create group member directory")?;
+    let temporary = path.with_extension("tmp");
+    let encoded = serde_json::to_string(member)?;
+    fs::write(&temporary, encoded).context("failed to write group member record")?;
+    fs::rename(&temporary, path).context("failed to publish group member record")
+}
+
 fn write_group_member(
     trace_dir: &std::path::Path,
     group: &str,
     member: &GroupMember,
 ) -> Result<()> {
     let path = member_path(trace_dir, group, &member.session);
-    let dir = path.parent().expect("member path always has a parent");
-    fs::create_dir_all(dir).context("failed to create group member directory")?;
-    let temporary = path.with_extension("tmp");
-    let encoded = serde_json::to_string(member)?;
-    fs::write(&temporary, encoded).context("failed to write group member record")?;
-    fs::rename(&temporary, &path).context("failed to publish group member record")
+    let existing = read_group_member(&path);
+    let refused = match existing {
+        Some(existing) => {
+            existing.outcome == Some(GroupOutcome::Completed)
+                && member.outcome != Some(GroupOutcome::Completed)
+        }
+        None => {
+            let missing = matches!(
+                fs::metadata(&path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            );
+            member.outcome != Some(GroupOutcome::Completed) && !missing
+        }
+    };
+    if refused {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=group_member_downgrade_refused group={} session={}",
+            group,
+            member.session
+        );
+        return Ok(());
+    }
+    publish_group_member(&path, member)
 }
 
 pub(super) fn register_group_member(
@@ -1106,12 +1161,8 @@ pub(super) fn register_group_member(
     session: &str,
     label: Option<&str>,
 ) -> Result<()> {
-    if member_path(trace_dir, group, session).exists() {
-        return Ok(());
-    }
-    write_group_member(
-        trace_dir,
-        group,
+    publish_group_member(
+        &member_path(trace_dir, group, session),
         &GroupMember {
             session: session.to_owned(),
             label: label.map(str::to_owned),
@@ -1163,10 +1214,7 @@ fn group_roster(
             if path.extension().is_none_or(|extension| extension != "json") {
                 continue;
             }
-            let Ok(encoded) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(member) = serde_json::from_str::<GroupMember>(&encoded) else {
+            let Some(member) = read_group_member(&path) else {
                 continue;
             };
             members.push(member);
@@ -1761,6 +1809,187 @@ fn emit(out: &mut dyn Write, line: serde_json::Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_completed_group_member_is_never_downgraded_to_gone() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        register_group_member(&trace, "stress-group", session, None).unwrap();
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            None,
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert_eq!(roster.len(), 1);
+        assert_eq!(
+            roster[0].outcome,
+            Some(GroupOutcome::Completed),
+            "a Gone settle must never overwrite a Completed member"
+        );
+    }
+
+    #[test]
+    fn a_gone_member_is_upgraded_by_a_later_completed_settle() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        register_group_member(&trace, "stress-group", session, None).unwrap();
+        settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            None,
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert_eq!(roster.len(), 1);
+        assert_eq!(
+            roster[0].outcome,
+            Some(GroupOutcome::Completed),
+            "a Completed settle must still write over a Gone member"
+        );
+    }
+
+    #[test]
+    fn a_relabel_of_a_completed_member_still_writes_the_new_label() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        register_group_member(&trace, "stress-group", session, Some("first")).unwrap();
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            Some("first"),
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            Some("second"),
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert_eq!(roster.len(), 1);
+        assert_eq!(
+            roster[0].label.as_deref(),
+            Some("second"),
+            "the Completed guard must not block a relabel"
+        );
+        assert_eq!(roster[0].outcome, Some(GroupOutcome::Completed));
+    }
+
+    #[test]
+    fn a_corrupt_member_record_blocks_gone_but_is_healed_by_completed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        let path = member_path(&trace, "stress-group", session);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{not json",
+            "a Gone settle must leave an unparseable record untouched"
+        );
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            None,
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert_eq!(roster.len(), 1);
+        assert_eq!(
+            roster[0].outcome,
+            Some(GroupOutcome::Completed),
+            "a Completed settle must heal an unparseable record"
+        );
+    }
+
+    #[test]
+    fn group_roster_skips_unparseable_member_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        let path = member_path(&trace, "stress-group", session);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert!(
+            roster.is_empty(),
+            "an unparseable member file must be skipped, not error"
+        );
+    }
+
+    #[test]
+    fn registering_again_resets_a_stale_completed_member() {
+        let root = tempfile::TempDir::new().unwrap();
+        let trace = root.path().join("trace");
+        let session = "v1:kitty:k10304_f0001a.77:9999999";
+        register_group_member(&trace, "stress-group", session, None).unwrap();
+        settle_group_member(
+            &trace,
+            "stress-group",
+            session,
+            None,
+            GroupOutcome::Completed,
+        )
+        .unwrap();
+        register_group_member(&trace, "stress-group", session, None).unwrap();
+        settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
+        let roster = group_roster(
+            &PendingBridgeStore::with_dir(root.path().join("pending")),
+            &trace,
+            "stress-group",
+        )
+        .unwrap();
+        assert_eq!(roster.len(), 1);
+        assert_eq!(
+            roster[0].outcome,
+            Some(GroupOutcome::Gone),
+            "a fresh register must reset the stale Completed so the round's own settle applies"
+        );
+    }
+
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1775,7 +2004,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::super::bridge::PendingBridgeStore;
-    use super::super::spawn::{SpawnLedger, SpawnLocks, SpawnRecord};
+    use super::super::spawn::{SpawnLedger, SpawnLocks};
     use super::*;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2396,6 +2625,16 @@ mod tests {
             tool: CliToolId::new("pi").unwrap(),
             surface: SpawnSurface::Tab,
         });
+        ledger
+            .record(
+                &SpawnKey::new("lane-gone-early").unwrap(),
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                Some("id-recorded-at-spawn"),
+            )
+            .unwrap();
         facts.foreground_basenames = vec!["pi".to_owned()];
         facts.foreground_pids = vec![424242];
         let backend =
@@ -2427,22 +2666,21 @@ mod tests {
             Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
             None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
         }
-        result.unwrap();
+        if let Err(error) = &result {
+            panic!("watch error: {error:?}");
+        }
 
         let events = lines(&out);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "gone");
-        let record_dir = root.path().join("spawn-records");
-        let record_paths = std::fs::read_dir(&record_dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect::<Vec<_>>();
-        assert_eq!(record_paths.len(), 1);
-        let record: SpawnRecord =
-            serde_json::from_str(&std::fs::read_to_string(&record_paths[0]).unwrap()).unwrap();
         assert_eq!(
-            record.external_id.as_deref(),
-            Some("0000cafe-cafe-cafe-cafe-cafecafecafe")
+            ledger
+                .load(&SpawnKey::new("lane-gone-early").unwrap(), "/work")
+                .unwrap()
+                .and_then(|record| record.external_id)
+                .as_deref(),
+            Some("id-recorded-at-spawn"),
+            "a heuristic capture must never overwrite the spawn-time record"
         );
     }
 
@@ -3551,8 +3789,8 @@ mod tests {
             .count();
         assert_eq!(full, 27);
         assert_eq!(
-            ls, 83,
-            "every poll reads the session facts once for the transcript gate, the strict reads stay on the tenths, and the completion adds its captures"
+            ls, 60,
+            "every poll reads the session facts once for the transcript gate, the strict reads stay on the tenths, and unresolved external-id captures stop after the attempt budget"
         );
         let events = lines(&out);
         assert_eq!(events.len(), 1);
@@ -4261,6 +4499,7 @@ mod tests {
                 tool: self.tool.clone(),
                 display_name: None,
                 external_id: None,
+                external_id_authoritative: false,
                 has_activity: None,
                 evidence: qol_terminal_sessions::cli::CliSessionEvidence {
                     runtime,
@@ -5158,6 +5397,56 @@ mod tests {
             lane.wakes().len(),
             1,
             "a second pass must never repeat the combined wake"
+        );
+    }
+
+    #[test]
+    fn external_id_capture_attempts_are_bounded_per_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let ledger = ledger(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_never",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned(); 40]);
+        let (terminals, _) = harness(backend);
+        let interpreter = CliSessionInterpreter::system();
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        for poll in 0..10 {
+            let result = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks(&root),
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(
+                result.keep,
+                "the open round must keep polling (poll {poll})"
+            );
+        }
+        assert!(
+            !round.external_id_captured,
+            "a session without a spawn identity never captures"
+        );
+        assert_eq!(
+            round.external_id_attempts, EXTERNAL_ID_MAX_ATTEMPTS,
+            "capture retries must stop after the attempt budget even though the round keeps polling"
         );
     }
 }

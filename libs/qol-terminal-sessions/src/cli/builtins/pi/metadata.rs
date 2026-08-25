@@ -19,6 +19,7 @@ const REVERSE_READ_CHUNK: u64 = 64 * 1024;
 pub(super) struct PiMetadata {
     pub session_name: Option<String>,
     pub external_id: Option<String>,
+    pub external_id_authoritative: bool,
     pub has_activity: Option<bool>,
     pub runtime: CliRuntimeState,
     pub activity: CliActivityEvidence,
@@ -64,9 +65,13 @@ impl PiMetadataResolver {
 
     pub fn resolve(&self, session: &SessionFacts) -> PiMetadata {
         let mut cache = self.cache.lock().ok();
-        let path = cache
-            .as_mut()
-            .and_then(|cache| session_file(session, self.environment.as_ref(), cache));
+        let (env_path, authoritative) = env_session_file(session, self.environment.as_ref());
+        let path = match env_path {
+            Some(path) => Some(path),
+            None => cache
+                .as_mut()
+                .and_then(|cache| session_file(session, self.environment.as_ref(), cache)),
+        };
         let external_id = path.as_deref().and_then(id_from_path);
         let facts = cache
             .as_mut()
@@ -82,6 +87,7 @@ impl PiMetadataResolver {
         PiMetadata {
             session_name,
             external_id,
+            external_id_authoritative: authoritative,
             has_activity: activity.combined(),
             runtime: path
                 .as_deref()
@@ -102,6 +108,18 @@ impl PiMetadataResolver {
         };
         session_files(session, self.environment.as_ref(), &mut cache)
     }
+}
+
+fn env_session_file(
+    session: &SessionFacts,
+    environment: &dyn PiEnvironment,
+) -> (Option<PathBuf>, bool) {
+    for pid in &session.foreground_pids {
+        if let Some(path) = environment.session_file_authoritative(*pid, &session.cwd) {
+            return (Some(path), true);
+        }
+    }
+    (None, false)
 }
 
 fn session_file(

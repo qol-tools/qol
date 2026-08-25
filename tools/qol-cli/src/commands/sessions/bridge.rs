@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +22,7 @@ use super::spawn::{SpawnLedger, SpawnLocks};
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
 const GATE_LOCK_MESSAGE: &str = "Blocking waiting for file lock";
@@ -443,9 +444,6 @@ impl PendingBridgeStore {
         let checkpoint = self
             .load_unlocked(binding)?
             .ok_or_else(|| anyhow!("no pending bridge exists for `{binding}`"))?;
-        if checkpoint.closed {
-            bail!("the pending bridge is already closed");
-        }
         if checkpoint.completion_marker != marker {
             bail!("bridge acknowledgement does not match the pending round");
         }
@@ -655,7 +653,7 @@ impl PendingBridgeStore {
                     let dead_session = live_sessions
                         .map(|live| !live.contains(&checkpoint.session))
                         .unwrap_or(false);
-                    if checkpoint.closed || checkpoint.session.is_empty() || dead_session {
+                    if checkpoint.session.is_empty() || (dead_session && !checkpoint.closed) {
                         let _ = fs::remove_file(&path);
                         if dead_session {
                             if let Ok(binding) = checkpoint.session.parse::<SessionBinding>() {
@@ -829,6 +827,7 @@ pub(super) fn execute(
     locks: &SpawnLocks,
     trace_dir: &std::path::Path,
     acknowledge_marker: Option<&str>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
     let _owner = pending.acquire_owner(binding)?;
@@ -866,6 +865,7 @@ pub(super) fn execute(
                 locks,
                 trace_dir,
                 false,
+                cancel,
             );
         }
         pending.acknowledge(binding, &round.completion_marker, false)?;
@@ -973,6 +973,7 @@ pub(super) fn execute(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
+            None,
         )?
     } else {
         wait_for_completion(
@@ -986,11 +987,20 @@ pub(super) fn execute(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
+            None,
         )?
     };
     pending.observe(binding, &marker.token, outcome.completed)?;
     if outcome.completed {
-        super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
+        super::spawn::capture_lane_external_id(
+            terminals,
+            interpreter,
+            ledger,
+            locks,
+            binding,
+            &marker.token,
+            Some(started_at),
+        );
     }
     qol_runtime::probe!(
         "CLI_SESSION_BRIDGE",
@@ -1135,6 +1145,7 @@ pub(super) fn resume(
     locks: &SpawnLocks,
     trace_dir: &std::path::Path,
     kickstart: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutcome> {
     let _owner = pending.acquire_owner(binding)?;
     resume_owned(
@@ -1147,6 +1158,7 @@ pub(super) fn resume(
         locks,
         trace_dir,
         kickstart,
+        cancel,
     )
 }
 
@@ -1161,6 +1173,7 @@ fn resume_owned(
     locks: &SpawnLocks,
     trace_dir: &std::path::Path,
     kickstart: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutcome> {
     let round = match pending.pending_round(binding)? {
         Some(round) => round,
@@ -1293,6 +1306,7 @@ fn resume_owned(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
+            cancel,
         )?
     } else {
         wait_for_completion(
@@ -1306,11 +1320,20 @@ fn resume_owned(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
+            cancel,
         )?
     };
     if outcome.completed {
         pending.observe(binding, &round.completion_marker, true)?;
-        super::spawn::capture_lane_external_id(terminals, interpreter, ledger, locks, binding);
+        super::spawn::capture_lane_external_id(
+            terminals,
+            interpreter,
+            ledger,
+            locks,
+            binding,
+            &round.completion_marker,
+            round.started_at,
+        );
         settle_and_deliver_group(
             terminals,
             pending,
@@ -1446,9 +1469,10 @@ pub(super) fn wait_for_completion(
     liveness: &dyn Fn() -> Option<bool>,
     stall_after: Duration,
     role: Role,
+    cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutcome> {
     let outcome = terminals
-        .wait_for_completion(
+        .wait_for_completion_with_cancel(
             binding,
             marker,
             timeout,
@@ -1457,8 +1481,14 @@ pub(super) fn wait_for_completion(
             submitted,
             liveness,
             stall_after,
+            cancel,
         )
         .context("bridge screen read failed")?;
+    if outcome.cancelled {
+        bail!(
+            "bridge wait cancelled; the round stays open and recoverable via `qol sessions resume`"
+        );
+    }
     Ok(BridgeOutcome {
         completed: outcome.completed,
         submitted: outcome.submitted,
@@ -1537,6 +1567,7 @@ fn wait_for_pi_round(
     liveness: &dyn Fn() -> Option<bool>,
     stall_after: Duration,
     role: Role,
+    cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutcome> {
     let started = Instant::now();
     let mut reads = 0u64;
@@ -1545,6 +1576,11 @@ fn wait_for_pi_round(
     let mut last_probe: Option<Instant> = None;
     let mut cached_paths: Vec<PathBuf> = Vec::new();
     loop {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            bail!(
+                "bridge wait cancelled; the round stays open and recoverable via `qol sessions resume`"
+            );
+        }
         reads += 1;
         let paths = transcript_paths_for(terminals, interpreter, binding);
         if !paths.is_empty() {
@@ -1623,8 +1659,12 @@ fn wait_for_pi_round(
             ));
         }
         let remaining = timeout.saturating_sub(elapsed);
+        let mut wait_for = interval.min(remaining);
+        if cancel.is_some() {
+            wait_for = wait_for.min(CANCEL_POLL_INTERVAL);
+        }
         if subscribed {
-            match changed.recv_timeout(interval.min(remaining)) {
+            match changed.recv_timeout(wait_for) {
                 Ok(()) => {
                     last_signal = Instant::now();
                     interval = Duration::from_millis(500);
@@ -1635,7 +1675,7 @@ fn wait_for_pi_round(
                 Err(mpsc::RecvTimeoutError::Disconnected) => subscribed = false,
             }
         } else {
-            std::thread::sleep(interval.min(remaining));
+            std::thread::sleep(wait_for);
             interval = (interval * 2).min(Duration::from_secs(15));
         }
     }
@@ -2063,6 +2103,7 @@ mod tests {
                 tool: self.tool().clone(),
                 display_name: None,
                 external_id: None,
+                external_id_authoritative: false,
                 has_activity: None,
                 evidence: CliSessionEvidence::default(),
             }
@@ -2111,6 +2152,7 @@ mod tests {
                 tool: self.tool().clone(),
                 display_name: None,
                 external_id: None,
+                external_id_authoritative: false,
                 has_activity: None,
                 evidence: CliSessionEvidence::default(),
             }
@@ -2200,6 +2242,7 @@ mod tests {
             &|| Some(false),
             Duration::from_secs(3600),
             Role::Lane,
+            None,
         )
         .unwrap();
         assert!(outcome.completed);
@@ -2241,6 +2284,7 @@ mod tests {
             &|| Some(false),
             Duration::from_secs(3600),
             Role::Lane,
+            None,
         )
         .unwrap();
         assert!(outcome.completed);
@@ -2290,6 +2334,7 @@ mod tests {
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             root.path(),
             false,
+            None,
         )
         .unwrap()
     }
@@ -2434,6 +2479,7 @@ mod tests {
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             root.path(),
+            None,
             None,
         )
         .unwrap();
@@ -2704,6 +2750,7 @@ mod tests {
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             root.path(),
+            None,
             None,
         )
         .unwrap();
@@ -2993,6 +3040,7 @@ mod tests {
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             root.path(),
             false,
+            None,
         )
         .unwrap();
 
@@ -3045,6 +3093,7 @@ mod tests {
             &SpawnLocks::with_dir(root.path().join("spawn-locks")),
             root.path(),
             false,
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3279,7 +3328,102 @@ mod tests {
     }
 
     #[test]
-    fn sweep_removes_stale_tmp_legacy_and_closed_checkpoints() {
+    fn retain_live_keeps_closed_checkpoints_for_dead_sessions() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let dead = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&dead, "QOL_BRIDGE_DONE_dead", "v1:fake:8:800", false, None)
+            .unwrap();
+        store.observe(&dead, "QOL_BRIDGE_DONE_dead", true).unwrap();
+        store.close_checkpoints_for_session(&dead.token()).unwrap();
+
+        let mut live_sessions = std::collections::HashSet::new();
+        live_sessions.insert("v1:fake:1:100".to_owned());
+        store.retain_live(&live_sessions).unwrap();
+
+        assert!(
+            store.file_for(&dead).exists(),
+            "a closed checkpoint survives the sweep so a late loop close can acknowledge it"
+        );
+        assert!(
+            store.pending_round(&dead).unwrap().is_none(),
+            "a closed checkpoint is not a pending round"
+        );
+    }
+
+    #[test]
+    fn acknowledge_accepts_a_closed_checkpoint_with_a_matching_marker() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        store
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_final",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        store
+            .close_checkpoints_for_session(&binding.token())
+            .unwrap();
+        assert!(
+            store.load(&binding).unwrap().unwrap().closed,
+            "the fixture must start from a closed checkpoint"
+        );
+
+        store
+            .acknowledge(&binding, "QOL_BRIDGE_DONE_final", false)
+            .unwrap();
+        assert!(
+            store.load(&binding).unwrap().is_none(),
+            "acknowledging a closed checkpoint must delete it"
+        );
+
+        store
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_final",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        store
+            .close_checkpoints_for_session(&binding.token())
+            .unwrap();
+        let error = store
+            .acknowledge(&binding, "QOL_BRIDGE_DONE_wrong", false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("does not match"),
+            "a mismatched marker must still fail on a closed checkpoint: {error}"
+        );
+        assert!(
+            store.load(&binding).unwrap().is_some(),
+            "the failed acknowledgement must leave the closed checkpoint in place"
+        );
+
+        store
+            .acknowledge(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        assert!(
+            store.load(&binding).unwrap().is_none(),
+            "an accepted loop close requires completed, and a closed-at-completion checkpoint satisfies it"
+        );
+    }
+
+    #[test]
+    fn sweep_removes_stale_tmp_and_legacy_but_keeps_closed_checkpoints() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
         let open = SessionBinding::from_str("v1:fake:1:100").unwrap();
@@ -3325,7 +3469,10 @@ mod tests {
         assert!(!stale_tmp.exists());
         assert!(fresh_tmp.exists());
         assert!(!legacy.exists());
-        assert!(!closed.exists());
+        assert!(
+            closed.exists(),
+            "a closed checkpoint is kept for a late loop close; acknowledge deletes it"
+        );
         assert!(store.file_for(&open).exists());
     }
 
@@ -3482,6 +3629,7 @@ mod tests {
             &locks,
             root.path(),
             false,
+            None,
         )
         .unwrap();
         assert!(outcome_a.completed);
@@ -3516,6 +3664,7 @@ mod tests {
             &locks,
             root.path(),
             false,
+            None,
         )
         .unwrap();
         assert!(outcome_b.completed);

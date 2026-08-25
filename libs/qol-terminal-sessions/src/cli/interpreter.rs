@@ -231,6 +231,7 @@ mod tests {
                 tool: self.tool.clone(),
                 display_name: Some(self.tool.label.clone()),
                 external_id: None,
+                external_id_authoritative: false,
                 has_activity: None,
                 evidence: CliSessionEvidence::default(),
             }

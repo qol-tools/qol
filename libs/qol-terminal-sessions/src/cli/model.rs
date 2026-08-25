@@ -68,6 +68,7 @@ pub struct CliSessionDescriptor {
     pub tool: CliTool,
     pub display_name: Option<String>,
     pub external_id: Option<String>,
+    pub external_id_authoritative: bool,
     pub has_activity: Option<bool>,
     pub evidence: CliSessionEvidence,
 }

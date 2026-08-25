@@ -95,6 +95,7 @@ impl CliSessionStrategy for SubscribedAgent {
             tool: self.tool.clone(),
             display_name: self.name.lock().unwrap().clone(),
             external_id: Some(self.external_id.lock().unwrap().clone()),
+            external_id_authoritative: false,
             has_activity: Some(true),
             evidence: CliSessionEvidence {
                 runtime: *self.runtime.lock().unwrap(),
@@ -140,6 +141,7 @@ impl CliSessionStrategy for FakeCodex {
             tool: self.tool.clone(),
             display_name: self.name.clone(),
             external_id: Some("test-session".to_owned()),
+            external_id_authoritative: false,
             has_activity: Some(self.touched),
             evidence: CliSessionEvidence {
                 runtime: if self.touched {

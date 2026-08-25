@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -18,6 +18,7 @@ pub(super) const SURFACE_TAB: &str = "tab";
 pub(super) const SURFACE_OS_WINDOW: &str = "os-window";
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT_MS: u64 = 30_000;
+const READY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SCOPE_SLICE: &str = "qol-agents.slice";
 const SCOPE_WEIGHT_MIN: u32 = 1;
@@ -494,7 +495,7 @@ impl SpawnLedger {
         external_id: Option<&str>,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create spawn record directory")?;
-        let path = self.file_for(key);
+        let path = self.file_for(key, cwd);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -527,8 +528,8 @@ impl SpawnLedger {
         fs::rename(&temporary, &path).context("failed to publish spawn record")
     }
 
-    pub(super) fn load(&self, key: &SpawnKey) -> Result<Option<SpawnRecord>> {
-        let encoded = match fs::read_to_string(self.file_for(key)) {
+    pub(super) fn load(&self, key: &SpawnKey, cwd: &str) -> Result<Option<SpawnRecord>> {
+        let encoded = match fs::read_to_string(self.file_for(key, cwd)) {
             Ok(encoded) => encoded,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).context("failed to read spawn record"),
@@ -538,8 +539,8 @@ impl SpawnLedger {
             .context("spawn record is invalid")
     }
 
-    fn file_for(&self, key: &SpawnKey) -> PathBuf {
-        let digest = Sha256::digest(key.as_str().as_bytes());
+    fn file_for(&self, key: &SpawnKey, cwd: &str) -> PathBuf {
+        let digest = Sha256::digest(format!("{}\u{0}{}", key.as_str(), cwd).as_bytes());
         self.dir.join(format!("{digest:x}.json"))
     }
 }
@@ -788,6 +789,7 @@ fn run_lanes_with(
         parsed.group.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
+        None,
     )
 }
 
@@ -819,6 +821,7 @@ fn run_with(
         parsed.group.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
+        None,
     )
 }
 
@@ -829,12 +832,13 @@ pub(super) fn deliver_task(
     task: &str,
     pending: &super::bridge::PendingBridgeStore,
     resumed: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
         .session
         .parse()
         .context("spawned session token cannot be resolved for task delivery")?;
-    wait_until_live(terminals, interpreter, &binding)?;
+    wait_until_live(terminals, interpreter, &binding, cancel)?;
     let submitted = super::bridge::submit(
         terminals,
         interpreter,
@@ -856,9 +860,13 @@ fn wait_until_live(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
+    cancel: Option<&AtomicBool>,
 ) -> Result<()> {
     let started = Instant::now();
     loop {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            bail!("spawn wait cancelled; the lane was not launched and the round was not opened");
+        }
         let facts = terminals
             .discover()
             .context("target discovery failed while waiting for its live UI")?
@@ -881,7 +889,11 @@ fn wait_until_live(
                 SPAWN_TASK_READY_TIMEOUT.as_secs()
             );
         }
-        std::thread::sleep(READY_POLL_INTERVAL);
+        if cancel.is_some() {
+            std::thread::sleep(READY_CANCEL_POLL_INTERVAL);
+        } else {
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
     }
 }
 
@@ -1063,6 +1075,7 @@ pub(super) fn spawn_lanes(
     group: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
     trace_dir: &std::path::Path,
+    cancel: Option<&AtomicBool>,
 ) -> Result<LaneSetOutcome> {
     if lanes.is_empty() {
         bail!("`lanes` is empty; give one entry per lane, each with its own key and bounded task");
@@ -1107,6 +1120,7 @@ pub(super) fn spawn_lanes(
             group.as_deref(),
             pending,
             trace_dir,
+            cancel,
         )
         .with_context(|| {
             format!(
@@ -1169,6 +1183,7 @@ pub(super) fn spawn_or_reuse(
     group: Option<&str>,
     pending: &super::bridge::PendingBridgeStore,
     trace_dir: &std::path::Path,
+    cancel: Option<&AtomicBool>,
 ) -> Result<SpawnOutcome> {
     if background && task.is_none() {
         bail!(
@@ -1194,7 +1209,7 @@ pub(super) fn spawn_or_reuse(
                 let requested_cwd = canonicalize_cwd(cwd)?;
                 let resume_decision = decide_resume(
                     resume,
-                    ledger.load(&prepared.key)?.as_ref(),
+                    ledger.load(&prepared.key, &requested_cwd.to_string_lossy())?.as_ref(),
                     &prepared.tool_id,
                     &requested_cwd.to_string_lossy(),
                     interpreter,
@@ -1263,6 +1278,7 @@ pub(super) fn spawn_or_reuse(
                         autoclose,
                         group,
                         trace_dir,
+                        cancel,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1285,6 +1301,7 @@ pub(super) fn spawn_or_reuse(
                         model,
                         &prepared.title,
                         autoclose,
+                        cancel,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1297,6 +1314,7 @@ pub(super) fn spawn_or_reuse(
                             round_task,
                             pending,
                             resumed,
+                            cancel,
                         ),
                         None => Ok(outcome),
                     }
@@ -1337,6 +1355,7 @@ pub(super) fn spawn_or_reuse(
                         round_task,
                         pending,
                         false,
+                        cancel,
                     ),
                     None => Ok(outcome),
                 }
@@ -1377,45 +1396,80 @@ pub(super) fn spawn_or_reuse(
     result
 }
 
+pub(super) enum ExternalIdCapture {
+    Authoritative,
+    Heuristic,
+    Unresolved,
+}
+
 pub(super) fn capture_lane_external_id(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
     binding: &SessionBinding,
-) -> bool {
+    marker: &str,
+    since: Option<std::time::SystemTime>,
+) -> ExternalIdCapture {
     let Ok(facts) = terminals.discover() else {
-        return false;
+        return ExternalIdCapture::Unresolved;
     };
     let Some(facts) = facts
         .into_iter()
         .find(|facts| facts.id == *binding.session_id())
     else {
-        return false;
+        return ExternalIdCapture::Unresolved;
     };
     let Some(identity) = facts.spawn_identity.as_ref() else {
-        return false;
+        return ExternalIdCapture::Unresolved;
     };
-    let Some(external_id) = interpreter
-        .describe(&facts)
-        .external_id
-        .filter(|id| !id.is_empty())
-    else {
+    let marker_id = (!marker.is_empty())
+        .then(|| {
+            qol_terminal_sessions::cli::session_file_containing_marker(
+                &facts.cwd,
+                marker,
+                since.unwrap_or(std::time::UNIX_EPOCH),
+            )
+        })
+        .flatten()
+        .and_then(|path| external_id_from_transcript_path(&path));
+    let (external_id, authoritative) = match marker_id {
+        Some(external_id) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_captured_from_transcript key={} tool={} id={}",
+                identity.key,
+                identity.tool,
+                external_id
+            );
+            (external_id, true)
+        }
+        None => {
+            let Some((external_id, authoritative)) =
+                resolve_lane_external_id(interpreter, ledger, identity, &facts)
+            else {
+                return ExternalIdCapture::Unresolved;
+            };
+            (external_id, authoritative)
+        }
+    };
+    if !authoritative {
         qol_runtime::probe!(
             "CLI_SESSION_SPAWN",
-            "event=external_id_unresolved key={} tool={}",
+            "event=external_id_provisional key={} tool={} id={}",
             identity.key,
-            identity.tool
+            identity.tool,
+            external_id
         );
-        return false;
-    };
+        return ExternalIdCapture::Heuristic;
+    }
     let Ok(_guard) = locks.acquire(&identity.key) else {
         qol_runtime::probe!(
             "CLI_SESSION_SPAWN",
             "event=external_id_capture_skipped key={} reason=spawn_in_flight",
             identity.key
         );
-        return false;
+        return ExternalIdCapture::Unresolved;
     };
     match ledger.record(
         &identity.key,
@@ -1433,7 +1487,7 @@ pub(super) fn capture_lane_external_id(
                 identity.tool,
                 external_id
             );
-            true
+            ExternalIdCapture::Authoritative
         }
         Err(error) => {
             qol_runtime::probe!(
@@ -1442,7 +1496,74 @@ pub(super) fn capture_lane_external_id(
                 identity.key,
                 error
             );
-            false
+            ExternalIdCapture::Unresolved
+        }
+    }
+}
+
+fn external_id_from_transcript_path(path: &std::path::Path) -> Option<String> {
+    let stem = path.file_name()?.to_str()?.strip_suffix(".jsonl")?;
+    let (_, id) = stem.rsplit_once('_')?;
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+fn resolve_lane_external_id(
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    identity: &SpawnIdentity,
+    facts: &SessionFacts,
+) -> Option<(String, bool)> {
+    let descriptor = interpreter.describe(facts);
+    let described = descriptor.external_id.filter(|id| !id.is_empty());
+    let authoritative = descriptor.external_id_authoritative;
+    let recorded = ledger
+        .load(&identity.key, &facts.cwd)
+        .ok()
+        .flatten()
+        .and_then(|record| record.external_id)
+        .filter(|id| !id.is_empty());
+    match (described, recorded, authoritative) {
+        (Some(resolved), Some(recorded), true) if resolved != recorded => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_corrected_from_env key={} tool={} recorded={} resolved={}",
+                identity.key,
+                identity.tool,
+                recorded,
+                resolved
+            );
+            Some((resolved, true))
+        }
+        (Some(resolved), Some(recorded), false) if resolved != recorded => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_conflict_kept_ledger key={} tool={} recorded={} resolved={}",
+                identity.key,
+                identity.tool,
+                recorded,
+                resolved
+            );
+            Some((recorded, false))
+        }
+        (Some(resolved), _, authoritative) => Some((resolved, authoritative)),
+        (None, Some(recorded), _) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_resumed_from_ledger key={} tool={} id={}",
+                identity.key,
+                identity.tool,
+                recorded
+            );
+            Some((recorded, false))
+        }
+        (None, None, _) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=external_id_unresolved key={} tool={}",
+                identity.key,
+                identity.tool
+            );
+            None
         }
     }
 }
@@ -1461,6 +1582,7 @@ fn launch_background(
     autoclose: bool,
     group: Option<&str>,
     trace_dir: &std::path::Path,
+    cancel: Option<&AtomicBool>,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1480,6 +1602,7 @@ fn launch_background(
         &session_id,
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
+        cancel,
     )?;
     let descriptor = interpreter.describe(&facts);
     ledger.record(
@@ -1540,6 +1663,7 @@ fn launch_ready(
     model: Option<&str>,
     title: &str,
     autoclose: bool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1559,6 +1683,7 @@ fn launch_ready(
         &session_id,
         identity,
         Duration::from_millis(READY_TIMEOUT_MS),
+        cancel,
     )?;
     let descriptor = interpreter.describe(&facts);
     ledger.record(
@@ -1652,6 +1777,7 @@ pub(super) fn spawn_detached(
         &session_id,
         &prepared.identity,
         Duration::from_millis(READY_TIMEOUT_MS),
+        None,
     )?;
     let descriptor = interpreter.describe(&facts);
     ledger.record(
@@ -1680,6 +1806,7 @@ fn poll_ready(
     session_id: &SessionId,
     identity: &SpawnIdentity,
     timeout: Duration,
+    cancel: Option<&AtomicBool>,
 ) -> Result<SessionFacts> {
     let started = Instant::now();
     let mut last = ReadinessObservation {
@@ -1688,6 +1815,9 @@ fn poll_ready(
         described: None,
     };
     loop {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            bail!("spawn wait cancelled; the lane was not launched and the round was not opened");
+        }
         let snapshot = terminals
             .snapshot()
             .context("spawn readiness discovery failed")?;
@@ -1731,7 +1861,11 @@ fn poll_ready(
                 timeout.as_millis()
             );
         }
-        std::thread::sleep(READY_POLL_INTERVAL);
+        if cancel.is_some() {
+            std::thread::sleep(READY_CANCEL_POLL_INTERVAL);
+        } else {
+            std::thread::sleep(READY_POLL_INTERVAL);
+        }
     }
 }
 
@@ -1810,6 +1944,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex};
 
+    use qol_terminal_sessions::cli::{
+        CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliTool, CliToolColor,
+        CliToolId,
+    };
     use qol_terminal_sessions::{
         BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities, SessionFocus,
         SessionInventory, SessionSpawner, TerminalBackend, TerminalError, TerminalSnapshot,
@@ -2091,6 +2229,7 @@ mod tests {
             None,
             pending,
             &std::path::PathBuf::from("."),
+            None,
         )
     }
 
@@ -2220,12 +2359,12 @@ mod tests {
     }
 
     #[test]
-    fn spawn_ledger_records_roundtrip_and_are_keyed_by_the_spawn_key() {
+    fn spawn_ledger_records_roundtrip_and_are_keyed_by_the_spawn_key_and_cwd() {
         let root = tempfile::TempDir::new().unwrap();
         let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         let key = SpawnKey::new("lane-ledger").unwrap();
 
-        assert!(ledger.load(&key).unwrap().is_none());
+        assert!(ledger.load(&key, "/work").unwrap().is_none());
         ledger
             .record(
                 &key,
@@ -2236,7 +2375,7 @@ mod tests {
                 Some("01a00a6b"),
             )
             .unwrap();
-        let record = ledger.load(&key).unwrap().unwrap();
+        let record = ledger.load(&key, "/work").unwrap().unwrap();
         assert_eq!(record.key, "lane-ledger");
         assert_eq!(record.tool, "pi");
         assert_eq!(record.surface, "tab");
@@ -2255,7 +2394,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let record = ledger.load(&key).unwrap().unwrap();
+        let record = ledger.load(&key, "/work").unwrap().unwrap();
         assert_eq!(
             record.external_id.as_deref(),
             Some("01a00a6b"),
@@ -2269,6 +2408,69 @@ mod tests {
         assert_eq!(
             record.created_at, record.last_seen,
             "the first record pins created_at and the refresh bumps last_seen"
+        );
+    }
+
+    #[test]
+    fn a_same_key_spawn_in_another_cwd_does_not_reuse_the_stale_external_id() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-ledger").unwrap();
+
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/worktree-a",
+                None,
+                Some("01a00a6b"),
+            )
+            .unwrap();
+        assert_eq!(
+            ledger
+                .load(&key, "/worktree-a")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("01a00a6b"),
+            "the record for the recorded cwd stays visible"
+        );
+        assert!(
+            ledger.load(&key, "/worktree-b").unwrap().is_none(),
+            "the same key in a different cwd must not see the stale record"
+        );
+
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/worktree-b",
+                None,
+                Some("01a00a6c"),
+            )
+            .unwrap();
+        assert_eq!(
+            ledger
+                .load(&key, "/worktree-a")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("01a00a6b"),
+            "the worktree-a record survives the worktree-b spawn"
+        );
+        assert_eq!(
+            ledger
+                .load(&key, "/worktree-b")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("01a00a6c"),
+            "the worktree-b record holds its own id"
         );
     }
 
@@ -2405,7 +2607,7 @@ mod tests {
                 Some("01a00a6c"),
             )
             .unwrap();
-        let record = ledger.load(&key).unwrap().unwrap();
+        let record = ledger.load(&key, "/work").unwrap().unwrap();
         assert_eq!(
             record.model.as_deref(),
             Some("flash-x"),
@@ -2434,6 +2636,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_millis(300),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -2487,7 +2690,7 @@ mod tests {
         );
         assert!(
             ledger
-                .load(&SpawnKey::new("lane-dead-tool").unwrap())
+                .load(&SpawnKey::new("lane-dead-tool").unwrap(), "/work")
                 .unwrap()
                 .is_none(),
             "a lane that never came up must not leave a spawn record behind"
@@ -3726,6 +3929,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_millis(200),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3749,6 +3953,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_secs(1),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3770,6 +3975,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_millis(200),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3791,6 +3997,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_millis(200),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3824,6 +4031,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_secs(2),
+            None,
         )
         .unwrap();
         assert_eq!(facts.binding().unwrap().root_pid(), 10);
@@ -3835,6 +4043,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_secs(2),
+            None,
         )
         .unwrap();
         assert_eq!(interpreter.describe(&facts).tool.id.to_string(), "codex");
@@ -3846,6 +4055,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_secs(2),
+            None,
         )
         .unwrap();
         assert_eq!(facts.binding().unwrap().token(), "v1:kitty:spawn-lane-1:10");
@@ -3869,6 +4079,7 @@ mod tests {
             &session_id,
             &identity,
             Duration::from_secs(1),
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -4153,5 +4364,272 @@ mod tests {
             decide(&interpreter, &[first, second], &codex),
             SpawnDecision::Ambiguous(2)
         );
+    }
+
+    fn unresolved_facts(key: &str, cwd: &str) -> SessionFacts {
+        SessionFacts {
+            id: SessionId::new(BackendId::new("kitty").unwrap(), format!("spawn-{key}")).unwrap(),
+            root_pid: 200,
+            cwd: cwd.to_owned(),
+            title: "Spawned".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: vec!["zed".to_owned()],
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: Some(identity(key, "pi", SpawnSurface::Tab)),
+        }
+    }
+
+    struct FixedExternalIdStrategy {
+        external_id: Option<String>,
+        authoritative: bool,
+    }
+
+    impl CliSessionStrategy for FixedExternalIdStrategy {
+        fn tool(&self) -> &CliTool {
+            static TOOL: std::sync::OnceLock<CliTool> = std::sync::OnceLock::new();
+            TOOL.get_or_init(|| {
+                CliTool::new(
+                    CliToolId::new("pi").unwrap(),
+                    "Pi",
+                    CliToolColor::new(1, 2, 3),
+                )
+            })
+        }
+
+        fn matches(&self, _session: &SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(&self, _session: &SessionFacts) -> CliSessionDescriptor {
+            CliSessionDescriptor {
+                tool: self.tool().clone(),
+                display_name: None,
+                external_id: self.external_id.clone(),
+                external_id_authoritative: self.authoritative,
+                has_activity: None,
+                evidence: CliSessionEvidence::default(),
+            }
+        }
+    }
+
+    #[test]
+    fn a_described_id_that_conflicts_with_the_ledger_record_keeps_the_ledger_id() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-poisoned").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                Some("id-recorded-A"),
+            )
+            .unwrap();
+        let facts = unresolved_facts("lane-poisoned", "/work");
+        let binding = facts.binding().unwrap();
+        let (terminals, _) = harness(vec![vec![facts]]);
+        let interpreter =
+            CliSessionInterpreter::from_strategies([Arc::new(FixedExternalIdStrategy {
+                external_id: Some("id-resolved-B".to_owned()),
+                authoritative: false,
+            }) as Arc<dyn CliSessionStrategy>])
+            .unwrap();
+
+        let captured = capture_lane_external_id(
+            &terminals,
+            &interpreter,
+            &ledger,
+            &locks(&root),
+            &binding,
+            "",
+            None,
+        );
+        assert!(
+            matches!(captured, ExternalIdCapture::Heuristic),
+            "a heuristic resolution is provisional, never final"
+        );
+        assert_eq!(
+            ledger
+                .load(&key, "/work")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("id-recorded-A"),
+            "the ledger id must never be replaced by an unrelated resolution"
+        );
+    }
+
+    #[test]
+    fn an_authoritative_env_resolution_corrects_a_poisoned_ledger_record() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-poisoned").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                Some("id-recorded-A"),
+            )
+            .unwrap();
+        let facts = unresolved_facts("lane-poisoned", "/work");
+        let binding = facts.binding().unwrap();
+        let (terminals, _) = harness(vec![vec![facts]]);
+        let interpreter =
+            CliSessionInterpreter::from_strategies([Arc::new(FixedExternalIdStrategy {
+                external_id: Some("id-resolved-B".to_owned()),
+                authoritative: true,
+            }) as Arc<dyn CliSessionStrategy>])
+            .unwrap();
+
+        let captured = capture_lane_external_id(
+            &terminals,
+            &interpreter,
+            &ledger,
+            &locks(&root),
+            &binding,
+            "",
+            None,
+        );
+        assert!(
+            matches!(captured, ExternalIdCapture::Authoritative),
+            "an authoritative resolution finalizes the capture"
+        );
+        assert_eq!(
+            ledger
+                .load(&key, "/work")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("id-resolved-B"),
+            "the process env is the truth: it must repair a poisoned spawn-time guess"
+        );
+    }
+
+    #[test]
+    fn a_resumed_lane_captures_its_external_id_from_the_ledger_when_description_cannot_resolve() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-resumed").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                Some("019feb29-6312d38b"),
+            )
+            .unwrap();
+        let facts = unresolved_facts("lane-resumed", "/work");
+        let binding = facts.binding().unwrap();
+        let (terminals, _) = harness(vec![vec![facts]]);
+
+        let captured = capture_lane_external_id(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            &binding,
+            "",
+            None,
+        );
+        assert!(
+            matches!(captured, ExternalIdCapture::Heuristic),
+            "the ledger fallback is provisional until the env can confirm"
+        );
+        assert_eq!(
+            ledger
+                .load(&key, "/work")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("019feb29-6312d38b"),
+            "the resumed id must stay recorded"
+        );
+    }
+
+    #[test]
+    fn the_round_marker_pins_the_lane_to_its_own_transcript() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-marked").unwrap();
+        let facts = unresolved_facts("lane-marked", "/work");
+        let binding = facts.binding().unwrap();
+        let (terminals, _) = harness(vec![vec![facts]]);
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let sibling =
+            encoded_dir.join("2026-08-24T19-22-22-314Z_01a03539-4aea-7cfa-98f8-16378157ce45.jsonl");
+        let own =
+            encoded_dir.join("2026-08-24T19-22-27-530Z_01a03539-5f4a-70fb-a215-36e00f9f3323.jsonl");
+        std::fs::write(&sibling, "no marker here").unwrap();
+        std::fs::write(&own, "task text ... QOL_BRIDGE_DONE_marker-abc123 ...").unwrap();
+        let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
+        std::env::set_var("PI_CODING_AGENT_SESSION_DIR", session_dir.path());
+        let captured = capture_lane_external_id(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            &binding,
+            "QOL_BRIDGE_DONE_marker-abc123",
+            Some(std::time::UNIX_EPOCH),
+        );
+        match previous {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
+        }
+        assert!(
+            matches!(captured, ExternalIdCapture::Authoritative),
+            "the transcript containing the round marker is the authoritative identity"
+        );
+        assert_eq!(
+            ledger
+                .load(&key, "/work")
+                .unwrap()
+                .unwrap()
+                .external_id
+                .as_deref(),
+            Some("01a03539-5f4a-70fb-a215-36e00f9f3323"),
+            "the marker pins the lane to its own file, not a sibling's"
+        );
+    }
+
+    #[test]
+    fn a_fresh_lane_without_a_ledger_record_stays_unresolved() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let facts = unresolved_facts("lane-fresh", "/work");
+        let binding = facts.binding().unwrap();
+        let (terminals, _) = harness(vec![vec![facts]]);
+
+        let captured = capture_lane_external_id(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            &binding,
+            "",
+            None,
+        );
+        assert!(
+            matches!(captured, ExternalIdCapture::Unresolved),
+            "without a ledger record the unresolved description must fall through"
+        );
+        assert!(ledger
+            .load(&SpawnKey::new("lane-fresh").unwrap(), "/work")
+            .unwrap()
+            .is_none());
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -256,12 +257,14 @@ impl TextInput for TerminalSessionService {
 pub const WAIT_BACKOFF_BASE: Duration = Duration::from_secs(3);
 pub const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(15);
 const WAIT_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
+pub const WAIT_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub struct WaitOutcome {
     pub completed: bool,
     pub submitted: bool,
     pub stalled: bool,
+    pub cancelled: bool,
     pub screen: String,
     pub reads: u64,
     pub elapsed: Duration,
@@ -295,6 +298,32 @@ impl TerminalSessionService {
         liveness: &dyn Fn() -> Option<bool>,
         stall_after: Duration,
     ) -> Result<WaitOutcome, TerminalError> {
+        self.wait_for_completion_with_cancel(
+            binding,
+            marker,
+            timeout,
+            changed,
+            subscribed,
+            submitted,
+            liveness,
+            stall_after,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn wait_for_completion_with_cancel(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        timeout: Duration,
+        changed: mpsc::Receiver<()>,
+        subscribed: bool,
+        submitted: bool,
+        liveness: &dyn Fn() -> Option<bool>,
+        stall_after: Duration,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<WaitOutcome, TerminalError> {
         self.wait_for_completion_with_backoff(
             binding,
             marker,
@@ -306,6 +335,7 @@ impl TerminalSessionService {
             stall_after,
             self.wait_backoff,
             &mut |duration| std::thread::sleep(duration),
+            cancel,
         )
     }
 
@@ -322,6 +352,7 @@ impl TerminalSessionService {
         stall_after: Duration,
         backoff: WaitBackoff,
         sleep: &mut dyn FnMut(Duration),
+        cancel: Option<&AtomicBool>,
     ) -> Result<WaitOutcome, TerminalError> {
         let started = Instant::now();
         let mut previous = None;
@@ -330,6 +361,17 @@ impl TerminalSessionService {
         let mut reads = 0u64;
         let mut current_backoff = backoff.base;
         loop {
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Ok(WaitOutcome {
+                    completed: false,
+                    submitted,
+                    stalled: false,
+                    cancelled: true,
+                    screen: String::new(),
+                    reads,
+                    elapsed: started.elapsed(),
+                });
+            }
             reads += 1;
             let screen = if reads.is_multiple_of(10) {
                 self.read_screen(binding)?
@@ -342,6 +384,7 @@ impl TerminalSessionService {
                     completed: true,
                     submitted,
                     stalled: false,
+                    cancelled: false,
                     screen,
                     reads,
                     elapsed: started.elapsed(),
@@ -359,6 +402,7 @@ impl TerminalSessionService {
                     completed: false,
                     submitted,
                     stalled: true,
+                    cancelled: false,
                     screen: previous.clone().unwrap_or_default(),
                     reads,
                     elapsed: started.elapsed(),
@@ -370,18 +414,22 @@ impl TerminalSessionService {
                     completed: false,
                     submitted,
                     stalled: false,
+                    cancelled: false,
                     screen: previous.clone().unwrap_or_default(),
                     reads,
                     elapsed,
                 });
             }
             let remaining = timeout.saturating_sub(elapsed);
-            let interval = if matched {
+            let mut interval = if matched {
                 WAIT_SETTLE_INTERVAL
             } else {
                 current_backoff
             }
             .min(remaining);
+            if cancel.is_some() {
+                interval = interval.min(WAIT_CANCEL_POLL_INTERVAL);
+            }
             if grow_backoff {
                 current_backoff = next_backoff(current_backoff, backoff.cap);
             }
@@ -703,6 +751,7 @@ mod tests {
                     requested.push(duration);
                     std::thread::sleep(duration);
                 },
+                None,
             )
             .unwrap();
 
@@ -778,6 +827,7 @@ mod tests {
                     requested.push(duration);
                     std::thread::sleep(duration);
                 },
+                None,
             )
             .unwrap();
 
@@ -851,6 +901,7 @@ mod tests {
                     requested.push(duration);
                     std::thread::sleep(duration);
                 },
+                None,
             )
             .unwrap();
 

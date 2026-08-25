@@ -1,4 +1,5 @@
 mod environment;
+pub use self::environment::session_file_containing_marker;
 mod metadata;
 
 #[cfg(test)]
@@ -61,6 +62,7 @@ impl CliSessionStrategy for PiStrategy {
                 .or(metadata.session_name)
                 .or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
+            external_id_authoritative: metadata.external_id_authoritative,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
                 runtime: metadata.runtime,

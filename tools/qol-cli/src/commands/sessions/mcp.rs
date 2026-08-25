@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
@@ -24,6 +26,7 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub(super) const WAIT_TIMEOUT_MIN_MS: u64 = 1_000;
 pub(super) const WAIT_TIMEOUT_DEFAULT_MS: u64 = 30_000;
 pub(super) const WAIT_TIMEOUT_MAX_MS: u64 = 600_000;
+const PROGRESS_NOTIFY_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct McpSessionServer {
     terminals: Arc<TerminalSessionService>,
@@ -119,13 +122,12 @@ impl McpSessionServer {
         }
     }
 
+    #[cfg(test)]
     fn handle_line(&self, line: &str) -> Option<Value> {
-        if line.trim().is_empty() {
-            return None;
-        }
-        let message: Value = match serde_json::from_str(line) {
-            Ok(message) => message,
-            Err(_) => return Some(error(None, ERROR_PARSE, "parse error: invalid JSON")),
+        let message = match parse_json_line(line) {
+            Ok(Some(message)) => message,
+            Ok(None) => return None,
+            Err(response) => return Some(response),
         };
         message.get("id")?;
         let method = match message.get("method").and_then(Value::as_str) {
@@ -178,26 +180,35 @@ impl McpSessionServer {
     }
 
     fn call_tool(&self, id: Value, params: Value) -> Value {
+        self.call_tool_with_cancel(&id, &params, None)
+    }
+
+    fn call_tool_with_cancel(
+        &self,
+        id: &Value,
+        params: &Value,
+        cancel: Option<&AtomicBool>,
+    ) -> Value {
         let name = params.get("name").and_then(Value::as_str);
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
         let Some(name) = name else {
             return error(
-                Some(id),
+                Some(id.clone()),
                 ERROR_INVALID_PARAMS,
                 "tools/call requires a tool name",
             );
         };
         let outcome = match name {
             "sessions_list" => self.tool_list_sessions(),
-            "session_spawn" => self.tool_spawn(arguments),
+            "session_spawn" => self.tool_spawn(arguments, cancel),
             "session_fork" => self.tool_fork(arguments),
             "session_submit" => self.tool_submit(arguments),
-            "session_bridge" => self.tool_bridge(arguments),
+            "session_bridge" => self.tool_bridge(arguments, cancel),
             "session_loop_close" => self.close_loop(arguments),
             "session_close" => self.tool_close(arguments),
             other => {
                 return error(
-                    Some(id),
+                    Some(id.clone()),
                     ERROR_INVALID_PARAMS,
                     format!("unknown tool: {other}"),
                 );
@@ -208,7 +219,7 @@ impl McpSessionServer {
             Err(message) => (message, true),
         };
         result(
-            id,
+            id.clone(),
             json!({
                 "content": [{ "type": "text", "text": text }],
                 "isError": is_error,
@@ -232,9 +243,9 @@ impl McpSessionServer {
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_spawn(&self, arguments: Value) -> Result<String, String> {
+    fn tool_spawn(&self, arguments: Value, cancel: Option<&AtomicBool>) -> Result<String, String> {
         if arguments.get("lanes").is_some() {
-            return self.tool_spawn_lanes(&arguments);
+            return self.tool_spawn_lanes(&arguments, cancel);
         }
         let tool = string_argument(&arguments, "tool")?;
         let cwd = string_argument(&arguments, "cwd")?;
@@ -316,6 +327,7 @@ impl McpSessionServer {
             group.as_deref(),
             &self.pending,
             &self.reports_dir,
+            cancel,
         )
         .map_err(|error| error.to_string())?;
         if outcome.task_submitted == Some(true) {
@@ -324,7 +336,11 @@ impl McpSessionServer {
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_spawn_lanes(&self, arguments: &Value) -> Result<String, String> {
+    fn tool_spawn_lanes(
+        &self,
+        arguments: &Value,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<String, String> {
         let tool = string_argument(arguments, "tool")?;
         let cwd = string_argument(arguments, "cwd")?;
         for rejected in ["key", "task", "title"] {
@@ -374,6 +390,7 @@ impl McpSessionServer {
             group.as_deref(),
             &self.pending,
             &self.reports_dir,
+            cancel,
         )
         .map_err(|error| error.to_string())?;
         for lane in &outcome.lanes {
@@ -416,6 +433,7 @@ impl McpSessionServer {
             title.as_deref(),
             brief,
             parent.as_deref(),
+            self.spawn_cap.as_ref(),
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -460,7 +478,7 @@ impl McpSessionServer {
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_bridge(&self, arguments: Value) -> Result<String, String> {
+    fn tool_bridge(&self, arguments: Value, cancel: Option<&AtomicBool>) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
         if arguments.get("task").is_some() {
             return Err("session_bridge takes no `task`: delivery belongs to session_spawn and session_submit, and bridge only collects the round after its wake. Resend this call without that argument.".to_owned());
@@ -481,6 +499,7 @@ impl McpSessionServer {
             &self.locks,
             &self.reports_dir,
             false,
+            cancel,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -641,21 +660,170 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: {}", help_text().trim_end());
     }
-    let server = McpSessionServer::system()?;
+    let server = Arc::new(McpSessionServer::system()?);
     server.watcher.start(&server.pending);
-    let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut output = BufWriter::new(stdout.lock());
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if let Some(response) = server.handle_line(&line) {
-            serde_json::to_writer(&mut output, &response)?;
-            output.write_all(b"\n")?;
-            output.flush()?;
-        }
-    }
+    let writer = Arc::new(Mutex::new(BufWriter::new(stdout)));
+    let cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let workers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+    let reader = {
+        let server = Arc::clone(&server);
+        let writer = Arc::clone(&writer);
+        let cancellations = Arc::clone(&cancellations);
+        let workers = Arc::clone(&workers);
+        std::thread::spawn(move || -> Result<()> {
+            let stdin = io::stdin();
+            for line in stdin.lock().lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                dispatch_line(&server, &writer, &cancellations, &workers, &line)?;
+            }
+            let pending_flags: Vec<Arc<AtomicBool>> =
+                cancellations.lock().unwrap().values().cloned().collect();
+            for flag in pending_flags {
+                flag.store(true, Ordering::SeqCst);
+            }
+            for worker in workers.lock().unwrap().drain(..) {
+                let _ = worker.join();
+            }
+            Ok(())
+        })
+    };
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("the sessions MCP reader thread panicked"))??;
     server.watcher.stop();
     Ok(())
+}
+
+fn dispatch_line<W: Write + Send + Sync + 'static>(
+    server: &Arc<McpSessionServer>,
+    writer: &Arc<Mutex<BufWriter<W>>>,
+    cancellations: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    line: &str,
+) -> Result<()> {
+    let message = match parse_json_line(line) {
+        Ok(Some(message)) => message,
+        Ok(None) => return Ok(()),
+        Err(response) => {
+            write_response(writer, &response)?;
+            return Ok(());
+        }
+    };
+    let id = message.get("id").cloned();
+    let method = message.get("method").and_then(Value::as_str);
+    if method == Some("notifications/cancelled") {
+        if let Some(request_id) = message.pointer("/params/requestId").cloned() {
+            let key = request_id_key(&request_id);
+            if let Some(flag) = cancellations.lock().unwrap().get(&key) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+        if let Some(id) = id {
+            write_response(writer, &result(id, json!({})))?;
+        }
+        return Ok(());
+    }
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let Some(method) = method else {
+        write_response(
+            writer,
+            &error(
+                Some(id),
+                ERROR_INVALID_REQUEST,
+                "invalid request: missing method",
+            ),
+        )?;
+        return Ok(());
+    };
+    if method == "tools/call" {
+        let flag = Arc::new(AtomicBool::new(false));
+        cancellations
+            .lock()
+            .unwrap()
+            .insert(request_id_key(&id), Arc::clone(&flag));
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let progress_token = params
+            .get("_meta")
+            .and_then(|meta| meta.get("progressToken"))
+            .cloned();
+        let server = Arc::clone(server);
+        let writer = Arc::clone(writer);
+        let cancellations = Arc::clone(cancellations);
+        let worker = std::thread::spawn(move || {
+            let done = Arc::new(AtomicBool::new(false));
+            if let Some(token) = &progress_token {
+                let writer = Arc::clone(&writer);
+                let done = Arc::clone(&done);
+                let token = token.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(PROGRESS_NOTIFY_INTERVAL);
+                    if done.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let _ = write_response(
+                        &writer,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/progress",
+                            "params": {
+                                "progressToken": token,
+                                "progress": 0,
+                                "total": 1,
+                                "message": "round still open",
+                            },
+                        }),
+                    );
+                });
+            }
+            let response = server.call_tool_with_cancel(&id, &params, Some(&flag));
+            done.store(true, Ordering::SeqCst);
+            if let Err(error) = write_response(&writer, &response) {
+                qol_runtime::probe!(
+                    "CLI_SESSION_MCP",
+                    "event=response_write_failed id={} error={}",
+                    id,
+                    error
+                );
+            }
+            cancellations.lock().unwrap().remove(&request_id_key(&id));
+        });
+        workers.lock().unwrap().push(worker);
+        return Ok(());
+    }
+    let params = message.get("params").cloned().unwrap_or(Value::Null);
+    write_response(writer, &server.handle(method, params, id))?;
+    Ok(())
+}
+
+fn write_response<W: Write + Send + Sync + 'static>(
+    writer: &Arc<Mutex<BufWriter<W>>>,
+    response: &Value,
+) -> io::Result<()> {
+    let mut output = writer.lock().unwrap();
+    serde_json::to_writer(&mut *output, response)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
+fn request_id_key(id: &Value) -> String {
+    id.to_string()
+}
+
+fn parse_json_line(line: &str) -> Result<Option<Value>, Value> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    match serde_json::from_str(line) {
+        Ok(message) => Ok(Some(message)),
+        Err(_) => Err(error(None, ERROR_PARSE, "parse error: invalid JSON")),
+    }
 }
 
 fn help_text() -> String {
@@ -1259,6 +1427,7 @@ mod tests {
             &|| Some(false),
             Duration::from_millis(50),
             super::super::bridge::Role::Architect,
+            None,
         )
         .unwrap();
         assert!(!outcome.completed);
@@ -1282,6 +1451,7 @@ mod tests {
             &|| Some(true),
             Duration::from_millis(50),
             super::super::bridge::Role::Architect,
+            None,
         )
         .unwrap();
         assert!(!outcome.completed);
@@ -1882,6 +2052,56 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("no longer live"));
+        assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_accepted_works_on_an_autoclosed_lane_whose_checkpoint_is_closed() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "mcp-lane-auto", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server.pending.observe(&binding, &marker, true).unwrap();
+        server
+            .pending
+            .close_checkpoints_for_session(&binding.token())
+            .unwrap();
+        backend.mark_gone();
+
+        let mut arguments = close_arguments("accepted");
+        arguments["session"] = json!(session);
+        arguments["completion_marker"] = json!(marker);
+        let response = tool_call(&server, "session_loop_close", arguments);
+        assert_eq!(
+            response["result"]["isError"], false,
+            "the architect must be able to close the feature loop after the lane autoclosed: {}",
+            response["result"]["content"][0]["text"]
+        );
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "accepted");
+        assert_eq!(receipt["terminal_closed"], true);
+        assert_eq!(receipt["terminal_state"], "already_gone");
+        assert!(
+            server.pending.discard(&binding).is_err(),
+            "the loop close must delete the closed checkpoint"
+        );
         assert!(backend.closed.lock().unwrap().is_empty());
     }
 
@@ -3241,5 +3461,285 @@ mod tests {
             assert!(message.contains(expected), "{argument}: {message}");
         }
         assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
+    }
+
+    type TestWriter = Arc<Mutex<BufWriter<Vec<u8>>>>;
+    type ScriptedContext = (
+        Arc<McpSessionServer>,
+        TestWriter,
+        Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+        Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    );
+
+    fn scripted_harness(server: McpSessionServer) -> ScriptedContext {
+        let server = Arc::new(server);
+        let writer = Arc::new(Mutex::new(BufWriter::new(Vec::new())));
+        let cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let workers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        (server, writer, cancellations, workers)
+    }
+
+    fn feed_line(
+        server: &Arc<McpSessionServer>,
+        writer: &TestWriter,
+        cancellations: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+        workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+        line: &Value,
+    ) {
+        dispatch_line(
+            server,
+            writer,
+            cancellations,
+            workers,
+            &serde_json::to_string(line).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn read_responses(writer: &TestWriter) -> Vec<Value> {
+        let data = writer.lock().unwrap().get_ref().clone();
+        String::from_utf8(data)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    fn wait_for_responses(writer: &TestWriter, count: usize, deadline: Duration) -> Vec<Value> {
+        let started = Instant::now();
+        loop {
+            let responses = read_responses(writer);
+            if responses.len() >= count {
+                return responses;
+            }
+            assert!(
+                started.elapsed() < deadline,
+                "timed out after {:?} waiting for {count} responses; got {}: {:?}",
+                deadline,
+                responses.len(),
+                responses
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn drain_workers(workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>) {
+        for worker in workers.lock().unwrap().drain(..) {
+            let _ = worker.join();
+        }
+    }
+
+    fn pending_bridge_request(id: i64) -> Value {
+        request(
+            id,
+            "tools/call",
+            json!({ "name": "session_bridge", "arguments": { "session": token() } }),
+        )
+    }
+
+    #[test]
+    fn a_ping_is_answered_while_a_bridge_call_is_still_in_flight() {
+        let (server, _backend) = server(Vec::new(), false, false);
+        let (server, writer, cancellations, workers) = scripted_harness(server);
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(
+                1,
+                "tools/call",
+                json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
+            ),
+        );
+        wait_for_responses(&writer, 1, Duration::from_secs(2));
+
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &pending_bridge_request(2),
+        );
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(3, "ping", json!({})),
+        );
+        let responses = wait_for_responses(&writer, 3, Duration::from_secs(2));
+        assert_eq!(
+            responses[1]["id"], 3,
+            "the ping must be answered while the bridge is still waiting: {responses:?}"
+        );
+        assert_eq!(responses[2]["id"], 2);
+        drain_workers(&workers);
+    }
+
+    #[test]
+    fn a_cancelled_bridge_releases_the_owner_and_leaves_the_round_open() {
+        let (mut server, _backend) = server(Vec::new(), false, false);
+        let binding: SessionBinding = token().parse().unwrap();
+        server.round_timeout = Duration::from_secs(30);
+        let (server, writer, cancellations, workers) = scripted_harness(server);
+
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(
+                1,
+                "tools/call",
+                json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
+            ),
+        );
+        wait_for_responses(&writer, 1, Duration::from_secs(2));
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &pending_bridge_request(5),
+        );
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        while server.pending.owner_pid(&binding).is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the bridge never attached to the round"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": { "requestId": 5 },
+            }),
+        );
+        let responses = wait_for_responses(&writer, 2, Duration::from_secs(3));
+        assert_eq!(
+            responses[1]["id"], 5,
+            "the cancelled bridge must respond promptly: {responses:?}"
+        );
+        assert_eq!(responses[1]["result"]["isError"], true);
+        assert!(
+            responses[1]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled"),
+            "the cancellation must be named: {responses:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the cancelled bridge took {:?} to return",
+            started.elapsed()
+        );
+
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.completed,
+            "cancelling a bridge must not complete the round"
+        );
+        assert!(
+            server.pending.owner_pid(&binding).is_none(),
+            "the cancelled bridge must release its attach"
+        );
+        drain_workers(&workers);
+    }
+
+    #[test]
+    fn a_cancelled_pi_bridge_releases_the_owner_and_leaves_the_round_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(FakeBackend::new(Vec::new(), false, false));
+        let pi_facts = SessionFacts {
+            id: SessionId::new(BackendId::new("fake").unwrap(), "9").unwrap(),
+            root_pid: 300,
+            cwd: "/work/demo".to_owned(),
+            title: "Pi REPL".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: vec!["pi".to_owned()],
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        };
+        backend.add_lane(pi_facts);
+        let mut server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let binding: SessionBinding = "v1:fake:9:300".parse().unwrap();
+        server.round_timeout = Duration::from_secs(30);
+        let (server, writer, cancellations, workers) = scripted_harness(server);
+
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(
+                1,
+                "tools/call",
+                json!({ "name": "session_submit", "arguments": { "session": "v1:fake:9:300", "task": "implement the bounded change" } }),
+            ),
+        );
+        let submitted = wait_for_responses(&writer, 1, Duration::from_secs(2));
+        assert_eq!(
+            submitted[0]["result"]["isError"], false,
+            "submit failed: {submitted:?}"
+        );
+
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(
+                6,
+                "tools/call",
+                json!({ "name": "session_bridge", "arguments": { "session": "v1:fake:9:300" } }),
+            ),
+        );
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        while server.pending.owner_pid(&binding).is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the bridge never attached to the round"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": { "requestId": 6 },
+            }),
+        );
+        let responses = wait_for_responses(&writer, 2, Duration::from_secs(3));
+        assert_eq!(responses[1]["id"], 6, "{responses:?}");
+        assert_eq!(responses[1]["result"]["isError"], true);
+        assert!(
+            responses[1]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled"),
+            "{responses:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(!round.completed);
+        assert!(server.pending.owner_pid(&binding).is_none());
+        drain_workers(&workers);
     }
 }

@@ -400,6 +400,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
             &locks,
             &bridge::trace_dir(),
             parsed.acknowledge_marker.as_deref(),
+            None,
         )?,
         None => {
             if parsed.acknowledge_marker.is_some() {
@@ -417,6 +418,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
                 &locks,
                 &bridge::trace_dir(),
                 false,
+                None,
             )?
         }
     };
@@ -543,6 +545,7 @@ fn run_resume(args: &[OsString]) -> Result<()> {
         &spawn::SpawnLocks::system()?,
         &bridge::trace_dir(),
         kickstart,
+        None,
     )?;
     println!(
         "{}",

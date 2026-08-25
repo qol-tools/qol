@@ -10,7 +10,8 @@ use qol_terminal_sessions::TerminalSessionService;
 use serde::{Deserialize, Serialize};
 
 use super::spawn::{
-    config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached, SpawnLedger, SpawnLocks,
+    config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached, SpawnCapConfig,
+    SpawnLedger, SpawnLocks,
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
@@ -208,6 +209,7 @@ pub(super) fn fork(
     title: Option<&str>,
     brief: &str,
     parent: Option<&str>,
+    cap: Option<&SpawnCapConfig>,
 ) -> Result<ForkOutcome> {
     validate_brief(brief)?;
     let tool_id = CliToolId::new(tool.to_owned())
@@ -229,7 +231,7 @@ pub(super) fn fork(
         &extra,
         title,
         config_surface()?,
-        resolve_spawn_cap(config_spawn_cap()?).as_ref(),
+        cap,
         &prompt,
     )?;
     let record = ForkRecord {
@@ -302,6 +304,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         parsed.title.as_deref(),
         &brief,
         parsed.parent.as_deref(),
+        resolve_spawn_cap(config_spawn_cap()?).as_ref(),
     )?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
     Ok(())

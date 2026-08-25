@@ -59,6 +59,7 @@ impl CliSessionStrategy for KimiStrategy {
             tool: self.tool.clone(),
             display_name: metadata.session_name.or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
+            external_id_authoritative: false,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
                 runtime: CliRuntimeState::Unknown,

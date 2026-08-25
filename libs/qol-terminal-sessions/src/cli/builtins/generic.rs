@@ -54,6 +54,7 @@ impl CliSessionStrategy for GenericStrategy {
             tool: self.tool.clone(),
             display_name,
             external_id: None,
+            external_id_authoritative: false,
             has_activity: None,
             evidence: CliSessionEvidence::default(),
         }

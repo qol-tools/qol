@@ -62,6 +62,7 @@ impl CliSessionStrategy for ClaudeStrategy {
                 .or_else(|| clean_title(&session.title))
                 .or_else(|| fallback_name(session)),
             external_id: metadata.external_id,
+            external_id_authoritative: false,
             has_activity: metadata.has_activity,
             evidence: CliSessionEvidence {
                 runtime: metadata.runtime,
