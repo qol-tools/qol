@@ -29,6 +29,7 @@ const DBUS_IFACE = `
 
 const OBJECT_PATH = "/org/qol/AltTabPreviewPlane";
 const DEFAULT_TTL_MS = 4500;
+const DESELECTED_CLONE_OPACITY = 184;
 
 let plane = null;
 
@@ -182,6 +183,9 @@ class PreviewPlane {
         container.set_position(x, y);
         container.set_size(w, h);
         container.set_clip(0, 0, w, h);
+        if (!selected) {
+            container.set_opacity(DESELECTED_CLONE_OPACITY);
+        }
         this._group.add_actor(container);
 
         const inset = chrome ? 8 : 0;

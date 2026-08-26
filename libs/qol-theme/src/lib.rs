@@ -1426,7 +1426,11 @@ impl PickerSurfacePalette {
                 mix_rgb(card_bg, system.text_primary, 0.13),
                 mix_rgb(card_bg, system.text_primary, 0.36),
             ),
-            None => (system.surface_hovered, system.accent_fill, system.accent),
+            None => (
+                system.surface_hovered,
+                mix_rgb(system.surface_raised, system.accent, 0.28),
+                system.accent,
+            ),
         };
         Self {
             panel_bg: mix_rgb(card_bg, system.surface_canvas, 0.56),

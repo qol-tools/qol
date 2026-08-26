@@ -24,6 +24,8 @@ static RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+pub(crate) const DESELECTED_CARD_OPACITY: f32 = 0.72;
+
 struct RenderSnap {
     selected_index: Option<usize>,
     visible: bool,
@@ -374,6 +376,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> D
                 .p(px(stepped.card_padding))
                 .when(snap.visible, |el| el.cursor_pointer())
                 .map(|el| card_bg(el, is_selected, snap))
+                .when(!is_selected, |el| el.opacity(DESELECTED_CARD_OPACITY))
                 .child(render_preview(win, context, &stepped))
                 .child(render_label(
                     i,
