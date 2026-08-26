@@ -148,6 +148,24 @@ pub(super) enum RowControl {
     },
 }
 
+/// Whether a row whose value comes from a runtime query has heard back yet.
+/// Without this a wedged plugin daemon is indistinguishable from a healthy one
+/// showing its defaults, which is the silent failure the mission forbids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) enum RowQueryState {
+    /// The row has no runtime query, or its poller has not started.
+    #[default]
+    Idle,
+    /// A sample is in flight and no value has ever landed. `since` lets the
+    /// view hold the indicator back until a query is actually slow, so healthy
+    /// plugins never flash a spinner.
+    Loading { since: std::time::Instant },
+    /// The last sample succeeded.
+    Ready,
+    /// The last sample failed or exceeded its budget.
+    Unavailable(String),
+}
+
 pub(super) struct Row {
     pub(super) id: String,
     pub(super) section_id: Option<String>,
@@ -716,45 +734,40 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
     }
 }
 
+/// Every runtime query this single row's value depends on.
+pub(super) fn row_query_names(row: &Row) -> Vec<&str> {
+    match &row.control {
+        RowControl::Select {
+            dynamic: Some(dynamic),
+            ..
+        }
+        | RowControl::MultiSelect {
+            dynamic: Some(dynamic),
+            ..
+        } => vec![dynamic.name.as_str()],
+        RowControl::Action {
+            active_query: Some(query),
+            ..
+        } => vec![query.as_str()],
+        RowControl::Status { query, .. } | RowControl::Gamepad { query, .. } => {
+            vec![query.as_str()]
+        }
+        RowControl::List {
+            query,
+            active_query,
+            ..
+        } => std::iter::once(query.as_str())
+            .chain(active_query.as_deref())
+            .collect(),
+        RowControl::QrCode { query, .. } if !query.is_empty() => vec![query.as_str()],
+        _ => Vec::new(),
+    }
+}
+
 pub(super) fn runtime_query_names<'a>(rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for row in rows {
-        match &row.control {
-            RowControl::Select {
-                dynamic: Some(dynamic),
-                ..
-            }
-            | RowControl::MultiSelect {
-                dynamic: Some(dynamic),
-                ..
-            } => {
-                names.insert(dynamic.name.clone());
-            }
-            RowControl::Action {
-                active_query: Some(query),
-                ..
-            } => {
-                names.insert(query.clone());
-            }
-            RowControl::Status { query, .. } => {
-                names.insert(query.clone());
-            }
-            RowControl::List {
-                query,
-                active_query,
-                ..
-            } => {
-                names.insert(query.clone());
-                names.extend(active_query.iter().cloned());
-            }
-            RowControl::Gamepad { query, .. } => {
-                names.insert(query.clone());
-            }
-            RowControl::QrCode { query, .. } if !query.is_empty() => {
-                names.insert(query.clone());
-            }
-            _ => {}
-        }
+        names.extend(row_query_names(row).into_iter().map(str::to_owned));
     }
     names.into_iter().collect()
 }

@@ -14,8 +14,9 @@ use super::persistence::{panel_base, save_values};
 use super::rows::{
     apply_runtime_query, begin_list_item_action, filtered_list_items, list_item_actions,
     list_slider_value, merged_config, primary_list_item_action, query_flag_value, row_action,
-    row_streams, runtime_query_names, selected_list_item, stream_gated, ListActions, ListItem,
-    ListSlider, Row, RowControl, RowSection, SelectOption, SliderHold,
+    row_query_names, row_streams, runtime_query_names, selected_list_item, stream_gated,
+    ListActions, ListItem, ListSlider, Row, RowControl, RowQueryState, RowSection, SelectOption,
+    SliderHold,
 };
 use super::{SettingsPanel, SettingsRuntime, SourceState};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
@@ -37,6 +38,8 @@ const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 /// How long the rail selection must hold still before its source starts polling.
 const SOURCE_SWITCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
+/// How long a runtime query may take before its row admits it is waiting.
+const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
@@ -101,6 +104,35 @@ fn transition_policy(in_flight: bool, state_changed: bool) -> Option<TransitionA
 
 fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Instant) -> bool {
     started.is_some_and(|started| now.duration_since(started) < RAIL_TRANSITION)
+}
+
+/// Collapses the states of every query a row depends on into the one the row
+/// should show. Unavailable wins over loading, loading wins over ready, and a
+/// query still inside its grace period is treated as ready so healthy plugins
+/// never flash an indicator.
+fn rollup_query_state<'a>(
+    states: impl Iterator<Item = Option<&'a RowQueryState>>,
+    grace: std::time::Duration,
+    now: std::time::Instant,
+) -> RowQueryState {
+    let mut rolled = RowQueryState::Idle;
+    for state in states {
+        match state {
+            Some(RowQueryState::Unavailable(message)) => {
+                return RowQueryState::Unavailable(message.clone());
+            }
+            Some(RowQueryState::Loading { since })
+                if now.saturating_duration_since(*since) >= grace =>
+            {
+                rolled = RowQueryState::Loading { since: *since };
+            }
+            Some(RowQueryState::Ready) if rolled == RowQueryState::Idle => {
+                rolled = RowQueryState::Ready
+            }
+            _ => {}
+        }
+    }
+    rolled
 }
 
 fn query_is_due(due: Option<std::time::Instant>, now: std::time::Instant) -> bool {
@@ -265,6 +297,10 @@ pub(super) struct SettingsPanelView {
     slider_pending: std::collections::HashSet<(usize, String)>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
+    /// Per-source query freshness, so a row backed by a wedged daemon can say
+    /// so instead of silently rendering its contract default. Keyed by source
+    /// because query names repeat across plugins.
+    query_states: std::collections::HashMap<(usize, String), RowQueryState>,
     frame_pump_armed: bool,
     motion_tick: Option<std::time::Instant>,
     sample_signal: Option<std::sync::Arc<SampleSignal>>,
@@ -394,6 +430,7 @@ impl SettingsPanelView {
             slider_pending: std::collections::HashSet::new(),
             frame_paced_samples: None,
             applied_query_payloads: std::collections::HashMap::new(),
+            query_states: std::collections::HashMap::new(),
             frame_pump_armed: false,
             motion_tick: None,
             sample_signal: None,
@@ -817,6 +854,14 @@ impl SettingsPanelView {
         if self.runtime_queries.is_empty() {
             return;
         }
+        let source = self.selected_source;
+        let since = std::time::Instant::now();
+        for query in &self.runtime_queries {
+            self.query_states
+                .entry((source, query.clone()))
+                .or_insert(RowQueryState::Loading { since });
+        }
+        self.notify_after_loading_grace(cx);
         self.pause_runtime_poll();
         let generation = self.runtime_poll_generation;
         let runtime = self.runtime.clone();
@@ -889,6 +934,23 @@ impl SettingsPanelView {
         .detach();
     }
 
+    /// A query that never answers produces no sample and therefore no redraw,
+    /// so nothing would ever reveal that the row is waiting. One timer past the
+    /// grace period gives the indicator a chance to appear.
+    fn notify_after_loading_grace(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(QUERY_LOADING_GRACE)
+                    .await;
+                let _ = this.update(&mut async_cx, |_, cx| cx.notify());
+            }
+        })
+        .detach();
+    }
+
     fn pump_frame_paced_samples(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.frame_paced_samples.is_none() {
             self.frame_pump_armed = false;
@@ -952,6 +1014,13 @@ impl SettingsPanelView {
     }
 
     fn apply_query(&mut self, query: &str, result: Result<serde_json::Value, String>) {
+        self.query_states.insert(
+            (self.selected_source, query.to_string()),
+            match &result {
+                Ok(_) => RowQueryState::Ready,
+                Err(message) => RowQueryState::Unavailable(message.clone()),
+            },
+        );
         let drag = self.slider_drag.clone();
         let pending = self.slider_pending.clone();
         apply_runtime_query(&mut self.root_mut().rows, query, result, &|index, id| {
@@ -2674,7 +2743,57 @@ impl SettingsPanelView {
             )
     }
 
+    /// The freshness of a row's value: unavailable wins over loading, and a row
+    /// with no runtime query is always idle.
+    fn row_query_state(&self, index: usize) -> RowQueryState {
+        let row = &self.level().rows[index];
+        rollup_query_state(
+            row_query_names(row)
+                .into_iter()
+                .map(|query| self.query_states.get(&(row.source, query.to_string()))),
+            QUERY_LOADING_GRACE,
+            std::time::Instant::now(),
+        )
+    }
+
+    /// Replaces a query-backed value with a spinner or an unavailable marker
+    /// while its plugin has not answered. Status rows are excluded: they carry
+    /// their own tone and error text.
+    fn render_query_state_cell(&self, index: usize) -> Option<Div> {
+        if matches!(self.level().rows[index].control, RowControl::Status { .. }) {
+            return None;
+        }
+        let cell = || {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .flex_none()
+                .w(px(value_cell_width(&self.level().rows[index].control)))
+                .justify_end()
+        };
+        match self.row_query_state(index) {
+            RowQueryState::Loading { .. } => Some(cell().child(Spinner::new(
+                ("settings-query-spinner", index),
+                rgb(self.palette.status_muted),
+            ))),
+            RowQueryState::Unavailable(_) => Some(
+                cell().child(
+                    div()
+                        .text_size(px(qol_theme::TEXT_CAPTION))
+                        .text_color(rgb(self.palette.status_muted))
+                        .child("unavailable"),
+                ),
+            ),
+            RowQueryState::Idle | RowQueryState::Ready => None,
+        }
+    }
+
     fn render_value_cell(&self, index: usize) -> Div {
+        if let Some(cell) = self.render_query_state_cell(index) {
+            return cell;
+        }
         match &self.level().rows[index].control {
             RowControl::Toggle(active) => return self.render_toggle_value(*active),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
@@ -8135,5 +8254,74 @@ default = "visible"
             without_sections > 0.0 && without_sections < uncapped,
             "a source without sections still contributes its floor height"
         );
+    }
+}
+
+#[cfg(test)]
+mod query_state_tests {
+    use super::{rollup_query_state, RowQueryState};
+    use std::time::{Duration, Instant};
+
+    const GRACE: Duration = Duration::from_millis(300);
+
+    fn rollup(states: &[Option<RowQueryState>], now: Instant) -> RowQueryState {
+        rollup_query_state(states.iter().map(Option::as_ref), GRACE, now)
+    }
+
+    /// A healthy plugin answers well inside the grace period, so its rows must
+    /// never flash a spinner on the way to their value.
+    #[test]
+    fn a_query_inside_its_grace_period_shows_no_indicator() {
+        let now = Instant::now();
+        let fresh = RowQueryState::Loading { since: now };
+        assert_eq!(rollup(&[Some(fresh)], now), RowQueryState::Idle);
+    }
+
+    /// Past the grace period the row has to admit it is waiting, otherwise a
+    /// wedged daemon is indistinguishable from a working one.
+    #[test]
+    fn a_query_past_its_grace_period_reports_loading() {
+        let now = Instant::now();
+        let stale = RowQueryState::Loading {
+            since: now - GRACE - Duration::from_millis(1),
+        };
+        assert!(matches!(
+            rollup(&[Some(stale)], now),
+            RowQueryState::Loading { .. }
+        ));
+    }
+
+    /// A row backed by several queries is only as good as its worst one.
+    #[test]
+    fn the_worst_query_decides_what_the_row_shows() {
+        let now = Instant::now();
+        let waiting = RowQueryState::Loading {
+            since: now - GRACE * 2,
+        };
+        let cases = [
+            (
+                vec![Some(RowQueryState::Ready), Some(waiting.clone())],
+                "loading",
+            ),
+            (
+                vec![
+                    Some(RowQueryState::Ready),
+                    Some(waiting.clone()),
+                    Some(RowQueryState::Unavailable("dead".into())),
+                ],
+                "unavailable",
+            ),
+            (vec![Some(RowQueryState::Ready), None], "ready"),
+            (vec![None, None], "idle"),
+        ];
+        for (states, expected) in cases {
+            let actual = match rollup(&states, now) {
+                RowQueryState::Idle => "idle",
+                RowQueryState::Loading { .. } => "loading",
+                RowQueryState::Ready => "ready",
+                RowQueryState::Unavailable(_) => "unavailable",
+            };
+            assert_eq!(actual, expected, "states: {states:?}");
+        }
     }
 }
