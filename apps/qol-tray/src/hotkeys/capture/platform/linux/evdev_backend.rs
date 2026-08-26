@@ -2,7 +2,7 @@ use super::super::super::{Binding, CaptureEvent};
 use super::super::super::{OnFire, RebuildBindings};
 use super::matcher::BindingMatcher;
 use anyhow::{Context, Result};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use evdev::raw_stream::RawDevice;
 use evdev::{
     uinput::VirtualDevice, AttributeSet, AttributeSetRef, Device, EventSummary, EventType,
@@ -14,6 +14,32 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const VIRTUAL_KEYBOARD_NAME: &str = "qol-tray-virtual-keyboard";
+
+/// The only channel through which capture code may reach plugin actions.
+///
+/// Reader threads sit between the user's keyboard and the desktop: the device is
+/// held with EVIOCGRAB, so every keystroke reaches the session only because a
+/// reader forwarded it. Any blocking call on that thread therefore freezes all
+/// typing and then replays the kernel's backlog in one burst. Handing readers a
+/// `Sender` instead of a callback makes that structurally impossible - they hold
+/// nothing they can call, and `send` on an unbounded channel never blocks.
+type CaptureDispatch = Sender<CaptureEvent>;
+
+fn spawn_dispatch_thread(on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>) -> CaptureDispatch {
+    let (tx, rx) = crossbeam_channel::unbounded::<CaptureEvent>();
+    std::thread::Builder::new()
+        .name("hotkey-capture-dispatch".into())
+        .spawn(move || {
+            while let Ok(event) = rx.recv() {
+                on_fire(&event);
+            }
+        })
+        .map(|_| ())
+        .unwrap_or_else(|error| {
+            log::error!("failed to spawn evdev hotkey dispatch thread: {error}");
+        });
+    tx
+}
 const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(super) fn keycode_name(code: u16) -> &'static str {
@@ -236,11 +262,12 @@ pub(super) fn install(
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )?));
     let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
+    let dispatch = spawn_dispatch_thread(on_fire);
 
     for keyboard in grabbed_keyboards {
         let matcher = matcher.clone();
         let virtual_device = virtual_device.clone();
-        let on_fire = on_fire.clone();
+        let dispatch = dispatch.clone();
         let grabbed = grabbed.clone();
 
         std::thread::spawn(move || {
@@ -251,7 +278,7 @@ pub(super) fn install(
                 keyboard.held,
                 matcher,
                 virtual_device,
-                on_fire,
+                dispatch,
                 grabbed,
             );
         });
@@ -279,8 +306,8 @@ pub(super) fn install(
         );
     }
 
-    spawn_reload_thread(matcher.clone(), reload_rx, rebuild, on_fire.clone());
-    spawn_rescan_thread(grabbed, matcher, virtual_device, key_caps, on_fire);
+    spawn_reload_thread(matcher.clone(), reload_rx, rebuild, dispatch.clone());
+    spawn_rescan_thread(grabbed, matcher, virtual_device, key_caps, dispatch);
 
     Ok(())
 }
@@ -349,7 +376,7 @@ fn spawn_rescan_thread(
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<VirtualDevice>>,
     key_caps: Arc<Mutex<AttributeSet<KeyCode>>>,
-    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
+    dispatch: CaptureDispatch,
 ) {
     std::thread::Builder::new()
         .name("hotkey-capture-linux-rescan".into())
@@ -380,7 +407,7 @@ fn spawn_rescan_thread(
                 merge_capabilities(&keyboard, &key_caps, &virtual_device, &keyboard.path);
                 let matcher = matcher.clone();
                 let virtual_device = virtual_device.clone();
-                let on_fire = on_fire.clone();
+                let dispatch = dispatch.clone();
                 let grabbed = grabbed.clone();
                 let path = keyboard.path;
                 let path_display = path.display().to_string();
@@ -394,7 +421,7 @@ fn spawn_rescan_thread(
                             keyboard.held,
                             matcher,
                             virtual_device,
-                            on_fire,
+                            dispatch,
                             grabbed,
                         );
                     });
@@ -452,7 +479,7 @@ fn spawn_reload_thread(
     matcher: Arc<Mutex<BindingMatcher>>,
     reload_rx: Receiver<()>,
     rebuild: RebuildBindings,
-    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
+    dispatch: CaptureDispatch,
 ) {
     std::thread::Builder::new()
         .name("hotkey-capture-linux-reload".into())
@@ -483,7 +510,7 @@ fn spawn_reload_thread(
                     }
                 };
                 for event in stopped {
-                    on_fire(&event);
+                    let _ = dispatch.send(event);
                 }
             }
         })
@@ -501,7 +528,7 @@ fn run_reader(
     initial_held: AttributeSet<KeyCode>,
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<VirtualDevice>>,
-    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
+    dispatch: CaptureDispatch,
     grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
 ) {
     let device_name = device.name().unwrap_or("unknown").to_owned();
@@ -524,7 +551,7 @@ fn run_reader(
                     event,
                     &matcher,
                     &virtual_device,
-                    on_fire.as_ref(),
+                    &dispatch,
                     &device_name,
                     grab_time,
                     &mut known_held,
@@ -589,7 +616,7 @@ fn process_event(
     event: InputEvent,
     matcher: &Mutex<BindingMatcher>,
     virtual_device: &Mutex<VirtualDevice>,
-    on_fire: &dyn Fn(&CaptureEvent),
+    dispatch: &CaptureDispatch,
     device: &str,
     grab_time: SystemTime,
     known_held: &mut HashSet<u16>,
@@ -627,7 +654,8 @@ fn process_event(
             capture_event.binding.plugin_uid.as_str(),
             capture_event.binding.action
         );
-        on_fire(&capture_event);
+        // never call plugin code from the reader thread; see CaptureDispatch.
+        let _ = dispatch.send(capture_event);
     }
 }
 
@@ -744,6 +772,50 @@ mod tests {
         let grabbed: HashSet<PathBuf> = HashSet::from([PathBuf::from("/dev/input/event3")]);
         let discovered = vec![PathBuf::from("/dev/input/event3")];
         assert!(devices_to_grab(&grabbed, discovered).is_empty());
+    }
+
+    fn capture_event(action: &str) -> CaptureEvent {
+        CaptureEvent {
+            binding: Binding {
+                combo: None,
+                plugin_uid: crate::plugins::PluginUid::new("test-plugin"),
+                action: action.to_owned(),
+                raw_key: "F12".to_owned(),
+                continuous: false,
+            },
+            phase: super::super::super::super::Phase::START,
+        }
+    }
+
+    /// A slow plugin action must never hold up the reader thread. Before the
+    /// dispatch channel existed, `on_fire` ran inline in the read loop, so a
+    /// cold-daemon action froze every grabbed keyboard for its full duration and
+    /// then flushed the kernel's backlog into the desktop in one burst.
+    #[test]
+    fn dispatch_returns_immediately_while_the_handler_is_still_blocked() {
+        let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler_entered = entered.clone();
+        let dispatch = spawn_dispatch_thread(Arc::new(move |_: &CaptureEvent| {
+            handler_entered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(500));
+        }));
+
+        let started = std::time::Instant::now();
+        for index in 0..10 {
+            dispatch
+                .send(capture_event(&format!("action-{index}")))
+                .expect("dispatch must accept the event");
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "sending 10 events took {elapsed:?}; the reader thread was blocked by the handler"
+        );
+        assert!(
+            entered.load(std::sync::atomic::Ordering::SeqCst) <= 1,
+            "the handler should still be working on the first event"
+        );
     }
 
     #[test]
