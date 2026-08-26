@@ -43,7 +43,7 @@ const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_milli
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
-const CRUMB_SEPARATOR_GUTTER: f32 = 5.0;
+const CRUMB_SEPARATOR_GUTTER: f32 = 6.0;
 const CRUMB_MAX_WIDTH: f32 = 160.0;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -4536,11 +4536,10 @@ impl SettingsPanelView {
         rgba(self.kit.washes.hairline.packed())
     }
 
-    /// Lays the trail out as `parent > parent > here`: the separator only ever
-    /// sits between two crumbs, it gets its own breathing room, and the crumb
-    /// nearest the title is brightest so the hierarchy reads left to right.
+    /// Lays the trail out as `parent > parent` above the title: the separator
+    /// only ever sits between two crumbs, and the whole line stays muted so
+    /// the title underneath carries the emphasis.
     fn crumb_elements(&self, trail: Vec<String>) -> Vec<Div> {
-        let last = trail.len().saturating_sub(1);
         let separator = rgba(crate::kit::alpha(self.kit.palette.text_muted, 0x70));
         let mut crumbs = Vec::with_capacity(trail.len() * 2);
         for (index, label) in trail.into_iter().enumerate() {
@@ -4553,15 +4552,7 @@ impl SettingsPanelView {
                         .child("\u{203A}"),
                 );
             }
-            crumbs.push(
-                div()
-                    .truncate()
-                    .max_w(px(CRUMB_MAX_WIDTH))
-                    .when(index == last, |crumb| {
-                        crumb.text_color(rgb(self.palette.section_text))
-                    })
-                    .child(label),
-            );
+            crumbs.push(div().truncate().max_w(px(CRUMB_MAX_WIDTH)).child(label));
         }
         crumbs
     }
@@ -4597,7 +4588,7 @@ impl SettingsPanelView {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .text_size(px(qol_theme::TEXT_NANO))
+                                .text_size(px(qol_theme::TEXT_MICRO))
                                 .text_color(rgb(self.kit.palette.text_muted))
                                 .children(self.crumb_elements(trail)),
                         )
@@ -6004,8 +5995,9 @@ fn focus_enters_the_body(plugin_id: &str) -> bool {
 }
 
 fn crumb_labels(heading: &str, plugin: Option<String>, parents: Vec<String>) -> Vec<String> {
-    let mut labels = vec![heading.to_string()];
-    labels.extend(plugin.filter(|title| title != heading));
+    let mut labels = vec![plugin
+        .filter(|title| title != heading)
+        .unwrap_or_else(|| heading.to_string())];
     labels.extend(parents);
     labels
 }
@@ -8040,14 +8032,14 @@ default = "visible"
     }
 
     #[test]
-    fn the_trail_names_the_plugin_between_the_panel_and_the_open_card() {
+    fn the_trail_starts_at_the_plugin_not_the_window() {
         assert_eq!(
             crumb_labels(
                 "qol settings",
                 Some("Key remap".to_string()),
                 vec!["Excluded apps".to_string()]
             ),
-            vec!["qol settings", "Key remap", "Excluded apps"]
+            vec!["Key remap", "Excluded apps"]
         );
     }
 
