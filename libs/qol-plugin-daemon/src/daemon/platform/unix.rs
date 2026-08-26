@@ -346,7 +346,7 @@ where
 }
 
 fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<PathBuf>)> {
-    if let Some(listener) = inherited_listener()? {
+    if let Some(listener) = inherited_listener() {
         #[cfg(debug_assertions)]
         eprintln!("[daemon] adopting a pre-bound listener fd, skipping bind()");
         return Ok((listener, None));
@@ -415,11 +415,23 @@ fn replace_existing(config: &DaemonConfig) -> io::Result<bool> {
     ))
 }
 
-fn inherited_listener() -> io::Result<Option<UnixListener>> {
-    let Ok(raw) = std::env::var(qol_conventions::ENV_DAEMON_LISTENER_FD) else {
-        return Ok(None);
-    };
-    listener_from_fd_str(&raw).map(Some)
+/// A daemon only ever receives this variable from the qol-tray that pre-bound
+/// the fd for it. Anything else (an unrelated ancestor's leftover, a stale
+/// number) names an fd that is not a listening socket here, so it is ignored
+/// and the daemon binds its own socket path instead of dying on it.
+fn inherited_listener() -> Option<UnixListener> {
+    let raw = std::env::var(qol_conventions::ENV_DAEMON_LISTENER_FD).ok()?;
+    match listener_from_fd_str(&raw) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            eprintln!(
+                "[daemon] ignoring {}={raw}: {error}; binding the socket path instead",
+                qol_conventions::ENV_DAEMON_LISTENER_FD
+            );
+            std::env::remove_var(qol_conventions::ENV_DAEMON_LISTENER_FD);
+            None
+        }
+    }
 }
 
 fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
@@ -432,8 +444,29 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
             ),
         )
     })?;
+    if !is_listening_socket(fd) {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("fd {fd} is not a listening socket in this process"),
+        ));
+    }
     restore_cloexec(fd)?;
     Ok(unsafe { UnixListener::from_raw_fd(fd) })
+}
+
+fn is_listening_socket(fd: RawFd) -> bool {
+    let mut accepting: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ACCEPTCONN,
+            (&mut accepting as *mut libc::c_int).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    rc == 0 && accepting != 0
 }
 
 /// qol-tray clears CLOEXEC on a pre-bound fd so it survives the exec into
@@ -477,7 +510,16 @@ pub fn inherited_primary_port_fd() -> Option<RawFd> {
 }
 
 fn fd_from_env(env_name: &str) -> Option<RawFd> {
-    std::env::var(env_name).ok()?.parse().ok()
+    let raw = std::env::var(env_name).ok()?;
+    let fd: RawFd = raw.parse().ok()?;
+    if !is_listening_socket(fd) {
+        eprintln!(
+            "[daemon] ignoring {env_name}={raw}: fd {fd} is not a listening socket in this process"
+        );
+        std::env::remove_var(env_name);
+        return None;
+    }
+    Some(fd)
 }
 
 fn read_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
@@ -1078,6 +1120,33 @@ mod tests {
         remove_socket_file(path);
     }
 
+    /// The env var is only meaningful for the daemon qol-tray bound the fd
+    /// for. Leaked into any other process (a terminal opened from a plugin,
+    /// then `qol dev`, then every daemon) it named an fd that was closed or
+    /// unrelated, and daemons died on it instead of binding their own socket.
+    #[test]
+    fn bind_listener_ignores_an_inherited_fd_that_is_not_a_listening_socket() {
+        use std::os::fd::AsRawFd;
+
+        let _lock = daemon_listener_fd_env_lock();
+        let not_a_socket = fs::File::open("/dev/null").unwrap();
+        let socket_name = temp_socket_name("fallback-after-bogus-fd");
+        let config = fallback_config(socket_name);
+        let expected = PathBuf::from("/tmp").join(socket_name);
+        let _ = fs::remove_file(&expected);
+
+        for bogus in [not_a_socket.as_raw_fd().to_string(), "999999".to_owned()] {
+            std::env::set_var(qol_conventions::ENV_DAEMON_LISTENER_FD, &bogus);
+            let (_listener, bound_path) = bind_listener(&config).unwrap();
+            assert_eq!(bound_path.as_deref(), Some(expected.as_path()));
+            assert!(
+                std::env::var_os(qol_conventions::ENV_DAEMON_LISTENER_FD).is_none(),
+                "a rejected handoff must not linger and suppress socket cleanup"
+            );
+            remove_socket_file(expected.clone());
+        }
+    }
+
     #[test]
     fn listener_from_fd_str_rejects_malformed_value() {
         let error = listener_from_fd_str("not-a-number").unwrap_err();
@@ -1144,14 +1213,32 @@ mod tests {
 
     #[test]
     fn inherited_port_fd_reads_the_named_env_var() {
+        use std::os::fd::AsRawFd;
+
         let _lock = daemon_listener_fd_env_lock();
         let env_name = format!("{}_TESTPORT", qol_conventions::ENV_DAEMON_PORT_FD);
-        std::env::set_var(&env_name, "42");
+        let pre_bound = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::env::set_var(&env_name, pre_bound.as_raw_fd().to_string());
 
         let fd = inherited_port_fd("testport");
 
         std::env::remove_var(&env_name);
-        assert_eq!(fd, Some(42));
+        assert_eq!(fd, Some(pre_bound.as_raw_fd()));
+    }
+
+    #[test]
+    fn inherited_port_fd_ignores_a_number_that_is_not_a_listening_socket() {
+        let _lock = daemon_listener_fd_env_lock();
+        let env_name = format!("{}_BOGUSPORT", qol_conventions::ENV_DAEMON_PORT_FD);
+        std::env::set_var(&env_name, "999999");
+
+        let fd = inherited_port_fd("bogusport");
+
+        assert_eq!(fd, None, "a leaked or stale fd number must not be adopted");
+        assert!(
+            std::env::var_os(&env_name).is_none(),
+            "a rejected handoff variable is dropped so nothing downstream trusts it"
+        );
     }
 
     #[test]
@@ -1180,13 +1267,19 @@ mod tests {
 
     #[test]
     fn inherited_primary_port_fd_reads_the_unsuffixed_env_var() {
+        use std::os::fd::AsRawFd;
+
         let _lock = daemon_listener_fd_env_lock();
-        std::env::set_var(qol_conventions::ENV_DAEMON_PORT_FD, "7");
+        let pre_bound = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::env::set_var(
+            qol_conventions::ENV_DAEMON_PORT_FD,
+            pre_bound.as_raw_fd().to_string(),
+        );
 
         let fd = inherited_primary_port_fd();
 
         std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
-        assert_eq!(fd, Some(7));
+        assert_eq!(fd, Some(pre_bound.as_raw_fd()));
     }
 
     #[test]

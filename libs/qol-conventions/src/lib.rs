@@ -30,6 +30,33 @@ pub const ENV_THEME_ACCENT: &str = "QOL_TRAY_THEME_ACCENT";
 pub const ENV_THEME_NAME: &str = "QOL_TRAY_THEME_NAME";
 pub const ENV_HTTP_TOKEN: &str = "QOL_TRAY_HTTP_TOKEN";
 
+/// True for the variables that hand a pre-bound listener from qol-tray to the
+/// one daemon it spawned them for (plus the replace-existing flag that travels
+/// with them). Nothing else may inherit them: the fd number means nothing in
+/// any other process, and a daemon that trusts it adopts a bogus listener
+/// instead of binding its own socket.
+pub fn is_daemon_handoff_env(key: &str) -> bool {
+    key == ENV_DAEMON_LISTENER_FD
+        || key == ENV_DAEMON_REPLACE_EXISTING
+        || key.starts_with(ENV_DAEMON_PORT_FD)
+}
+
+/// The handoff variables present in this process's own environment.
+pub fn daemon_handoff_env_keys() -> Vec<std::ffi::OsString> {
+    std::env::vars_os()
+        .map(|(key, _)| key)
+        .filter(|key| key.to_str().is_some_and(is_daemon_handoff_env))
+        .collect()
+}
+
+/// Keeps a child that is not the daemon those fds were bound for from
+/// inheriting them.
+pub fn scrub_daemon_handoff_env(command: &mut std::process::Command) {
+    for key in daemon_handoff_env_keys() {
+        command.env_remove(key);
+    }
+}
+
 pub const ENV_DEV_GENERATION_MODE: &str = "QOL_DEV_GENERATION_MODE";
 pub const ENV_DEV_GENERATION_ID: &str = "QOL_DEV_GENERATION_ID";
 pub const ENV_DEV_READY_FILE: &str = "QOL_DEV_READY_FILE";
@@ -297,6 +324,20 @@ pub mod build;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daemon_handoff_env_covers_listener_port_and_replace_flags() {
+        use super::*;
+        assert!(is_daemon_handoff_env(ENV_DAEMON_LISTENER_FD));
+        assert!(is_daemon_handoff_env(ENV_DAEMON_PORT_FD));
+        assert!(is_daemon_handoff_env(&format!(
+            "{ENV_DAEMON_PORT_FD}_DISCOVERY"
+        )));
+        assert!(is_daemon_handoff_env(ENV_DAEMON_REPLACE_EXISTING));
+        assert!(!is_daemon_handoff_env(ENV_DAEMON_SOCKET));
+        assert!(!is_daemon_handoff_env(ENV_HTTP_TOKEN));
+        assert!(!is_daemon_handoff_env(ENV_PLUGIN_ID));
+    }
+
     use super::*;
 
     #[test]
