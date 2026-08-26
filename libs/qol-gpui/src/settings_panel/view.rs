@@ -43,6 +43,8 @@ const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_milli
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
+const CRUMB_SEPARATOR_GUTTER: f32 = 5.0;
+const CRUMB_MAX_WIDTH: f32 = 160.0;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PanelFocus {
@@ -4534,6 +4536,36 @@ impl SettingsPanelView {
         rgba(self.kit.washes.hairline.packed())
     }
 
+    /// Lays the trail out as `parent > parent > here`: the separator only ever
+    /// sits between two crumbs, it gets its own breathing room, and the crumb
+    /// nearest the title is brightest so the hierarchy reads left to right.
+    fn crumb_elements(&self, trail: Vec<String>) -> Vec<Div> {
+        let last = trail.len().saturating_sub(1);
+        let separator = rgba(crate::kit::alpha(self.kit.palette.text_muted, 0x70));
+        let mut crumbs = Vec::with_capacity(trail.len() * 2);
+        for (index, label) in trail.into_iter().enumerate() {
+            if index > 0 {
+                crumbs.push(
+                    div()
+                        .flex_none()
+                        .px(px(CRUMB_SEPARATOR_GUTTER))
+                        .text_color(separator)
+                        .child("\u{203A}"),
+                );
+            }
+            crumbs.push(
+                div()
+                    .truncate()
+                    .max_w(px(CRUMB_MAX_WIDTH))
+                    .when(index == last, |crumb| {
+                        crumb.text_color(rgb(self.palette.section_text))
+                    })
+                    .child(label),
+            );
+        }
+        crumbs
+    }
+
     fn render_band(&self) -> Div {
         let total = self.panel_row_total();
         let mut trail = self.trail();
@@ -4567,15 +4599,7 @@ impl SettingsPanelView {
                                 .items_center()
                                 .text_size(px(qol_theme::TEXT_NANO))
                                 .text_color(rgb(self.kit.palette.text_muted))
-                                .gap_0p5()
-                                .children(trail.into_iter().map(|label| {
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .child(div().truncate().max_w(px(160.)).child(label))
-                                        .child("\u{203A}")
-                                })),
+                                .children(self.crumb_elements(trail)),
                         )
                     })
                     .child(
