@@ -1,6 +1,7 @@
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub(crate) struct CaptureStatus {
@@ -11,6 +12,7 @@ pub(crate) struct CaptureStatus {
     tone: ToastTone,
     timeout: Option<Duration>,
     layout: ToastLayout,
+    saved_file: Option<(PathBuf, u32, u32)>,
 }
 
 impl CaptureStatus {
@@ -28,6 +30,7 @@ impl CaptureStatus {
             tone: ToastTone::Neutral,
             timeout: None,
             layout: ToastLayout::status(),
+            saved_file: None,
         }
     }
 
@@ -50,8 +53,31 @@ impl CaptureStatus {
         self
     }
 
+    pub(crate) fn saved_file(mut self, path: PathBuf, width: u32, height: u32) -> Self {
+        self.saved_file = Some((path, width, height));
+        self
+    }
+
     fn into_toast(self) -> Toast {
-        let toast = Toast::new(self.title, self.subtitle, self.layout).tone(self.tone);
+        let toast = Toast::new(self.title, self.subtitle, self.layout)
+            .tone(self.tone)
+            .group("qol-shot")
+            .key(self.context);
+        let toast = match self.saved_file {
+            Some((path, width, height)) => {
+                let artifact = path.clone();
+                let folder = path.clone();
+                toast
+                    .detail_path(path.to_string_lossy().into_owned())
+                    .preview(path, width, height)
+                    .on_activate(move |_| {
+                        qol_apps::desktop_integration::open_with_default_app(&artifact)?;
+                        Ok(())
+                    })
+                    .on_folder(move |_| crate::capture::completion::reveal(&folder))
+            }
+            None => toast,
+        };
         match self.timeout {
             Some(timeout) => toast.timeout(timeout),
             None => toast.persistent(),

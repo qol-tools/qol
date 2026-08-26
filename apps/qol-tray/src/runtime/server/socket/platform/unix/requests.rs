@@ -94,6 +94,21 @@ fn handle_push_notification(
     layout: Option<NotificationLayout>,
 ) {
     let accepted = push_plugin_known(plugin_id);
+    if accepted && title.trim().is_empty() {
+        log::warn!(
+            "[runtime/socket] PUSH notification rejected: plugin {plugin_id:?} sent an empty title"
+        );
+        crate::runtime::server::trace::push(
+            plugin_id.strip_prefix("plugin-").unwrap_or(plugin_id),
+            "notification",
+            false,
+        );
+        let ack = PushAck::Error {
+            message: "empty title".to_string(),
+        };
+        let _ = write_flushed_json_line(writer, &ack);
+        return;
+    }
     respond_to_push(writer, plugin_id, "notification", accepted);
     if !accepted {
         return;
@@ -570,6 +585,31 @@ mod tests {
             response.contains("\"status\":\"error\""),
             "malformed plugin id push must be rejected: {response:?}",
         );
+    }
+
+    #[test]
+    fn push_notification_with_blank_title_rejected_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            for title in ["", "   ", "\t\n "] {
+                let payload = serde_json::json!({
+                    "cmd": "push_notification",
+                    "plugin_id": "plugin-test",
+                    "title": title,
+                    "body": "x",
+                    "level": "info",
+                });
+                let response = push_ack(&payload.to_string(), &shared);
+                assert!(
+                    response.contains("\"status\":\"error\""),
+                    "blank title {title:?} must be refused: {response:?}",
+                );
+                assert!(
+                    response.contains("empty title"),
+                    "refusal must name the cause: {response:?}",
+                );
+            }
+        });
     }
 
     #[test]
