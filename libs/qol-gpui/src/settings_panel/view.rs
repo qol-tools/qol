@@ -37,7 +37,7 @@ const GROUP_HEADER_INSET: f32 = 8.0;
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 /// How long the rail selection must hold still before its source starts polling.
-const SOURCE_SWITCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
+const QUERY_SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
 /// How long a runtime query may take before its row admits it is waiting.
 const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
@@ -752,10 +752,9 @@ impl SettingsPanelView {
         }
     }
 
-    /// Moves the rail highlight. Selection is cheap intent: the body keeps
-    /// showing whatever was last materialised until the highlight settles, so
-    /// holding an arrow key through the rail costs one page build instead of
-    /// one per plugin passed.
+    /// Moves the rail highlight and the page together, instantly: a page
+    /// build is microseconds, so every keystroke lands on the next frame.
+    /// Only the landed source's queries wait for the rail to settle.
     fn select_source(&mut self, next: usize, cx: &mut Context<Self>) {
         if next == self.selected_source {
             return;
@@ -763,7 +762,8 @@ impl SettingsPanelView {
         #[cfg(debug_assertions)]
         let switch_started = std::time::Instant::now();
         self.selected_source = next;
-        self.materialize_source_when_settled(cx);
+        self.materialize_source(cx);
+        self.resume_poll_when_settled(cx);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_NAV",
@@ -775,9 +775,9 @@ impl SettingsPanelView {
         );
     }
 
-    /// Builds the selected source's page and starts its poller. Everything
-    /// expensive about a source switch lives here, and nothing calls it while
-    /// the selection is still moving.
+    /// Builds the selected source's page: rows, selection, scroll, and the
+    /// query list. Pauses the previous source's poller; the caller decides
+    /// when the new source's queries start.
     fn materialize_source(&mut self, cx: &mut Context<Self>) {
         let next = self.selected_source;
         if next == self.materialized_source {
@@ -806,7 +806,6 @@ impl SettingsPanelView {
         self.level_mut().selected = first_visible;
         self.level().body_scroll.rewind();
         self.pause_runtime_poll();
-        self.resume_runtime_poll(cx);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_NAV",
@@ -820,8 +819,8 @@ impl SettingsPanelView {
         cx.notify();
     }
 
-    /// Materialises the selected source once the rail has stopped moving.
-    fn materialize_source_when_settled(&mut self, cx: &mut Context<Self>) {
+    /// Starts the landed source's queries once the rail stops moving.
+    fn resume_poll_when_settled(&mut self, cx: &mut Context<Self>) {
         self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
         let generation = self.source_settle_generation;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -829,11 +828,11 @@ impl SettingsPanelView {
             async move {
                 async_cx
                     .background_executor()
-                    .timer(SOURCE_SWITCH_DEBOUNCE)
+                    .timer(QUERY_SETTLE_DEBOUNCE)
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if this.source_settle_generation == generation {
-                        this.materialize_source(cx);
+                        this.resume_runtime_poll(cx);
                     }
                 });
             }
@@ -843,6 +842,8 @@ impl SettingsPanelView {
 
     fn descend_source_menu(&mut self, cx: &mut Context<Self>) {
         self.materialize_source(cx);
+        self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
+        self.resume_runtime_poll(cx);
         self.set_source_menu(false);
         self.open_selected_section();
     }
