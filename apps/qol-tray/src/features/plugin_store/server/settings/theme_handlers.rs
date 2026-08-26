@@ -188,7 +188,7 @@ fn bad_request(message: &str) -> Response {
 
 pub(super) fn apply_theme_to_running_surfaces(state: &AppState) {
     let native = crate::features::theme::current_native_theme_key();
-    let accent = crate::features::theme::current_accent_key();
+    let accent = crate::features::theme::native_accent_wire();
     if !crate::settings_surface::apply_theme(&native, &accent) {
         crate::settings_surface::stop();
         crate::settings_surface::prewarm();
