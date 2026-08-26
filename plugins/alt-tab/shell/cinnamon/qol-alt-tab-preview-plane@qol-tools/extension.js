@@ -29,7 +29,7 @@ const DBUS_IFACE = `
 
 const OBJECT_PATH = "/org/qol/AltTabPreviewPlane";
 const DEFAULT_TTL_MS = 4500;
-const DESELECTED_CLONE_OPACITY = 184;
+const DESELECTED_CLONE_OPACITY = 140;
 
 let plane = null;
 

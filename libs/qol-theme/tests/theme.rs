@@ -1,7 +1,7 @@
 use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
-    alt_tab_preview_plane_runtime, css, css_rgba_milli, dark_accent_preset, dark_theme,
-    dark_theme_with_accent_key, resolve_surface_override, runtime_dark_theme, PickerSurfacePalette,
+    css, css_rgba_milli, dark_accent_preset, dark_theme, dark_theme_with_accent_key,
+    resolve_surface_override, runtime_dark_theme, theme_for_native_key, PickerSurfacePalette,
     SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
     DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
     HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
@@ -199,7 +199,9 @@ fn settings_panel_palette_derives_status_tones_from_system_roles() {
 
 #[test]
 fn alt_tab_preview_plane_palette_derives_from_system_roles() {
-    let palette = alt_tab_preview_plane_runtime();
+    let palette = theme_for_native_key(None, None)
+        .components
+        .alt_tab_preview_plane;
     assert_eq!(
         palette.backdrop_rgba,
         with_alpha(LIGHT_REFERENCE.black, 0x1c)
@@ -308,10 +310,7 @@ fn picker_surface_palette_themed_none_uses_system_roles() {
     let palette = PickerSurfacePalette::themed(system, None, 1.0);
     assert_eq!(palette.card_bg, system.surface_raised);
     assert_eq!(palette.card_hover_bg, system.surface_hovered);
-    assert_eq!(
-        palette.card_selected_bg,
-        mix_rgb(system.surface_raised, system.accent, 0.28)
-    );
+    assert_eq!(palette.card_selected_bg, system.accent_fill);
     assert_eq!(palette.card_selected_border, system.accent);
     assert_eq!(
         palette.panel_bg,

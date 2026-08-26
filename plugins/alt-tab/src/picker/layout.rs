@@ -1,7 +1,7 @@
 pub const MIN_CARD_SCALE: f32 = 0.5;
 pub const MAX_CARD_SCALE: f32 = 2.5;
 pub const DEFAULT_CARD_SCALE: f32 = 1.5;
-pub const DESELECTED_CARD_SCALE: f32 = 0.94;
+pub const DESELECTED_CARD_SCALE: f32 = 0.88;
 pub const MIN_CARD_PADDING: f32 = 0.0;
 pub const MAX_CARD_PADDING: f32 = 24.0;
 pub const DEFAULT_CARD_PADDING: f32 = 0.0;

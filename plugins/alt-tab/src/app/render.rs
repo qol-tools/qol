@@ -24,7 +24,7 @@ static RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-pub(crate) const DESELECTED_CARD_OPACITY: f32 = 0.72;
+pub(crate) const DESELECTED_CARD_OPACITY: f32 = 0.55;
 
 struct RenderSnap {
     selected_index: Option<usize>,
@@ -395,7 +395,7 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     let kit = qol_gpui::kit::kit();
     if selected {
         let card = el
-            .border_1()
+            .border_2()
             .border_color(rgb(snap.palette.card_selected_border))
             .shadow(kit.focus_ring());
         return if snap.transparent_bg {
