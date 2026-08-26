@@ -1,6 +1,7 @@
 pub const MIN_CARD_SCALE: f32 = 0.5;
 pub const MAX_CARD_SCALE: f32 = 2.5;
 pub const DEFAULT_CARD_SCALE: f32 = 1.5;
+pub const DESELECTED_CARD_SCALE: f32 = 0.94;
 pub const MIN_CARD_PADDING: f32 = 0.0;
 pub const MAX_CARD_PADDING: f32 = 24.0;
 pub const DEFAULT_CARD_PADDING: f32 = 0.0;
@@ -71,6 +72,21 @@ impl CardMetrics {
 
     pub fn minimized_icon_px(&self) -> f32 {
         BASE_MINIMIZED_ICON * self.scale
+    }
+
+    pub fn stepped(&self, selected: bool) -> CardMetrics {
+        if selected {
+            return *self;
+        }
+        let mut m = *self;
+        m.scale *= DESELECTED_CARD_SCALE;
+        m.card_padding *= DESELECTED_CARD_SCALE;
+        m.card_width *= DESELECTED_CARD_SCALE;
+        m.card_height *= DESELECTED_CARD_SCALE;
+        m.preview_width *= DESELECTED_CARD_SCALE;
+        m.preview_height *= DESELECTED_CARD_SCALE;
+        m.label_strip_height *= DESELECTED_CARD_SCALE;
+        m
     }
 }
 
@@ -218,8 +234,16 @@ fn picker_height_for(window_count: usize, columns: usize, metrics: &CardMetrics)
     RENDER_PAD_Y + rows as f32 * metrics.card_height + rows.saturating_sub(1) as f32 * RENDER_GAP
 }
 
+pub fn card_inset_for(slot: &CardMetrics, stepped: &CardMetrics) -> (f32, f32) {
+    (
+        (slot.card_width - stepped.card_width) / 2.0,
+        (slot.card_height - stepped.card_height) / 2.0,
+    )
+}
+
 pub fn preview_rect_for_card(
     index: usize,
+    selected: bool,
     columns: usize,
     panel_origin: (f32, f32),
     show_hotkey_hints: bool,
@@ -239,11 +263,13 @@ pub fn preview_rect_for_card(
         + header_h
         + RENDER_PAD_Y / 2.0
         + row as f32 * (metrics.card_height + RENDER_GAP);
+    let stepped = metrics.stepped(selected);
+    let (dx, dy) = card_inset_for(metrics, &stepped);
     PreviewRect {
-        x: card_x + metrics.card_padding,
-        y: card_y + metrics.card_padding,
-        w: metrics.preview_width,
-        h: metrics.preview_height,
+        x: card_x + dx + stepped.card_padding,
+        y: card_y + dy + stepped.card_padding,
+        w: stepped.preview_width,
+        h: stepped.preview_height,
     }
 }
 
@@ -374,7 +400,7 @@ mod tests {
     #[test]
     fn preview_rect_matches_grid_padding_gap_and_card_padding() {
         let metrics = CardMetrics::from_config(1.5, 4.0);
-        let rect = preview_rect_for_card(7, 6, (100.0, 200.0), true, &metrics);
+        let rect = preview_rect_for_card(7, true, 6, (100.0, 200.0), true, &metrics);
 
         assert_close(rect.x, 100.0 + 20.0 + 1.0 * (330.0 + 16.0) + 4.0, "x");
         assert_close(
@@ -384,6 +410,37 @@ mod tests {
         );
         assert_close(rect.w, metrics.preview_width, "w");
         assert_close(rect.h, metrics.preview_height, "h");
+    }
+
+    #[test]
+    fn preview_rect_steps_deselected_cards_down_inside_the_slot() {
+        let metrics = CardMetrics::from_config(1.5, 4.0);
+        let (index, columns, origin, hints) = (7usize, 6usize, (100.0, 200.0), true);
+        let selected = preview_rect_for_card(index, true, columns, origin, hints, &metrics);
+        let stepped = metrics.stepped(false);
+        let (dx, dy) = card_inset_for(&metrics, &stepped);
+        let deselected = preview_rect_for_card(index, false, columns, origin, hints, &metrics);
+
+        assert_close(
+            deselected.x,
+            selected.x - metrics.card_padding + dx + stepped.card_padding,
+            "x",
+        );
+        assert_close(
+            deselected.y,
+            selected.y - metrics.card_padding + dy + stepped.card_padding,
+            "y",
+        );
+        assert_close(
+            deselected.w,
+            metrics.preview_width * DESELECTED_CARD_SCALE,
+            "w",
+        );
+        assert_close(
+            deselected.h,
+            metrics.preview_height * DESELECTED_CARD_SCALE,
+            "h",
+        );
     }
 
     #[test]

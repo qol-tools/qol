@@ -475,6 +475,7 @@ impl AltTabApp {
                 }
                 let rect = preview_rect_for_card(
                     index,
+                    state.selected_index == Some(index),
                     layout.columns,
                     (panel_x, panel_y),
                     state.show_hotkey_hints,

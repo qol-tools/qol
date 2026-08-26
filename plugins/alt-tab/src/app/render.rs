@@ -339,42 +339,52 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
     )
 }
 
-fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> Stateful<Div> {
+fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> Div {
     let snap = context.snap;
     let is_selected = snap.selected_index == Some(i);
+    let stepped = snap.metrics.stepped(is_selected);
 
     div()
-        .id(ElementId::Integer(i as u64))
-        .when(snap.visible, |el| {
-            el.on_click({
-                let entity = context.entity.clone();
-                move |_, window, cx| {
-                    let _ = entity.update(cx, |this, cx| {
-                        this.delegate.update(cx, |s, _| s.select_index(i));
-                        this.dismiss("click/card", window, cx);
-                        this.delegate
-                            .update(cx, |s, _| s.activate_selected_target());
-                    });
-                }
-            })
-        })
-        .flex()
-        .flex_col()
-        .items_start()
         .w(px(snap.metrics.card_width))
         .h(px(snap.metrics.card_height))
-        .p(px(snap.metrics.card_padding))
-        .when(snap.visible, |el| el.cursor_pointer())
-        .map(|el| card_bg(el, is_selected, snap))
-        .child(render_preview(win, context))
-        .child(render_label(
-            i,
-            win,
-            snap,
-            context.label_config,
-            context.window,
-            context.app,
-        ))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id(ElementId::Integer(i as u64))
+                .when(snap.visible, |el| {
+                    el.on_click({
+                        let entity = context.entity.clone();
+                        move |_, window, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                this.delegate.update(cx, |s, _| s.select_index(i));
+                                this.dismiss("click/card", window, cx);
+                                this.delegate
+                                    .update(cx, |s, _| s.activate_selected_target());
+                            });
+                        }
+                    })
+                })
+                .flex()
+                .flex_col()
+                .items_start()
+                .w(px(stepped.card_width))
+                .h(px(stepped.card_height))
+                .p(px(stepped.card_padding))
+                .when(snap.visible, |el| el.cursor_pointer())
+                .map(|el| card_bg(el, is_selected, snap))
+                .child(render_preview(win, context, &stepped))
+                .child(render_label(
+                    i,
+                    win,
+                    snap,
+                    &stepped,
+                    context.label_config,
+                    context.window,
+                    context.app,
+                )),
+        )
 }
 
 fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div> {
@@ -404,9 +414,8 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     })
 }
 
-fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>) -> Div {
+fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &CardMetrics) -> Div {
     let snap = context.snap;
-    let metrics = &snap.metrics;
     let palette = &snap.palette;
     let render_gpui_preview = snap.rendering.renders_gpui_preview_images() || win.is_minimized;
     let minimized_icon = if win.is_minimized {
@@ -470,12 +479,12 @@ fn render_label(
     i: usize,
     win: &WindowInfo,
     snap: &RenderSnap,
+    metrics: &CardMetrics,
     label_config: &LabelConfig,
     window: &Window,
     cx: &App,
 ) -> Div {
     let selected = snap.selected_index == Some(i);
-    let metrics = &snap.metrics;
     let palette = &snap.palette;
     let label = label_text(i, win, snap, label_config);
     let line_height_px = metrics.label_line_height_px(label_config.size.factor());
