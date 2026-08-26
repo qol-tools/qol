@@ -30,6 +30,14 @@ pub(crate) fn cancel_recording(session_id: u64) {
     recorder::global().cancel(session_id);
 }
 
+#[cfg(feature = "linux_evdev")]
+pub(crate) fn release_held_keys() {
+    evdev_backend::release_held_keys();
+}
+
+#[cfg(not(feature = "linux_evdev"))]
+pub(crate) fn release_held_keys() {}
+
 #[cfg(not(feature = "linux_evdev"))]
 pub(crate) fn install(
     _bindings: Vec<Binding>,

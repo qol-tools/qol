@@ -10,10 +10,95 @@ use evdev::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const VIRTUAL_KEYBOARD_NAME: &str = "qol-tray-virtual-keyboard";
+
+/// The virtual keyboard plus the set of key codes currently emitted as down
+/// on it. Only the readers' graceful exit releases held keys; the dev
+/// exec-restart and the abort-on-panic hook destroy the process image with
+/// whatever is down at that instant still latched in the X server, which then
+/// autorepeats that key forever (the desktop is unusable until reboot).
+/// Tracking every emit here gives those paths one thing to flush.
+struct TrackedVirtualDevice {
+    device: VirtualDevice,
+    held: HashSet<u16>,
+}
+
+impl TrackedVirtualDevice {
+    fn new(device: VirtualDevice) -> Self {
+        Self {
+            device,
+            held: HashSet::new(),
+        }
+    }
+
+    fn emit(&mut self, events: &[InputEvent]) -> std::io::Result<()> {
+        self.device.emit(events)?;
+        track_emitted(&mut self.held, events);
+        Ok(())
+    }
+
+    fn release_held(&mut self) {
+        let events = release_events(&self.held);
+        if events.is_empty() {
+            return;
+        }
+        if let Err(error) = self.device.emit(&events) {
+            log::warn!("evdev: held-key release flush failed: {error}");
+        }
+        self.held.clear();
+    }
+}
+
+fn track_emitted(held: &mut HashSet<u16>, events: &[InputEvent]) {
+    for event in events {
+        if event.event_type() != EventType::KEY {
+            continue;
+        }
+        match event.value() {
+            1 => {
+                held.insert(event.code());
+            }
+            0 => {
+                held.remove(&event.code());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn release_events(held: &HashSet<u16>) -> Vec<InputEvent> {
+    held.iter()
+        .flat_map(|&code| {
+            [
+                InputEvent::new(EventType::KEY.0, code, 0),
+                InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
+            ]
+        })
+        .collect()
+}
+
+static FLUSH_TARGET: OnceLock<Arc<Mutex<TrackedVirtualDevice>>> = OnceLock::new();
+
+/// Emit key-up for everything still held on the virtual keyboard. For the
+/// ways out of the process that skip the readers' own exit release: the dev
+/// exec-restart, graceful shutdown, and the abort-on-panic hook. Uses
+/// try_lock so a panic on a thread that holds the emit lock cannot deadlock
+/// the abort (the grabs must still be released by process death).
+pub(super) fn release_held_keys() {
+    let Some(target) = FLUSH_TARGET.get() else {
+        return;
+    };
+    match target.try_lock() {
+        Ok(mut vd) => vd.release_held(),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner().release_held(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log::warn!("evdev: virtual keyboard busy during exit flush; a held key may stick");
+        }
+    }
+}
 
 /// The only channel through which capture code may reach plugin actions.
 ///
@@ -195,6 +280,7 @@ fn install_panic_safety_hook() {
             log::error!(
                 "evdev capture active: panic detected; aborting to release keyboard grabs ({info})"
             );
+            release_held_keys();
             prior(info);
             std::process::abort();
         }));
@@ -256,11 +342,12 @@ pub(super) fn install(
             .iter()
             .filter_map(|keyboard| keyboard.device.supported_keys()),
     )));
-    let virtual_device = Arc::new(Mutex::new(build_virtual_device(
+    let virtual_device = Arc::new(Mutex::new(TrackedVirtualDevice::new(build_virtual_device(
         &key_caps
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    )?));
+    )?)));
+    let _ = FLUSH_TARGET.set(virtual_device.clone());
     let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
     let dispatch = spawn_dispatch_thread(on_fire);
 
@@ -374,7 +461,7 @@ fn grab_keyboard(
 fn spawn_rescan_thread(
     grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
     matcher: Arc<Mutex<BindingMatcher>>,
-    virtual_device: Arc<Mutex<VirtualDevice>>,
+    virtual_device: Arc<Mutex<TrackedVirtualDevice>>,
     key_caps: Arc<Mutex<AttributeSet<KeyCode>>>,
     dispatch: CaptureDispatch,
 ) {
@@ -439,7 +526,7 @@ fn spawn_rescan_thread(
 fn merge_capabilities(
     keyboard: &GrabbedKeyboard,
     key_caps: &Mutex<AttributeSet<KeyCode>>,
-    virtual_device: &Mutex<VirtualDevice>,
+    virtual_device: &Mutex<TrackedVirtualDevice>,
     path: &std::path::Path,
 ) {
     let Ok(mut caps) = key_caps.lock() else {
@@ -458,7 +545,7 @@ fn merge_capabilities(
     match build_virtual_device(&caps) {
         Ok(new_device) => {
             if let Ok(mut vd) = virtual_device.lock() {
-                *vd = new_device;
+                vd.device = new_device;
                 log::info!(
                     "evdev: virtual device rebuilt with {} key capabilities after grabbing {}",
                     caps.iter().count(),
@@ -527,7 +614,7 @@ fn run_reader(
     grab_time: SystemTime,
     initial_held: AttributeSet<KeyCode>,
     matcher: Arc<Mutex<BindingMatcher>>,
-    virtual_device: Arc<Mutex<VirtualDevice>>,
+    virtual_device: Arc<Mutex<TrackedVirtualDevice>>,
     dispatch: CaptureDispatch,
     grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
 ) {
@@ -593,7 +680,7 @@ fn run_reader(
 }
 
 fn replay_state(
-    virtual_device: &Mutex<VirtualDevice>,
+    virtual_device: &Mutex<TrackedVirtualDevice>,
     matcher: &Mutex<BindingMatcher>,
     device: &str,
     code: u16,
@@ -615,7 +702,7 @@ fn replay_state(
 fn process_event(
     event: InputEvent,
     matcher: &Mutex<BindingMatcher>,
-    virtual_device: &Mutex<VirtualDevice>,
+    virtual_device: &Mutex<TrackedVirtualDevice>,
     dispatch: &CaptureDispatch,
     device: &str,
     grab_time: SystemTime,
@@ -659,7 +746,7 @@ fn process_event(
     }
 }
 
-fn forward(event: InputEvent, virtual_device: &Mutex<VirtualDevice>) {
+fn forward(event: InputEvent, virtual_device: &Mutex<TrackedVirtualDevice>) {
     if let Ok(mut vd) = virtual_device.lock() {
         if let Err(error) = vd.emit(&[event]) {
             log::warn!("evdev: virtual emit failed: {error}");
@@ -785,6 +872,39 @@ mod tests {
             },
             phase: super::super::super::super::Phase::START,
         }
+    }
+
+    #[test]
+    fn tracked_held_set_follows_emitted_downs_and_ups() {
+        let mut held = HashSet::new();
+        let down = |code: u16| InputEvent::new(EventType::KEY.0, code, 1);
+        let up = |code: u16| InputEvent::new(EventType::KEY.0, code, 0);
+        let syn = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
+
+        track_emitted(&mut held, &[down(38), syn, down(42), syn]);
+        assert_eq!(held, HashSet::from([38, 42]));
+        track_emitted(&mut held, &[InputEvent::new(EventType::KEY.0, 38, 2), syn]);
+        assert_eq!(
+            held,
+            HashSet::from([38, 42]),
+            "autorepeat does not change held state"
+        );
+        track_emitted(&mut held, &[up(38), syn]);
+        assert_eq!(held, HashSet::from([42]));
+    }
+
+    /// The letter latched by an exec-restart mid-keypress: the flush must
+    /// emit an up (with a SYN) for every key still down on the virtual
+    /// keyboard, else X autorepeats it until the machine is power-cycled.
+    #[test]
+    fn release_events_emit_an_up_and_a_syn_for_every_held_key() {
+        let held = HashSet::from([38u16]);
+        let events = release_events(&held);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type(), EventType::KEY);
+        assert_eq!((events[0].code(), events[0].value()), (38, 0));
+        assert_eq!(events[1].event_type(), EventType::SYNCHRONIZATION);
+        assert!(release_events(&HashSet::new()).is_empty());
     }
 
     /// A slow plugin action must never hold up the reader thread. Before the

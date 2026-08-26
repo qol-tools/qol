@@ -31,6 +31,10 @@ pub(crate) fn start_recording(_session_id: u64, _events: Arc<crate::daemon::Even
 
 pub(crate) fn cancel_recording(_session_id: u64) {}
 
+/// The macOS tap passes events through instead of re-emitting them, so it
+/// holds no synthetic key state to flush.
+pub(crate) fn release_held_keys() {}
+
 pub(crate) fn install(
     bindings: Vec<Binding>,
     on_fire: OnFire,

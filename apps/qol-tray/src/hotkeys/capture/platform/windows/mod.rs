@@ -10,6 +10,9 @@ pub(crate) fn start_recording(_session_id: u64, _events: Arc<crate::daemon::Even
 
 pub(crate) fn cancel_recording(_session_id: u64) {}
 
+/// No capture backend re-emits events on Windows; nothing to flush.
+pub(crate) fn release_held_keys() {}
+
 pub(crate) fn install(
     _bindings: Vec<Binding>,
     _on_fire: OnFire,

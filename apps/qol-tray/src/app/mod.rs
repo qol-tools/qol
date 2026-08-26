@@ -146,6 +146,7 @@ pub(crate) fn run() -> Result<()> {
 
     qol_tray::features::gpu_driver_sync::stop_watch();
 
+    hotkeys::release_held_keys();
     if owns_host_surface {
         log_binding_restore("shutdown", hotkeys::restore_desktop_bindings_on_exit());
     }

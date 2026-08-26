@@ -44,6 +44,14 @@ pub fn start_recording(session_id: u64, events: std::sync::Arc<crate::daemon::Ev
     capture::start_recording(session_id, events)
 }
 
+/// Flush key-ups for everything the capture backend still holds down on its
+/// virtual keyboard. Call on every way out of the process that skips the
+/// readers' own exit release (exec-restart, graceful shutdown); without it a
+/// key that is physically down at that instant stays latched in the desktop.
+pub fn release_held_keys() {
+    capture::release_held_keys();
+}
+
 pub fn cancel_recording(session_id: u64) {
     capture::cancel_recording(session_id);
 }
