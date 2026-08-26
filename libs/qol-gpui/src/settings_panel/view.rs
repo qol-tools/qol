@@ -729,6 +729,15 @@ impl SettingsPanelView {
         self.level().body_scroll.rewind();
         self.pause_runtime_poll();
         self.resume_runtime_poll(cx);
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "plugin={} phase=source-switch queries={}",
+            self.sources
+                .get(next)
+                .map_or("unknown", |source| source.plugin_id.as_str()),
+            self.runtime_queries.len()
+        );
     }
 
     fn descend_source_menu(&mut self) {

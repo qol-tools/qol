@@ -30,10 +30,14 @@ fn tray_config_route(base: &str) -> String {
 
 pub(super) fn query(base: &str, query: &str) -> Result<serde_json::Value, String> {
     let route = format!("{base}/queries/{query}");
+    #[cfg(debug_assertions)]
+    let started = std::time::Instant::now();
     let (status, body) = tray_http_session(&route).map_err(|error| error.to_string())?;
+    #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
-        "panel={base} phase=runtime-query query={query} status={status}"
+        "panel={base} phase=runtime-query query={query} status={status} elapsed_ms={}",
+        started.elapsed().as_millis()
     );
     if status != 200 {
         return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
