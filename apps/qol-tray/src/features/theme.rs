@@ -151,6 +151,8 @@ pub fn native_accent_wire() -> String {
 pub fn apply_accent_env(command: &mut Command) {
     if let Ok(Some(key)) = selected_native_accent_key() {
         command.env(qol_conventions::ENV_THEME_ACCENT, key);
+    } else {
+        command.env_remove(qol_conventions::ENV_THEME_ACCENT);
     }
 }
 

@@ -346,9 +346,9 @@ mod tests {
         let command = runtime_command(&resolved(), Path::new("/bin/true"));
 
         assert!(
-            !command
-                .get_envs()
-                .any(|(key, _)| key == OsStr::new(qol_conventions::ENV_THEME_ACCENT)),
+            !command.get_envs().any(|(key, value)| key
+                == OsStr::new(qol_conventions::ENV_THEME_ACCENT)
+                && value.is_some()),
             "web-only accent selection must not inject ENV_THEME_ACCENT",
         );
     }
