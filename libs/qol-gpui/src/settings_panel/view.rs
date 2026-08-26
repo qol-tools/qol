@@ -280,6 +280,11 @@ pub(super) struct SettingsPanelView {
     runtime_queries: Vec<String>,
     sources: Vec<SourceState>,
     selected_source: usize,
+    /// The source the body is actually showing. It lags `selected_source`
+    /// while the rail is moving, so scrolling past a plugin never materialises
+    /// its page.
+    materialized_source: usize,
+    source_settle_generation: u64,
     source_menu: bool,
     rail_transition: TransitionTracker,
     deck_transition: TransitionTracker,
@@ -411,6 +416,8 @@ impl SettingsPanelView {
                 .collect(),
             sources: state.sources,
             selected_source: focused_source,
+            materialized_source: focused_source,
+            source_settle_generation: 0,
             source_menu: has_many_sources,
             rail_transition: TransitionTracker::default(),
             deck_transition: TransitionTracker::default(),
@@ -456,7 +463,7 @@ impl SettingsPanelView {
         let first_visible = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.level_mut().selected = first_visible;
         if view.panel_names_a_source() {
-            view.descend_source_menu();
+            view.descend_source_menu(cx);
         }
         view.resume_runtime_poll(cx);
         view
@@ -507,7 +514,7 @@ impl SettingsPanelView {
             &self.level().sections,
             self.sources.len(),
             self.filter_needle().as_deref(),
-            self.selected_source,
+            self.materialized_source,
         )
     }
 
@@ -591,7 +598,7 @@ impl SettingsPanelView {
         for (index, visible_items) in list_fit_updates(
             &self.root().rows,
             &self.root().sections,
-            self.selected_source,
+            self.materialized_source,
             self.height_cap,
         ) {
             if let RowControl::List { list, .. } = &mut self.root_mut().rows[index].control {
@@ -695,6 +702,7 @@ impl SettingsPanelView {
         };
         self.forget_last_visit();
         self.select_source(source_index, cx);
+        self.materialize_source(cx);
         let Some(section_index) = (0..self.level().sections.len()).find(|index| {
             let section = &self.level().sections[*index];
             section.source == source_index && !self.section_visible_rows(*index).is_empty()
@@ -703,7 +711,7 @@ impl SettingsPanelView {
         };
         self.level_mut().selected_section = section_index;
         if focus_enters_the_body(plugin_id) {
-            self.descend_source_menu();
+            self.descend_source_menu(cx);
         } else {
             self.set_source_menu(self.sources.len() > 1);
         }
@@ -742,11 +750,40 @@ impl SettingsPanelView {
         }
     }
 
+    /// Moves the rail highlight. Selection is cheap intent: the body keeps
+    /// showing whatever was last materialised until the highlight settles, so
+    /// holding an arrow key through the rail costs one page build instead of
+    /// one per plugin passed.
     fn select_source(&mut self, next: usize, cx: &mut Context<Self>) {
         if next == self.selected_source {
             return;
         }
+        #[cfg(debug_assertions)]
+        let switch_started = std::time::Instant::now();
         self.selected_source = next;
+        self.materialize_source_when_settled(cx);
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "plugin={} phase=source-switch elapsed_us={}",
+            self.sources
+                .get(next)
+                .map_or("unknown", |source| source.plugin_id.as_str()),
+            switch_started.elapsed().as_micros()
+        );
+    }
+
+    /// Builds the selected source's page and starts its poller. Everything
+    /// expensive about a source switch lives here, and nothing calls it while
+    /// the selection is still moving.
+    fn materialize_source(&mut self, cx: &mut Context<Self>) {
+        let next = self.selected_source;
+        if next == self.materialized_source {
+            return;
+        }
+        #[cfg(debug_assertions)]
+        let started = std::time::Instant::now();
+        self.materialized_source = next;
         self.height_revision += 1;
         self.runtime = self
             .sources
@@ -767,24 +804,24 @@ impl SettingsPanelView {
         self.level_mut().selected = first_visible;
         self.level().body_scroll.rewind();
         self.pause_runtime_poll();
-        self.resume_runtime_poll_when_settled(cx);
+        self.resume_runtime_poll(cx);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_NAV",
-            "plugin={} phase=source-switch queries={}",
+            "plugin={} phase=materialize queries={} elapsed_us={}",
             self.sources
                 .get(next)
                 .map_or("unknown", |source| source.plugin_id.as_str()),
-            self.runtime_queries.len()
+            self.runtime_queries.len(),
+            started.elapsed().as_micros()
         );
+        cx.notify();
     }
 
-    /// Starts the newly selected source's poller only once the rail selection
-    /// has stopped moving. Holding an arrow key through the rail would
-    /// otherwise fan out every source's queries in turn, and a query already
-    /// in flight cannot be cancelled.
-    fn resume_runtime_poll_when_settled(&mut self, cx: &mut Context<Self>) {
-        let generation = self.runtime_poll_generation;
+    /// Materialises the selected source once the rail has stopped moving.
+    fn materialize_source_when_settled(&mut self, cx: &mut Context<Self>) {
+        self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
+        let generation = self.source_settle_generation;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -793,8 +830,8 @@ impl SettingsPanelView {
                     .timer(SOURCE_SWITCH_DEBOUNCE)
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
-                    if this.runtime_poll_generation == generation {
-                        this.resume_runtime_poll(cx);
+                    if this.source_settle_generation == generation {
+                        this.materialize_source(cx);
                     }
                 });
             }
@@ -802,7 +839,8 @@ impl SettingsPanelView {
         .detach();
     }
 
-    fn descend_source_menu(&mut self) {
+    fn descend_source_menu(&mut self, cx: &mut Context<Self>) {
+        self.materialize_source(cx);
         self.set_source_menu(false);
         self.open_selected_section();
     }
@@ -818,7 +856,7 @@ impl SettingsPanelView {
         match key {
             "up" => self.step_selected_source(-1, cx),
             "down" => self.step_selected_source(1, cx),
-            "enter" | "return" => self.descend_source_menu(),
+            "enter" | "return" => self.descend_source_menu(cx),
             "escape" => {
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
@@ -854,7 +892,7 @@ impl SettingsPanelView {
         if self.runtime_queries.is_empty() {
             return;
         }
-        let source = self.selected_source;
+        let source = self.materialized_source;
         let since = std::time::Instant::now();
         for query in &self.runtime_queries {
             self.query_states
@@ -1015,7 +1053,7 @@ impl SettingsPanelView {
 
     fn apply_query(&mut self, query: &str, result: Result<serde_json::Value, String>) {
         self.query_states.insert(
-            (self.selected_source, query.to_string()),
+            (self.materialized_source, query.to_string()),
             match &result {
                 Ok(_) => RowQueryState::Ready,
                 Err(message) => RowQueryState::Unavailable(message.clone()),
@@ -3316,7 +3354,7 @@ impl SettingsPanelView {
                 return;
             }
             this.select_source(index, cx);
-            this.descend_source_menu();
+            this.descend_source_menu(cx);
             cx.notify();
         }))
     }
@@ -4527,9 +4565,9 @@ impl SettingsPanelView {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap_0p5()
                                 .text_size(px(qol_theme::TEXT_NANO))
                                 .text_color(rgb(self.kit.palette.text_muted))
+                                .gap_0p5()
                                 .children(trail.into_iter().map(|label| {
                                     div()
                                         .flex()
@@ -4648,7 +4686,9 @@ impl SettingsPanelView {
     fn body_groups(&self) -> Vec<(String, Vec<usize>)> {
         if !self.filtering() {
             return (0..self.level().sections.len())
-                .filter(|section| self.level().sections[*section].source == self.selected_source)
+                .filter(|section| {
+                    self.level().sections[*section].source == self.materialized_source
+                })
                 .map(|section| {
                     let visible = self.section_filtered_rows(section);
                     (self.section_title(section), visible)
@@ -4689,7 +4729,7 @@ impl SettingsPanelView {
             .map(|level| level.title.clone().unwrap_or_default())
             .collect::<Vec<_>>();
         let plugin = (self.sources.len() > 1 && !self.filtering())
-            .then(|| self.plugin_title(self.selected_source));
+            .then(|| self.plugin_title(self.materialized_source));
         crumb_labels(&self.panel.heading, plugin, cards)
     }
 
