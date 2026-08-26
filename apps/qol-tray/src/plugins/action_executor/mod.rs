@@ -20,6 +20,10 @@ pub(crate) use tracking::ProcessTracker;
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 const QUERY_DAEMON_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
+/// Queries are reads that feed a settings row, so they get an interactive
+/// budget instead of the action transport's 10s ceiling. A daemon that cannot
+/// answer inside it is reported unavailable rather than stalling the panel.
+const QUERY_DISPATCH_TIMEOUT: Duration = Duration::from_millis(750);
 
 #[derive(Debug)]
 pub enum ActionExecutionError {
@@ -209,8 +213,11 @@ pub fn dispatch_query(
     query_name: &str,
 ) -> Result<serde_json::Value, ActionExecutionError> {
     let socket_path = resolve_plugin_daemon_socket(plugin_manager, plugin_id)?;
-    let initial_dispatch =
-        crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);
+    let initial_dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
+        &socket_path,
+        query_name,
+        QUERY_DISPATCH_TIMEOUT,
+    );
     #[cfg(debug_assertions)]
     trace_query_dispatch(plugin_id, query_name, "initial", &initial_dispatch);
     if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
@@ -236,8 +243,11 @@ pub fn dispatch_query(
     }
     readiness?;
 
-    let retry_dispatch =
-        crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);
+    let retry_dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
+        &socket_path,
+        query_name,
+        QUERY_DISPATCH_TIMEOUT,
+    );
     #[cfg(debug_assertions)]
     trace_query_dispatch(plugin_id, query_name, "retry", &retry_dispatch);
     query_dispatch_result(retry_dispatch, plugin_id, query_name)

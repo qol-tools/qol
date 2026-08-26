@@ -35,6 +35,8 @@ const BODY_SIDE_PADDING: f32 = 16.0;
 const GROUP_HEADER_INSET: f32 = 8.0;
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+/// How long the rail selection must hold still before its source starts polling.
+const SOURCE_SWITCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
@@ -728,7 +730,7 @@ impl SettingsPanelView {
         self.level_mut().selected = first_visible;
         self.level().body_scroll.rewind();
         self.pause_runtime_poll();
-        self.resume_runtime_poll(cx);
+        self.resume_runtime_poll_when_settled(cx);
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_NAV",
@@ -738,6 +740,29 @@ impl SettingsPanelView {
                 .map_or("unknown", |source| source.plugin_id.as_str()),
             self.runtime_queries.len()
         );
+    }
+
+    /// Starts the newly selected source's poller only once the rail selection
+    /// has stopped moving. Holding an arrow key through the rail would
+    /// otherwise fan out every source's queries in turn, and a query already
+    /// in flight cannot be cancelled.
+    fn resume_runtime_poll_when_settled(&mut self, cx: &mut Context<Self>) {
+        let generation = self.runtime_poll_generation;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(SOURCE_SWITCH_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if this.runtime_poll_generation == generation {
+                        this.resume_runtime_poll(cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn descend_source_menu(&mut self) {

@@ -56,3 +56,8 @@ fn dispatch_daemon_action_request(
 pub fn daemon_listener_reachable(endpoint: &Path) -> bool {
     platform::can_connect(endpoint)
 }
+
+#[cfg(test)]
+pub(crate) fn default_io_timeout() -> Duration {
+    platform::default_io_timeout()
+}

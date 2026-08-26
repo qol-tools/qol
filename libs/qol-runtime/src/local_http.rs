@@ -126,12 +126,14 @@ impl Session {
         path: &str,
         body: Option<&str>,
     ) -> io::Result<Response> {
+        let reused = self.stream.is_some();
         match self.request_on_open_connection(method, path, body) {
             Ok(response) => Ok(response),
-            Err(_) => {
+            Err(error) if reused && is_stale_connection(&error) => {
                 self.stream = None;
                 self.request_on_open_connection(method, path, body)
             }
+            Err(error) => Err(error),
         }
     }
 
@@ -155,6 +157,21 @@ impl Session {
         }
         response
     }
+}
+
+/// True when the failure is the kept-alive socket having been closed under us,
+/// which a fresh connection retries away. A timeout is not in this set: the
+/// peer is simply slow, and retrying would silently pay the budget twice and
+/// issue a second full request on the server.
+fn is_stale_connection(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
 }
 
 fn read_kept_alive_response(stream: &mut TcpStream) -> io::Result<Response> {
@@ -225,6 +242,41 @@ fn parse_response(raw: &str) -> io::Result<Response> {
 
 #[cfg(test)]
 mod tests {
+    use super::is_stale_connection;
+    use std::io;
+
+    /// A kept-alive socket closed under us is retried on a fresh connection.
+    /// A timeout is not: retrying would pay the budget twice and issue a
+    /// second full request on a peer that is merely slow.
+    #[test]
+    fn only_closed_connections_are_worth_retrying() {
+        let retried = [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::UnexpectedEof,
+        ];
+        for kind in retried {
+            assert!(
+                is_stale_connection(&io::Error::from(kind)),
+                "{kind:?} must be retried on a fresh connection"
+            );
+        }
+        let surfaced = [
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::PermissionDenied,
+        ];
+        for kind in surfaced {
+            assert!(
+                !is_stale_connection(&io::Error::from(kind)),
+                "{kind:?} must surface instead of being retried"
+            );
+        }
+    }
+
     use super::{parse_response, Client, Method, Response};
 
     #[test]

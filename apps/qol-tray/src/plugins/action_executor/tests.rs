@@ -600,3 +600,21 @@ fn repeated_daemon_action_readiness_does_not_read_profile_state() {
     assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
     plugin_manager.lock().unwrap().shutdown();
 }
+
+/// Queries feed settings rows, so they must fail fast rather than inherit the
+/// action transport's ceiling. Without this bound, one wedged plugin daemon
+/// stalls the settings rail for seconds per query.
+#[test]
+fn query_dispatch_uses_an_interactive_budget_not_the_action_ceiling() {
+    let action_ceiling = crate::plugins::action_transport::default_io_timeout();
+    assert!(
+        super::QUERY_DISPATCH_TIMEOUT < action_ceiling,
+        "query budget {:?} must be tighter than the action ceiling {action_ceiling:?}",
+        super::QUERY_DISPATCH_TIMEOUT
+    );
+    assert!(
+        super::QUERY_DISPATCH_TIMEOUT <= std::time::Duration::from_millis(1000),
+        "a settings row read must stay interactive, got {:?}",
+        super::QUERY_DISPATCH_TIMEOUT
+    );
+}
