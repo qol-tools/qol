@@ -416,7 +416,7 @@ impl Surface {
             if configured {
                 crate::popup_window::present_topmost(&title);
             }
-            let shown = configured && crate::popup_window::show_window_passive_by_title(&title);
+            let shown = configured && crate::popup_window::show_window_interactive_by_title(&title);
             visible.set(shown);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",

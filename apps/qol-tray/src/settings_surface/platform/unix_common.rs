@@ -425,11 +425,7 @@ fn show_toast_in_host(
         )
         .tone(toast_tone(&level));
         if let Some((_, payload)) = action {
-            toast = toast.on_activate(move |_cx| {
-                if let Err(error) = crate::paths::open_url(&payload) {
-                    log::warn!("[toast] activation open failed: {error:#}");
-                }
-            });
+            toast = toast.on_activate(move |_cx| crate::paths::open_url(&payload));
         }
         if let Err(error) = toast_host.show(toast, cx) {
             log::warn!("[toast] render failed: {error:#}");

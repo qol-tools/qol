@@ -472,15 +472,19 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay, false)
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, true)
+}
+
+pub fn show_window_interactive_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, false)
 }
 
 pub fn show_normal_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true, WindowPresentation::Normal)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Normal, false)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -493,6 +497,7 @@ fn show_window_by_title_with_focus(
     title: &str,
     focus: bool,
     presentation: WindowPresentation,
+    input_passthrough: bool,
 ) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
@@ -514,7 +519,7 @@ fn show_window_by_title_with_focus(
     );
     let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
-    let input_ok = set_input_passthrough(&conn, wid, !focus);
+    let input_ok = set_input_passthrough(&conn, wid, input_passthrough);
     let map_ok = conn
         .map_window(wid)
         .ok()

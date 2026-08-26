@@ -118,6 +118,10 @@ pub fn show_window_passive_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn show_window_interactive_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn show_normal_window_by_title(_title: &str) -> bool {
     false
 }

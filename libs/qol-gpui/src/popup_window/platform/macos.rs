@@ -556,6 +556,10 @@ pub fn show_window_passive_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
 }
 
+pub fn show_window_interactive_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
+}
+
 pub fn show_normal_window_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, true, WindowPresentation::Normal)
 }

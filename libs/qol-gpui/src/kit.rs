@@ -551,6 +551,22 @@ pub fn tile_tone(name: &str) -> u32 {
     TILE_TONES[(hash % TILE_TONES.len() as u32) as usize]
 }
 
+pub fn path_label(path: &str) -> (String, String) {
+    let body = path.strip_suffix('/').unwrap_or(path);
+    if body.is_empty() {
+        return (String::new(), path.to_string());
+    }
+    let bytes = body.as_bytes();
+    let starts: Vec<usize> = (0..bytes.len())
+        .filter(|i| (*i == 0 || bytes[i - 1] == b'/') && bytes[*i] != b'/')
+        .collect();
+    if starts.len() < 2 {
+        return (String::new(), path.to_string());
+    }
+    let cut = starts[starts.len() - 2];
+    (body[..cut].to_string(), body[cut..].to_string())
+}
+
 pub fn kit() -> Kit {
     let theme = qol_theme::runtime_theme();
     Kit::new(theme.mode, theme.system)
@@ -559,7 +575,7 @@ pub fn kit() -> Kit {
 #[cfg(test)]
 mod tests {
     use super::{
-        focus_ring_for, rail_scrim, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
+        focus_ring_for, path_label, rail_scrim, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
         RAIL_SCRIM_END, RAIL_SCRIM_START,
     };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
@@ -593,5 +609,42 @@ mod tests {
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_END}")));
         assert!(rendered.contains("a: 0.0"));
         assert!(rendered.contains(&format!("a: {}", f32::from(RAIL_SCRIM_ALPHA) / 255.0)));
+    }
+
+    #[test]
+    fn path_label_splits_a_deep_absolute_path_keeping_the_last_two_components() {
+        assert_eq!(
+            path_label("/home/kmrh47/Pictures/qol/204118.png"),
+            (
+                "/home/kmrh47/Pictures/".to_string(),
+                "qol/204118.png".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn path_label_holds_the_root_in_head_for_a_two_component_path() {
+        assert_eq!(
+            path_label("/tmp/a.png"),
+            ("/".to_string(), "tmp/a.png".to_string())
+        );
+    }
+
+    #[test]
+    fn path_label_returns_a_single_component_verbatim() {
+        assert_eq!(path_label("a.png"), (String::new(), "a.png".to_string()));
+    }
+
+    #[test]
+    fn path_label_collapses_an_empty_string_to_two_empty_halves() {
+        assert_eq!(path_label(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn path_label_treats_a_trailing_separator_as_absent() {
+        assert_eq!(
+            path_label("/a/b/c/"),
+            ("/a/".to_string(), "b/c".to_string())
+        );
     }
 }

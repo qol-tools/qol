@@ -25,10 +25,11 @@ pub use fallback::{
     hide_windows_by_title_prefix, make_override_redirect, park_window_by_title, pinned_window_kind,
     prepare_window_reveal_by_title, release_focus_by_title, reposition_window_by_title,
     set_ghost_debug, set_unmap_hide, set_window_fixed_size_by_title, set_window_type_dock_by_title,
-    show_normal_window_by_title, show_window_by_title, show_window_passive_by_title,
-    sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
-    window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
-    window_holds_input_focus, window_position_by_title, WindowGeometrySession,
+    show_normal_window_by_title, show_window_by_title, show_window_interactive_by_title,
+    show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
+    visible_windows_by_title_prefix, window_backing_scale, window_bounds_primary_anchored,
+    window_geometry_session, window_holds_input_focus, window_position_by_title,
+    WindowGeometrySession,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
@@ -38,10 +39,11 @@ pub use linux::{
     hide_windows_by_title_prefix, make_override_redirect, park_window_by_title, pinned_window_kind,
     prepare_window_reveal_by_title, release_focus_by_title, reposition_window_by_title,
     set_ghost_debug, set_unmap_hide, set_window_fixed_size_by_title, set_window_type_dock_by_title,
-    show_normal_window_by_title, show_window_by_title, show_window_passive_by_title,
-    sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
-    window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
-    window_holds_input_focus, window_position_by_title, WindowGeometrySession,
+    show_normal_window_by_title, show_window_by_title, show_window_interactive_by_title,
+    show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
+    visible_windows_by_title_prefix, window_backing_scale, window_bounds_primary_anchored,
+    window_geometry_session, window_holds_input_focus, window_position_by_title,
+    WindowGeometrySession,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
@@ -52,10 +54,10 @@ pub use macos::{
     prepare_window_reveal_by_title, reassert_focus_on_main, release_focus_by_title,
     reposition_window_by_title, set_ghost_debug, set_unmap_hide, set_window_fixed_size_by_title,
     set_window_type_dock_by_title, show_normal_window_by_title, show_window_by_title,
-    show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
-    visible_windows_by_title_prefix, window_backing_scale, window_bounds_primary_anchored,
-    window_geometry_session, window_holds_input_focus, window_position_by_title,
-    WindowGeometrySession,
+    show_window_interactive_by_title, show_window_passive_by_title, sync_window_layout,
+    sync_window_layout_by_title, visible_windows_by_title_prefix, window_backing_scale,
+    window_bounds_primary_anchored, window_geometry_session, window_holds_input_focus,
+    window_position_by_title, WindowGeometrySession,
 };
 
 pub fn present_topmost(title: &str) {
