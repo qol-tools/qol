@@ -228,3 +228,71 @@ Two debug-only probes, both compiled out in release:
 Reader: `scratchpad/navtrace.py <epoch_ms>` correlates switches with the
 queries they fire and flags anything at or above 250ms. Trace file is
 `/tmp/qol-altmon.log`.
+
+## Live trace of the reported gesture
+
+Captured on the instrumented build (tray pid 147586) while the user opened the
+panel and moved down the rail fast, then back up. 26 source switches, 245
+runtime queries, 430s window.
+
+Peak burst, 10 switches in 374ms, each one starting a fresh poller:
+
+```
+429072ms  SWITCH -> plugin-cli-sessions        queries=0
+429094ms  SWITCH -> plugin-controllers         queries=2
+429110ms  SWITCH -> plugin-ide-checkout        queries=0
+429116ms  SWITCH -> plugin-launcher            queries=0
+429143ms  SWITCH -> plugin-lights              queries=2
+429168ms  SWITCH -> plugin-monitor             queries=2
+429206ms  SWITCH -> plugin-os-themes           queries=1
+429239ms  SWITCH -> plugin-pointz              queries=3
+429258ms  SWITCH -> qol-shot                   queries=2
+429360ms  SWITCH -> qol-voice                  queries=6
+429446ms  SWITCH -> plugin-window-actions      queries=0
+```
+
+Per-panel totals over the window:
+
+```
+/api/plugins/plugin-pointz      n=1    total=1865ms
+/api/plugins/qol-voice          n=8    total=137ms
+/api/plugins/plugin-bluetooth   n=12   total=78ms
+/api/plugins/qol-shot           n=4    total=19ms
+/api/core                       n=216  total=16ms
+/api/plugins/plugin-os-themes   n=1    total=3ms
+/api/plugins/plugin-monitor     n=2    total=3ms
+/api/plugins/plugin-lights      n=2    total=1ms
+```
+
+Three things the trace adds to the model above.
+
+**No caching between visits.** plugin-bluetooth was visited twice and re-ran
+all six queries both times (n=12), even though the second visit was 1.7s after
+the first. Nothing reuses the previous sample.
+
+**Most pollers do pure churn.** plugin-controllers (queries=2),
+plugin-cli-sessions, plugin-ide-checkout, plugin-launcher and
+plugin-window-actions produced zero completed queries. The switch away landed
+16 to 40ms later, so `pause_runtime_poll` cancelled the poller before its
+first sample was ever scheduled. 26 poller starts, a handful of samples.
+
+**Slow sources leak uninterruptible work and show nothing.** plugin-pointz was
+visited twice at three queries each, so six dispatches were attempted. Exactly
+one ever returned, `pairing_status` at 1865ms. The other five never completed
+inside the 430s window. Those rows rendered with no data, no spinner and no
+error for the entire session, which is precisely the silent failure that
+non-negotiable 6 forbids.
+
+Thread count on the settings host stayed at 32 across the burst, so this is not
+thread growth. The gpui background executor is a fixed pool, which is exactly
+why a blocking uncancellable query starves it.
+
+This confirms proposals A (debounce, kills the churn), B (interactive budget,
+bounds the leak) and D (visible loading/stale/unavailable, ends the silence),
+and adds one more:
+
+### F. Cache the last sample per source
+
+Keep the previous good sample for each source and render it immediately on
+re-entry, refreshing behind it. Revisiting a plugin should not look like a cold
+load.
