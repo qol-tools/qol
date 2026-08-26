@@ -4236,6 +4236,8 @@ impl Focusable for SettingsPanelView {
 
 impl Render for SettingsPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        let build_started = std::time::Instant::now();
         self.palette = settings_panel_runtime();
         self.poll_visible.store(
             window.is_window_active(),
@@ -4272,6 +4274,14 @@ impl Render for SettingsPanelView {
                 }
             }
         }
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_FRAME",
+            "phase=build rows={} rail={} elapsed_us={}",
+            items.len(),
+            rail.len(),
+            build_started.elapsed().as_micros()
+        );
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
