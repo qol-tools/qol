@@ -1560,4 +1560,6 @@ Plugin: `plugins/qol-memory` (id `qol-memory`, binary `qol-memory`, Rust port of
 
 Spec: `docs/research/qol-memory/plugin-mvp-scope.md`.
 
+Interface plan (stage 2 daemon, host MCP endpoint, launcher flows, harness bridge): `docs/research/qol-memory/interface-plan.md`.
+
 Parity harness: `docs/research/qol-memory/parity.mjs` deep-compares `node ask.mjs` output against the `qol-memory` binary across the eval suites (brief and full modes, both index-cache build orders) and fails on any output or `.meta` mismatch.
