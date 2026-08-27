@@ -2,6 +2,7 @@ pub mod auth;
 pub mod github_auth;
 pub mod gpu_driver_sync;
 pub mod launcher_apps;
+pub mod mcp;
 #[cfg(feature = "dev")]
 pub mod mode_toggle;
 pub mod notifications;

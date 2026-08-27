@@ -1,0 +1,11 @@
+[package]
+name = "qol-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Transport-agnostic JSON-RPC handler for the MCP tools surface"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+indexmap = { version = "2.12", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true

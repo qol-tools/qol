@@ -6551,6 +6551,15 @@ name = "qol-hotkeys"
 version = "1.0.0"
 
 [[package]]
+name = "qol-mcp"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qol-memory"
 version = "0.1.0"
 dependencies = [
@@ -6766,6 +6775,7 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-hotkeys",
+ "qol-mcp",
  "qol-migrations",
  "qol-plugin-api",
  "qol-plugin-daemon",

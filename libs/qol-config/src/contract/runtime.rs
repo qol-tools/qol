@@ -27,12 +27,40 @@ pub struct ActionSpec {
     pub confirm: Option<String>,
     #[serde(default)]
     pub input: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub agent_tool: bool,
+    #[serde(default)]
+    pub tool_description: Option<String>,
+}
+
+impl ActionSpec {
+    pub fn tool_description(&self) -> &str {
+        match self.tool_description.as_deref() {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => &self.description,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct QuerySpec {
     pub description: String,
     pub poll_interval_ms: u64,
+    #[serde(default)]
+    pub agent_tool: bool,
+    #[serde(default)]
+    pub tool_description: Option<String>,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+}
+
+impl QuerySpec {
+    pub fn tool_description(&self) -> &str {
+        match self.tool_description.as_deref() {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => &self.description,
+        }
+    }
 }
 
 const STREAM_THROTTLE_MIN: u64 = 16;
@@ -69,7 +97,8 @@ fn validate_runtime_spec(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError
     validate_names(&spec.actions, "action", &mut all_names)?;
     validate_names(&spec.queries, "query", &mut all_names)?;
     validate_names(&spec.streams, "stream", &mut all_names)?;
-    validate_initial_queries(spec)
+    validate_initial_queries(spec)?;
+    validate_agent_tools(spec)
 }
 
 fn validate_names<'a, V>(
@@ -102,6 +131,55 @@ fn validate_initial_queries(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecEr
             return Err(ParseRuntimeSpecError::Validation(format!(
                 "stream {name} initial_query references undeclared query: {qname}"
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_agent_tools(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError> {
+    for (name, action) in &spec.actions {
+        validate_agent_tool_entry(
+            "action",
+            name,
+            action.agent_tool,
+            action.tool_description(),
+            action.input.as_ref(),
+        )?;
+    }
+    for (name, query) in &spec.queries {
+        validate_agent_tool_entry(
+            "query",
+            name,
+            query.agent_tool,
+            query.tool_description(),
+            query.input.as_ref(),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_agent_tool_entry(
+    kind: &str,
+    name: &str,
+    agent_tool: bool,
+    description: &str,
+    input: Option<&IndexMap<String, String>>,
+) -> Result<(), ParseRuntimeSpecError> {
+    if !agent_tool {
+        return Ok(());
+    }
+    if description.trim().is_empty() {
+        return Err(ParseRuntimeSpecError::Validation(format!(
+            "agent tool {kind} {name} needs a description"
+        )));
+    }
+    if let Some(input) = input {
+        for param in input.keys() {
+            if !is_valid_runable_name(param) {
+                return Err(ParseRuntimeSpecError::Validation(format!(
+                    "agent tool {kind} {name} has invalid input name: {param}"
+                )));
+            }
         }
     }
     Ok(())
@@ -301,6 +379,135 @@ poll_interval_ms = 1000
         assert!(
             result.is_err(),
             "same name in action and query should be rejected"
+        );
+    }
+
+    #[test]
+    fn parses_flagged_agent_query_with_input() {
+        let input = r#"
+schema_version = 1
+
+[query.list_devices]
+description = "List all paired devices"
+poll_interval_ms = 2000
+agent_tool = true
+tool_description = "List paired devices by name"
+input = { name = "device name filter", ieee = "device IEEE address" }
+"#;
+        let spec = parse_runtime_spec_str(input).expect("parse");
+        let query = &spec.queries["list_devices"];
+        assert!(query.agent_tool, "agent_tool flag set");
+        assert_eq!(
+            query.tool_description.as_deref(),
+            Some("List paired devices by name")
+        );
+        let input_map = query.input.as_ref().expect("input present");
+        assert_eq!(input_map.len(), 2, "two inputs");
+        assert_eq!(input_map["name"], "device name filter");
+        assert_eq!(input_map["ieee"], "device IEEE address");
+    }
+
+    #[test]
+    fn rejects_flagged_agent_query_without_description() {
+        let input = r#"
+schema_version = 1
+
+[query.list_devices]
+description = ""
+poll_interval_ms = 2000
+agent_tool = true
+tool_description = ""
+"#;
+        match parse_runtime_spec_str(input) {
+            Err(ParseRuntimeSpecError::Validation(message)) => {
+                assert_eq!(message, "agent tool query list_devices needs a description");
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_flagged_agent_action_with_invalid_input_name() {
+        let input = r#"
+schema_version = 1
+
+[action.remove_device]
+description = "Remove a device"
+agent_tool = true
+input = { "Bad-Name" = "device id" }
+"#;
+        match parse_runtime_spec_str(input) {
+            Err(ParseRuntimeSpecError::Validation(message)) => {
+                assert_eq!(
+                    message,
+                    "agent tool action remove_device has invalid input name: Bad-Name"
+                );
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_query_without_agent_tool_keys() {
+        let input = r#"
+schema_version = 1
+
+[query.list_devices]
+description = "List all paired devices"
+poll_interval_ms = 2000
+"#;
+        let spec = parse_runtime_spec_str(input).expect("parse");
+        let query = &spec.queries["list_devices"];
+        assert!(!query.agent_tool, "agent_tool defaults to false");
+        assert!(query.tool_description.is_none(), "no tool_description");
+        assert!(query.input.is_none(), "no input");
+    }
+
+    #[test]
+    fn tool_description_prefers_override_and_falls_back_to_description() {
+        let with_override = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.remove_device]
+description = "remove base"
+tool_description = "Remove a paired device"
+
+[query.list_devices]
+description = "list base"
+poll_interval_ms = 1000
+tool_description = "List paired devices"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            with_override.actions["remove_device"].tool_description(),
+            "Remove a paired device"
+        );
+        assert_eq!(
+            with_override.queries["list_devices"].tool_description(),
+            "List paired devices"
+        );
+        let without_override = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.remove_device]
+description = "remove base"
+
+[query.list_devices]
+description = "list base"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            without_override.actions["remove_device"].tool_description(),
+            "remove base"
+        );
+        assert_eq!(
+            without_override.queries["list_devices"].tool_description(),
+            "list base"
         );
     }
 }

@@ -71,6 +71,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
                 qol_headless::OutputFormat::PlainText
             },
         ),
+        "mcp" => commands::mcp::run(rest),
         "trace" => commands::trace::run(rest),
         "trace-rs" => commands::trace_rs::run(rest),
         "doctor" => commands::doctor::run(

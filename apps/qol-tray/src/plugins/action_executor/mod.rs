@@ -24,6 +24,7 @@ const QUERY_DAEMON_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 /// budget instead of the action transport's 10s ceiling. A daemon that cannot
 /// answer inside it is reported unavailable rather than stalling the panel.
 const QUERY_DISPATCH_TIMEOUT: Duration = Duration::from_millis(750);
+pub const MCP_DISPATCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum ActionExecutionError {
@@ -212,12 +213,30 @@ pub fn dispatch_query(
     plugin_id: &str,
     query_name: &str,
 ) -> Result<serde_json::Value, ActionExecutionError> {
-    let socket_path = resolve_plugin_daemon_socket(plugin_manager, plugin_id)?;
-    let initial_dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
-        &socket_path,
+    dispatch_query_with_input(
+        plugin_manager,
+        plugin_id,
         query_name,
+        serde_json::Value::Null,
         QUERY_DISPATCH_TIMEOUT,
-    );
+    )
+}
+
+pub fn dispatch_query_with_input(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    query_name: &str,
+    input: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, ActionExecutionError> {
+    let socket_path = resolve_plugin_daemon_socket(plugin_manager, plugin_id)?;
+    let initial_dispatch =
+        crate::plugins::action_transport::dispatch_daemon_action_with_input_and_timeout(
+            &socket_path,
+            query_name,
+            &input,
+            timeout,
+        );
     #[cfg(debug_assertions)]
     trace_query_dispatch(plugin_id, query_name, "initial", &initial_dispatch);
     if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
@@ -243,11 +262,13 @@ pub fn dispatch_query(
     }
     readiness?;
 
-    let retry_dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
-        &socket_path,
-        query_name,
-        QUERY_DISPATCH_TIMEOUT,
-    );
+    let retry_dispatch =
+        crate::plugins::action_transport::dispatch_daemon_action_with_input_and_timeout(
+            &socket_path,
+            query_name,
+            &input,
+            timeout,
+        );
     #[cfg(debug_assertions)]
     trace_query_dispatch(plugin_id, query_name, "retry", &retry_dispatch);
     query_dispatch_result(retry_dispatch, plugin_id, query_name)

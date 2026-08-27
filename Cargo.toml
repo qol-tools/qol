@@ -35,6 +35,7 @@ qol-headless = { path = "libs/qol-headless" }
 qol-host-fixes = { path = "libs/qol-host-fixes" }
 qol-host-session = { path = "libs/qol-host-session" }
 qol-hotkeys = { path = "libs/qol-hotkeys" }
+qol-mcp = { path = "libs/qol-mcp" }
 qol-terminal-sessions = { path = "libs/qol-terminal-sessions" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }

@@ -320,6 +320,48 @@ fn app() -> HeadlessApp {
                 }),
             ),
         )
+        .command(
+            command(
+                "mcp",
+                "Print qol-tray MCP endpoint facts and configure agent harnesses.",
+                "qol mcp <url|token|headers|configure>",
+                "Covers the stateless streamable HTTP MCP endpoint that qol-tray serves behind its token auth: url prints the endpoint URL, token prints the auth token, headers prints a JSON headers object, and configure writes or replaces the qol MCP entry for claude, codex, pi, or kimi.",
+                "URL, token, headers JSON, or configure confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when the tray token or the harness config file is missing or a harness name is unknown.",
+            )
+            .subcommand(command(
+                "url",
+                "Print the MCP endpoint URL.",
+                "qol mcp url",
+                "Prints the local streamable HTTP endpoint URL that qol-tray serves.",
+                "The URL on stdout.",
+                "Exits zero.",
+            ))
+            .subcommand(command(
+                "token",
+                "Print the tray HTTP auth token.",
+                "qol mcp token",
+                "Reads the token from the qol config directory; it exists once qol-tray has run.",
+                "The token on stdout.",
+                "Exits non-zero when the token file is missing.",
+            ))
+            .subcommand(command(
+                "headers",
+                "Print a JSON headers object carrying the auth token.",
+                "qol mcp headers",
+                "Prints a compact JSON object mapping the auth header name to the token, ready to paste into a harness config.",
+                "The headers JSON on stdout.",
+                "Exits non-zero when the token file is missing.",
+            ))
+            .subcommand(command(
+                "configure",
+                "Write or replace the qol MCP entry in a harness's user config.",
+                "qol mcp configure <claude|codex|pi|kimi>",
+                "Writes or replaces the qol entry under mcpServers for claude, pi, and kimi, or the codex TOML table; claude and pi reference the qol CLI for headers and token while codex and kimi embed the token value directly. Other servers, tables, and comments survive. The config file must already exist.",
+                "updated <path> and the written entry on stdout; diagnostics on stderr.",
+                "Exits non-zero when the harness name is unknown or the config file does not exist.",
+            )),
+        )
         .command(command(
             "trace",
             "Inspect a named runtime trace target.",

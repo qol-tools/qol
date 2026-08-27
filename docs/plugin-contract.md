@@ -249,12 +249,21 @@ that `qol-config.toml` fields (and section `actions`) bind to. Schema in
 `libs/qol-config/src/contract/runtime.rs` (`RuntimeSpec`, `ActionSpec`, `QuerySpec`,
 `StreamSpec`); cross-validation in `.../cross_validate.rs`.
 
-- `[action.<name>]`: `description`, optional `confirm`, optional `input` map.
-- `[query.<name>]`: `description`, `poll_interval_ms`.
+- `[action.<name>]`: `description`, optional `confirm`, optional `input` map,
+  optional `agent_tool` (bool), optional `tool_description`.
+- `[query.<name>]`: `description`, `poll_interval_ms`, optional `agent_tool`
+  (bool), optional `tool_description`, optional `input` map.
 - `[stream.<name>]`: `description`, `throttle_ms` (clamped 16..=1000), optional
   `initial_query`.
 - Names must be `[a-z][a-z0-9_]*` (stricter than action ids: no dashes, no
   uppercase, no leading digit) and globally unique across actions/queries/streams.
+
+An agent tool is any query or action with `agent_tool = true`; the host exposes
+it on its MCP endpoint at `/api/mcp` as `<plugin_id>__<name>` with
+`tool_description` (falling back to `description`) and a JSON schema built from
+the `input` map, where every parameter is a required string. Flagged entries
+must have a non-empty description and input names matching the runable name
+charset.
 
 Cross-file: an `action` field's `action` and a `list`/`status`/`qr_code` field's
 `query` must reference a declared runtime entry; a `stream = "..."` attribute is

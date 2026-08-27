@@ -336,6 +336,9 @@ fn assemble_app(
     plugins_dir: PathBuf,
     http_security: security::HttpSecurity,
 ) -> Router {
+    let mcp = super::super::mcp::router(app_state.plugin_manager.clone()).layer(
+        middleware::from_fn_with_state(http_security.clone(), security::require_api_access),
+    );
     let api = api_router(app_state, http_security.clone());
     let no_cache = SetResponseHeaderLayer::overriding(
         header::CACHE_CONTROL,
@@ -348,6 +351,7 @@ fn assemble_app(
     Router::new()
         .nest("/api", api)
         .nest("/api/task-runner", task_runner)
+        .nest("/api/mcp", mcp)
         .nest("/plugins", plugin_ui::router(plugins_dir))
         .route("/", get(assets::serve_embedded_index))
         .route("/{*path}", get(assets::serve_embedded))

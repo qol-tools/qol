@@ -118,6 +118,7 @@ qol-host-fixes.workspace = true
 qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true
+qol-mcp.workspace = true
 qol-migrations.workspace = true
 qol-plugin-api.workspace = true
 qol-profile-sync.workspace = true
