@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+pub mod lock;
 pub mod seal;
 
 #[derive(Clone, Debug)]
@@ -53,6 +54,18 @@ impl Store {
 
     pub fn candidates_path(&self) -> PathBuf {
         self.root.join("candidates.jsonl")
+    }
+
+    pub fn ingest_state_path(&self) -> PathBuf {
+        self.root.join("ingest-state.json")
+    }
+
+    pub fn continue_marker_path(&self) -> PathBuf {
+        self.root.join("continue.marker.json")
+    }
+
+    pub fn distill_lock_path(&self) -> PathBuf {
+        self.root.join(".distill.lock")
     }
 
     pub fn read_units(&self) -> anyhow::Result<UnitsLayer> {
@@ -127,20 +140,20 @@ fn newest_run_name(root: &Path) -> Option<String> {
     runs.pop()
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Unit {
     pub key: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default)]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
     #[serde(default)]
     pub text: String,

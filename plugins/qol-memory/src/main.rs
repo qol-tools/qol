@@ -1,7 +1,17 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    qol_memory::cli::exit_code(std::env::args().skip(1))
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
+        return match qol_memory::app::run_daemon() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    qol_memory::cli::exit_code(args)
 }
 
 #[cfg(test)]
@@ -25,5 +35,16 @@ mod tests {
             manifest.catalog_runtime_args("status"),
             Some(vec!["status".to_string()])
         );
+    }
+
+    #[test]
+    fn live_manifest_declares_the_resident_daemon() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let daemon = manifest.daemon.as_ref().expect("daemon must be declared");
+
+        assert_eq!(manifest.daemon.as_ref().map(|d| d.enabled), Some(true));
+        assert_eq!(daemon.command, "qol-memory");
+        assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-memory.sock"));
     }
 }

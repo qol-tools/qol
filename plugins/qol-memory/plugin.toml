@@ -10,6 +10,11 @@ platforms = ["linux", "macos"]
 [runtime]
 command = "qol-memory"
 
+[daemon]
+enabled = true
+command = "qol-memory"
+socket = "/tmp/qol-memory.sock"
+
 [action.status]
 label = "Status"
 args = ["status"]

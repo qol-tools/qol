@@ -1,10 +1,14 @@
 pub mod aliases;
+pub mod app;
 pub mod ask;
 pub mod cli;
+pub mod continue_recall;
 pub mod doctor;
+pub mod ingest;
 pub mod platform;
 pub mod retrieval;
 pub mod retrieval_log;
 pub mod skills;
 pub mod store;
 pub mod text;
+pub mod watch;

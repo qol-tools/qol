@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use qol_headless::{Command, CommandContext, Execution, HeadlessApp};
+use serde_json::{json, Value};
 
-use crate::ask::{render_text, AskRequest, LogOptions};
+use crate::ask::{render_text, AskOutput, AskRequest, LogOptions};
 use crate::store::Store;
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
@@ -17,45 +18,77 @@ const USAGE_ASK: &str = concat!(
     "[--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH]"
 );
 const USAGE_STATUS: &str = "usage: qol-memory status [--store PATH]";
+const USAGE_RUN: &str = "usage: qol-memory run";
+const USAGE_CAPTURE: &str = "usage: qol-memory capture --unit '<json>' [--store PATH]";
+const USAGE_CONTINUE: &str = "usage: qol-memory continue --cwd PATH --session ID [--store PATH]";
+const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
+
+type PlainHandler = Box<dyn Fn(&CommandContext) -> Result<Execution> + Send + Sync>;
+type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
+
+struct Handlers {
+    ask_plain: PlainHandler,
+    ask_json: JsonHandler,
+    status_plain: PlainHandler,
+    status_json: JsonHandler,
+    run_plain: PlainHandler,
+    capture_plain: PlainHandler,
+    capture_json: JsonHandler,
+    continue_plain: PlainHandler,
+    continue_json: JsonHandler,
+    reindex_plain: PlainHandler,
+    reindex_json: JsonHandler,
+}
+
+impl Handlers {
+    fn live() -> Handlers {
+        Handlers {
+            ask_plain: Box::new(run_ask_plain),
+            ask_json: Box::new(run_ask_json),
+            status_plain: Box::new(run_status_plain),
+            status_json: Box::new(run_status_json),
+            run_plain: Box::new(run_run_plain),
+            capture_plain: Box::new(run_capture_plain),
+            capture_json: Box::new(run_capture_json),
+            continue_plain: Box::new(run_continue_plain),
+            continue_json: Box::new(run_continue_json),
+            reindex_plain: Box::new(run_reindex_plain),
+            reindex_json: Box::new(run_reindex_json),
+        }
+    }
+}
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
 
 fn app() -> HeadlessApp {
-    app_with_handlers(
-        run_ask_plain,
-        run_ask_json,
-        run_status_plain,
-        run_status_json,
-    )
+    app_with_handlers(Handlers::live())
 }
 
-fn app_with_handlers<AP, AJ, SP, SJ>(
-    ask_plain: AP,
-    ask_json: AJ,
-    status_plain: SP,
-    status_json: SJ,
-) -> HeadlessApp
-where
-    AP: Fn(&CommandContext) -> Result<Execution> + Send + Sync + 'static,
-    AJ: Fn(&CommandContext) -> Result<serde_json::Value> + Send + Sync + 'static,
-    SP: Fn(&CommandContext) -> Result<Execution> + Send + Sync + 'static,
-    SJ: Fn(&CommandContext) -> Result<serde_json::Value> + Send + Sync + 'static,
-{
+fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
         .about("Long-context memory: answer questions from your settled agent session history.")
         .default_command(["status"])
-        .command(ask_command(ask_plain, ask_json))
-        .command(status_command(status_plain, status_json))
+        .command(ask_command(handlers.ask_plain, handlers.ask_json))
+        .command(status_command(handlers.status_plain, handlers.status_json))
+        .command(run_command(handlers.run_plain))
+        .command(capture_command(
+            handlers.capture_plain,
+            handlers.capture_json,
+        ))
+        .command(continue_command(
+            handlers.continue_plain,
+            handlers.continue_json,
+        ))
+        .command(reindex_command(
+            handlers.reindex_plain,
+            handlers.reindex_json,
+        ))
         .doctor_checks(crate::doctor::checks())
 }
 
-fn ask_command<AP, AJ>(plain: AP, json: AJ) -> Command
-where
-    AP: Fn(&CommandContext) -> Result<Execution> + Send + Sync + 'static,
-    AJ: Fn(&CommandContext) -> Result<serde_json::Value> + Send + Sync + 'static,
-{
+fn ask_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("ask")
         .about("Answer a question from your agent history memory.")
         .usage(format!(
@@ -71,22 +104,62 @@ where
              the full result object with --json.",
         )
         .exit_behavior("Usage errors exit 64; failures exit 1.")
-        .run_result(plain)
-        .run_json(json)
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
 }
 
-fn status_command<SP, SJ>(plain: SP, json: SJ) -> Command
-where
-    SP: Fn(&CommandContext) -> Result<Execution> + Send + Sync + 'static,
-    SJ: Fn(&CommandContext) -> Result<serde_json::Value> + Send + Sync + 'static,
-{
+fn status_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("status")
         .about("Show the state of the local memory store.")
         .usage(format!("{BINARY_NAME} status [--store PATH]"))
         .output("key: value lines in plain text; the status object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
-        .run_result(plain)
-        .run_json(json)
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn run_command(plain: PlainHandler) -> Command {
+    Command::new("run")
+        .alias("daemon")
+        .about("Run the resident memory daemon.")
+        .usage(USAGE_RUN)
+        .detail("The legacy `daemon` command is an alias.")
+        .exit_behavior("Runs until stopped; exits non-zero if daemon startup fails.")
+        .run_result(move |context| plain(context))
+}
+
+fn capture_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("capture")
+        .about("Append one redacted unit to the memory store.")
+        .usage(USAGE_CAPTURE)
+        .detail("The unit must be a JSON object.")
+        .output("The `appended: <n>` line in plain text; the appended count with --json.")
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn continue_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("continue")
+        .about("Print the units that landed since the per-cwd continuation marker.")
+        .usage(USAGE_CONTINUE)
+        .output(
+            "The continuation block in plain text when units were injected; \
+             nothing otherwise; the outcome object with --json.",
+        )
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn reindex_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("reindex")
+        .about("Drop the persisted BM25 indexes and rebuild them.")
+        .usage(USAGE_REINDEX)
+        .output("The `reindexed: <layers>` line in plain text; the layer list with --json.")
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
 }
 
 #[derive(Debug)]
@@ -205,14 +278,162 @@ fn parse_status_invocation(args: &[String]) -> std::result::Result<Option<PathBu
     Ok(store)
 }
 
+struct CaptureInvocation {
+    unit: Value,
+    store: Option<PathBuf>,
+}
+
+fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvocation, String> {
+    let mut unit: Option<Value> = None;
+    let mut store: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--unit" => {
+                let raw = args
+                    .get(index + 1)
+                    .ok_or_else(|| usage_capture_error("--unit requires a value"))?;
+                let parsed: Value = serde_json::from_str(raw)
+                    .map_err(|_| usage_capture_error("--unit expects a JSON object"))?;
+                if !parsed.is_object() {
+                    return Err(usage_capture_error("--unit expects a JSON object"));
+                }
+                unit = Some(parsed);
+                index += 2;
+            }
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args,
+                    index,
+                    "--store",
+                    USAGE_CAPTURE,
+                )?));
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_capture_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                return Err(usage_capture_error(&format!(
+                    "unexpected argument `{positional}`"
+                )));
+            }
+        }
+    }
+    let unit = match unit {
+        Some(unit) => unit,
+        None => return Err(usage_capture_error("--unit is required")),
+    };
+    Ok(CaptureInvocation { unit, store })
+}
+
+struct ContinueInvocation {
+    cwd: String,
+    session: String,
+    store: Option<PathBuf>,
+}
+
+fn parse_continue_invocation(args: &[String]) -> std::result::Result<ContinueInvocation, String> {
+    let mut cwd: Option<String> = None;
+    let mut session: Option<String> = None;
+    let mut store: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--cwd" => {
+                cwd = Some(value_flag_with(args, index, "--cwd", USAGE_CONTINUE)?.to_string());
+                index += 2;
+            }
+            "--session" => {
+                session =
+                    Some(value_flag_with(args, index, "--session", USAGE_CONTINUE)?.to_string());
+                index += 2;
+            }
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args,
+                    index,
+                    "--store",
+                    USAGE_CONTINUE,
+                )?));
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_continue_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                return Err(usage_continue_error(&format!(
+                    "unexpected argument `{positional}`"
+                )));
+            }
+        }
+    }
+    let cwd = match cwd {
+        Some(cwd) => cwd,
+        None => return Err(usage_continue_error("--cwd is required")),
+    };
+    let session = match session {
+        Some(session) => session,
+        None => return Err(usage_continue_error("--session is required")),
+    };
+    Ok(ContinueInvocation {
+        cwd,
+        session,
+        store,
+    })
+}
+
+struct ReindexInvocation {
+    store: Option<PathBuf>,
+}
+
+fn parse_reindex_invocation(args: &[String]) -> std::result::Result<ReindexInvocation, String> {
+    let mut store: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args,
+                    index,
+                    "--store",
+                    USAGE_REINDEX,
+                )?));
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_reindex_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                return Err(usage_reindex_error(&format!(
+                    "unexpected argument `{positional}`"
+                )));
+            }
+        }
+    }
+    Ok(ReindexInvocation { store })
+}
+
 fn value_flag<'a>(
     args: &'a [String],
     index: usize,
     name: &str,
 ) -> std::result::Result<&'a str, String> {
+    value_flag_with(args, index, name, USAGE_ASK)
+}
+
+fn value_flag_with<'a>(
+    args: &'a [String],
+    index: usize,
+    name: &str,
+    usage: &str,
+) -> std::result::Result<&'a str, String> {
     let value = args
         .get(index + 1)
-        .ok_or_else(|| usage_error(&format!("{name} requires a value")))?;
+        .ok_or_else(|| format!("{name} requires a value\n{usage}"))?;
     Ok(value.as_str())
 }
 
@@ -224,11 +445,30 @@ fn usage_status_error(detail: &str) -> String {
     format!("{detail}\n{USAGE_STATUS}")
 }
 
+fn usage_run_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_RUN}")
+}
+
+fn usage_capture_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_CAPTURE}")
+}
+
+fn usage_continue_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_CONTINUE}")
+}
+
+fn usage_reindex_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_REINDEX}")
+}
+
 fn run_ask_plain(context: &CommandContext) -> Result<Execution> {
     let invocation = match parse_ask_invocation(context.args()) {
         Ok(invocation) => invocation,
         Err(message) => return Ok(Execution::usage(message)),
     };
+    if let Some(output) = ask_via_socket(&invocation)? {
+        return Ok(Execution::success(newline_terminated(render_text(&output))));
+    }
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
     let aliases = crate::aliases::embedded();
@@ -241,8 +481,11 @@ fn run_ask_plain(context: &CommandContext) -> Result<Execution> {
     Ok(Execution::success(newline_terminated(render_text(&output))))
 }
 
-fn run_ask_json(context: &CommandContext) -> Result<serde_json::Value> {
+fn run_ask_json(context: &CommandContext) -> Result<Value> {
     let invocation = parse_ask_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    if let Some(output) = ask_via_socket(&invocation)? {
+        return serde_json::to_value(&output).context("failed to serialize the ask result");
+    }
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
     let aliases = crate::aliases::embedded();
@@ -255,11 +498,40 @@ fn run_ask_json(context: &CommandContext) -> Result<serde_json::Value> {
     serde_json::to_value(&output).context("failed to serialize the ask result")
 }
 
+fn ask_via_socket(invocation: &CliAskInvocation) -> Result<Option<AskOutput>> {
+    if invocation.store.is_some() {
+        return Ok(None);
+    }
+    let input = json!({
+        "query": invocation.request.query,
+        "k": invocation.request.k,
+        "brief": invocation.request.brief,
+        "exclude_session": invocation.request.exclude_session,
+        "log_source": invocation.log_options.source,
+        "log_cwd": invocation.log_options.cwd,
+        "log_fact": invocation.log_options.fact,
+        "no_log": invocation.log_options.no_log,
+    });
+    match crate::app::send_request("ask", input) {
+        Ok(Some(value)) => Ok(Some(
+            serde_json::from_value(value).context("unexpected qol-memory daemon ask payload")?,
+        )),
+        Ok(None) => anyhow::bail!("qol-memory daemon returned no ask payload"),
+        Err(error) if !crate::app::daemon_unreachable(&error) => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
 fn run_status_plain(context: &CommandContext) -> Result<Execution> {
     let store_path = match parse_status_invocation(context.args()) {
         Ok(store_path) => store_path,
         Err(message) => return Ok(Execution::usage(message)),
     };
+    if let Some(value) = status_via_socket(store_path.as_deref())? {
+        return Ok(Execution::success(newline_terminated(flatten_status(
+            &value,
+        ))));
+    }
     let store =
         Store::resolve(store_path.as_deref()).context("failed to resolve the qol-memory store")?;
     let value = crate::ask::status(&store)?;
@@ -268,22 +540,192 @@ fn run_status_plain(context: &CommandContext) -> Result<Execution> {
     ))))
 }
 
-fn run_status_json(context: &CommandContext) -> Result<serde_json::Value> {
+fn run_status_json(context: &CommandContext) -> Result<Value> {
     let store_path = parse_status_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    if let Some(value) = status_via_socket(store_path.as_deref())? {
+        return Ok(value);
+    }
     let store =
         Store::resolve(store_path.as_deref()).context("failed to resolve the qol-memory store")?;
     crate::ask::status(&store)
 }
 
-fn flatten_status(value: &serde_json::Value) -> String {
+fn status_via_socket(store: Option<&Path>) -> Result<Option<Value>> {
+    if store.is_some() {
+        return Ok(None);
+    }
+    match crate::app::send_request("status", json!({})) {
+        Ok(Some(value)) => Ok(Some(value)),
+        Ok(None) => anyhow::bail!("qol-memory daemon returned no status payload"),
+        Err(error) if !crate::app::daemon_unreachable(&error) => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
+fn run_run_plain(context: &CommandContext) -> Result<Execution> {
+    if let Err(message) = parse_run_invocation(context.args()) {
+        return Ok(Execution::usage(message));
+    }
+    match crate::app::run_daemon() {
+        Ok(()) => Ok(Execution::success("")),
+        Err(error) => Ok(Execution::runtime_error(format!("{PLUGIN_ID}: {error:#}"))),
+    }
+}
+
+fn parse_run_invocation(args: &[String]) -> std::result::Result<(), String> {
+    match args.first() {
+        Some(token) if token.starts_with("--") => {
+            Err(usage_run_error(&format!("unknown flag `{token}`")))
+        }
+        Some(token) => Err(usage_run_error(&format!("unexpected argument `{token}`"))),
+        None => Ok(()),
+    }
+}
+
+fn run_capture_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_capture_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let appended = capture_appended(&invocation)?;
+    Ok(Execution::success(newline_terminated(format!(
+        "appended: {appended}"
+    ))))
+}
+
+fn run_capture_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_capture_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    let appended = capture_appended(&invocation)?;
+    Ok(json!({ "appended": appended }))
+}
+
+fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
+    if invocation.store.is_none() {
+        match crate::app::send_request("capture", json!({ "unit": invocation.unit.clone() })) {
+            Ok(Some(value)) => {
+                let appended = value
+                    .get("appended")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("qol-memory daemon returned no appended count")
+                    })?;
+                return Ok(appended as usize);
+            }
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no capture payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    in_process_capture(invocation)
+}
+
+fn in_process_capture(invocation: &CaptureInvocation) -> Result<usize> {
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let mut keys = crate::ingest::KeySet::load(&store)?;
+    crate::ingest::append_units(&store, std::slice::from_ref(&invocation.unit), &mut keys)
+}
+
+fn run_continue_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_continue_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let payload = continue_payload(&invocation)?;
+    let stdout = if payload.get("stage").and_then(Value::as_str) == Some("injected") {
+        payload
+            .get("block")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        String::new()
+    };
+    Ok(Execution::success(newline_terminated(stdout)))
+}
+
+fn run_continue_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_continue_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    continue_payload(&invocation)
+}
+
+fn continue_payload(invocation: &ContinueInvocation) -> Result<Value> {
+    if invocation.store.is_none() {
+        let input = json!({
+            "cwd": invocation.cwd,
+            "session": invocation.session,
+        });
+        match crate::app::send_request("continue", input) {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no continue payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let request = crate::continue_recall::ContinueRequest {
+        cwd: invocation.cwd.clone(),
+        session: invocation.session.clone(),
+    };
+    let outcome = crate::continue_recall::run(&store, &request)?;
+    serde_json::to_value(outcome).context("failed to serialize the continue outcome")
+}
+
+fn run_reindex_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_reindex_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let layers = reindex_layers(&invocation)?;
+    Ok(Execution::success(newline_terminated(format!(
+        "reindexed: {}",
+        layers.join(", ")
+    ))))
+}
+
+fn run_reindex_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_reindex_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    let layers = reindex_layers(&invocation)?;
+    Ok(json!({ "layers": layers }))
+}
+
+fn reindex_layers(invocation: &ReindexInvocation) -> Result<Vec<String>> {
+    if invocation.store.is_none() {
+        match crate::app::send_request("reindex", json!({})) {
+            Ok(Some(value)) => {
+                let layers = value
+                    .get("layers")
+                    .and_then(Value::as_array)
+                    .map(|array| {
+                        array
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("qol-memory daemon returned no layers"))?;
+                return Ok(layers);
+            }
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no reindex payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    crate::app::warm::reindex(&store)
+}
+
+fn flatten_status(value: &Value) -> String {
     let mut lines = Vec::new();
     push_status_lines("", value, &mut lines);
     lines.join("\n")
 }
 
-fn push_status_lines(key: &str, value: &serde_json::Value, lines: &mut Vec<String>) {
+fn push_status_lines(key: &str, value: &Value, lines: &mut Vec<String>) {
     match value {
-        serde_json::Value::Object(map) => {
+        Value::Object(map) => {
             for (child_key, child_value) in map {
                 let child_path = if key.is_empty() {
                     child_key.clone()
@@ -328,31 +770,87 @@ mod tests {
     struct OperationCalls {
         ask: AtomicUsize,
         status: AtomicUsize,
+        run: AtomicUsize,
+        capture: AtomicUsize,
+        continue_cmd: AtomicUsize,
+        reindex: AtomicUsize,
+    }
+
+    impl OperationCalls {
+        fn all_zero(&self) -> bool {
+            self.ask.load(Ordering::SeqCst) == 0
+                && self.status.load(Ordering::SeqCst) == 0
+                && self.run.load(Ordering::SeqCst) == 0
+                && self.capture.load(Ordering::SeqCst) == 0
+                && self.continue_cmd.load(Ordering::SeqCst) == 0
+                && self.reindex.load(Ordering::SeqCst) == 0
+        }
+    }
+
+    fn sentinel_handlers(calls: &Arc<OperationCalls>) -> Handlers {
+        let ask_calls = Arc::clone(calls);
+        let ask_json_calls = Arc::clone(calls);
+        let status_calls = Arc::clone(calls);
+        let status_json_calls = Arc::clone(calls);
+        let run_calls = Arc::clone(calls);
+        let capture_calls = Arc::clone(calls);
+        let capture_json_calls = Arc::clone(calls);
+        let continue_calls = Arc::clone(calls);
+        let continue_json_calls = Arc::clone(calls);
+        let reindex_calls = Arc::clone(calls);
+        let reindex_json_calls = Arc::clone(calls);
+        Handlers {
+            ask_plain: Box::new(move |_| {
+                ask_calls.ask.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel ask"))
+            }),
+            ask_json: Box::new(move |_: &CommandContext| {
+                ask_json_calls.ask.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "ask" }))
+            }),
+            status_plain: Box::new(move |_| {
+                status_calls.status.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel status"))
+            }),
+            status_json: Box::new(move |_: &CommandContext| {
+                status_json_calls.status.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "status" }))
+            }),
+            run_plain: Box::new(move |_| {
+                run_calls.run.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel run"))
+            }),
+            capture_plain: Box::new(move |_| {
+                capture_calls.capture.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel capture"))
+            }),
+            capture_json: Box::new(move |_: &CommandContext| {
+                capture_json_calls.capture.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "capture" }))
+            }),
+            continue_plain: Box::new(move |_| {
+                continue_calls.continue_cmd.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel continue"))
+            }),
+            continue_json: Box::new(move |_: &CommandContext| {
+                continue_json_calls
+                    .continue_cmd
+                    .fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "continue" }))
+            }),
+            reindex_plain: Box::new(move |_| {
+                reindex_calls.reindex.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel reindex"))
+            }),
+            reindex_json: Box::new(move |_: &CommandContext| {
+                reindex_json_calls.reindex.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "reindex" }))
+            }),
+        }
     }
 
     fn sentinel_app(calls: Arc<OperationCalls>) -> HeadlessApp {
-        let ask_calls = Arc::clone(&calls);
-        let ask_json_calls = Arc::clone(&calls);
-        let status_calls = Arc::clone(&calls);
-        let status_json_calls = Arc::clone(&calls);
-        app_with_handlers(
-            move |_| {
-                ask_calls.ask.fetch_add(1, Ordering::SeqCst);
-                Ok(Execution::success("sentinel ask"))
-            },
-            move |_: &CommandContext| {
-                ask_json_calls.ask.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({ "sentinel": "ask" }))
-            },
-            move |_| {
-                status_calls.status.fetch_add(1, Ordering::SeqCst);
-                Ok(Execution::success("sentinel status"))
-            },
-            move |_: &CommandContext| {
-                status_json_calls.status.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({ "sentinel": "status" }))
-            },
-        )
+        app_with_handlers(sentinel_handlers(&calls))
     }
 
     fn parse_args(args: &[&str]) -> std::result::Result<CliAskInvocation, String> {
@@ -480,6 +978,10 @@ mod tests {
             vec!["ask", "help"],
             vec!["help", "status"],
             vec!["help", "doctor"],
+            vec!["help", "run"],
+            vec!["help", "capture"],
+            vec!["help", "continue"],
+            vec!["help", "reindex"],
         ];
 
         for args in cases {
@@ -488,8 +990,54 @@ mod tests {
                 sentinel_app(Arc::clone(&calls)).execute(args.iter().map(|arg| (*arg).to_string()));
 
             assert_eq!(execution.exit_code, EXIT_SUCCESS, "args: {args:?}");
-            assert_eq!(calls.ask.load(Ordering::SeqCst), 0, "args: {args:?}");
-            assert_eq!(calls.status.load(Ordering::SeqCst), 0, "args: {args:?}");
+            assert!(calls.all_zero(), "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn run_help_lists_the_daemon_alias() {
+        let calls = Arc::new(OperationCalls::default());
+        let execution =
+            sentinel_app(Arc::clone(&calls)).execute(["help".to_string(), "run".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert!(
+            execution.stdout.contains("`daemon`"),
+            "stdout: {}",
+            execution.stdout
+        );
+        assert!(calls.all_zero());
+    }
+
+    #[test]
+    fn capture_requires_a_json_object() {
+        let cases = [
+            vec!["capture"],
+            vec!["capture", "--unit", "not json"],
+            vec!["capture", "--unit", "\"a plain string\""],
+            vec!["capture", "--unit", "[1, 2]"],
+            vec!["capture", "--unit"],
+        ];
+
+        for args in cases {
+            let execution = app().execute(args.iter().map(|arg| (*arg).to_string()));
+            assert_eq!(execution.exit_code, EXIT_USAGE, "args: {args:?}");
+            assert!(execution.stderr.contains(USAGE_CAPTURE), "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn continue_requires_cwd_and_session() {
+        let cases = [
+            vec!["continue"],
+            vec!["continue", "--cwd", "/repo"],
+            vec!["continue", "--session", "sess-live-aaa1"],
+        ];
+
+        for args in cases {
+            let execution = app().execute(args.iter().map(|arg| (*arg).to_string()));
+            assert_eq!(execution.exit_code, EXIT_USAGE, "args: {args:?}");
+            assert!(execution.stderr.contains(USAGE_CONTINUE), "args: {args:?}");
         }
     }
 
@@ -574,6 +1122,32 @@ mod tests {
         let unknown_flag = app().execute(["status".to_string(), "--wat".to_string()]);
         assert_eq!(unknown_flag.exit_code, EXIT_USAGE);
         assert!(unknown_flag.stderr.contains(USAGE_STATUS));
+    }
+
+    #[test]
+    fn capture_and_continue_and_reindex_usage_errors_exit_64() {
+        let capture_extra = app().execute([
+            "capture".to_string(),
+            "--unit".to_string(),
+            "{}".to_string(),
+            "extra".to_string(),
+        ]);
+        assert_eq!(capture_extra.exit_code, EXIT_USAGE);
+
+        let continue_unknown = app().execute([
+            "continue".to_string(),
+            "--cwd".to_string(),
+            "/repo".to_string(),
+            "--session".to_string(),
+            "s".to_string(),
+            "--wat".to_string(),
+        ]);
+        assert_eq!(continue_unknown.exit_code, EXIT_USAGE);
+        assert!(continue_unknown.stderr.contains(USAGE_CONTINUE));
+
+        let reindex_unknown = app().execute(["reindex".to_string(), "--wat".to_string()]);
+        assert_eq!(reindex_unknown.exit_code, EXIT_USAGE);
+        assert!(reindex_unknown.stderr.contains(USAGE_REINDEX));
     }
 
     #[test]

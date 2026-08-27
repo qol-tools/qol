@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::aliases::AliasMap;
@@ -13,7 +13,7 @@ use crate::retrieval::cache;
 use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef};
 use crate::retrieval_log::{self, Exclusion, RetrievalEvent};
 use crate::skills::{self, Freshness, Served, SkillsIndex};
-use crate::store::{dedupe_user_units, is_boilerplate_unit, Store, Unit};
+use crate::store::{dedupe_user_units, is_boilerplate_unit, NotesLayer, Store, Unit, UnitsLayer};
 use crate::text;
 
 const SNIPPET_WINDOW: usize = 240;
@@ -94,7 +94,7 @@ fn family_tail_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new("\\(.*\\)$").expect("valid regex"))
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Gates {
     #[serde(rename = "NO_MEMORY_COV")]
     pub no_memory_cov: f64,
@@ -275,6 +275,17 @@ fn fixed2_string(value: f64) -> String {
 
 pub fn run(store: &Store, aliases: &AliasMap, req: &AskRequest) -> Result<AskOutput> {
     let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    run_with_layers(store, aliases, req, &units, &notes)
+}
+
+pub fn run_with_layers(
+    store: &Store,
+    aliases: &AliasMap,
+    req: &AskRequest,
+    units: &UnitsLayer,
+    notes_layer: &NotesLayer,
+) -> Result<AskOutput> {
     let user_units_input: Vec<Unit> = units
         .items
         .iter()
@@ -282,7 +293,6 @@ pub fn run(store: &Store, aliases: &AliasMap, req: &AskRequest) -> Result<AskOut
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_units_input);
-    let notes_layer = store.read_notes()?;
 
     let exclude_session: Option<String> = req
         .exclude_session
@@ -752,7 +762,7 @@ fn is_boilerplate_unit_user(hit: &UnitHit) -> bool {
         .any(|marker| hit.text.contains(marker))
 }
 
-fn doc_refs(items: &[Unit]) -> Vec<DocRef<'_>> {
+pub(crate) fn doc_refs(items: &[Unit]) -> Vec<DocRef<'_>> {
     items
         .iter()
         .map(|item| DocRef {
@@ -762,7 +772,7 @@ fn doc_refs(items: &[Unit]) -> Vec<DocRef<'_>> {
         .collect()
 }
 
-fn notes_refs(items: &[crate::store::Note]) -> Vec<DocRef<'_>> {
+pub(crate) fn notes_refs(items: &[crate::store::Note]) -> Vec<DocRef<'_>> {
     items
         .iter()
         .map(|item| DocRef {
@@ -939,8 +949,21 @@ pub fn run_and_log(
     req: &AskRequest,
     log: &LogOptions,
 ) -> Result<AskOutput> {
+    let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    run_and_log_with_layers(store, aliases, req, log, &units, &notes)
+}
+
+pub fn run_and_log_with_layers(
+    store: &Store,
+    aliases: &AliasMap,
+    req: &AskRequest,
+    log: &LogOptions,
+    units: &UnitsLayer,
+    notes: &NotesLayer,
+) -> Result<AskOutput> {
     let started = Instant::now();
-    let out = run(store, aliases, req)?;
+    let out = run_with_layers(store, aliases, req, units, notes)?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     if !log.no_log {
@@ -1020,7 +1043,10 @@ pub fn render_text(out: &AskOutput) -> String {
 pub fn status(store: &Store) -> Result<Value> {
     let units = store.read_units()?;
     let notes = store.read_notes()?;
+    status_with_layers(store, &units, &notes)
+}
 
+pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer) -> Result<Value> {
     let units_path = store.units_path();
     let units_present = units_path.exists();
     let units_bytes = std::fs::metadata(&units_path)
@@ -1110,7 +1136,7 @@ pub fn status(store: &Store) -> Result<Value> {
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AskOutput {
     pub query: String,
     pub verdict: String,
@@ -1129,7 +1155,7 @@ pub struct AskOutput {
     pub notes: Vec<NoteOut>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Answer {
     pub text: String,
     pub layer: String,
@@ -1146,14 +1172,14 @@ pub struct Answer {
     pub superseded: Option<Option<Vec<Superseded>>>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Superseded {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ts: Option<String>,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct Recalled {
     pub key: String,
     pub cls: String,
@@ -1164,7 +1190,7 @@ pub struct Recalled {
     pub source_ts: Option<String>,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct Related {
     pub text: String,
     pub cls: String,
@@ -1172,7 +1198,7 @@ pub struct Related {
     pub source_ts: Option<String>,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct Signals {
     pub top_note_score: Option<f64>,
     pub top_unit_score: Option<f64>,
@@ -1187,13 +1213,13 @@ pub struct Signals {
     pub recency_resolved: Option<bool>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Counts {
     pub units: usize,
     pub notes: usize,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct SkillsOut {
     pub status: String,
     pub root: Option<String>,
@@ -1202,7 +1228,7 @@ pub struct SkillsOut {
     pub hits: Vec<SkillHit>,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct SkillHit {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1222,7 +1248,7 @@ pub struct SkillHit {
     pub dirty: Option<bool>,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct UnitOut {
     pub key: String,
     pub score: f64,
@@ -1239,7 +1265,7 @@ pub struct UnitOut {
     pub snippet: String,
 }
 
-#[derive(Serialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 pub struct NoteOut {
     pub key: String,
     pub cls: String,

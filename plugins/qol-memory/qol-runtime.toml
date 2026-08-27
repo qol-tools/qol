@@ -1,0 +1,26 @@
+schema_version = 1
+
+[query.ask]
+description = "Answer a question from the settled agent session history"
+poll_interval_ms = 60000
+agent_tool = true
+tool_description = "Retrieve settled facts from the user's agent session history. Ask in plain words; the answer names the matching prior sessions and skills."
+input = { query = "question in plain words", cwd = "optional working directory for scoping", exclude_session = "optional session id to exclude" }
+
+[query.status]
+description = "Store size, index freshness and pending candidates"
+poll_interval_ms = 60000
+agent_tool = true
+tool_description = "Report the qol-memory store size, index freshness and pending distillation candidates."
+
+[query.continue]
+description = "Units landed since the per-cwd continuation marker"
+poll_interval_ms = 60000
+input = { cwd = "working directory of the session", session = "session id being continued" }
+
+[action.capture]
+description = "Append one redacted unit to the store"
+input = { unit = "one unit as a JSON object" }
+
+[action.reindex]
+description = "Drop the persisted BM25 indexes and rebuild them"
