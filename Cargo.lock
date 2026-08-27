@@ -6551,6 +6551,24 @@ name = "qol-hotkeys"
 version = "1.0.0"
 
 [[package]]
+name = "qol-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-plugin-api",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1 0.10.6",
+ "sha2",
+]
+
+[[package]]
 name = "qol-migrations"
 version = "0.2.0"
 dependencies = [

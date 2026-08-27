@@ -1,0 +1,23 @@
+[package]
+name = "qol-memory"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+flate2 = "1"
+regex = "1"
+sha1 = "0.10"
+sha2.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
+qol-config.workspace = true
+qol-conventions.workspace = true
+qol-fs.workspace = true
+qol-headless.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true

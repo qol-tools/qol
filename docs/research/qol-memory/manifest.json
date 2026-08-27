@@ -1,0 +1,12 @@
+{
+  "name": "qol-memory pinned artifact manifest",
+  "note": "Store relocated to the canonical qol data dir: qol_config::data_dir() = $XDG_DATA_HOME/qol-tray/plugins/qol-memory, matching cli-sessions and qol-voice. A shared resolver (docs/research/qol-memory/lib/store-path.js) + QOL_MEMORY_STORE env override keep all scripts + the Rust probe aligned. reports/ in this repo is legacy fallback. Content hashes detect drift.",
+  "pinned_run": "2026-08-10T21-38-02-273Z",
+  "artifacts": {
+    "snapshot.jsonl": "b639a5ad64802f3b3b1b97b3f8b9dd6ddfcefeb6f21ac04b93c7004756043cff",
+    "snapshot_report.json": "8fac1fad0616734b9e8a2fd1f986caea78696dcc9d020c867f3951f7e3dc0840",
+    "notes.jsonl": "4117ed036378141345dca5eadbe0a98d0f4236e996ceafc62c2235f1010a8eae",
+    "dense-scores-v5.json": "5eee7f6890cca629eb5f024d07194d20c433cc15c344e23ef2a49be8628e40f6",
+    "ingest.jsonl": "c2c0d55c6d31eb766b9b6ec5f32a7cb7861fbcb071ded305791023a640584700"
+  }
+}

@@ -1,24 +1,81 @@
 #!/usr/bin/env node
-import { readdirSync, statSync, lstatSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
+import { qolMemoryStore } from "./lib/store-path.js";
+import { redact } from "./lib/redact.js";
 
 const args = process.argv.slice(2);
 const pick = (flag, def) => {
   const i = args.indexOf(flag);
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 };
-const PI_DIR = resolve(pick("--pi-dir", join(homedir(), ".pi", "agent", "sessions")));
-const CLAUDE_DIR = resolve(pick("--claude-dir", join(homedir(), ".claude", "projects")));
+const PI_DIR = resolve(pick("--pi-dir", process.env.QOL_MEMORY_PI_DIR || join(homedir(), ".pi", "agent", "sessions")));
+const CLAUDE_DIR = resolve(pick("--claude-dir", process.env.QOL_MEMORY_CLAUDE_DIR || join(homedir(), ".claude", "projects")));
 const RUN_ID = new Date().toISOString().replace(/[:.]/g, "-");
-const OUT_DIR = resolve(pick("--out", join(process.cwd(), "reports", "qol-memory", "snapshot", RUN_ID)));
+const BASE = dirname(new URL(import.meta.url).pathname);
+const PINNED_RUN = (() => {
+  try {
+    return JSON.parse(readFileSync(join(BASE, "eval", "questions.json"), "utf8")).run_pin || null;
+  } catch {
+    return null;
+  }
+})();
+const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
+const OUT_DIR = resolve(pick("--out", join(STORE_ROOT, "snapshot", RUN_ID)));
 const rawMaxSamples = Number(pick("--max-samples", "500"));
 const MAX_SAMPLES = Number.isInteger(rawMaxSamples) && rawMaxSamples > 0 ? rawMaxSamples : 500;
 const KEEP = Number.isInteger(Number(pick("--keep", "5"))) ? Math.max(1, Number(pick("--keep", "5"))) : 5;
 const MAX_DEPTH = 8;
+
+const IGNORE_PATH = pick("--ignore", join(STORE_ROOT, "ignore"));
+const DEFAULT_IGNORE = ["**/*secret*", "**/*token*", "**/.env", "**/.env.*", "**/memory/"];
+function loadIgnore() {
+  const rules = [...DEFAULT_IGNORE];
+  try {
+    for (const line of readFileSync(IGNORE_PATH, "utf8").split("\n")) {
+      const t = line.trim();
+      if (t && !t.startsWith("#")) rules.push(t);
+    }
+  } catch {
+  }
+  return rules;
+}
+const IGNORE = loadIgnore();
+function isIgnored(p) {
+  const rel = p.replace(PI_DIR, "~pi").replace(CLAUDE_DIR, "~claude");
+  for (const r of IGNORE) {
+    if (r.includes("*")) {
+      const re = new RegExp("^" + r.split("*").map(escapeRegExp).join(".*") + "$");
+      if (re.test(rel) || re.test(rel.replace(/\\/g, "/"))) return true;
+    } else if (rel.includes(r) || rel.replace(/\\/g, "/").includes(r)) {
+      return true;
+    }
+  }
+  return false;
+}
+function escapeRegExp(x) { return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+const INGEST_PATH = join(STORE_ROOT, "ingest.jsonl");
+
+function sha256FileSync(file) {
+  try {
+    const buf = readFileSync(file);
+    return createHash("sha256").update(buf).digest("hex");
+  } catch {
+    return "";
+  }
+}
+function ledgerWrite(line) {
+  try {
+    appendFileSync(INGEST_PATH, line + "\n");
+  } catch {
+  }
+}
+const WITH_ASSISTANT = args.includes("--with-assistant");
 
 const SCRIPTS = [
   ["cjk", /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/],
@@ -53,9 +110,9 @@ function walk(dir, depth = 0) {
     }
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
-      if (name === "memory") continue;
+      if (isIgnored(p)) continue;
       out.push(...walk(p, depth + 1));
-    } else if (name.endsWith(".jsonl")) {
+    } else if (name.endsWith(".jsonl") && !isIgnored(p)) {
       out.push(p);
     }
   }
@@ -93,6 +150,24 @@ function unitKey(source, file, ts, text) {
   return createHash("sha256").update([source, file, ts, text].join("|")).digest("hex").slice(0, 16);
 }
 
+function pushAssistant(units, stats, source, file, sessionId, cwd, ts, text) {
+  text = redact(text);
+  if (!text.trim()) return;
+  stats.chars.assistant += text.length;
+  if (!WITH_ASSISTANT) return;
+  units.push({
+    key: unitKey(source + "-assistant", file, ts, text),
+    source,
+    file: basename(file),
+    session: sessionId,
+    cwd,
+    kind: "assistant",
+    ts,
+    text,
+  });
+  stats.units.byKind.assistant = (stats.units.byKind.assistant || 0) + 1;
+}
+
 async function processFile(file, source, stats, units) {
   const rl = createInterface({ input: createReadStream(file, "utf8"), crlfDelay: Infinity });
   let sessionId = null;
@@ -120,12 +195,11 @@ async function processFile(file, source, stats, units) {
       const content = m.content;
       const ts = toIso(m.timestamp);
       if (role === "user") {
-        const text = textOf(content);
+        const text = redact(textOf(content));
         stats.chars.user += text.length;
-        units.push({ key: unitKey(source, basename(file), ts, text), source, file: basename(file), session: sessionId, cwd, kind: "user", ts, text });
-        stats.units.byKind.user++;
+        pushUnit({ key: unitKey(source, basename(file), ts, text), source, file: basename(file), session: sessionId, cwd, kind: "user", ts, text });
       } else if (role === "assistant") {
-        stats.chars.assistant += textOf(content).length;
+        pushAssistant(units, stats, source, basename(file), sessionId, cwd, ts, textOf(content));
         stats.chars.thinking += thinkingOf(content).length;
       } else if (role === "toolResult" || role === "bashExecution") {
         stats.chars.tool += textOf(content).length;
@@ -135,7 +209,7 @@ async function processFile(file, source, stats, units) {
     }
     if (t === "compaction") {
       const d = e.details || {};
-      const text = e.summary || "";
+      const text = redact(e.summary || "");
       const ts = toIso(e.timestamp);
       stats.chars.summaries += text.length;
       units.push({
@@ -154,7 +228,7 @@ async function processFile(file, source, stats, units) {
       continue;
     }
     if (t === "branch_summary") {
-      const text = e.summary || "";
+      const text = redact(e.summary || "");
       const ts = toIso(e.timestamp);
       stats.chars.summaries += text.length;
       units.push({ key: unitKey(source, basename(file), ts, text), source, file: basename(file), session: sessionId, cwd, kind: "branch", ts, text });
@@ -168,18 +242,17 @@ async function processFile(file, source, stats, units) {
         stats.chars.tool += textOf(content).length;
         continue;
       }
-      const text = textOf(content);
+      const text = redact(textOf(content));
       if (!text.trim()) continue;
       sessionId = e.sessionId || sessionId;
       cwd = e.cwd || cwd;
       const ts = toIso(e.timestamp);
       stats.chars.user += text.length;
-      units.push({ key: unitKey(source, basename(file), ts, text), source, file: basename(file), session: sessionId, cwd, kind: "user", ts, text });
-      stats.units.byKind.user++;
+      pushUnit({ key: unitKey(source, basename(file), ts, text), source, file: basename(file), session: sessionId, cwd, kind: "user", ts, text });
       continue;
     }
     if (t === "summary") {
-      const text = e.summary || "";
+      const text = redact(e.summary || "");
       if (!text.trim()) continue;
       const ts = toIso(e.timestamp);
       stats.chars.summaries += text.length;
@@ -189,7 +262,7 @@ async function processFile(file, source, stats, units) {
     }
     if (t === "assistant") {
       const content = e.message ? e.message.content : e.content;
-      stats.chars.assistant += textOf(content).length;
+      pushAssistant(units, stats, source, basename(file), sessionId, cwd, toIso(e.timestamp), textOf(content));
       stats.chars.thinking += thinkingOf(content).length;
       stats.images[source] += countBlocks(content, "image");
     }
@@ -198,10 +271,25 @@ async function processFile(file, source, stats, units) {
 }
 
 const started = new Date();
+const DEDUPE = !args.includes("--no-dedupe");
+const dedupeSeen = new Set();
+let dedupeDropped = 0;
+function pushUnit(u) {
+  if (u.kind === "user" && DEDUPE) {
+    const fam = u.text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (dedupeSeen.has(fam)) {
+      dedupeDropped++;
+      return;
+    }
+    dedupeSeen.add(fam);
+  }
+  units.push(u);
+  stats.units.byKind.user++;
+}
 const stats = {
   files: { pi: 0, claude: 0 },
   bytes: { pi: 0, claude: 0 },
-  units: { pi: 0, claude: 0, byKind: { user: 0, compaction: 0, branch: 0 } },
+  units: { pi: 0, claude: 0, byKind: { user: 0, assistant: 0, compaction: 0, branch: 0 }, dedupe: { enabled: DEDUPE, key: "normalized full text", dropped: 0 } },
   chars: { user: 0, assistant: 0, thinking: 0, tool: 0, summaries: 0 },
   images: { pi: 0, claude: 0 },
   errors: { files: 0, lines: 0, filesList: [], sources: [] },
@@ -223,9 +311,11 @@ for (const [dir, source] of jobs) {
     continue;
   }
   for (const f of files) {
-    let size;
+    let size, mt;
     try {
-      size = statSync(f).size;
+      const st = statSync(f);
+      size = st.size;
+      mt = st.mtimeMs;
     } catch {
       stats.errors.files++;
       stats.errors.filesList.push({ file: basename(f), badLines: 0, error: "stat failed" });
@@ -240,6 +330,9 @@ for (const [dir, source] of jobs) {
         stats.errors.lines += badLines;
         stats.errors.filesList.push({ file: basename(f), badLines });
       }
+      const started = Date.now();
+      const fhash = sha256FileSync(f);
+      ledgerWrite(JSON.stringify({ path: f, source, size, mtimeMs: mt, sha256: fhash, walked_at: RUN_ID, elapsed_ms: Date.now() - started }));
     } catch (err) {
       stats.errors.files++;
       stats.errors.filesList.push({ file: basename(f), badLines: 0, error: err.message });
@@ -272,6 +365,7 @@ stats.lang.nonLatinShare = stats.lang.sampled ? stats.lang.nonLatin / stats.lang
 const status = stats.errors.sources.length > 0 || stats.errors.files > 0 ? (stats.units.pi + stats.units.claude === 0 ? "fail" : "degraded") : "pass";
 
 mkdirSync(OUT_DIR, { recursive: true });
+stats.units.dedupe.dropped = dedupeDropped;
 const snapshotPath = join(OUT_DIR, "snapshot.jsonl");
 writeFileSync(snapshotPath, units.map((u) => JSON.stringify(u)).join("\n") + (units.length ? "\n" : ""));
 const reportPath = join(OUT_DIR, "report.json");
@@ -285,7 +379,7 @@ writeFileSync(
       started_at: started.toISOString(),
       finished_at: finished.toISOString(),
       status,
-      inputs: { piDir: PI_DIR, claudeDir: CLAUDE_DIR, maxSamples: MAX_SAMPLES, keep: KEEP },
+      inputs: { piDir: PI_DIR, claudeDir: CLAUDE_DIR, maxSamples: MAX_SAMPLES, keep: KEEP, withAssistant: WITH_ASSISTANT },
       artifacts: { snapshot: join(basename(dirname(snapshotPath)), basename(snapshotPath)), report: basename(reportPath) },
       commands: [`node docs/research/qol-memory/snapshot.mjs`],
       stats,
@@ -299,13 +393,13 @@ writeFileSync(
   )
 );
 
-const snapshotRoot = dirname(dirname(OUT_DIR));
+const snapshotRoot = dirname(OUT_DIR);
 try {
   const runs = readdirSync(snapshotRoot)
     .filter((n) => /^\d{4}-\d{2}-\d{2}T/.test(n))
     .map((n) => ({ n, d: statSync(join(snapshotRoot, n)).mtimeMs }))
     .sort((a, b) => b.d - a.d);
-  for (const run of runs.slice(KEEP)) {
+  for (const run of runs.filter((r) => r.n !== PINNED_RUN).slice(KEEP)) {
     const runDir = join(snapshotRoot, run.n);
     try {
       for (const f of readdirSync(runDir)) {
@@ -319,7 +413,7 @@ try {
 
 console.log(`status: ${status}`);
 console.log(`files: pi ${stats.files.pi} (${(stats.bytes.pi / 1e6).toFixed(0)}MB), claude ${stats.files.claude} (${(stats.bytes.claude / 1e9).toFixed(1)}GB)`);
-console.log(`units: ${stats.units.pi + stats.units.claude} (user ${stats.units.byKind.user}, compaction ${stats.units.byKind.compaction}, branch ${stats.units.byKind.branch})`);
+console.log(`units: ${stats.units.pi + stats.units.claude} (user ${stats.units.byKind.user}, assistant ${stats.units.byKind.assistant || 0}, compaction ${stats.units.byKind.compaction}, branch ${stats.units.byKind.branch})`);
 console.log(`chars: user ${(stats.chars.user / 1e6).toFixed(1)}M, assistant ${(stats.chars.assistant / 1e6).toFixed(1)}M, thinking ${(stats.chars.thinking / 1e6).toFixed(2)}M, tool ${(stats.chars.tool / 1e6).toFixed(1)}M, summaries ${(stats.chars.summaries / 1e3).toFixed(0)}k`);
 console.log(`lang: ${stats.lang.nonLatin}/${stats.lang.sampled} sampled user units non-Latin (${(stats.lang.nonLatinShare * 100).toFixed(1)}%), pi ${stats.lang.bySource.pi} / claude ${stats.lang.bySource.claude}`);
 console.log(`report: ${reportPath}`);
