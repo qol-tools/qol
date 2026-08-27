@@ -830,19 +830,13 @@ fn poll_round(
             &round.marker,
             &screen,
         );
-        let idle_msg = if finished_turn {
-            format!(
-                "qol sessions: lane {} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
-                round.session,
-                clean_screen(screen_tail(&report))
-            )
-        } else {
-            format!(
-                "qol sessions: lane {} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\n{}",
-                round.session,
-                clean_screen(screen_tail(&report))
-            )
-        };
+        let idle_msg = markerless_wake_message(
+            finished_turn,
+            trace_dir,
+            &round.session,
+            &clean_screen(screen_tail(&report)),
+            round.label.as_deref(),
+        );
         return complete_seen_round(
             terminals,
             interpreter,
@@ -1474,6 +1468,43 @@ fn wake_message(
     }
 }
 
+fn markerless_wake_message(
+    finished_turn: bool,
+    trace_dir: &std::path::Path,
+    session: &str,
+    cleaned: &str,
+    label: Option<&str>,
+) -> String {
+    let sentence = if finished_turn {
+        format!(
+            "qol sessions: lane {session} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
+        )
+    } else {
+        format!(
+            "qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
+        )
+    };
+    lane_report_wake_message(&sentence, cleaned, trace_dir, session, label)
+}
+
+fn lane_report_wake_message(
+    sentence: &str,
+    cleaned: &str,
+    trace_dir: &std::path::Path,
+    session: &str,
+    label: Option<&str>,
+) -> String {
+    match write_lane_report(trace_dir, session, cleaned, label) {
+        Ok(path) => format!("{sentence}\n\nReport: {}", path.display()),
+        Err(error) => {
+            let report = inline_report(cleaned);
+            format!(
+                "{sentence}\n\n{report}\n\nWarning: could not write the lane report file ({error}); the full screen is not preserved."
+            )
+        }
+    }
+}
+
 fn completion_message(
     trace_dir: &std::path::Path,
     session: &str,
@@ -1489,15 +1520,7 @@ fn completion_message(
         format!("qol sessions: {session} completed. Report below.")
     };
     let cleaned = clean_screen(screen);
-    match write_lane_report(trace_dir, session, &cleaned, label) {
-        Ok(path) => format!("{sentence}\n\nReport: {}", path.display()),
-        Err(error) => {
-            let report = inline_report(&cleaned);
-            format!(
-                "{sentence}\n\n{report}\n\nWarning: could not write the lane report file ({error}); the full screen is not preserved."
-            )
-        }
-    }
+    lane_report_wake_message(&sentence, &cleaned, trace_dir, session, label)
 }
 
 fn lane_report_path(
@@ -2949,6 +2972,15 @@ mod tests {
         );
     }
 
+    fn wake_report_body(wake: &str) -> String {
+        let path = wake
+            .rsplit_once("\n\nReport: ")
+            .map(|(_, path)| path.trim().to_owned())
+            .unwrap_or_else(|| panic!("the wake must name a report file: {wake:?}"));
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("report {path} unreadable: {error}"))
+    }
+
     fn sanitize_lane_path(dir: &std::path::Path, session: &str) -> std::path::PathBuf {
         dir.join("lanes")
             .join(format!("{}.md", sanitize_token(session)))
@@ -2992,6 +3024,48 @@ mod tests {
             .join("research")
             .join("v1_pi_7_100.txt")
             .is_file());
+    }
+
+    #[test]
+    fn finished_turn_wake_writes_a_lane_report_and_does_not_paste_the_body() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = "v1:pi:7:100";
+        let body = "line one\nline two\nline three";
+        let wake = markerless_wake_message(true, dir.path(), session, body, None);
+        let report_path = sanitize_lane_path(dir.path(), session);
+        assert_eq!(
+            wake,
+            format!(
+                "qol sessions: lane {session} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}",
+                report_path.display()
+            )
+        );
+        assert_eq!(std::fs::read_to_string(&report_path).unwrap(), body);
+        assert!(
+            !wake.contains("line two"),
+            "the wake must stay a pointer to the report file: {wake:?}"
+        );
+    }
+
+    #[test]
+    fn idle_wake_writes_a_lane_report_and_does_not_paste_the_body() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = "v1:pi:7:100";
+        let body = "line one\nline two\nline three";
+        let wake = markerless_wake_message(false, dir.path(), session, body, None);
+        let report_path = sanitize_lane_path(dir.path(), session);
+        assert_eq!(
+            wake,
+            format!(
+                "qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}",
+                report_path.display()
+            )
+        );
+        assert_eq!(std::fs::read_to_string(&report_path).unwrap(), body);
+        assert!(
+            !wake.contains("line two"),
+            "the wake must stay a pointer to the report file: {wake:?}"
+        );
     }
 
     #[test]
@@ -4951,8 +5025,13 @@ mod tests {
             wakes[0]
         );
         assert!(
-            wakes[0].contains("the lane finished without a marker"),
-            "the wake must carry the lane screen tail: {:?}",
+            !wakes[0].contains("the lane finished without a marker"),
+            "the wake must stay a pointer, not paste the screen: {:?}",
+            wakes[0]
+        );
+        assert!(
+            wake_report_body(&wakes[0]).contains("the lane finished without a marker"),
+            "the report file must carry the lane screen tail: {:?}",
             wakes[0]
         );
         assert!(lane.settled(&sim));
@@ -4980,15 +5059,14 @@ mod tests {
 
         let wakes = lane.wakes();
         assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        let body = wake_report_body(&wakes[0]);
         assert!(
-            wakes[0].contains("the lane's own screen tail"),
-            "the capture must be the lane's own screen: {:?}",
-            wakes[0]
+            body.contains("the lane's own screen tail"),
+            "the capture must be the lane's own screen: {body:?}"
         );
         assert!(
-            !wakes[0].contains("FOREIGN"),
-            "a foreign transcript must never be delivered as this lane's report: {:?}",
-            wakes[0]
+            !body.contains("FOREIGN"),
+            "a foreign transcript must never be delivered as this lane's report: {body:?}"
         );
         assert!(lane.settled(&sim));
     }
