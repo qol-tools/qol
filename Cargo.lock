@@ -6001,6 +6001,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "if-addrs",
+ "libc",
  "log",
  "qol-apps",
  "qol-config",

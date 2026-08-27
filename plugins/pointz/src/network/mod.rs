@@ -86,7 +86,7 @@ pub async fn bind_udp_or_inherit(name: &str, port: u16) -> anyhow::Result<UdpSoc
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use std::os::fd::IntoRawFd;
+    use std::os::fd::{AsRawFd, IntoRawFd};
 
     // Each test below uses its own distinct env var suffix
     // (_TESTFALLBACK / _TESTINHERIT), so unlike qol-plugin-daemon's tests for
@@ -106,15 +106,16 @@ mod tests {
         );
     }
 
-    // Regression test: tokio::net::UdpSocket::from_std requires the socket to
-    // already be in non-blocking mode, which an fd inherited via
-    // std::net::UdpSocket::from_raw_fd is not by default. Forgetting
-    // set_nonblocking here previously panicked at daemon startup the moment
-    // qol-tray pre-bound a port for this plugin.
+    // Regression test: tokio::net::UdpSocket::from_std requires the socket
+    // to be non-blocking, which an fd inherited via
+    // std::net::UdpSocket::from_raw_fd is not by default; this test asserts
+    // the O_NONBLOCK flag on the adopted fd. Forgetting set_nonblocking
+    // previously panicked at daemon startup when qol-tray pre-bound a port.
     #[tokio::test]
     #[cfg(unix)]
     async fn bind_udp_or_inherit_adopts_an_inherited_fd_without_panicking() {
         let pre_bound = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+        let pre_bound_port = pre_bound.local_addr().unwrap().port();
         let fd = pre_bound.into_raw_fd();
         let env_name = format!("{}_TESTINHERIT", qol_conventions::ENV_DAEMON_PORT_FD);
         std::env::set_var(&env_name, fd.to_string());
@@ -127,15 +128,17 @@ mod tests {
              before tokio::net::UdpSocket::from_std, or tokio's reactor registration fails",
         );
 
-        let sender = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
-        let target = socket.local_addr().unwrap();
-        sender.send_to(b"ping", target).await.unwrap();
-        let mut buf = [0u8; 4];
-        let (size, _) = socket.recv_from(&mut buf).await.unwrap();
         assert_eq!(
-            &buf[..size],
-            b"ping",
-            "the adopted socket must be genuinely usable for async I/O"
+            socket.local_addr().unwrap().port(),
+            pre_bound_port,
+            "the pre-bound fd must be adopted, not silently rebound to a fresh port"
+        );
+
+        let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "fcntl(F_GETFL) must succeed on the adopted fd");
+        assert!(
+            flags & libc::O_NONBLOCK != 0,
+            "the adopted fd must be non-blocking before tokio::net::UdpSocket::from_std"
         );
     }
 }

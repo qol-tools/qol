@@ -455,18 +455,35 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
 }
 
 fn is_listening_socket(fd: RawFd) -> bool {
-    let mut accepting: libc::c_int = 0;
+    socket_opt(fd, libc::SO_ACCEPTCONN).is_some_and(|accepting| accepting != 0)
+}
+
+/// A pre-bound port fd is adoptable when it is a socket of a kind that can
+/// already be serving: a stream socket must be listening, but a datagram
+/// socket never is - `SO_ACCEPTCONN` is 0 for every UDP socket, so judging
+/// one by that alone rejects a perfectly good handoff and forces the daemon
+/// to rebind a port qol-tray still holds.
+fn is_adoptable_socket(fd: RawFd) -> bool {
+    match socket_opt(fd, libc::SO_TYPE) {
+        Some(libc::SOCK_DGRAM) => true,
+        Some(libc::SOCK_STREAM) => is_listening_socket(fd),
+        _ => false,
+    }
+}
+
+fn socket_opt(fd: RawFd, option: libc::c_int) -> Option<libc::c_int> {
+    let mut value: libc::c_int = 0;
     let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
     let rc = unsafe {
         libc::getsockopt(
             fd,
             libc::SOL_SOCKET,
-            libc::SO_ACCEPTCONN,
-            (&mut accepting as *mut libc::c_int).cast::<libc::c_void>(),
+            option,
+            (&mut value as *mut libc::c_int).cast::<libc::c_void>(),
             &mut len,
         )
     };
-    rc == 0 && accepting != 0
+    (rc == 0).then_some(value)
 }
 
 /// qol-tray clears CLOEXEC on a pre-bound fd so it survives the exec into
@@ -512,9 +529,9 @@ pub fn inherited_primary_port_fd() -> Option<RawFd> {
 fn fd_from_env(env_name: &str) -> Option<RawFd> {
     let raw = std::env::var(env_name).ok()?;
     let fd: RawFd = raw.parse().ok()?;
-    if !is_listening_socket(fd) {
+    if !is_adoptable_socket(fd) {
         eprintln!(
-            "[daemon] ignoring {env_name}={raw}: fd {fd} is not a listening socket in this process"
+            "[daemon] ignoring {env_name}={raw}: fd {fd} is not a pre-bound socket in this process"
         );
         std::env::remove_var(env_name);
         return None;
@@ -1224,6 +1241,29 @@ mod tests {
 
         std::env::remove_var(&env_name);
         assert_eq!(fd, Some(pre_bound.as_raw_fd()));
+    }
+
+    // Regression test: `SO_ACCEPTCONN` is 0 for every UDP socket, so judging
+    // a pre-bound port fd by "is it listening" rejected every datagram
+    // handoff. plugin-pointz then rebound its discovery port, hit
+    // EADDRINUSE against the qol-tray-held socket, and crash-looped.
+    #[test]
+    fn inherited_port_fd_adopts_a_pre_bound_udp_socket() {
+        use std::os::fd::AsRawFd;
+
+        let _lock = daemon_listener_fd_env_lock();
+        let env_name = format!("{}_TESTUDPPORT", qol_conventions::ENV_DAEMON_PORT_FD);
+        let pre_bound = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        std::env::set_var(&env_name, pre_bound.as_raw_fd().to_string());
+
+        let fd = inherited_port_fd("testudpport");
+
+        std::env::remove_var(&env_name);
+        assert_eq!(
+            fd,
+            Some(pre_bound.as_raw_fd()),
+            "a datagram socket is never listening, but it is still a valid handoff"
+        );
     }
 
     #[test]

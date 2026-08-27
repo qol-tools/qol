@@ -51,6 +51,9 @@ qol-conventions.workspace = true
 qol-plugin-api.workspace = true
 tempfile = "3"
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [package.metadata.deb]
 maintainer = "KMRH47"
 copyright = "2025, KMRH47"
