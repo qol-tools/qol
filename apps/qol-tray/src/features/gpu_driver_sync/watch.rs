@@ -662,15 +662,15 @@ mod tests {
             probe_rx
                 .recv_timeout(Duration::from_secs(5))
                 .expect("the initial observation must run");
+            let before = counter.load(Ordering::SeqCst);
             std::fs::write(dir.join("module.ko"), b"payload").unwrap();
-            let second = counter.load(Ordering::SeqCst);
-            probe_rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("a real filesystem event must drive a re-observation");
-            assert!(
-                counter.load(Ordering::SeqCst) > second,
-                "the event must trigger a fresh probe"
-            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while counter.load(Ordering::SeqCst) <= before {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                probe_rx
+                    .recv_timeout(remaining)
+                    .expect("a real filesystem event must drive a re-observation");
+            }
             let _ = shutdown_tx.send(true);
             handle.abort();
             std::fs::remove_dir_all(&dir).ok();
