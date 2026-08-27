@@ -18,21 +18,14 @@ static STATE: OnceLock<FileLoggerState> = OnceLock::new();
 pub fn init() {
     let version = env!("CARGO_PKG_VERSION").to_string();
     let commit = env!("GIT_COMMIT_HASH").to_string();
-    let log_dir = super::platform::log_dir();
+    let log_dir = qol_log::log_dir();
     let suppressed_path = crate::paths::suppressed_errors_path()
         .unwrap_or_else(|_| log_dir.join("suppressed-errors.json"));
 
     let version_tag = format!("v{}@{}", version, commit);
     let limiter = RateLimiter::load(&suppressed_path, version_tag);
 
-    let build_appender = |dir: &std::path::Path| {
-        tracing_appender::rolling::RollingFileAppender::builder()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("qol-tray")
-            .filename_suffix("log")
-            .max_log_files(7)
-            .build(dir)
-    };
+    let build_appender = |dir: &std::path::Path| qol_log::rolling(dir, "qol-tray");
 
     let file_appender = match build_appender(&log_dir) {
         Ok(appender) => appender,

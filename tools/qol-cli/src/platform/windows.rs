@@ -44,12 +44,6 @@ impl PlatformOps for Platform {
             .map(PathBuf::from)
     }
 
-    fn core_log_dir(&self) -> PathBuf {
-        dirs::data_local_dir()
-            .map(|dir| dir.join("qol-tray/logs"))
-            .unwrap_or_else(|| env::temp_dir().join("qol-tray/logs"))
-    }
-
     fn open_path(&self, path: &Path) -> Result<OpenPathOutcome> {
         qol_apps::desktop_integration::open_with_default_app(path)
             .with_context(|| format!("could not open {}", path.display()))?;

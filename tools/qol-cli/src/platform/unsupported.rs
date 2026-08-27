@@ -30,10 +30,6 @@ impl PlatformOps for Platform {
         env::var_os("HOME").map(PathBuf::from)
     }
 
-    fn core_log_dir(&self) -> PathBuf {
-        env::temp_dir().join("qol-tray/logs")
-    }
-
     fn open_path(&self, _path: &Path) -> Result<OpenPathOutcome> {
         Err(anyhow!("opening paths is not supported on this platform"))
     }

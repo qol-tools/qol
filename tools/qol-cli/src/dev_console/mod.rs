@@ -34,7 +34,7 @@ use draw::frame_accent;
 use emu_panel::emu_run_line;
 use log_pane::{clamp_offset, window_start, LogPane, LogRing};
 use render_util::ITEM_GAP;
-use session::{copy_highlight, core_log_dir, strip_ansi};
+use session::{copy_highlight, strip_ansi};
 use stream_view::draw_run_log;
 use tray_handle::{terminate_child, try_wait};
 

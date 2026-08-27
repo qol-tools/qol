@@ -6300,6 +6300,7 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
+ "qol-log",
  "qol-plugin-daemon",
  "qol-process",
  "qol-profile-sync",
@@ -6552,6 +6553,16 @@ name = "qol-hotkeys"
 version = "1.0.0"
 
 [[package]]
+name = "qol-log"
+version = "1.0.0"
+dependencies = [
+ "dirs 6.0.0",
+ "qol-config",
+ "tempfile",
+ "tracing-appender",
+]
+
+[[package]]
 name = "qol-mcp"
 version = "0.1.0"
 dependencies = [
@@ -6776,6 +6787,7 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-hotkeys",
+ "qol-log",
  "qol-mcp",
  "qol-migrations",
  "qol-plugin-api",

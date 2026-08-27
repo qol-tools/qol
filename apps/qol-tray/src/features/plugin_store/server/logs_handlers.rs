@@ -27,7 +27,7 @@ async fn entries(
     tokio::task::spawn_blocking(move || {
         let date_str = log_date_str(query.date)?;
         let filename = format!("qol-tray.{}.log", date_str);
-        let path = crate::logging::platform::log_dir().join(filename);
+        let path = qol_log::log_dir().join(filename);
 
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
@@ -72,7 +72,7 @@ async fn unsuppress(Path(key): Path<String>) -> StatusCode {
 
 async fn open_dir() -> StatusCode {
     tokio::task::spawn_blocking(|| {
-        let dir = crate::logging::platform::log_dir();
+        let dir = qol_log::log_dir();
         if !dir.exists() {
             return StatusCode::NOT_FOUND;
         }

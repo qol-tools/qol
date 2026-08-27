@@ -4,7 +4,6 @@ mod error_capture;
 pub mod file_logger;
 #[cfg(feature = "dev")]
 mod filter;
-pub(crate) mod platform;
 pub(crate) mod rate_limiter;
 mod redaction;
 pub(crate) mod relay;
@@ -49,6 +48,11 @@ pub fn init_logger() -> CoreControlsHandle {
     let controls = load_core_controls_from_shared_config();
     let handle = std::sync::Arc::new(std::sync::RwLock::new(controls));
 
+    #[cfg(any(test, debug_assertions))]
+    if let Some(dir) = crate::paths::test_log_dir() {
+        qol_log::set_dir_override(dir);
+    }
+
     file_logger::init();
 
     let dev_controls = handle.clone();
@@ -69,6 +73,11 @@ pub fn init_logger() -> CoreControlsHandle {
 #[cfg(not(feature = "dev"))]
 pub fn init_logger() {
     use tracing_subscriber::prelude::*;
+
+    #[cfg(any(test, debug_assertions))]
+    if let Some(dir) = crate::paths::test_log_dir() {
+        qol_log::set_dir_override(dir);
+    }
 
     file_logger::init();
 

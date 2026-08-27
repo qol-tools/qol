@@ -37,8 +37,8 @@ fn spawn_relay<R: Read + Send + 'static>(
     to_stderr: bool,
 ) {
     std::thread::spawn(move || {
-        let mut sink = daemon_log_sink();
-        let file = sink.as_mut().map(|file| file as &mut dyn Write);
+        let mut sink = DaemonSink;
+        let file = Some(&mut sink as &mut dyn Write);
         let suppress = suppress_patterns.as_deref().map(Vec::as_slice);
         if to_stderr {
             relay_lines(reader, &label, suppress, std::io::stderr(), file);
@@ -48,15 +48,50 @@ fn spawn_relay<R: Read + Send + 'static>(
     });
 }
 
+// One process-wide rotating sink rather than a fresh append handle per relay
+// thread: the tee used to grow without bound, and a per-thread appender would
+// race its own retention prune against the others.
 #[cfg(feature = "dev")]
-fn daemon_log_sink() -> Option<std::fs::File> {
-    let dir = super::platform::log_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("qol-daemons.log"))
-        .ok()
+fn daemon_log_sink(
+) -> Option<&'static std::sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>> {
+    static SINK: std::sync::OnceLock<
+        Option<std::sync::Mutex<qol_log::tracing_appender::rolling::RollingFileAppender>>,
+    > = std::sync::OnceLock::new();
+    SINK.get_or_init(|| {
+        let dir = qol_log::log_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        qol_log::remove_unrotated(&dir, "qol-daemons");
+        qol_log::rolling(&dir, "qol-daemons")
+            .ok()
+            .map(std::sync::Mutex::new)
+    })
+    .as_ref()
+}
+
+#[cfg(feature = "dev")]
+struct DaemonSink;
+
+#[cfg(feature = "dev")]
+impl std::io::Write for DaemonSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let Some(sink) = daemon_log_sink() else {
+            return Ok(buf.len());
+        };
+        let Ok(mut appender) = sink.lock() else {
+            return Ok(buf.len());
+        };
+        appender.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let Some(sink) = daemon_log_sink() else {
+            return Ok(());
+        };
+        let Ok(mut appender) = sink.lock() else {
+            return Ok(());
+        };
+        appender.flush()
+    }
 }
 
 // The console sink is the tray's own stdio, which is a pipe into qol dev and

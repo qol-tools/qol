@@ -43,7 +43,6 @@ pub(crate) trait PlatformOps {
     fn copy_to_clipboard(&self, text: &str) -> Result<()>;
     fn available_memory_mb(&self) -> Option<u64>;
     fn home_dir(&self) -> Option<PathBuf>;
-    fn core_log_dir(&self) -> PathBuf;
     fn open_path(&self, path: &Path) -> Result<OpenPathOutcome>;
     fn supports_immutable_payload_build(&self) -> bool;
     fn open_text_file(&self, path: &Path) -> bool;

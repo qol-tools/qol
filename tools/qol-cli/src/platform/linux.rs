@@ -46,12 +46,6 @@ impl PlatformOps for Platform {
         env::var_os("HOME").map(PathBuf::from)
     }
 
-    fn core_log_dir(&self) -> PathBuf {
-        qol_config::data_dir()
-            .map(|dir| dir.join("logs"))
-            .unwrap_or_else(|| env::temp_dir().join("qol-tray/logs"))
-    }
-
     fn open_path(&self, path: &Path) -> Result<OpenPathOutcome> {
         if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
             return Ok(OpenPathOutcome::new(false));

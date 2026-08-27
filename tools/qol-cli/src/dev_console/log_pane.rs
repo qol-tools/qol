@@ -6,7 +6,7 @@ use std::process::Child;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::{core_log_dir, emu_run_line, strip_ansi, LOG_CAP};
+use super::{emu_run_line, strip_ansi, LOG_CAP};
 
 pub(super) struct LogRing {
     pub(super) lines: VecDeque<String>,
@@ -285,11 +285,14 @@ impl DevLogFile {
 }
 
 pub(super) fn dev_log_dir() -> PathBuf {
-    core_log_dir()
+    qol_log::log_dir()
 }
 
 fn create_dev_log_file_in(dir: &Path) -> Option<DevLogFile> {
     fs::create_dir_all(dir).ok()?;
+    // Every qol dev run opens its own file, so nothing here ever rotates;
+    // sweep the older runs before adding one more.
+    let _ = qol_log::prune_matching(dir, "qol-dev", qol_log::FILES_KEPT);
     let path = dir.join(dev_log_file_name());
     let writer = OpenOptions::new()
         .create(true)
@@ -422,5 +425,30 @@ mod tests {
         }
         assert_eq!(clamp_offset(100, 10, 500), 90, "clamp to len-height");
         assert_eq!(clamp_offset(5, 10, 3), 0, "short log clamps to zero");
+    }
+
+    #[test]
+    fn creating_a_dev_log_file_prunes_older_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..(qol_log::FILES_KEPT + 3) {
+            std::fs::write(dir.path().join(format!("qol-dev-{n}-{n}.log")), "old run").unwrap();
+        }
+        std::fs::write(dir.path().join("unrelated.log"), "keep me").unwrap();
+
+        let created = create_dev_log_file_in(dir.path()).unwrap();
+
+        assert!(created.path.starts_with(dir.path()));
+        assert!(created.path.exists());
+        assert!(dir.path().join("unrelated.log").exists());
+        let run_files = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("qol-dev-") && name.ends_with(".log")
+            })
+            .count();
+        assert_eq!(run_files, qol_log::FILES_KEPT + 1);
     }
 }

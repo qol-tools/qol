@@ -34,10 +34,6 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     Platform.home_dir()
 }
 
-pub(crate) fn core_log_dir() -> std::path::PathBuf {
-    Platform.core_log_dir()
-}
-
 pub(crate) fn supports_immutable_payload_build() -> bool {
     Platform.supports_immutable_payload_build()
 }

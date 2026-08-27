@@ -955,10 +955,6 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
     }
 }
 
-pub(super) fn core_log_dir() -> PathBuf {
-    crate::host_facade::core_log_dir()
-}
-
 pub(super) fn act_plugin(dash: &mut Dash) {
     let selected = match &dash.links {
         LinksState::Live(rows) => rows.get(dash.plugin_cursor).cloned(),
