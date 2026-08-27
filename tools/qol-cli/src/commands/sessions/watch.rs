@@ -271,7 +271,7 @@ fn complete_seen_round(
             &round.driver,
             sleep,
         )? {
-            if round.autoclose {
+            if round.autoclose && delivery.delivered {
                 close_lane_terminal(terminals, &round.binding);
                 pending.close_checkpoints_for_session(&round.session)?;
                 qol_runtime::probe!(
@@ -503,7 +503,8 @@ fn poll_round(
                                 "event=completed_group_after_exit group={} session={} members={} delivered={}",
                                 group,
                                 round.session,
-                                group_roster(pending, trace_dir, group)?.len(),
+                                group_roster(pending, &settling_round_dir(trace_dir, group), group)?
+                                    .len(),
                                 delivery.delivered
                             );
                             emit_completed(
@@ -1040,6 +1041,52 @@ fn group_dir(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
     trace_dir.join("groups").join(safe)
 }
 
+const COMBINED_CLAIM: &str = "combined.claim";
+
+fn rounds_dir(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
+    group_dir(trace_dir, group).join("rounds")
+}
+
+fn round_dir(trace_dir: &std::path::Path, group: &str, round: u32) -> std::path::PathBuf {
+    rounds_dir(trace_dir, group).join(round.to_string())
+}
+
+fn latest_round(trace_dir: &std::path::Path, group: &str) -> Option<u32> {
+    fs::read_dir(rounds_dir(trace_dir, group))
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            name.to_str()?.parse::<u32>().ok()
+        })
+        .max()
+}
+
+fn settling_round_dir(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
+    round_dir(
+        trace_dir,
+        group,
+        latest_round(trace_dir, group).unwrap_or(1),
+    )
+}
+
+fn joining_round_dir(trace_dir: &std::path::Path, group: &str) -> Result<std::path::PathBuf> {
+    let round = match latest_round(trace_dir, group) {
+        Some(latest)
+            if round_dir(trace_dir, group, latest)
+                .join(COMBINED_CLAIM)
+                .exists() =>
+        {
+            latest + 1
+        }
+        Some(latest) => latest,
+        None => 1,
+    };
+    let dir = round_dir(trace_dir, group, round);
+    fs::create_dir_all(&dir).context("failed to open the group round directory")?;
+    Ok(dir)
+}
+
 pub(super) fn label_slug(label: Option<&str>) -> String {
     let Some(label) = label else {
         return String::new();
@@ -1063,8 +1110,7 @@ pub(super) fn label_slug(label: Option<&str>) -> String {
 }
 
 fn fragment_path(
-    trace_dir: &std::path::Path,
-    group: &str,
+    round: &std::path::Path,
     session: &str,
     label: Option<&str>,
 ) -> std::path::PathBuf {
@@ -1075,7 +1121,7 @@ fn fragment_path(
     } else {
         format!("{slug}_{base}")
     };
-    group_dir(trace_dir, group).join(name)
+    round.join(name)
 }
 
 fn write_group_fragment(
@@ -1085,7 +1131,7 @@ fn write_group_fragment(
     tail: &str,
     label: Option<&str>,
 ) -> Result<()> {
-    let path = fragment_path(trace_dir, group, session, label);
+    let path = fragment_path(&settling_round_dir(trace_dir, group), session, label);
     let dir = path.parent().expect("fragment path always has a parent");
     fs::create_dir_all(dir).context("failed to create group fragment directory")?;
     fs::write(&path, tail).context("failed to write group fragment")
@@ -1107,12 +1153,12 @@ struct GroupMember {
     outcome: Option<GroupOutcome>,
 }
 
-fn member_dir(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
-    group_dir(trace_dir, group).join("members")
+fn member_dir(round: &std::path::Path) -> std::path::PathBuf {
+    round.join("members")
 }
 
-fn member_path(trace_dir: &std::path::Path, group: &str, session: &str) -> std::path::PathBuf {
-    member_dir(trace_dir, group).join(format!("{}.json", sanitize_token(session)))
+fn member_path(round: &std::path::Path, session: &str) -> std::path::PathBuf {
+    member_dir(round).join(format!("{}.json", sanitize_token(session)))
 }
 
 fn read_group_member(path: &std::path::Path) -> Option<GroupMember> {
@@ -1129,12 +1175,8 @@ fn publish_group_member(path: &std::path::Path, member: &GroupMember) -> Result<
     fs::rename(&temporary, path).context("failed to publish group member record")
 }
 
-fn write_group_member(
-    trace_dir: &std::path::Path,
-    group: &str,
-    member: &GroupMember,
-) -> Result<()> {
-    let path = member_path(trace_dir, group, &member.session);
+fn write_group_member(round: &std::path::Path, group: &str, member: &GroupMember) -> Result<()> {
+    let path = member_path(round, &member.session);
     let existing = read_group_member(&path);
     let refused = match existing {
         Some(existing) => {
@@ -1167,8 +1209,9 @@ pub(super) fn register_group_member(
     session: &str,
     label: Option<&str>,
 ) -> Result<()> {
+    let round = joining_round_dir(trace_dir, group)?;
     publish_group_member(
-        &member_path(trace_dir, group, session),
+        &member_path(&round, session),
         &GroupMember {
             session: session.to_owned(),
             label: label.map(str::to_owned),
@@ -1196,7 +1239,7 @@ fn settle_group_member(
     outcome: GroupOutcome,
 ) -> Result<()> {
     write_group_member(
-        trace_dir,
+        &settling_round_dir(trace_dir, group),
         group,
         &GroupMember {
             session: session.to_owned(),
@@ -1208,11 +1251,11 @@ fn settle_group_member(
 
 fn group_roster(
     pending: &PendingBridgeStore,
-    trace_dir: &std::path::Path,
+    round: &std::path::Path,
     group: &str,
 ) -> Result<Vec<GroupMember>> {
     let mut members = Vec::new();
-    if let Ok(entries) = fs::read_dir(member_dir(trace_dir, group)) {
+    if let Ok(entries) = fs::read_dir(member_dir(round)) {
         for entry in entries {
             let path = entry
                 .context("failed to read group member directory")?
@@ -1245,7 +1288,7 @@ fn claim_group_delivery(dir: &std::path::Path) -> Result<bool> {
     match OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(dir.join("combined.claim"))
+        .open(dir.join(COMBINED_CLAIM))
     {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
@@ -1262,11 +1305,11 @@ pub(super) fn maybe_deliver_group_combined(
     driver: &str,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<Option<(String, WakeDelivery)>> {
-    let members = group_roster(pending, trace_dir, group)?;
+    let dir = settling_round_dir(trace_dir, group);
+    let members = group_roster(pending, &dir, group)?;
     if members.is_empty() || !members.iter().all(|member| member.outcome.is_some()) {
         return Ok(None);
     }
-    let dir = group_dir(trace_dir, group);
     if !claim_group_delivery(&dir)? {
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
@@ -1279,7 +1322,7 @@ pub(super) fn maybe_deliver_group_combined(
     let mut combined = String::new();
     for member in &members {
         combined.push_str(&format!("## {}\n\n", member.session));
-        let path = fragment_path(trace_dir, group, &member.session, member.label.as_deref());
+        let path = fragment_path(&dir, &member.session, member.label.as_deref());
         if let Ok(encoded) = fs::read_to_string(&path) {
             combined.push_str(&encoded);
             combined.push('\n');
@@ -1306,10 +1349,12 @@ pub(super) fn maybe_deliver_group_combined(
         &message,
         sleep,
     )?;
-    if !delivery.delivered {
-        let _ = fs::remove_file(dir.join("combined.claim"));
-    }
     Ok(Some((combined, delivery)))
+}
+
+#[cfg(test)]
+pub(super) fn combined_report_path(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
+    settling_round_dir(trace_dir, group).join("combined.md")
 }
 
 fn grouped_message(
@@ -1861,7 +1906,7 @@ mod tests {
         settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -1890,7 +1935,7 @@ mod tests {
         .unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -1926,7 +1971,7 @@ mod tests {
         .unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -1944,7 +1989,7 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let trace = root.path().join("trace");
         let session = "v1:kitty:k10304_f0001a.77:9999999";
-        let path = member_path(&trace, "stress-group", session);
+        let path = member_path(&settling_round_dir(&trace, "stress-group"), session);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{not json").unwrap();
         settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
@@ -1963,7 +2008,7 @@ mod tests {
         .unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -1980,12 +2025,12 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let trace = root.path().join("trace");
         let session = "v1:kitty:k10304_f0001a.77:9999999";
-        let path = member_path(&trace, "stress-group", session);
+        let path = member_path(&settling_round_dir(&trace, "stress-group"), session);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{not json").unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -2013,7 +2058,7 @@ mod tests {
         settle_group_member(&trace, "stress-group", session, None, GroupOutcome::Gone).unwrap();
         let roster = group_roster(
             &PendingBridgeStore::with_dir(root.path().join("pending")),
-            &trace,
+            &settling_round_dir(&trace, "stress-group"),
             "stress-group",
         )
         .unwrap();
@@ -2361,8 +2406,8 @@ mod tests {
             out_a.is_empty(),
             "the first grouped member must emit no completed event: {out_a:?}"
         );
-        let combined_dir = root.path().join("groups").join(group);
-        let combined_path = combined_dir.join("combined.md");
+        let combined_path = combined_report_path(root.path(), group);
+        let combined_dir = settling_round_dir(root.path(), group);
         assert!(
             !combined_path.exists(),
             "the combined file must wait until every member completes"
@@ -3020,20 +3065,14 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&report_path).unwrap(), "body");
 
         write_group_fragment(dir.path(), "research", session, "tail", label).unwrap();
-        assert!(dir
-            .path()
-            .join("groups")
-            .join("research")
+        assert!(settling_round_dir(dir.path(), "research")
             .join("csharp-settings-panel_v1_pi_7_100.txt")
             .is_file());
 
         let plain_report_path = write_lane_report(dir.path(), session, "body", None).unwrap();
         assert_eq!(plain_report_path, sanitize_lane_path(dir.path(), session));
         write_group_fragment(dir.path(), "research", session, "tail", None).unwrap();
-        assert!(dir
-            .path()
-            .join("groups")
-            .join("research")
+        assert!(settling_round_dir(dir.path(), "research")
             .join("v1_pi_7_100.txt")
             .is_file());
     }
@@ -4796,8 +4835,7 @@ mod tests {
         }
 
         fn combined(&self, group: &str) -> Option<String> {
-            std::fs::read_to_string(super::group_dir(self.trace_dir(), group).join("combined.md"))
-                .ok()
+            std::fs::read_to_string(super::combined_report_path(self.trace_dir(), group)).ok()
         }
     }
 
@@ -5621,6 +5659,125 @@ mod tests {
             lane.wakes().len(),
             1,
             "a second pass must never repeat the combined wake"
+        );
+    }
+
+    #[test]
+    fn sim_every_round_on_the_same_group_delivers_its_own_combined_wake() {
+        let sim = SessionSim::new();
+        let group = "set-2-respawn";
+        for round in 1..=3u32 {
+            let marker_a = format!("QOL_BRIDGE_DONE_a{round}");
+            let marker_b = format!("QOL_BRIDGE_DONE_b{round}");
+            let report_a = format!("report a round {round}\n{marker_a}");
+            let report_b = format!("report b round {round}\n{marker_b}");
+            let mut lane_a = sim.lane(
+                &format!("7{round}"),
+                100 + round as i32,
+                &marker_a,
+                true,
+                Some(group),
+                Some("lane-a"),
+                Transcript::Finished,
+                vec![report_a.clone(); 4],
+            );
+            let mut lane_b = sim.lane(
+                &format!("8{round}"),
+                200 + round as i32,
+                &marker_b,
+                true,
+                Some(group),
+                Some("lane-b"),
+                Transcript::Finished,
+                vec![report_b.clone(); 4],
+            );
+            lane_a.set_report(Some(report_a), true);
+            lane_b.set_report(Some(report_b), true);
+
+            lane_a.run(&sim);
+            lane_b.run(&sim);
+
+            assert!(
+                lane_a.wakes().is_empty(),
+                "round {round}: the first member must not wake on its own: {:?}",
+                lane_a.wakes()
+            );
+            let wakes = lane_b.wakes();
+            assert_eq!(
+                wakes.len(),
+                1,
+                "round {round}: the last member must deliver exactly one combined wake: {wakes:?}"
+            );
+            assert!(
+                wakes[0].contains("all 2 lanes finished"),
+                "round {round}: the combined wake counts this round's lanes: {:?}",
+                wakes[0]
+            );
+            let combined = sim
+                .combined(group)
+                .unwrap_or_else(|| panic!("round {round} must write its own combined report"));
+            assert!(
+                combined.contains(&format!("report a round {round}"))
+                    && combined.contains(&format!("report b round {round}")),
+                "round {round}: the combined report holds both lanes: {combined}"
+            );
+            for earlier in 1..round {
+                assert!(
+                    !combined.contains(&format!("report a round {earlier}")),
+                    "round {round} must not re-report round {earlier}: {combined}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sim_a_grouped_lane_keeps_its_terminal_when_the_combined_wake_fails() {
+        let sim = SessionSim::new();
+        let group = "undeliverable-set";
+        let mut lane_a = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("lane-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        let mut lane_b = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("lane-b"),
+            Transcript::Finished,
+            vec!["report b\nQOL_BRIDGE_DONE_b".to_owned(); 4],
+        );
+        lane_a.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
+        lane_b.set_report(Some("report b\nQOL_BRIDGE_DONE_b".to_owned()), true);
+        lane_b.backend.fail_sending();
+
+        lane_a.run(&sim);
+        lane_b.run(&sim);
+
+        let events = lane_b.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["delivered"], false);
+        assert_eq!(
+            lane_b.closed(),
+            0,
+            "the lane stays open as the report surface when the combined wake could not land"
+        );
+        assert!(
+            lane_b.open_round(&sim).is_some(),
+            "the checkpoint survives so `qol sessions next` can still surface the round"
+        );
+        assert!(
+            settling_round_dir(sim.trace_dir(), group)
+                .join(COMBINED_CLAIM)
+                .exists(),
+            "the round stays claimed so the next round on this group aggregates on its own"
         );
     }
 

@@ -271,7 +271,7 @@ fn app() -> HeadlessApp {
                 "next",
                 "Print the exact next command for each open bridge round.",
                 "qol sessions next [<session>] [--json]",
-                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target already printed its completion signal prints phase=collect with the resume command that collects it; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
                 "Round phases and commands on stdout.",
                 "Exits non-zero when the bridge state cannot be read.",
             ))

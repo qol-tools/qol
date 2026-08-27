@@ -209,10 +209,12 @@ Details:
   (the default) leaves it off.
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
-  command for each open round: resume while waiting, resume --kickstart when
-  the target went idle without emitting its completion signal, discard when
-  the target's terminal is gone, then a review instruction with the
-  acknowledge-marker bridge template once complete.
+  command for each open round: resume while waiting, resume when the target
+  already printed its completion signal but the round is not collected,
+  resume --kickstart when the target went idle without emitting its
+  completion signal, discard when the target's terminal is gone, then a
+  review instruction with the acknowledge-marker bridge template once
+  complete.
   resume re-attaches to the one pending round and waits for its completion
   marker without submitting anything; its timeout defaults to 24h. With
   --kickstart it first nudges the interrupted session to continue or emit
@@ -702,6 +704,25 @@ fn next_rows(
             }));
             continue;
         }
+        let marker_printed = binding.as_ref().is_some_and(|binding| {
+            terminals
+                .read_screen_relaxed(binding)
+                .is_ok_and(|screen| marker_present(&screen, &round.completion_marker))
+        });
+        if marker_printed {
+            rows.push(serde_json::json!({
+                "phase": "collect",
+                "session": round.session,
+                "completion_marker": round.completion_marker,
+                "command": format!(
+                    "qol sessions resume {} --timeout-ms {}",
+                    round.session,
+                    bridge::TIMEOUT_MAX_MS
+                ),
+                "instruction": "The implementation terminal has already printed its completion signal, so the round is finished but not collected yet. Run the command in the foreground; it collects the report and returns immediately.",
+            }));
+            continue;
+        }
         let stalled = binding.as_ref().is_some_and(|binding| {
             bridge::session_liveness(terminals, interpreter, binding)() == Some(false)
         });
@@ -918,6 +939,7 @@ mod tests {
     struct FakeSessionBackend {
         id: BackendId,
         sessions: Vec<qol_terminal_sessions::SessionFacts>,
+        screen: Option<String>,
     }
 
     impl SessionInventory for FakeSessionBackend {
@@ -928,10 +950,12 @@ mod tests {
 
     impl ScreenReader for FakeSessionBackend {
         fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError> {
-            Err(TerminalError::Unsupported {
-                target: target.session_id().clone(),
-                capability: "screen reading",
-            })
+            self.screen
+                .clone()
+                .ok_or_else(|| TerminalError::Unsupported {
+                    target: target.session_id().clone(),
+                    capability: "screen reading",
+                })
         }
     }
 
@@ -962,10 +986,12 @@ mod tests {
             _snapshot: &TerminalSnapshot,
             target: &SessionBinding,
         ) -> Result<String, TerminalError> {
-            Err(TerminalError::Unsupported {
-                target: target.session_id().clone(),
-                capability: "screen reading",
-            })
+            self.screen
+                .clone()
+                .ok_or_else(|| TerminalError::Unsupported {
+                    target: target.session_id().clone(),
+                    capability: "screen reading",
+                })
         }
 
         fn id(&self) -> &BackendId {
@@ -976,9 +1002,17 @@ mod tests {
     fn fake_terminals(
         sessions: Vec<qol_terminal_sessions::SessionFacts>,
     ) -> (TerminalSessionService, Arc<FakeSessionBackend>) {
+        fake_terminals_showing(sessions, None)
+    }
+
+    fn fake_terminals_showing(
+        sessions: Vec<qol_terminal_sessions::SessionFacts>,
+        screen: Option<&str>,
+    ) -> (TerminalSessionService, Arc<FakeSessionBackend>) {
         let backend = Arc::new(FakeSessionBackend {
             id: BackendId::new("fake").unwrap(),
             sessions,
+            screen: screen.map(str::to_owned),
         });
         let terminals = TerminalSessionService::from_backends([
             Arc::clone(&backend) as Arc<dyn TerminalBackend>
@@ -1061,6 +1095,39 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("no pending bridge checkpoint"), "{error}");
+    }
+
+    #[test]
+    fn next_never_reports_waiting_for_a_lane_that_already_printed_its_marker() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        let (terminals, _) = fake_terminals_showing(
+            vec![fake_facts("2", 200)],
+            Some("lane report body\nQOL_BRIDGE_DONE_live"),
+        );
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["phase"], "collect",
+            "a printed completion marker is never a waiting round: {:?}",
+            rows[0]
+        );
+        assert!(rows[0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("qol sessions resume v1:fake:2:200"));
     }
 
     #[test]

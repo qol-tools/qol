@@ -3439,9 +3439,11 @@ mod tests {
             "the wake counts every lane in the set: {:?}",
             wakes[0].1
         );
-        let combined =
-            std::fs::read_to_string(root.path().join("groups").join(&group).join("combined.md"))
-                .expect("the set writes one combined report");
+        let combined = std::fs::read_to_string(super::super::watch::combined_report_path(
+            root.path(),
+            &group,
+        ))
+        .expect("the set writes one combined report");
         for key in keys {
             assert!(
                 combined.contains(&format!("findings from {key}")),
@@ -3551,9 +3553,11 @@ mod tests {
             "the combined wake counts every member: {:?}",
             wakes[0].1
         );
-        let combined =
-            std::fs::read_to_string(root.path().join("groups").join(group).join("combined.md"))
-                .expect("combined report written");
+        let combined = std::fs::read_to_string(super::super::watch::combined_report_path(
+            root.path(),
+            group,
+        ))
+        .expect("combined report written");
         for key in keys {
             assert!(
                 combined.contains(&format!("findings from {key}")),

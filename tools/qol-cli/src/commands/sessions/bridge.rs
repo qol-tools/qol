@@ -2390,11 +2390,8 @@ mod tests {
         );
         assert!(outcome.completed);
 
-        let member = root
-            .path()
-            .join("groups")
-            .join(group)
-            .join("members")
+        let member = super::super::watch::combined_report_path(root.path(), group)
+            .with_file_name("members")
             .join("v1_fake_7_100.json");
         let recorded = std::fs::read_to_string(&member).unwrap_or_else(|error| {
             panic!("member record missing at {}: {error}", member.display())
@@ -2403,11 +2400,8 @@ mod tests {
             recorded.contains("\"outcome\":\"completed\""),
             "the bridge collect path must settle the group member, got {recorded}"
         );
-        let fragment = root
-            .path()
-            .join("groups")
-            .join(group)
-            .join("lane-a_v1_fake_7_100.txt");
+        let fragment = super::super::watch::combined_report_path(root.path(), group)
+            .with_file_name("lane-a_v1_fake_7_100.txt");
         assert!(
             fragment.exists(),
             "the bridge collect path must write the lane fragment at {}",
@@ -2453,7 +2447,7 @@ mod tests {
             "lane-b",
         );
 
-        let combined = root.path().join("groups").join(group).join("combined.md");
+        let combined = super::super::watch::combined_report_path(root.path(), group);
         let report = std::fs::read_to_string(&combined).unwrap_or_else(|error| {
             panic!(
                 "the last lane must deliver the combined report at {}: {error}",
@@ -3696,7 +3690,7 @@ mod tests {
         .unwrap();
         assert!(outcome_b.completed);
 
-        let combined_path = root.path().join("groups").join(group).join("combined.md");
+        let combined_path = super::super::watch::combined_report_path(root.path(), group);
         assert!(
             combined_path.exists(),
             "the combined file must be written when the group completes via the bridge path"

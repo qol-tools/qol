@@ -312,19 +312,26 @@ fn loop_close_value(args: &[OsString], index: usize) -> Result<String> {
         .ok_or_else(|| anyhow!("usage: {LOOP_CLOSE_USAGE}"))
 }
 
+fn initiator_gone(terminals: &TerminalSessionService, driver: &str) -> bool {
+    driver
+        .parse::<SessionBinding>()
+        .map(|binding| super::watch::session_gone(terminals, &binding))
+        .unwrap_or(true)
+}
+
 pub(super) fn reap_orphaned_rounds(
     terminals: &TerminalSessionService,
     pending: &PendingBridgeStore,
 ) -> Result<Vec<String>> {
     let mut reaped = Vec::new();
     for round in pending.pending_rounds()? {
-        if round.completed {
-            continue;
-        }
         let Ok(binding) = round.session.parse::<SessionBinding>() else {
             continue;
         };
         if !super::watch::session_gone(terminals, &binding) {
+            continue;
+        }
+        if round.completed && !initiator_gone(terminals, &round.driver) {
             continue;
         }
         pending.discard(&binding)?;
@@ -474,7 +481,25 @@ mod tests {
     }
 
     #[test]
-    fn reap_leaves_a_completed_round_untouched_even_when_its_terminal_is_gone() {
+    fn reap_leaves_a_completed_round_whose_initiator_is_still_live() {
+        let root = tempfile::TempDir::new().unwrap();
+        let finished = open_round(&root, "1", 100);
+        store(&root)
+            .observe(&finished, "QOL_BRIDGE_DONE_1", true)
+            .unwrap();
+        let service = terminals(vec![facts("initiator", 9)]);
+
+        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+
+        assert!(
+            reaped.is_empty(),
+            "the initiator can still loop-close this lane, so its report stays"
+        );
+        assert!(store(&root).pending_round(&finished).unwrap().is_some());
+    }
+
+    #[test]
+    fn reap_discards_a_completed_round_whose_terminal_and_initiator_are_gone() {
         let root = tempfile::TempDir::new().unwrap();
         let finished = open_round(&root, "1", 100);
         store(&root)
@@ -484,8 +509,12 @@ mod tests {
 
         let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
 
-        assert!(reaped.is_empty());
-        assert!(store(&root).pending_round(&finished).unwrap().is_some());
+        assert_eq!(
+            reaped,
+            [finished.token()],
+            "a completed round nobody can review or loop-close is not left as an orphan row"
+        );
+        assert!(store(&root).pending_round(&finished).unwrap().is_none());
     }
 
     #[test]
@@ -502,10 +531,13 @@ mod tests {
 
         let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
 
-        assert_eq!(reaped, [gone_first.token(), gone_second.token()]);
+        assert_eq!(
+            reaped,
+            [gone_first.token(), gone_second.token(), finished.token()]
+        );
         assert!(store(&root).pending_round(&gone_first).unwrap().is_none());
         assert!(store(&root).pending_round(&gone_second).unwrap().is_none());
-        assert!(store(&root).pending_round(&finished).unwrap().is_some());
+        assert!(store(&root).pending_round(&finished).unwrap().is_none());
         assert!(store(&root).pending_round(&alive).unwrap().is_some());
     }
 }
