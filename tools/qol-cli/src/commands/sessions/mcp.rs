@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionInventory, SpawnSurface, TerminalSessionService,
@@ -519,64 +519,108 @@ impl McpSessionServer {
         if !matches!(outcome, "accepted" | "paused") {
             return Err("session_loop_close `outcome` must be `accepted` or `paused`".to_owned());
         }
-        let initiator = self
-            .pending
-            .pending_round(&binding)
-            .map_err(|error| error.to_string())?
-            .map(|round| round.driver)
-            .filter(|driver| !driver.is_empty());
-        let mut receipt = render_close_receipt(&arguments, outcome)?;
-        self.pending
-            .acknowledge(&binding, completion_marker, outcome == "accepted")
-            .map_err(|error| error.to_string())?;
-        if outcome == "accepted" {
-            let close = super::close::close_spawned_terminal(self.terminals.as_ref(), &binding)
-                .map_err(|error| error.to_string())?;
-            receipt["terminal_closed"] = json!(close.closed);
-            receipt["terminal_state"] = json!(close.terminal_state);
-            if let Some(detail) = close.close_detail {
-                receipt["close_detail"] = json!(detail);
-            }
-            if let Some(initiator) = initiator {
-                let siblings = super::close::close_loop_siblings(
-                    self.terminals.as_ref(),
-                    &self.pending,
-                    &initiator,
-                    &binding,
-                )
-                .map_err(|error| error.to_string())?;
-                if !siblings.is_empty() {
-                    let labels = self
-                        .pending
-                        .pending_rounds()
-                        .map_err(|error| error.to_string())?
-                        .into_iter()
-                        .map(|round| (round.session, round.label))
-                        .collect::<std::collections::HashMap<_, _>>();
-                    let terse = tersify_sibling_lanes(&siblings, &self.reports_dir, &labels)
-                        .map_err(|error| error.to_string())?;
-                    receipt["sibling_lanes"] = json!(terse);
-                }
-            }
-        }
+        let command = LoopCloseCommand {
+            binding: &binding,
+            completion_marker,
+            accepted: outcome == "accepted",
+            narrative: LoopCloseNarrative::ToolArguments(&arguments),
+        };
+        let receipt = execute_loop_close(
+            self.terminals.as_ref(),
+            &self.pending,
+            &self.reports_dir,
+            &command,
+        )
+        .map_err(|error| error.to_string())?;
         serde_json::to_string(&receipt).map_err(|error| format!("serialization failed: {error}"))
     }
 }
 
-fn render_close_receipt(arguments: &Value, outcome: &str) -> Result<Value, String> {
-    let landed = non_empty_argument(arguments, "landed")?;
-    let before = non_empty_argument(arguments, "before")?;
-    let now = non_empty_argument(arguments, "now")?;
-    let verification = non_empty_argument(arguments, "verification")?;
-    let remaining = non_empty_argument(arguments, "remaining")?;
+pub(super) struct LoopCloseCommand<'a> {
+    pub(super) binding: &'a SessionBinding,
+    pub(super) completion_marker: &'a str,
+    pub(super) accepted: bool,
+    pub(super) narrative: LoopCloseNarrative<'a>,
+}
+
+pub(super) enum LoopCloseNarrative<'a> {
+    ToolArguments(&'a Value),
+    Filled(&'a [String; 5]),
+}
+
+impl LoopCloseNarrative<'_> {
+    fn fields(&self) -> Result<(&str, &str, &str, &str, &str), String> {
+        match self {
+            LoopCloseNarrative::ToolArguments(arguments) => Ok((
+                non_empty_argument(arguments, "landed")?,
+                non_empty_argument(arguments, "before")?,
+                non_empty_argument(arguments, "now")?,
+                non_empty_argument(arguments, "verification")?,
+                non_empty_argument(arguments, "remaining")?,
+            )),
+            LoopCloseNarrative::Filled(fields) => {
+                Ok((&fields[0], &fields[1], &fields[2], &fields[3], &fields[4]))
+            }
+        }
+    }
+}
+
+pub(super) fn execute_loop_close(
+    terminals: &TerminalSessionService,
+    pending: &super::bridge::PendingBridgeStore,
+    reports_dir: &std::path::Path,
+    command: &LoopCloseCommand<'_>,
+) -> Result<Value> {
+    let initiator = pending
+        .pending_round(command.binding)?
+        .map(|round| round.driver)
+        .filter(|driver| !driver.is_empty());
+    let outcome = if command.accepted {
+        "accepted"
+    } else {
+        "paused"
+    };
+    let fields = command
+        .narrative
+        .fields()
+        .map_err(|error| anyhow!("{error}"))?;
+    let mut receipt = render_close_receipt(fields, outcome);
+    pending.acknowledge(command.binding, command.completion_marker, command.accepted)?;
+    if command.accepted {
+        let close = super::close::close_spawned_terminal(terminals, command.binding)?;
+        receipt["terminal_closed"] = json!(close.closed);
+        receipt["terminal_state"] = json!(close.terminal_state);
+        if let Some(detail) = close.close_detail {
+            receipt["close_detail"] = json!(detail);
+        }
+        if let Some(initiator) = initiator {
+            let siblings =
+                super::close::close_loop_siblings(terminals, pending, &initiator, command.binding)?;
+            if !siblings.is_empty() {
+                let labels = pending
+                    .pending_rounds()?
+                    .into_iter()
+                    .map(|round| (round.session, round.label))
+                    .collect::<std::collections::HashMap<_, _>>();
+                let terse = tersify_sibling_lanes(&siblings, reports_dir, &labels)
+                    .map_err(|error| anyhow!("{error}"))?;
+                receipt["sibling_lanes"] = json!(terse);
+            }
+        }
+    }
+    Ok(receipt)
+}
+
+fn render_close_receipt(fields: (&str, &str, &str, &str, &str), outcome: &str) -> Value {
+    let (landed, before, now, verification, remaining) = fields;
     let final_report = format!(
         "## What landed\n\n{landed}\n\n## Before\n\n{before}\n\n## Now\n\n{now}\n\n## Verification\n\n{verification}\n\n## Remaining\n\n{remaining}"
     );
-    Ok(json!({
+    json!({
         "loop_closed": true,
         "outcome": outcome,
         "final_report": final_report,
-    }))
+    })
 }
 
 const MAX_SIBLING_LANES: usize = 50;
@@ -2317,6 +2361,190 @@ mod tests {
             let response = tool_call(&server, "session_loop_close", arguments);
             assert_eq!(response["result"]["isError"], true);
         }
+    }
+
+    #[test]
+    fn loop_close_mcp_receipt_is_the_canonical_final_report() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let binding: SessionBinding = token().parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false, None)
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        let response = tool_call(&server, "session_loop_close", close_arguments("paused"));
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(
+            receipt,
+            json!({
+                "loop_closed": true,
+                "outcome": "paused",
+                "final_report": "## What landed\n\nThe feature landed.\n\n## Before\n\nThe loop stopped at round boundaries.\n\n## Now\n\nThe loop continues through acceptance.\n\n## Verification\n\nFocused tests pass.\n\n## Remaining\n\nNone.",
+            })
+        );
+        assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_cli_accepted_closes_the_spawned_terminal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "cli-lane", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+        server.pending.observe(&binding, &marker, true).unwrap();
+
+        let receipt = super::super::close::loop_close_from_args(
+            server.terminals.as_ref(),
+            &server.pending,
+            root.path(),
+            &[
+                std::ffi::OsString::from(session.as_str()),
+                std::ffi::OsString::from("--completion-marker"),
+                std::ffi::OsString::from(marker.as_str()),
+                std::ffi::OsString::from("--outcome"),
+                std::ffi::OsString::from("accepted"),
+                std::ffi::OsString::from("--landed"),
+                std::ffi::OsString::from("the loop-close verb"),
+                std::ffi::OsString::from("--verification"),
+                std::ffi::OsString::from("focused tests pass"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "accepted");
+        assert_eq!(receipt["terminal_closed"], true);
+        assert_eq!(receipt["terminal_state"], "closed");
+        assert!(receipt["final_report"]
+            .as_str()
+            .unwrap()
+            .contains("the loop-close verb"));
+        assert!(server.pending.pending_round(&binding).unwrap().is_none());
+        let closed = backend.closed.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0], binding);
+    }
+
+    #[test]
+    fn loop_close_cli_paused_leaves_the_terminal_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut spawned_arguments = spawn_arguments("codex", "cli-pause-lane", None, &cwd);
+        spawned_arguments["model"] = json!("flash-x");
+        spawned_arguments["task"] = json!("build the bounded change");
+        let spawned = tool_call(&server, "session_spawn", spawned_arguments);
+        assert_eq!(spawned["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(spawned["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let session = outcome["session"].as_str().unwrap().to_owned();
+        let marker = outcome["completion_marker"].as_str().unwrap().to_owned();
+        let binding: SessionBinding = session.parse().unwrap();
+
+        let receipt = super::super::close::loop_close_from_args(
+            server.terminals.as_ref(),
+            &server.pending,
+            root.path(),
+            &[
+                std::ffi::OsString::from(session.as_str()),
+                std::ffi::OsString::from("--completion-marker"),
+                std::ffi::OsString::from(marker.as_str()),
+                std::ffi::OsString::from("--outcome"),
+                std::ffi::OsString::from("paused"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(receipt["loop_closed"], true);
+        assert_eq!(receipt["outcome"], "paused");
+        assert!(receipt.get("terminal_closed").is_none());
+        assert!(receipt.get("terminal_state").is_none());
+        assert!(receipt["final_report"]
+            .as_str()
+            .unwrap()
+            .contains("(not provided)"));
+        assert!(server.pending.pending_round(&binding).unwrap().is_none());
+        assert!(backend.closed.lock().unwrap().is_empty());
+        assert!(server
+            .terminals
+            .discover()
+            .unwrap()
+            .iter()
+            .any(|facts| facts.id == *binding.session_id()));
+    }
+
+    #[test]
+    fn loop_close_cli_rejects_invalid_outcome_and_missing_required_input() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (server, backend) = server(Vec::new(), false, false);
+        let binding: SessionBinding = token().parse().unwrap();
+        server
+            .pending
+            .start(&binding, "QOL_BRIDGE_DONE_final", "", false, None)
+            .unwrap();
+        let call = |arguments: &[&str]| {
+            super::super::close::loop_close_from_args(
+                server.terminals.as_ref(),
+                &server.pending,
+                root.path(),
+                &arguments
+                    .iter()
+                    .map(std::ffi::OsString::from)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let error = call(&[
+            token().as_str(),
+            "--completion-marker",
+            "QOL_BRIDGE_DONE_final",
+            "--outcome",
+            "done",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("`--outcome` must be `accepted` or `paused`"),
+            "{error}"
+        );
+        assert!(server.pending.pending_round(&binding).unwrap().is_some());
+
+        let error = call(&[token().as_str(), "--outcome", "paused"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--completion-marker"), "{error}");
+
+        let error = call(&[]).unwrap_err().to_string();
+        assert!(error.contains("usage:"), "{error}");
+
+        let error = call(&[token().as_str(), "--bogus", "x"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown loop-close flag"), "{error}");
+        assert!(backend.closed.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 19] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 20] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -81,6 +81,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 19] = [
     SessionSubcommand {
         name: "close",
         run: |rest, _format| close::run(rest),
+    },
+    SessionSubcommand {
+        name: "loop-close",
+        run: |rest, format| close::run_loop_close(rest, format),
     },
     SessionSubcommand {
         name: "read",
@@ -153,6 +157,7 @@ Primary usage:
   qol sessions discard <session>
   qol sessions interrupt <session>
   qol sessions close <session>
+  qol sessions loop-close <session> --completion-marker MARKER --outcome accepted|paused [--landed TEXT] [--before TEXT] [--now TEXT] [--verification TEXT] [--remaining TEXT]
 
 Diagnostics:
   qol sessions send <session> <text...> [--submit]
@@ -224,6 +229,12 @@ Details:
   close terminates a spawned implementation session's terminal after its
   feature loop is closed. It refuses the calling terminal, sessions without
   a spawn identity, and sessions with an open loop.
+  loop-close retires an open feature loop straight from the shell: it
+  acknowledges the reviewed final round, records the outcome, and renders
+  the canonical receipt. outcome=accepted additionally terminates the lane
+  and closes every completed sibling lane of the same loop; outcome=paused
+  leaves the terminal open. Omitted narrative flags default to
+  "(not provided)", so retiring a stuck lane stays short.
   watch is long-running infrastructure for event-driven lane wakeup: it
   polls each watched round's screen for its completion marker, prints one
   JSON line per event (completed, gone, stalled), and exits 0 when no
@@ -582,6 +593,8 @@ fn interrupt(args: &[OsString]) -> Result<()> {
 
 fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let pending = bridge::PendingBridgeStore::system()?;
+    let terminals = service()?;
+    let reaped = close::reap_orphaned_rounds(&terminals, &pending)?;
     let rounds = if args.is_empty() {
         pending.pending_rounds()?
     } else {
@@ -589,7 +602,7 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         pending.pending_round(&binding)?.into_iter().collect()
     };
     let rows = next_rows(
-        &service()?,
+        &terminals,
         &CliSessionInterpreter::system(),
         &pending,
         &rounds,
@@ -600,6 +613,9 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
             serde_json::to_string_pretty(&rows).context("failed to serialize next rounds")?
         ),
         OutputFormat::PlainText => {
+            for token in &reaped {
+                println!("discarded orphaned round {token} (terminal is gone)");
+            }
             if rows.is_empty() {
                 println!("phase=idle");
                 println!("No pending round. Discover targets with `qol sessions list`, then submit one bounded round: `qol sessions bridge <session> -- <task>`.");
@@ -1109,6 +1125,7 @@ mod tests {
         ));
         assert!(help.contains("sessions_list, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
+        assert!(help.contains("qol sessions loop-close <session> --completion-marker MARKER"));
     }
 
     #[test]

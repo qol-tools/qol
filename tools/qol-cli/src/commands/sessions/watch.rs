@@ -977,7 +977,7 @@ fn load_rounds(pending: &PendingBridgeStore, tokens: &[String]) -> Result<Vec<Pe
     Ok(rounds)
 }
 
-fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) -> bool {
+pub(super) fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) -> bool {
     terminals
         .discover()
         .map(|facts| {
