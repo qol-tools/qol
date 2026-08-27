@@ -13,7 +13,8 @@ use crate::SessionFacts;
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
 use crate::cli::activity::{quiet_secs, recently_active};
 
-const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const MISSING_SESSION_CACHE_TTL: Duration = Duration::from_millis(500);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
 
 pub(super) struct ClaudeMetadata {
@@ -26,6 +27,7 @@ pub(super) struct ClaudeMetadata {
 
 pub(super) struct ClaudeMetadataResolver {
     environment: Arc<dyn ClaudeEnvironment>,
+    pub(super) projects_root: Option<PathBuf>,
     cache: Mutex<ClaudeCache>,
 }
 
@@ -57,6 +59,7 @@ impl ClaudeMetadataResolver {
     pub fn new(environment: Arc<dyn ClaudeEnvironment>) -> Self {
         Self {
             environment,
+            projects_root: None,
             cache: Mutex::new(ClaudeCache::default()),
         }
     }
@@ -97,6 +100,29 @@ impl ClaudeMetadataResolver {
         session_location(session, self.environment.as_ref(), &mut cache)
             .map(|location| location.transcript_path)
     }
+
+    pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
+        let root = if let Some(root) = &self.projects_root {
+            root.clone()
+        } else {
+            PathBuf::from(std::env::var_os("HOME")?)
+                .join(".claude")
+                .join("projects")
+        };
+        Some(root.join(project_dir_name(&session.cwd)))
+    }
+}
+
+fn project_dir_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn session_location(
@@ -116,7 +142,12 @@ fn cached_session(
     cache: &mut ClaudeCache,
 ) -> Option<ClaudeSessionLocation> {
     if let Some(entry) = cache.sessions.get(&pid) {
-        if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
+        let fresh_for = if entry.value.is_some() {
+            SESSION_CACHE_TTL
+        } else {
+            MISSING_SESSION_CACHE_TTL
+        };
+        if entry.checked_at.elapsed() < fresh_for {
             return entry.value.clone();
         }
     }

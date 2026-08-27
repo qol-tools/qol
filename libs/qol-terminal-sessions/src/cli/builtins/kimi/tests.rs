@@ -1,11 +1,14 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence, CliViewportState,
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
+    CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
@@ -19,6 +22,29 @@ struct FakeEnvironment {
 impl KimiEnvironment for FakeEnvironment {
     fn session(&self, _cwd: &str) -> Option<KimiSessionLocation> {
         self.location.clone()
+    }
+}
+
+#[derive(Default)]
+struct SwitchableEnvironment {
+    location: std::sync::Mutex<Option<KimiSessionLocation>>,
+    scans: AtomicUsize,
+}
+
+impl SwitchableEnvironment {
+    fn answer(&self, location: Option<KimiSessionLocation>) {
+        *self.location.lock().unwrap() = location;
+    }
+
+    fn scans(&self) -> usize {
+        self.scans.load(Ordering::SeqCst)
+    }
+}
+
+impl KimiEnvironment for SwitchableEnvironment {
+    fn session(&self, _cwd: &str) -> Option<KimiSessionLocation> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
+        self.location.lock().unwrap().clone()
     }
 }
 
@@ -117,6 +143,77 @@ fn same_directory_panes_do_not_share_kimi_session_metadata() {
 }
 
 #[test]
+fn a_missed_state_file_lookup_is_retried_after_half_a_second_not_thirty_seconds() {
+    let root = TempDir::new().unwrap();
+    let state = root.path().join("state.json");
+    std::fs::write(
+        &state,
+        r#"{"createdAt":"t","updatedAt":"t","title":"Fresh lane","workDir":"/work/proj","lastPrompt":"go"}"#,
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = KimiStrategy::with_environment(environment.clone());
+
+    assert_eq!(strategy.metadata.subscription_path(&session()), None);
+    assert_eq!(environment.scans(), 1);
+
+    environment.answer(Some(KimiSessionLocation {
+        session_id: "session_abc-123".to_owned(),
+        state_path: state.clone(),
+    }));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()),
+        None,
+        "the stored miss still serves an immediate re-check"
+    );
+    assert_eq!(
+        environment.scans(),
+        1,
+        "a burst of lookups inside one window shares a single filesystem scan"
+    );
+
+    std::thread::sleep(super::metadata::MISSING_SESSION_CACHE_TTL + Duration::from_millis(100));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(state.as_path())
+    );
+    assert_eq!(
+        environment.scans(),
+        2,
+        "the expired miss retries instead of serving emptiness for thirty seconds"
+    );
+}
+
+#[test]
+fn a_resolved_state_file_hit_stays_cached_without_another_scan() {
+    let root = TempDir::new().unwrap();
+    let state = root.path().join("state.json");
+    std::fs::write(
+        &state,
+        r#"{"createdAt":"t","updatedAt":"t","title":"Cached lane","workDir":"/work/proj","lastPrompt":"go"}"#,
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = KimiStrategy::with_environment(environment.clone());
+    environment.answer(Some(KimiSessionLocation {
+        session_id: "session_abc-123".to_owned(),
+        state_path: state.clone(),
+    }));
+
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(state.as_path())
+    );
+    environment.answer(None);
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(state.as_path()),
+        "a hit keeps its full cache window even when the answer changes underneath"
+    );
+    assert_eq!(environment.scans(), 1);
+}
+
+#[test]
 fn matches_only_kimi_processes() {
     let root = TempDir::new().unwrap();
     let strategy = strategy(root.path().join("state.json"), "session_x");
@@ -136,6 +233,52 @@ fn matches_only_kimi_processes() {
         facts.foreground_basenames = vec!["zsh".to_owned(), process.to_owned()];
         assert!(strategy.matches(&facts), "process `{process}` must match");
     }
+}
+
+#[test]
+fn subscribe_falls_back_to_the_session_group_when_no_state_file_exists_yet() {
+    let root = TempDir::new().unwrap();
+    let group = root.path().join("wd_proj_abc");
+    std::fs::create_dir_all(&group).unwrap();
+    std::fs::write(
+        root.path().join("session_index.jsonl"),
+        format!(
+            r#"{{"sessionId":"session_old","sessionDir":"{}/session_old","workDir":"/work/proj"}}"#,
+            group.display()
+        ),
+    )
+    .unwrap();
+    let (changed, events) = std::sync::mpsc::channel();
+    let previous_home = std::env::var_os("KIMI_CODE_HOME");
+    std::env::set_var("KIMI_CODE_HOME", root.path());
+    let interpreter = CliSessionInterpreter::from_strategies([
+        Arc::new(KimiStrategy::default()) as Arc<dyn CliSessionStrategy>
+    ])
+    .unwrap();
+
+    let subscription_result = interpreter.subscribe(
+        &session(),
+        Arc::new(move || {
+            let _ = changed.send(());
+        }),
+    );
+    match previous_home {
+        Some(home) => std::env::set_var("KIMI_CODE_HOME", home),
+        None => std::env::remove_var("KIMI_CODE_HOME"),
+    }
+
+    let subscription = subscription_result
+        .unwrap()
+        .expect("a kimi cwd with a known but file-less session group still yields a subscription");
+
+    let fresh = group.join("session_new");
+    std::fs::create_dir(&fresh).unwrap();
+    std::fs::write(fresh.join("state.json"), r#"{"title":"Fresh lane"}"#).unwrap();
+
+    events
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("a new session directory under the group wakes the subscription");
+    drop(subscription);
 }
 
 fn strategy(state_path: PathBuf, session_id: &str) -> KimiStrategy {

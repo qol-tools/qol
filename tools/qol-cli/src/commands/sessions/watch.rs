@@ -16,7 +16,7 @@ use super::spawn::{SpawnLedger, SpawnLocks};
 use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
 
 const POLL_BASE: Duration = Duration::from_secs(3);
-const POLL_CAP: Duration = Duration::from_secs(30);
+const POLL_CAP: Duration = Duration::from_secs(5);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
@@ -3702,6 +3702,68 @@ mod tests {
                 Duration::from_millis(30),
                 Duration::from_millis(30),
                 Duration::from_millis(30),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_watch_polling_doubles_from_three_seconds_and_never_exceeds_five() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let screens = [
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "idle".to_owned(),
+            "changed".to_owned(),
+            "done\nQOL_BRIDGE_DONE_round".to_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let backend = FakeBackend::new(facts("7", 100), screens);
+        let (terminals, _backend) = harness(backend);
+        let mut out = Vec::new();
+
+        let mut requested = Vec::new();
+        watch_loop(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            WatchConfig::default(),
+            &mut |duration| requested.push(duration),
+        )
+        .unwrap();
+
+        assert_eq!(requested[0], POLL_BASE);
+        assert!(
+            requested.iter().all(|duration| *duration <= POLL_CAP),
+            "every watch poll interval must stay within the {POLL_CAP:?} cap: {requested:?}"
+        );
+        assert!(
+            requested.contains(&POLL_CAP),
+            "the doubling must saturate at exactly the cap: {requested:?}"
+        );
+        assert_eq!(
+            requested,
+            vec![
+                POLL_BASE, POLL_BASE, POLL_CAP, POLL_CAP, POLL_CAP, POLL_BASE, POLL_BASE,
+                POLL_BASE,
             ]
         );
     }

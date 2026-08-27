@@ -163,7 +163,14 @@ impl CliSessionInterpreter {
         on_change: CliSessionChangeHandler,
     ) -> Result<Option<CliSessionSubscription>, CliSessionSubscriptionError> {
         let strategy = self.strategy_for(session);
-        let subscription = strategy.subscribe(session, on_change)?;
+        let subscription = match strategy.subscribe(session, on_change.clone())? {
+            Some(subscription) => Some(subscription),
+            None => strategy
+                .subscription_dir(session)
+                .filter(|directory| directory.is_dir())
+                .map(|directory| CliSessionSubscription::watch_dir(directory, on_change))
+                .transpose()?,
+        };
         qol_runtime::probe!(
             "CLI_SESSION_INTERPRETATION",
             "event=subscription state={} tool={} terminal_backend={}",

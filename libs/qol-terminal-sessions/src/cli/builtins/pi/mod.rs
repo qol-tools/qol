@@ -177,6 +177,10 @@ impl CliSessionStrategy for PiStrategy {
             .map(|path| CliSessionSubscription::watch_file(path, on_change))
             .transpose()
     }
+
+    fn subscription_dir(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
+        self.metadata.subscription_dir(session)
+    }
 }
 
 fn title_session_name(title: &str, cwd: &str) -> Option<String> {

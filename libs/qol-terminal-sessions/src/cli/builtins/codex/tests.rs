@@ -1,9 +1,13 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
-use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
+use crate::cli::{
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::CodexEnvironment;
@@ -29,6 +33,47 @@ struct NoRolloutEnvironment;
 impl CodexEnvironment for NoRolloutEnvironment {
     fn open_rollout(&self, _pid: i32) -> Option<std::path::PathBuf> {
         None
+    }
+
+    fn session_index_path(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+struct DirectoryOnlyEnvironment {
+    index: std::path::PathBuf,
+}
+
+impl CodexEnvironment for DirectoryOnlyEnvironment {
+    fn open_rollout(&self, _pid: i32) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn session_index_path(&self) -> Option<std::path::PathBuf> {
+        Some(self.index.clone())
+    }
+}
+
+#[derive(Default)]
+struct SwitchableEnvironment {
+    rollout: std::sync::Mutex<Option<std::path::PathBuf>>,
+    scans: AtomicUsize,
+}
+
+impl SwitchableEnvironment {
+    fn answer(&self, rollout: Option<std::path::PathBuf>) {
+        *self.rollout.lock().unwrap() = rollout;
+    }
+
+    fn scans(&self) -> usize {
+        self.scans.load(Ordering::SeqCst)
+    }
+}
+
+impl CodexEnvironment for SwitchableEnvironment {
+    fn open_rollout(&self, _pid: i32) -> Option<std::path::PathBuf> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
+        self.rollout.lock().unwrap().clone()
     }
 
     fn session_index_path(&self) -> Option<std::path::PathBuf> {
@@ -446,6 +491,105 @@ fn screen_classification_distinguishes_work_prompts_and_banners() {
         strategy.classify_screen(&facts, "plain output"),
         CliScreenEvidence::default()
     );
+}
+
+#[test]
+fn subscribe_falls_back_to_the_rollout_day_directory_when_no_rollout_exists_yet() {
+    let root = TempDir::new().unwrap();
+    let day = root
+        .path()
+        .join("sessions")
+        .join(chrono::Local::now().format("%Y/%m/%d").to_string());
+    std::fs::create_dir_all(&day).unwrap();
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    let (changed, events) = std::sync::mpsc::channel();
+    let strategy = CodexStrategy::with_environment(Arc::new(DirectoryOnlyEnvironment { index }));
+    let interpreter =
+        CliSessionInterpreter::from_strategies([Arc::new(strategy) as Arc<dyn CliSessionStrategy>])
+            .unwrap();
+
+    let subscription = interpreter
+        .subscribe(
+            &session(),
+            Arc::new(move || {
+                let _ = changed.send(());
+            }),
+        )
+        .unwrap()
+        .expect("an empty rollout day directory still yields a subscription");
+
+    std::fs::write(
+        day.join("rollout-2026-08-03T09-15-27-019fc855-60b9-7782-a8b1-3c2c7d0989ed.jsonl"),
+        "first\n",
+    )
+    .unwrap();
+
+    events
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("a rollout appearing in the day directory wakes the subscription");
+    drop(subscription);
+}
+
+#[test]
+fn a_missed_rollout_lookup_is_retried_after_half_a_second_not_thirty_seconds() {
+    let root = TempDir::new().unwrap();
+    let rollout = root
+        .path()
+        .join("rollout-2026-08-03T09-15-27-019fc855-60b9-7782-a8b1-3c2c7d0989ed.jsonl");
+    std::fs::write(&rollout, "first\n").unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = CodexStrategy::with_environment(environment.clone());
+
+    assert_eq!(strategy.metadata.subscription_path(&session()), None);
+    assert_eq!(environment.scans(), 1);
+
+    environment.answer(Some(rollout.clone()));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()),
+        None,
+        "the stored miss still serves an immediate re-check"
+    );
+    assert_eq!(
+        environment.scans(),
+        1,
+        "a burst of lookups inside one window shares a single filesystem scan"
+    );
+
+    std::thread::sleep(super::metadata::MISSING_ROLLOUT_CACHE_TTL + Duration::from_millis(100));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(rollout.as_path())
+    );
+    assert_eq!(
+        environment.scans(),
+        2,
+        "the expired miss retries instead of serving emptiness for thirty seconds"
+    );
+}
+
+#[test]
+fn a_resolved_rollout_hit_stays_cached_without_another_scan() {
+    let root = TempDir::new().unwrap();
+    let rollout = root
+        .path()
+        .join("rollout-2026-08-03T09-15-27-019fc855-60b9-7782-a8b1-3c2c7d0989ed.jsonl");
+    std::fs::write(&rollout, "first\n").unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = CodexStrategy::with_environment(environment.clone());
+    environment.answer(Some(rollout.clone()));
+
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(rollout.as_path())
+    );
+    environment.answer(None);
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(rollout.as_path()),
+        "a hit keeps its full cache window even when the answer changes underneath"
+    );
+    assert_eq!(environment.scans(), 1);
 }
 
 fn session() -> SessionFacts {

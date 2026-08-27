@@ -22,6 +22,7 @@ use super::spawn::{SpawnLedger, SpawnLocks};
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
+const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
@@ -1552,6 +1553,10 @@ fn transcript_paths_for(
     interpreter.transcript_paths(&facts)
 }
 
+fn next_backoff_interval(current: Duration) -> Duration {
+    (current * 2).min(WAIT_BACKOFF_CAP)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn wait_for_pi_round(
     terminals: &TerminalSessionService,
@@ -1670,13 +1675,13 @@ fn wait_for_pi_round(
                     interval = Duration::from_millis(500);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    interval = (interval * 2).min(Duration::from_secs(15));
+                    interval = next_backoff_interval(interval);
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => subscribed = false,
             }
         } else {
             std::thread::sleep(wait_for);
-            interval = (interval * 2).min(Duration::from_secs(15));
+            interval = next_backoff_interval(interval);
         }
     }
 }
@@ -2292,6 +2297,28 @@ mod tests {
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
         assert_eq!(round.screen.as_deref(), Some("the finished report"));
+    }
+
+    #[test]
+    fn the_bridge_wait_backoff_doubles_from_half_a_second_and_never_exceeds_one_second() {
+        let mut interval = Duration::from_millis(500);
+        for _ in 0..16 {
+            interval = next_backoff_interval(interval);
+            assert!(
+                interval <= WAIT_BACKOFF_CAP,
+                "the bridge wait backoff reached {interval:?}"
+            );
+        }
+        assert_eq!(
+            next_backoff_interval(Duration::from_millis(500)),
+            WAIT_BACKOFF_CAP,
+            "one doubling from the 500ms base lands exactly on the cap"
+        );
+        assert_eq!(
+            next_backoff_interval(WAIT_BACKOFF_CAP),
+            WAIT_BACKOFF_CAP,
+            "doubling at the cap must stay at the cap"
+        );
     }
 
     fn grouped_lane_collected_by_the_bridge(

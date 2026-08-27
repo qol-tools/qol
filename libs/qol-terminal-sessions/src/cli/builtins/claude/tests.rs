@@ -1,9 +1,13 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
-use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
+use crate::cli::{
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
@@ -24,6 +28,29 @@ struct EmptyEnvironment;
 impl ClaudeEnvironment for EmptyEnvironment {
     fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
         None
+    }
+}
+
+#[derive(Default)]
+struct SwitchableEnvironment {
+    location: std::sync::Mutex<Option<ClaudeSessionLocation>>,
+    scans: AtomicUsize,
+}
+
+impl SwitchableEnvironment {
+    fn answer(&self, location: Option<ClaudeSessionLocation>) {
+        *self.location.lock().unwrap() = location;
+    }
+
+    fn scans(&self) -> usize {
+        self.scans.load(Ordering::SeqCst)
+    }
+}
+
+impl ClaudeEnvironment for SwitchableEnvironment {
+    fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
+        self.location.lock().unwrap().clone()
     }
 }
 
@@ -171,6 +198,77 @@ fn an_unresolved_transcript_location_reads_unknown_not_ready() {
 }
 
 #[test]
+fn a_missed_transcript_lookup_is_retried_after_half_a_second_not_thirty_seconds() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"custom-title\",\"customTitle\":\"Late lane\"}\n",
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = ClaudeStrategy::with_environment(environment.clone());
+
+    assert_eq!(strategy.metadata.subscription_path(&session()), None);
+    assert_eq!(environment.scans(), 1);
+
+    environment.answer(Some(ClaudeSessionLocation {
+        external_id: "session-7".to_owned(),
+        transcript_path: transcript.clone(),
+    }));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()),
+        None,
+        "the stored miss still serves an immediate re-check"
+    );
+    assert_eq!(
+        environment.scans(),
+        1,
+        "a burst of lookups inside one window shares a single filesystem scan"
+    );
+
+    std::thread::sleep(super::metadata::MISSING_SESSION_CACHE_TTL + Duration::from_millis(100));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(transcript.as_path())
+    );
+    assert_eq!(
+        environment.scans(),
+        2,
+        "the expired miss retries instead of serving emptiness for thirty seconds"
+    );
+}
+
+#[test]
+fn a_resolved_transcript_hit_stays_cached_without_another_scan() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"custom-title\",\"customTitle\":\"Cached lane\"}\n",
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = ClaudeStrategy::with_environment(environment.clone());
+    environment.answer(Some(ClaudeSessionLocation {
+        external_id: "session-7".to_owned(),
+        transcript_path: transcript.clone(),
+    }));
+
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(transcript.as_path())
+    );
+    environment.answer(None);
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(transcript.as_path()),
+        "a hit keeps its full cache window even when the answer changes underneath"
+    );
+    assert_eq!(environment.scans(), 1);
+}
+
+#[test]
 fn a_missing_transcript_reads_ready_like_a_fresh_session() {
     let root = TempDir::new().unwrap();
     let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
@@ -254,6 +352,37 @@ fn claude_strategy_exposes_its_transcript_subscription() {
     let subscription = strategy.subscribe(&session(), Arc::new(|| {})).unwrap();
 
     assert!(subscription.is_some());
+}
+
+#[test]
+fn subscribe_falls_back_to_the_projects_directory_when_no_transcript_exists_yet() {
+    let root = TempDir::new().unwrap();
+    let projects = root.path().join("projects");
+    let project = projects.join("-work-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (changed, events) = std::sync::mpsc::channel();
+    let mut strategy = ClaudeStrategy::with_environment(Arc::new(EmptyEnvironment));
+    strategy.metadata.projects_root = Some(projects);
+    let interpreter =
+        CliSessionInterpreter::from_strategies([Arc::new(strategy) as Arc<dyn CliSessionStrategy>])
+            .unwrap();
+
+    let subscription = interpreter
+        .subscribe(
+            &session(),
+            Arc::new(move || {
+                let _ = changed.send(());
+            }),
+        )
+        .unwrap()
+        .expect("an empty claude project directory still yields a subscription");
+
+    std::fs::write(project.join("20260803T091527Z_session-7.jsonl"), "{}\n").unwrap();
+
+    events
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("a transcript appearing in the project directory wakes the subscription");
+    drop(subscription);
 }
 
 #[test]

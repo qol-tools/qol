@@ -109,6 +109,10 @@ impl CliSessionStrategy for ClaudeStrategy {
             .map(|path| CliSessionSubscription::watch_file(path, on_change))
             .transpose()
     }
+
+    fn subscription_dir(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
+        self.metadata.subscription_dir(session)
+    }
 }
 
 const PLACEHOLDER_TITLE: &str = "Claude Code";

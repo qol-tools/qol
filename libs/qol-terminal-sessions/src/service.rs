@@ -255,7 +255,7 @@ impl TextInput for TerminalSessionService {
 }
 
 pub const WAIT_BACKOFF_BASE: Duration = Duration::from_secs(3);
-pub const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(15);
+pub const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const WAIT_SETTLE_INTERVAL: Duration = Duration::from_millis(250);
 pub const WAIT_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -704,22 +704,15 @@ mod tests {
 
     #[test]
     fn backoff_doubles_from_base_and_caps() {
-        let cap = Duration::from_secs(15);
         assert_eq!(
-            next_backoff(Duration::from_secs(3), cap),
-            Duration::from_secs(6)
+            next_backoff(WAIT_BACKOFF_BASE, WAIT_BACKOFF_CAP),
+            WAIT_BACKOFF_CAP,
+            "doubling the three second base saturates straight at the one second cap"
         );
         assert_eq!(
-            next_backoff(Duration::from_secs(6), cap),
-            Duration::from_secs(12)
-        );
-        assert_eq!(
-            next_backoff(Duration::from_secs(12), cap),
-            Duration::from_secs(15)
-        );
-        assert_eq!(
-            next_backoff(Duration::from_secs(15), cap),
-            Duration::from_secs(15)
+            next_backoff(WAIT_BACKOFF_CAP, WAIT_BACKOFF_CAP),
+            WAIT_BACKOFF_CAP,
+            "doubling at the cap must stay at the cap"
         );
     }
 
@@ -770,6 +763,47 @@ mod tests {
                 Duration::from_millis(120),
             ],
             "the sleep must double from the base until it caps"
+        );
+    }
+
+    #[test]
+    fn default_wait_backoff_saturates_immediately_at_the_one_second_cap() {
+        let mut screens = vec!["idle".to_owned(); 5];
+        screens.push("done\nQOL_BRIDGE_DONE_capped".to_owned());
+        let backend = FakeBackend::new(screens);
+        let terminals = service(backend);
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        drop(tx);
+        let mut requested = Vec::new();
+
+        let outcome = terminals
+            .wait_for_completion_with_backoff(
+                &binding(),
+                "QOL_BRIDGE_DONE_capped",
+                Duration::from_secs(30),
+                rx,
+                false,
+                true,
+                &|| None,
+                Duration::from_secs(3600),
+                WaitBackoff::default(),
+                &mut |duration| requested.push(duration),
+                None,
+            )
+            .unwrap();
+
+        assert!(outcome.completed);
+        assert_eq!(
+            &requested[..],
+            &[
+                WAIT_BACKOFF_BASE,
+                WAIT_BACKOFF_CAP,
+                WAIT_BACKOFF_CAP,
+                WAIT_BACKOFF_CAP,
+                WAIT_BACKOFF_CAP,
+                WAIT_SETTLE_INTERVAL,
+            ],
+            "the first poll still waits out the untouched base, then every growth lands exactly on the one second cap and never past it, until a match settles"
         );
     }
 

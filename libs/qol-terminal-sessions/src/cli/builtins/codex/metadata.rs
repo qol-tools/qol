@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use chrono::{Datelike, Local};
 use serde_json::Value;
 
 use crate::cli::{model::normalize_display_name, tail, CliActivityEvidence, CliRuntimeState};
@@ -13,7 +14,8 @@ use crate::SessionFacts;
 use super::environment::CodexEnvironment;
 use crate::cli::activity::{quiet_secs, recently_active};
 
-const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const ROLLOUT_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const MISSING_ROLLOUT_CACHE_TTL: Duration = Duration::from_millis(500);
 
 pub(super) struct CodexMetadata {
     pub thread_name: Option<String>,
@@ -98,6 +100,19 @@ impl CodexMetadataResolver {
         let mut cache = self.cache.lock().ok()?;
         rollout_path(session, self.environment.as_ref(), &mut cache)
     }
+
+    pub fn subscription_dir(&self, _session: &SessionFacts) -> Option<PathBuf> {
+        let index = self.environment.session_index_path()?;
+        let now = Local::now();
+        Some(
+            index
+                .parent()?
+                .join("sessions")
+                .join(format!("{:04}", now.year()))
+                .join(format!("{:02}", now.month()))
+                .join(format!("{:02}", now.day())),
+        )
+    }
 }
 
 fn rollout_path(
@@ -117,7 +132,12 @@ fn cached_rollout(
     cache: &mut CodexCache,
 ) -> Option<PathBuf> {
     if let Some(entry) = cache.rollouts.get(&pid) {
-        if entry.checked_at.elapsed() < ROLLOUT_CACHE_TTL {
+        let fresh_for = if entry.value.is_some() {
+            ROLLOUT_CACHE_TTL
+        } else {
+            MISSING_ROLLOUT_CACHE_TTL
+        };
+        if entry.checked_at.elapsed() < fresh_for {
             return entry.value.clone();
         }
     }

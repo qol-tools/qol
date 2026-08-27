@@ -13,7 +13,8 @@ use crate::SessionFacts;
 use super::environment::PiEnvironment;
 use crate::cli::activity::{quiet_secs, recently_active};
 
-const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const MISSING_SESSION_CACHE_TTL: Duration = Duration::from_millis(500);
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
 
 pub(super) struct PiMetadata {
@@ -102,6 +103,11 @@ impl PiMetadataResolver {
         session_file(session, self.environment.as_ref(), &mut cache)
     }
 
+    pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
+        let pid = session.foreground_pids.first().copied().unwrap_or(0);
+        self.environment.session_directory(pid, &session.cwd)
+    }
+
     pub fn subscription_paths(&self, session: &SessionFacts) -> Vec<PathBuf> {
         let Some(mut cache) = self.cache.lock().ok() else {
             return Vec::new();
@@ -140,7 +146,12 @@ fn cached_session_file(
     cache: &mut PiCache,
 ) -> Option<PathBuf> {
     if let Some(entry) = cache.session_files.get(&pid) {
-        if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
+        let fresh_for = if entry.value.is_some() {
+            SESSION_CACHE_TTL
+        } else {
+            MISSING_SESSION_CACHE_TTL
+        };
+        if entry.checked_at.elapsed() < fresh_for {
             return entry.value.clone();
         }
     }
@@ -177,7 +188,12 @@ fn cached_session_files(
     cache: &mut PiCache,
 ) -> Vec<PathBuf> {
     if let Some(entry) = cache.session_file_lists.get(&pid) {
-        if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
+        let fresh_for = if entry.value.is_empty() {
+            MISSING_SESSION_CACHE_TTL
+        } else {
+            SESSION_CACHE_TTL
+        };
+        if entry.checked_at.elapsed() < fresh_for {
             return entry.value.clone();
         }
     }

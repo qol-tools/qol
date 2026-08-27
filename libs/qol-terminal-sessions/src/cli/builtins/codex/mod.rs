@@ -122,4 +122,8 @@ impl CliSessionStrategy for CodexStrategy {
             .map(|path| CliSessionSubscription::watch_file(path, on_change))
             .transpose()
     }
+
+    fn subscription_dir(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
+        self.metadata.subscription_dir(session)
+    }
 }

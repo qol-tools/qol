@@ -59,6 +59,10 @@ pub(super) trait PiEnvironment: Send + Sync {
     fn session_files(&self, pid: i32, cwd: &str) -> Vec<PathBuf> {
         self.session_file(pid, cwd).into_iter().collect()
     }
+
+    fn session_directory(&self, _pid: i32, cwd: &str) -> Option<PathBuf> {
+        session_dir(cwd)
+    }
 }
 
 pub(super) struct SystemPiEnvironment;

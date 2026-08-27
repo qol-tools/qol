@@ -12,7 +12,8 @@ use crate::{SessionBinding, SessionFacts};
 use super::environment::{newest_write, KimiEnvironment, KimiSessionLocation};
 use crate::cli::activity::{quiet_secs, recently_active};
 
-const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const SESSION_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(super) const MISSING_SESSION_CACHE_TTL: Duration = Duration::from_millis(500);
 const NEW_SESSION_TITLE: &str = "New Session";
 const MAX_SESSION_NAME_CHARS: usize = 80;
 
@@ -95,6 +96,52 @@ impl KimiMetadataResolver {
         cached_location(session, self.environment.as_ref(), &mut cache)
             .map(|location| location.state_path)
     }
+
+    pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
+        let home = kimi_subscription_home()?;
+        let index = fs::read_to_string(home.join("session_index.jsonl")).ok()?;
+        let mut groups: Vec<PathBuf> = index
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|entry| {
+                entry.get("workDir").and_then(serde_json::Value::as_str)
+                    == Some(session.cwd.as_str())
+            })
+            .filter_map(|entry| {
+                let session_dir = PathBuf::from(
+                    entry
+                        .get("sessionDir")
+                        .and_then(serde_json::Value::as_str)?,
+                );
+                let group = session_dir.parent()?.to_path_buf();
+                group.is_dir().then_some(group)
+            })
+            .collect();
+        groups.sort();
+        groups.dedup();
+        groups.into_iter().next()
+    }
+}
+
+fn kimi_subscription_home() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("KIMI_CODE_HOME") {
+        return expand_tilde(PathBuf::from(dir));
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".kimi-code"))
+}
+
+fn expand_tilde(path: PathBuf) -> Option<PathBuf> {
+    let text = path.to_str()?;
+    if text != "~" && !text.starts_with("~/") {
+        return Some(path);
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    if text == "~" || text == "~/" {
+        return Some(home);
+    }
+    Some(home.join(text.strip_prefix("~/")?))
 }
 
 fn cached_location(
@@ -107,7 +154,12 @@ fn cached_location(
     }
     let cwd = &session.cwd;
     if let Some(entry) = cache.locations.get(cwd) {
-        if entry.checked_at.elapsed() < SESSION_CACHE_TTL {
+        let fresh_for = if entry.value.is_some() {
+            SESSION_CACHE_TTL
+        } else {
+            MISSING_SESSION_CACHE_TTL
+        };
+        if entry.checked_at.elapsed() < fresh_for {
             return entry.value.clone();
         }
     }

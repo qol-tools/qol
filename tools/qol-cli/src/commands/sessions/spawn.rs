@@ -1147,10 +1147,14 @@ pub(super) fn spawn_lanes(
 
 fn refuse_second_ungrouped_lane(
     pending: &super::bridge::PendingBridgeStore,
+    driver: &str,
     live: &std::collections::HashSet<String>,
 ) -> Result<()> {
     for round in pending.pending_rounds()? {
         if round.completed || round.group.is_some() || !live.contains(&round.session) {
+            continue;
+        }
+        if !driver.is_empty() && round.driver != driver {
             continue;
         }
         let label = round.label.unwrap_or_else(|| round.session.clone());
@@ -1202,7 +1206,11 @@ pub(super) fn spawn_or_reuse(
                         .iter()
                         .filter_map(|facts| facts.binding().ok().map(|binding| binding.token()))
                         .collect::<std::collections::HashSet<_>>();
-                    refuse_second_ungrouped_lane(pending, &live)?;
+                    refuse_second_ungrouped_lane(
+                        pending,
+                        &super::bridge::driver_token(terminals),
+                        &live,
+                    )?;
                 }
                 require_model_for_launch(model)?;
                 let mut launch = wrap_launch(&prepared.launch, cap);
@@ -2694,6 +2702,47 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "a lane that never came up must not leave a spawn record behind"
+        );
+    }
+
+    #[test]
+    fn only_this_drivers_open_ungrouped_round_blocks_a_second_spawn() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let foreign = SessionBinding::from_str("v1:kitty:foreign-lane:100").unwrap();
+        let own = SessionBinding::from_str("v1:kitty:own-lane:200").unwrap();
+        pending
+            .start_with_label(
+                &foreign,
+                "QOL_BRIDGE_DONE_foreign",
+                "v1:kitty:some-other-terminal:900",
+                false,
+                None,
+                Some("lane-foreign"),
+            )
+            .unwrap();
+        let live = [foreign.token(), own.token()]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+
+        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live)
+            .expect("another terminal's open ungrouped round must not block this spawn");
+
+        pending
+            .start_with_label(
+                &own,
+                "QOL_BRIDGE_DONE_own",
+                "v1:kitty:this-terminal:42",
+                false,
+                None,
+                Some("lane-own"),
+            )
+            .unwrap();
+        let error = refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live)
+            .expect_err("this driver's own open ungrouped round still blocks a second lane");
+        assert!(
+            error.to_string().contains("lane-own"),
+            "the refusal must name this caller's own open round: {error}"
         );
     }
 

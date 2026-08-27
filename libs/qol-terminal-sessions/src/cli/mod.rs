@@ -82,6 +82,10 @@ pub trait CliSessionStrategy: Send + Sync {
         Ok(None)
     }
 
+    fn subscription_dir(&self, _session: &SessionFacts) -> Option<std::path::PathBuf> {
+        None
+    }
+
     fn classify_screen(&self, _session: &SessionFacts, _screen: &str) -> CliScreenEvidence {
         CliScreenEvidence::default()
     }

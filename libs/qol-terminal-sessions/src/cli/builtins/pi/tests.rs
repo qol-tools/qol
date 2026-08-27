@@ -1,9 +1,13 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
-use crate::cli::{CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliViewportState};
+use crate::cli::{
+    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 use super::environment::PiEnvironment;
@@ -26,6 +30,53 @@ struct PerPidEnvironment {
 impl PiEnvironment for PerPidEnvironment {
     fn session_file(&self, pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
         self.session_files.get(&pid).cloned()
+    }
+}
+
+#[derive(Default)]
+struct SwitchableEnvironment {
+    file: std::sync::Mutex<Option<std::path::PathBuf>>,
+    scans: AtomicUsize,
+    list_scans: AtomicUsize,
+}
+
+impl SwitchableEnvironment {
+    fn answer(&self, file: Option<std::path::PathBuf>) {
+        *self.file.lock().unwrap() = file;
+    }
+
+    fn scans(&self) -> usize {
+        self.scans.load(Ordering::SeqCst)
+    }
+
+    fn list_scans(&self) -> usize {
+        self.list_scans.load(Ordering::SeqCst)
+    }
+}
+
+impl PiEnvironment for SwitchableEnvironment {
+    fn session_file(&self, _pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
+        self.file.lock().unwrap().clone()
+    }
+
+    fn session_files(&self, _pid: i32, _cwd: &str) -> Vec<std::path::PathBuf> {
+        self.list_scans.fetch_add(1, Ordering::SeqCst);
+        self.file.lock().unwrap().clone().into_iter().collect()
+    }
+}
+
+struct DirectoryOnlyEnvironment {
+    directory: Option<std::path::PathBuf>,
+}
+
+impl PiEnvironment for DirectoryOnlyEnvironment {
+    fn session_file(&self, _pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn session_directory(&self, _pid: i32, _cwd: &str) -> Option<std::path::PathBuf> {
+        self.directory.clone()
     }
 }
 
@@ -216,6 +267,112 @@ fn an_unresolved_session_file_reads_unknown() {
 }
 
 #[test]
+fn a_missed_transcript_lookup_is_retried_after_half_a_second_not_thirty_seconds() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = PiStrategy::with_environment(environment.clone());
+
+    assert_eq!(strategy.metadata.subscription_path(&session()), None);
+    assert_eq!(environment.scans(), 1);
+
+    environment.answer(Some(file.clone()));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()),
+        None,
+        "the stored miss still serves an immediate re-check"
+    );
+    assert_eq!(
+        environment.scans(),
+        1,
+        "a burst of lookups inside one window shares a single filesystem scan"
+    );
+
+    std::thread::sleep(super::metadata::MISSING_SESSION_CACHE_TTL + Duration::from_millis(100));
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(file.as_path())
+    );
+    assert_eq!(
+        environment.scans(),
+        2,
+        "the expired miss retries instead of serving emptiness for thirty seconds"
+    );
+}
+
+#[test]
+fn a_resolved_transcript_hit_stays_cached_without_another_scan() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = PiStrategy::with_environment(environment.clone());
+    environment.answer(Some(file.clone()));
+
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(file.as_path())
+    );
+    environment.answer(None);
+    assert_eq!(
+        strategy.metadata.subscription_path(&session()).as_deref(),
+        Some(file.as_path()),
+        "a hit keeps its full cache window even when the answer changes underneath"
+    );
+    assert_eq!(environment.scans(), 1);
+}
+
+#[test]
+fn the_multi_candidate_list_lookup_shares_one_scan_and_retries_misses_promptly() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+    let environment = Arc::new(SwitchableEnvironment::default());
+    let strategy = PiStrategy::with_environment(environment.clone());
+
+    assert_eq!(
+        strategy.metadata.subscription_paths(&session()),
+        Vec::<std::path::PathBuf>::new()
+    );
+    assert_eq!(environment.list_scans(), 1);
+
+    environment.answer(Some(file.clone()));
+    assert_eq!(
+        strategy.metadata.subscription_paths(&session()),
+        Vec::<std::path::PathBuf>::new(),
+        "the stored miss still serves an immediate re-check"
+    );
+    assert_eq!(environment.list_scans(), 1);
+
+    std::thread::sleep(super::metadata::MISSING_SESSION_CACHE_TTL + Duration::from_millis(100));
+    assert_eq!(strategy.metadata.subscription_paths(&session()), vec![file]);
+    assert_eq!(
+        environment.list_scans(),
+        2,
+        "the expired miss retries instead of serving emptiness for thirty seconds"
+    );
+}
+
+#[test]
 fn display_name_falls_back_to_the_terminal_title() {
     let root = TempDir::new().unwrap();
     let file = root.path().join("missing.jsonl");
@@ -317,6 +474,98 @@ fn launch_program_is_the_pi_executable_without_arguments() {
         PiStrategy::default().launch(),
         Some(CliLaunchProgram::new("pi"))
     );
+}
+
+#[test]
+fn subscribe_falls_back_to_the_session_directory_when_no_session_file_exists_yet() {
+    let root = TempDir::new().unwrap();
+    let directory = root.path().join("sessions");
+    std::fs::create_dir_all(&directory).unwrap();
+    let (changed, events) = std::sync::mpsc::channel();
+    let interpreter = interpreted(PiStrategy::with_environment(Arc::new(
+        DirectoryOnlyEnvironment {
+            directory: Some(directory.clone()),
+        },
+    )));
+
+    let subscription = interpreter
+        .subscribe(
+            &session(),
+            Arc::new(move || {
+                let _ = changed.send(());
+            }),
+        )
+        .unwrap()
+        .expect("an empty session directory still yields a subscription");
+
+    std::fs::write(
+        directory.join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl"),
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+
+    events
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("a session file appearing in the directory wakes the subscription");
+    drop(subscription);
+}
+
+#[test]
+fn subscribe_watches_the_exact_session_file_when_one_resolves() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}\n",
+    )
+    .unwrap();
+    let (changed, events) = std::sync::mpsc::channel();
+    let interpreter = interpreted(PiStrategy::with_environment(Arc::new(FakeEnvironment {
+        session_file: file.clone(),
+    })));
+
+    let subscription = interpreter
+        .subscribe(
+            &session(),
+            Arc::new(move || {
+                let _ = changed.send(());
+            }),
+        )
+        .unwrap()
+        .expect("a resolved session file yields a subscription");
+
+    let mut content = std::fs::read_to_string(&file).unwrap();
+    content.push_str("{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[]}}\n");
+    std::fs::write(&file, content).unwrap();
+
+    events
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("a change to the resolved session file wakes the subscription");
+    drop(subscription);
+}
+
+#[test]
+fn subscribe_reports_no_subscription_when_the_session_directory_is_missing() {
+    let root = TempDir::new().unwrap();
+    let interpreter = interpreted(PiStrategy::with_environment(Arc::new(
+        DirectoryOnlyEnvironment {
+            directory: Some(root.path().join("absent")),
+        },
+    )));
+
+    let subscribed = interpreter.subscribe(&session(), Arc::new(|| {})).unwrap();
+
+    assert!(
+        subscribed.is_none(),
+        "a missing session directory must leave the waiter polling instead of erroring"
+    );
+}
+
+fn interpreted(strategy: PiStrategy) -> CliSessionInterpreter {
+    CliSessionInterpreter::from_strategies([Arc::new(strategy) as Arc<dyn CliSessionStrategy>])
+        .unwrap()
 }
 
 fn pi_screen(tail: &str) -> String {
