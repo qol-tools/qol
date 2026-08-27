@@ -347,10 +347,14 @@ mod tests {
 
     #[test]
     fn settings_url_targets_the_plugin_namespace() {
-        assert_eq!(
-            settings_url("plugin-foo"),
-            "http://127.0.0.1:42700/#plugins/plugin-foo/config"
-        );
+        let previous = std::env::var_os(ENV_HTTP_TOKEN);
+        std::env::remove_var(ENV_HTTP_TOKEN);
+        let url = settings_url("plugin-foo");
+        match previous {
+            Some(value) => std::env::set_var(ENV_HTTP_TOKEN, value),
+            None => std::env::remove_var(ENV_HTTP_TOKEN),
+        }
+        assert_eq!(url, "http://127.0.0.1:42700/#plugins/plugin-foo/config");
     }
 
     #[test]
