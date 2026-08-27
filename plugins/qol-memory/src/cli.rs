@@ -19,7 +19,8 @@ const USAGE_ASK: &str = concat!(
 );
 const USAGE_STATUS: &str = "usage: qol-memory status [--store PATH]";
 const USAGE_RUN: &str = "usage: qol-memory run";
-const USAGE_CAPTURE: &str = "usage: qol-memory capture --unit '<json>' [--store PATH]";
+const USAGE_CAPTURE: &str =
+    "usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH]";
 const USAGE_CONTINUE: &str = "usage: qol-memory continue --cwd PATH --session ID [--store PATH]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
 
@@ -130,9 +131,9 @@ fn run_command(plain: PlainHandler) -> Command {
 
 fn capture_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("capture")
-        .about("Append one redacted unit to the memory store.")
+        .about("Append one settled fact or one whole unit to the memory store.")
         .usage(USAGE_CAPTURE)
-        .detail("The unit must be a JSON object.")
+        .detail("Pass a fact with --text and --cwd, or a whole unit as a JSON object with --unit.")
         .output("The `appended: <n>` line in plain text; the appended count with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))
@@ -278,6 +279,7 @@ fn parse_status_invocation(args: &[String]) -> std::result::Result<Option<PathBu
     Ok(store)
 }
 
+#[derive(Debug)]
 struct CaptureInvocation {
     unit: Value,
     store: Option<PathBuf>,
@@ -285,6 +287,8 @@ struct CaptureInvocation {
 
 fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvocation, String> {
     let mut unit: Option<Value> = None;
+    let mut text: Option<String> = None;
+    let mut cwd: Option<String> = None;
     let mut store: Option<PathBuf> = None;
     let mut index = 0usize;
     while index < args.len() {
@@ -300,6 +304,14 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
                     return Err(usage_capture_error("--unit expects a JSON object"));
                 }
                 unit = Some(parsed);
+                index += 2;
+            }
+            "--text" => {
+                text = Some(value_flag_with(args, index, "--text", USAGE_CAPTURE)?.to_string());
+                index += 2;
+            }
+            "--cwd" => {
+                cwd = Some(value_flag_with(args, index, "--cwd", USAGE_CAPTURE)?.to_string());
                 index += 2;
             }
             "--store" => {
@@ -321,9 +333,27 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
             }
         }
     }
-    let unit = match unit {
-        Some(unit) => unit,
-        None => return Err(usage_capture_error("--unit is required")),
+    let unit = if let Some(unit) = unit {
+        if text.is_some() || cwd.is_some() {
+            return Err(usage_capture_error(
+                "--unit cannot be combined with --text or --cwd",
+            ));
+        }
+        unit
+    } else {
+        let (text, cwd) = match (text, cwd) {
+            (Some(text), Some(cwd)) => (text, cwd),
+            (Some(_), None) => return Err(usage_capture_error("--text requires --cwd")),
+            (None, Some(_)) => return Err(usage_capture_error("--cwd requires --text")),
+            (None, None) => return Err(usage_capture_error("--unit is required")),
+        };
+        if text.trim().is_empty() {
+            return Err(usage_capture_error("--text must not be empty"));
+        }
+        if cwd.trim().is_empty() {
+            return Err(usage_capture_error("--cwd must not be empty"));
+        }
+        crate::ingest::capture_unit(text.trim(), cwd.trim(), &crate::text::now_iso())
     };
     Ok(CaptureInvocation { unit, store })
 }
@@ -1009,6 +1039,14 @@ mod tests {
         assert!(calls.all_zero());
     }
 
+    fn parse_capture_args(args: &[&str]) -> std::result::Result<CaptureInvocation, String> {
+        let owned = args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>();
+        parse_capture_invocation(&owned)
+    }
+
     #[test]
     fn capture_requires_a_json_object() {
         let cases = [
@@ -1024,6 +1062,46 @@ mod tests {
             assert_eq!(execution.exit_code, EXIT_USAGE, "args: {args:?}");
             assert!(execution.stderr.contains(USAGE_CAPTURE), "args: {args:?}");
         }
+    }
+
+    #[test]
+    fn capture_text_flags_validate() {
+        let combined = parse_capture_args(&["--unit", "{}", "--text", "fact", "--cwd", "/p"])
+            .expect_err("--unit excludes --text and --cwd");
+        assert!(combined.contains("--unit cannot be combined with --text or --cwd"));
+        assert!(combined.contains(USAGE_CAPTURE));
+
+        let text_only = parse_capture_args(&["--text", "fact"]).expect_err("--text requires --cwd");
+        assert!(text_only.contains("--text requires --cwd"));
+        assert!(text_only.contains(USAGE_CAPTURE));
+
+        let cwd_only = parse_capture_args(&["--cwd", "/p"]).expect_err("--cwd requires --text");
+        assert!(cwd_only.contains("--cwd requires --text"));
+        assert!(cwd_only.contains(USAGE_CAPTURE));
+
+        let blank_text = parse_capture_args(&["--text", "   ", "--cwd", "/p"])
+            .expect_err("blank --text is rejected");
+        assert!(blank_text.contains("--text must not be empty"));
+        assert!(blank_text.contains(USAGE_CAPTURE));
+
+        let blank_cwd = parse_capture_args(&["--text", "fact", "--cwd", "  "])
+            .expect_err("blank --cwd is rejected");
+        assert!(blank_cwd.contains("--cwd must not be empty"));
+        assert!(blank_cwd.contains(USAGE_CAPTURE));
+    }
+
+    #[test]
+    fn capture_text_builds_a_capture_unit() {
+        let invocation =
+            parse_capture_args(&["--text", " fact ", "--cwd", "/p"]).expect("text flags parse");
+        let unit = invocation.unit;
+        assert_eq!(unit["kind"], "capture");
+        assert_eq!(unit["cwd"], "/p");
+        assert_eq!(unit["text"], "fact");
+        assert_eq!(
+            unit["key"],
+            crate::ingest::capture_unit("fact", "/p", "x")["key"]
+        );
     }
 
     #[test]

@@ -215,11 +215,11 @@ fn pick_units(units: &[Value], entry_ms: i64, session: &str) -> Vec<Value> {
             .unwrap_or("")
             .to_string();
         let slots = counts.entry(owner).or_insert([0, 0]);
-        let index = if kind == "user" { 0 } else { 1 };
-        let cap = if kind == "user" {
-            CAP_USER
-        } else {
+        let index = if kind == "compaction" { 1 } else { 0 };
+        let cap = if kind == "compaction" {
             CAP_COMPACTION
+        } else {
+            CAP_USER
         };
         if slots[index] >= cap {
             continue;
@@ -235,7 +235,7 @@ fn pick_units(units: &[Value], entry_ms: i64, session: &str) -> Vec<Value> {
 
 fn is_candidate(unit: &Value, entry_ms: i64, session: &str) -> bool {
     let kind = unit.get("kind").and_then(Value::as_str);
-    if kind != Some("user") && kind != Some("compaction") {
+    if kind != Some("user") && kind != Some("compaction") && kind != Some("capture") {
         return false;
     }
     let Some(text) = unit.get("text").and_then(Value::as_str) else {
@@ -490,5 +490,51 @@ mod tests {
         assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(3));
         let log = std::fs::read_to_string(store.root().join("hook.log")).unwrap();
         assert!(log.contains("\"reason\":\"store-reset\""));
+    }
+
+    #[test]
+    fn continue_injects_capture_units_like_user_units() {
+        let (_dir, store) = store_in("capture-units");
+        let capture_unit = json!({
+            "key": "aaaabbbbccccdddd",
+            "source": "agent",
+            "cwd": "/proj",
+            "kind": "capture",
+            "ts": "2026-08-02T13:00:00.000Z",
+            "text": "The capture lane stores one settled fact about the widget cache daemon"
+        });
+        let compaction_unit = json!({
+            "key": "ddddeeeeffff0000",
+            "source": "pi",
+            "file": "a.jsonl",
+            "session": "dddddddd-4444",
+            "cwd": "/proj",
+            "kind": "compaction",
+            "ts": "2026-08-02T14:00:00.000Z",
+            "text": "Rolled up  session   context with the distilled summary of decisions"
+        });
+        let body = [capture_unit, compaction_unit]
+            .iter()
+            .map(|unit| serde_json::to_string(unit).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(store.units_path(), body).unwrap();
+        write_marker_fixture(&store, "2026-08-01T00:00:00.000Z", 2);
+        let outcome = run(&store, &request()).unwrap();
+        let expected = concat!(
+            "[qol-memory continue] 2 unit(s) landed in the store since your last session here (2026-08-01T00:00:00Z):\n",
+            "  NEW 2026-08-02T14:00:00.000Z compaction dddddddd ddddeeee \"Rolled up session context with the distilled summary of decisions\"\n",
+            "  NEW 2026-08-02T13:00:00.000Z capture  aaaabbbb \"The capture lane stores one settled fact about the widget cache daemon\""
+        );
+        assert_eq!(
+            outcome,
+            ContinueOutcome {
+                stage: "injected".to_string(),
+                reason: None,
+                count: 2,
+                block: Some(expected.to_string()),
+            }
+        );
+        assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(2));
     }
 }

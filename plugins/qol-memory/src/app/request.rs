@@ -62,20 +62,39 @@ fn continue_request(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Valu
 }
 
 fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
-    let unit = input
-        .get("unit")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("capture: input.unit must be a JSON object"))?;
-    if !unit.is_object() {
-        anyhow::bail!("capture: input.unit must be a JSON object");
-    }
+    let unit = match input.get("unit") {
+        Some(unit) => {
+            if !unit.is_object() {
+                anyhow::bail!("capture: input.unit must be a JSON object");
+            }
+            unit.clone()
+        }
+        None => {
+            let text = string_field(input, "text", "capture")?;
+            let cwd = string_field(input, "cwd", "capture")?;
+            let text = text.trim();
+            if text.is_empty() {
+                anyhow::bail!("capture: input.text must not be empty");
+            }
+            let cwd = cwd.trim();
+            if cwd.is_empty() {
+                anyhow::bail!("capture: input.cwd must not be empty");
+            }
+            crate::ingest::capture_unit(text, cwd, &crate::text::now_iso())
+        }
+    };
     let mut warm = lock_state(state);
     let store = warm.store().clone();
     let appended = crate::ingest::append_units(&store, std::slice::from_ref(&unit), warm.keys())?;
     if appended > 0 {
         warm.push_units(std::slice::from_ref(&unit));
     }
-    Ok(json!({ "appended": appended }))
+    let key = unit
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(json!({ "appended": appended, "key": key }))
 }
 
 fn reindex(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
@@ -273,6 +292,78 @@ mod tests {
     }
 
     #[test]
+    fn request_capture_from_text_is_idempotent_and_recallable() {
+        let fillers = [
+            unit_value(
+                "filler-01",
+                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            ),
+            unit_value(
+                "filler-02",
+                "oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu bakery candle",
+            ),
+            unit_value(
+                "filler-03",
+                "dragon engine forest garden hammer island jacket kettle lantern mountain noodle ocean pillow quilt",
+            ),
+            unit_value(
+                "filler-04",
+                "river saddle tunnel umbrella violin window yogurt bacon donut ember falcon gravel hazel ivory",
+            ),
+        ];
+        let mut state = warm_state("capture-text", &fillers);
+        let input = json!({
+            "text": "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "cwd": "/tmp/proj"
+        });
+        let ReadResult::HandledWithData(value) = respond(&mut state, "capture", input.clone())
+        else {
+            panic!("capture must answer with data for action `capture`");
+        };
+        assert_eq!(value["appended"], 1);
+        let expected = crate::ingest::capture_unit(
+            "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "/tmp/proj",
+            "ignored",
+        );
+        assert_eq!(value["key"], expected["key"]);
+        let key = value["key"].as_str().expect("capture answers a key");
+        assert_eq!(key.len(), 16);
+        assert!(key.chars().all(|ch| ch.is_ascii_hexdigit()));
+
+        let ReadResult::HandledWithData(value) = respond(&mut state, "capture", input) else {
+            panic!("capture must answer with data for action `capture`");
+        };
+        assert_eq!(value["appended"], 0);
+        assert_eq!(value["key"], expected["key"]);
+
+        let ReadResult::HandledWithData(value) = respond(
+            &mut state,
+            "ask",
+            json!({ "query": "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz", "no_log": true }),
+        ) else {
+            panic!("ask must answer with data for action `ask`");
+        };
+        assert_eq!(value["verdict"], "answered");
+        assert_eq!(value["answer"]["layer"], "unit");
+        assert_eq!(value["answer"]["source_kind"], "capture");
+    }
+
+    #[test]
+    fn request_capture_rejects_empty_text() {
+        let mut state = warm_state("capture-empty", &[]);
+        let result = respond(
+            &mut state,
+            "capture",
+            json!({ "text": "   ", "cwd": "/tmp/proj" }),
+        );
+        assert!(
+            matches!(result, ReadResult::Error(message) if message == "capture: input.text must not be empty"),
+            "whitespace-only text must be rejected"
+        );
+    }
+
+    #[test]
     fn request_capture_rejects_non_object_units() {
         let mut state = warm_state("capture-bad", &[]);
         let result = respond(&mut state, "capture", json!({ "unit": "nope" }));
@@ -281,10 +372,10 @@ mod tests {
             "non-object unit must name the field"
         );
 
-        let result = respond(&mut state, "capture", json!({}));
+        let result = respond(&mut state, "capture", json!({ "unit": null }));
         assert!(
             matches!(result, ReadResult::Error(message) if message == "capture: input.unit must be a JSON object"),
-            "missing unit must name the field"
+            "non-object unit must name the field"
         );
     }
 

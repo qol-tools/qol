@@ -116,6 +116,20 @@ pub fn unit_key(source: &str, file: &str, ts: Option<&str>, text: &str) -> Strin
     key
 }
 
+pub const CAPTURE_SOURCE: &str = "agent";
+pub const CAPTURE_KIND: &str = "capture";
+
+pub fn capture_unit(text: &str, cwd: &str, ts: &str) -> serde_json::Value {
+    serde_json::json!({
+        "key": unit_key(CAPTURE_SOURCE, cwd, None, text),
+        "source": CAPTURE_SOURCE,
+        "cwd": cwd,
+        "kind": CAPTURE_KIND,
+        "ts": ts,
+        "text": text
+    })
+}
+
 pub fn is_ignored(roots: &IngestRoots, path: &Path) -> bool {
     let lossy = path.to_string_lossy();
     let raw: &str = lossy.as_ref();
@@ -432,6 +446,27 @@ mod tests {
             unit_key("pi", "a.jsonl", None, "hello"),
             unit_key("pi", "a.jsonl", Some(""), "hello")
         );
+    }
+
+    #[test]
+    fn capture_unit_key_ignores_ts_and_depends_on_cwd_and_text() {
+        let text = "the clipboard ring survives tray restarts";
+        let first = capture_unit(text, "/repo", "2026-08-01T09:00:00.000Z");
+        let second = capture_unit(text, "/repo", "2027-01-02T03:04:05.000Z");
+        assert_eq!(first["key"], second["key"]);
+        assert_ne!(
+            first["key"],
+            capture_unit("another fact entirely", "/repo", "2026-08-01T09:00:00.000Z")["key"]
+        );
+        assert_ne!(
+            first["key"],
+            capture_unit(text, "/elsewhere", "2026-08-01T09:00:00.000Z")["key"]
+        );
+        assert_eq!(first["source"], "agent");
+        assert_eq!(first["kind"], "capture");
+        assert_eq!(first["ts"], "2026-08-01T09:00:00.000Z");
+        assert!(first.get("file").is_none());
+        assert!(first.get("session").is_none());
     }
 
     #[test]

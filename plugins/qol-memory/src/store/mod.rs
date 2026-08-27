@@ -193,6 +193,12 @@ pub const BOILERPLATE_MARKERS: [&str; 4] = [
     "Review this change for security vulnerabilities",
 ];
 
+pub const ANSWER_POOL_KINDS: [&str; 2] = ["user", "capture"];
+
+pub fn in_answer_pool(kind: &str) -> bool {
+    ANSWER_POOL_KINDS.contains(&kind)
+}
+
 pub fn dedupe_user_units(units: &[Unit]) -> Vec<Unit> {
     let mut sorted: Vec<Unit> = units.to_vec();
     sorted.sort_by_key(|unit| crate::text::parse_iso_millis(unit.ts.as_deref()));
@@ -353,6 +359,15 @@ mod tests {
         assert_eq!(layer.run.as_deref(), Some("2026-08-07T09-30-00-000Z"));
         assert_eq!(layer.items.len(), 1);
         assert_eq!(layer.items[0].cls, "decision");
+    }
+
+    #[test]
+    fn answer_pool_accepts_user_and_capture_only() {
+        assert!(in_answer_pool("user"));
+        assert!(in_answer_pool("capture"));
+        assert!(!in_answer_pool("compaction"));
+        assert!(!in_answer_pool("observation"));
+        assert!(!in_answer_pool(""));
     }
 
     #[test]

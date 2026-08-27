@@ -19,6 +19,10 @@ socket = "/tmp/qol-memory.sock"
 label = "Status"
 args = ["status"]
 
+[action.capture]
+label = "Capture"
+args = ["capture"]
+
 [capabilities]
 doctor = true
 

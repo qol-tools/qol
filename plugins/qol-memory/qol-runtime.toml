@@ -19,8 +19,10 @@ poll_interval_ms = 60000
 input = { cwd = "working directory of the session", session = "session id being continued" }
 
 [action.capture]
-description = "Append one redacted unit to the store"
-input = { unit = "one unit as a JSON object" }
+description = "Append one settled fact to the store"
+agent_tool = true
+tool_description = "Remember one settled fact for future sessions. Write one self-contained sentence carrying the identifiers a later reader needs (paths, commits, names, dates). It is stored verbatim, scoped to cwd, and comes back through qol-memory__ask and the session-start continue block. Calling it twice with the same text and cwd stores one fact."
+input = { text = "the fact as one self-contained sentence", cwd = "absolute working directory of the project the fact belongs to" }
 
 [action.reindex]
 description = "Drop the persisted BM25 indexes and rebuild them"

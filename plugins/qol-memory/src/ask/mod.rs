@@ -289,7 +289,7 @@ pub fn run_with_layers(
     let user_units_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| unit.kind == "user")
+        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_units_input);
@@ -645,7 +645,7 @@ pub fn run_with_layers(
                 layer: "unit".to_string(),
                 key: top.key.clone(),
                 cls: None,
-                source_kind: "user".to_string(),
+                source_kind: top.kind.clone(),
                 source_ts: top.ts.clone(),
                 session: top.session.clone(),
                 score: text::to_fixed2(top.score),
@@ -654,7 +654,11 @@ pub fn run_with_layers(
             });
             verdict = "answered".to_string();
             confidence = "medium".to_string();
-            reason = "units layer answer (user's own words), confidence capped medium".to_string();
+            reason = if top.kind == "capture" {
+                "units layer answer (agent capture), confidence capped medium".to_string()
+            } else {
+                "units layer answer (user's own words), confidence capped medium".to_string()
+            };
         } else {
             verdict = "candidates".to_string();
             confidence = "low".to_string();
@@ -1058,7 +1062,7 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
     let user_units_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| unit.kind == "user")
+        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_units_input);
@@ -1604,6 +1608,53 @@ mod tests {
             "Decision: the plugin clipboard history ring now persists across tray restarts and survives the sandbox teardown"
         );
         assert_eq!(decision_entry.as_object().expect("object").len(), 4);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_answers_from_a_capture_unit_with_capture_provenance() {
+        let root = temp_root("capture-unit");
+        let capture = crate::ingest::capture_unit(
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "/tmp/proj",
+            "2026-08-01T09:00:00.000Z",
+        );
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![capture.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        assert_eq!(out.confidence, "medium");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.source_kind, "capture");
+        assert_eq!(
+            out.reason,
+            "units layer answer (agent capture), confidence capped medium"
+        );
+        assert_eq!(
+            answer.key,
+            capture["key"].as_str().expect("capture key string")
+        );
         fs::remove_dir_all(&root).ok();
     }
 }

@@ -110,7 +110,7 @@ if (!query) {
 const snapshot = join(STORE_ROOT, "snapshot");
 const notesRoot = join(STORE_ROOT, "notes");
 const { run: snapshotRun, path: unitsPath, items: allUnits } = readUnits(snapshot);
-const userUnits = dedupeUserUnits(allUnits.filter((u) => u.kind === "user"));
+const userUnits = dedupeUserUnits(allUnits.filter((u) => u.kind === "user" || u.kind === "capture"));
 const { run: notesRun, items: notes } = readNotes(notesRoot);
 
 const qtokens0 = tokens(query).filter((t) => !STOPWORDS.has(t));
@@ -315,7 +315,7 @@ if ((maxCov < NO_MEMORY_COV && !hasRecencyAnswer) || (noteTop ? noteTop.score : 
       layer: "unit",
       key: unitTop.key,
       cls: null,
-      source_kind: "user",
+      source_kind: unitTop.kind,
       source_ts: unitTop.ts,
       session: unitTop.session,
       score: Number(unitTop.score.toFixed(2)),
@@ -323,7 +323,7 @@ if ((maxCov < NO_MEMORY_COV && !hasRecencyAnswer) || (noteTop ? noteTop.score : 
     };
     verdict = "answered";
     confidence = "medium";
-    reason = "units layer answer (user's own words), confidence capped medium";
+    reason = unitTop.kind === "capture" ? "units layer answer (agent capture), confidence capped medium" : "units layer answer (user's own words), confidence capped medium";
   } else {
     verdict = "candidates";
     confidence = "low";

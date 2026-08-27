@@ -160,7 +160,7 @@ pub fn reindex(store: &Store) -> Result<Vec<String>> {
     let user_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| unit.kind == "user")
+        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_input);
