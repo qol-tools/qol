@@ -63,6 +63,7 @@ struct WatchedRound {
     last_change: Instant,
     marker_seen: bool,
     runtime_working_seen: bool,
+    transcript_ready_seen: bool,
     ready_polls: u32,
     external_id_captured: bool,
     external_id_attempts: u32,
@@ -89,6 +90,7 @@ impl WatchedRound {
             last_change: Instant::now(),
             marker_seen: false,
             runtime_working_seen: false,
+            transcript_ready_seen: false,
             ready_polls: 0,
             external_id_captured: false,
             external_id_attempts: 0,
@@ -798,19 +800,26 @@ fn poll_round(
     } else {
         round.marker_seen = false;
     }
-    match round_runtime(
+    let (state, from_transcript) = round_runtime(
         terminals,
         interpreter,
         &round.binding,
         &round.transcript_paths,
         &round.marker,
-    ) {
+    );
+    match state {
         CliRuntimeState::Working => {
             round.runtime_working_seen = true;
             round.ready_polls = 0;
         }
-        CliRuntimeState::Ready if round.runtime_working_seen => {
-            round.ready_polls += 1;
+        CliRuntimeState::Ready => {
+            let transcript_decided = from_transcript || round.transcript_ready_seen;
+            if transcript_decided {
+                round.transcript_ready_seen = true;
+            }
+            if transcript_decided || round.runtime_working_seen {
+                round.ready_polls += 1;
+            }
         }
         _ => {}
     }
@@ -820,7 +829,8 @@ fn poll_round(
         round.last_change = Instant::now();
         changed = true;
     }
-    let finished_turn = round.runtime_working_seen && round.ready_polls >= 3;
+    let turn_end_seen = round.runtime_working_seen || round.transcript_ready_seen;
+    let finished_turn = turn_end_seen && round.ready_polls >= 3;
     let screen_quiet = round.last_change.elapsed() >= config.stall_after;
     if finished_turn || screen_quiet {
         let report = capture_report(
@@ -885,6 +895,7 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.last_change = Instant::now();
                         round.marker_seen = false;
                         round.runtime_working_seen = false;
+                        round.transcript_ready_seen = false;
                         round.ready_polls = 0;
                         round.started_at = current.started_at;
                         round.transcript_paths = current.transcript_paths;
@@ -983,11 +994,11 @@ fn round_runtime(
     binding: &SessionBinding,
     paths: &[std::path::PathBuf],
     marker: &str,
-) -> CliRuntimeState {
+) -> (CliRuntimeState, bool) {
     if let Some(runtime) = interpreter.transcript_runtime(paths, marker) {
-        return runtime;
+        return (runtime, true);
     }
-    terminals
+    let runtime = terminals
         .discover()
         .ok()
         .and_then(|sessions| {
@@ -996,7 +1007,8 @@ fn round_runtime(
                 .find(|session| session.id == *binding.session_id())
         })
         .map(|session| interpreter.describe(&session).evidence.runtime)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (runtime, false)
 }
 
 fn screen_tail(screen: &str) -> &str {
@@ -5118,6 +5130,78 @@ mod tests {
         assert!(
             lane.events().is_empty(),
             "a lane that was never observed working must not stall: {:?}",
+            lane.events()
+        );
+        assert!(!lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_the_transcript_already_finished_wakes_markerless_without_a_stall_wait() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Silent,
+            vec!["the lane finished without a marker".to_owned(); 8],
+        );
+        lane.set_transcript_runtime(CliRuntimeState::Ready);
+
+        lane.poll_times(&sim, 2);
+        assert!(
+            !lane.round.runtime_working_seen,
+            "premise: no Working poll was ever observed"
+        );
+        assert!(
+            lane.events().is_empty(),
+            "below the three poll threshold nothing may fire yet: {:?}",
+            lane.events()
+        );
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(
+            events[0]["event"], "completed_markerless",
+            "a transcript declared finish must not wait for the stall window"
+        );
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1);
+        assert!(
+            wakes[0].contains("finished its turn without printing its completion marker"),
+            "the wake must name the finished turn, not the idle stall: {:?}",
+            wakes[0]
+        );
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_screen_ready_lane_with_no_working_and_no_transcript_ready_does_not_complete_early() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Finished,
+            vec!["idle".to_owned(); 10],
+        );
+
+        lane.poll_times(&sim, 10);
+
+        assert!(
+            !lane.round.transcript_ready_seen && !lane.round.runtime_working_seen,
+            "screen classified Ready registers neither transcript readiness nor a Working observation"
+        );
+        assert!(
+            lane.events().is_empty(),
+            "screen Ready alone must never complete the round early: {:?}",
             lane.events()
         );
         assert!(!lane.settled(&sim));
