@@ -127,7 +127,7 @@ impl PlatformStateClient {
         level: NotificationLevel,
         action: Option<(&str, &str)>,
     ) -> bool {
-        self.send_notification_with_layout(title, body, level, action, None)
+        self.send_notification_with_layout(title, body, level, action, None, None)
     }
 
     pub fn send_notification_with_layout(
@@ -136,6 +136,7 @@ impl PlatformStateClient {
         body: &str,
         level: NotificationLevel,
         action: Option<(&str, &str)>,
+        artifact: Option<&str>,
         layout: Option<NotificationLayout>,
     ) -> bool {
         let plugin_id = self.plugin_id_from_env();
@@ -146,6 +147,7 @@ impl PlatformStateClient {
             level,
             action_label: action.map(|(label, _)| label.to_string()),
             action_payload: action.map(|(_, payload)| payload.to_string()),
+            artifact: artifact.map(str::to_string),
             layout,
         };
         matches!(self.request_json(&request), Some(PushAck::Handled))

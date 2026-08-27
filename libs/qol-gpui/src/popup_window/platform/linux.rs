@@ -190,6 +190,36 @@ pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
     Some((geometry.x as i32, geometry.y as i32))
 }
 
+pub fn pointer_over_window_by_title(title: &str) -> bool {
+    pointer_over_window(title).unwrap_or(false)
+}
+
+fn pointer_over_window(title: &str) -> Option<bool> {
+    let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
+    let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    let attributes = conn.get_window_attributes(wid).ok()?.reply().ok()?;
+    if attributes.map_state != MapState::VIEWABLE {
+        return Some(false);
+    }
+    let geometry = conn.get_geometry(wid).ok()?.reply().ok()?;
+    let origin = conn
+        .translate_coordinates(wid, root, 0, 0)
+        .ok()?
+        .reply()
+        .ok()?;
+    let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
+    let left = i32::from(origin.dst_x);
+    let top = i32::from(origin.dst_y);
+    let x = i32::from(pointer.root_x);
+    let y = i32::from(pointer.root_y);
+    Some(
+        x >= left
+            && y >= top
+            && x < left + i32::from(geometry.width)
+            && y < top + i32::from(geometry.height),
+    )
+}
+
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {

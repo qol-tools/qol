@@ -23,6 +23,7 @@ enum Command {
         body: String,
         level: String,
         action: Option<(String, String)>,
+        artifact: Option<String>,
         layout: Option<NotificationLayout>,
     },
     ThemeChanged,
@@ -382,9 +383,12 @@ fn spawn_command_loop(
                     body,
                     level,
                     action,
+                    artifact,
                     layout,
                 } => {
-                    show_toast_in_host(toast_host, title, body, level, action, layout, &cx);
+                    show_toast_in_host(
+                        toast_host, title, body, level, action, artifact, layout, &cx,
+                    );
                     LoopFlow::Continue
                 }
                 Command::ThemeChanged => {
@@ -397,12 +401,14 @@ fn spawn_command_loop(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_toast_in_host(
     toast_host: ToastHost,
     title: String,
     body: String,
     level: String,
     action: Option<(String, String)>,
+    artifact: Option<String>,
     layout: Option<NotificationLayout>,
     cx: &gpui::AsyncApp,
 ) {
@@ -424,7 +430,9 @@ fn show_toast_in_host(
             ToastLayout::for_push(anchor, width, height, style),
         )
         .tone(toast_tone(&level));
-        if let Some((_, payload)) = action {
+        if let Some(path) = artifact {
+            toast = toast.artifact(path);
+        } else if let Some((_, payload)) = action {
             toast = toast.on_activate(move |_cx| crate::paths::open_url(&payload));
         }
         if let Err(error) = toast_host.show(toast, cx) {
@@ -673,6 +681,7 @@ pub(in crate::settings_surface) fn show_toast(
     body: &str,
     level: &str,
     action: Option<(&str, &str)>,
+    artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) -> anyhow::Result<bool> {
     let config = config();
@@ -687,6 +696,7 @@ pub(in crate::settings_surface) fn show_toast(
                 "body": body,
                 "level": level,
                 "action": action,
+                "artifact": artifact,
                 "layout": layout,
             }),
             Duration::from_millis(500),
@@ -727,6 +737,12 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 .get("action")
                 .and_then(serde_json::Value::as_object)
                 .and_then(validated_action);
+            let artifact = request
+                .input
+                .get("artifact")
+                .and_then(serde_json::Value::as_str)
+                .filter(|artifact| crate::paths::is_existing_absolute_path(artifact))
+                .map(str::to_string);
             let layout = request
                 .input
                 .get("layout")
@@ -737,6 +753,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                     body: body.to_string(),
                     level: level.to_string(),
                     action,
+                    artifact,
                     layout,
                 }),
                 _ => ReadResult::Error("toast requires title, body and level".into()),
@@ -754,8 +771,7 @@ fn validated_action(
     if label.trim().is_empty() {
         return None;
     }
-    let path = std::path::Path::new(payload);
-    if !path.is_absolute() || !path.exists() {
+    if !crate::paths::is_existing_absolute_path(payload) {
         return None;
     }
     Some((label.to_string(), payload.to_string()))
@@ -870,12 +886,14 @@ mod tests {
                 body,
                 level,
                 action,
+                artifact,
                 layout,
             }) => {
                 assert_eq!(title, "title");
                 assert_eq!(body, "body");
                 assert_eq!(level, "warn");
                 assert_eq!(action, Some(("open".to_string(), payload)));
+                assert_eq!(artifact, None);
                 assert_eq!(layout, None);
             }
             _ => panic!("toast request did not parse as a command"),
@@ -940,6 +958,38 @@ mod tests {
         };
         match parse_request(&malformed) {
             ReadResult::Command(Command::Toast { layout, .. }) => assert_eq!(layout, None),
+            _ => panic!("toast request did not parse as a command"),
+        }
+    }
+
+    #[test]
+    fn toast_protocol_resolves_the_artifact_only_for_an_existing_absolute_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("shot.png");
+        std::fs::write(&file, b"x").unwrap();
+        let existing = file.to_str().unwrap().to_string();
+        let request_for = |artifact: &str| DaemonRequest {
+            action: "toast".into(),
+            input: serde_json::json!({
+                "title": "title",
+                "body": "body",
+                "level": "info",
+                "artifact": artifact,
+            }),
+        };
+
+        match parse_request(&request_for(&existing)) {
+            ReadResult::Command(Command::Toast { artifact, .. }) => {
+                assert_eq!(artifact, Some(existing));
+            }
+            _ => panic!("toast request did not parse as a command"),
+        }
+
+        let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
+        match parse_request(&request_for(&missing)) {
+            ReadResult::Command(Command::Toast { artifact, .. }) => {
+                assert_eq!(artifact, None);
+            }
             _ => panic!("toast request did not parse as a command"),
         }
     }

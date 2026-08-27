@@ -55,6 +55,28 @@ impl MonitorPlacement {
         }
     }
 
+    pub fn resized(self, current: Bounds<Pixels>, content: Size<Pixels>) -> Bounds<Pixels> {
+        let x = match self.anchor {
+            Anchor::Corner(Corner::TopLeft | Corner::BottomLeft) => current.origin.x,
+            Anchor::Corner(Corner::TopRight | Corner::BottomRight) => {
+                current.origin.x + current.size.width - content.width
+            }
+            Anchor::TopCenter | Anchor::Center => {
+                current.origin.x + (current.size.width - content.width) / 2.0
+            }
+        };
+        let y = match self.anchor {
+            Anchor::Corner(Corner::TopLeft | Corner::TopRight) | Anchor::TopCenter => {
+                current.origin.y
+            }
+            Anchor::Corner(Corner::BottomLeft | Corner::BottomRight) => {
+                current.origin.y + current.size.height - content.height
+            }
+            Anchor::Center => current.origin.y + (current.size.height - content.height) / 2.0,
+        };
+        Bounds::new(point(x, y), content)
+    }
+
     pub fn projected_bounds(
         self,
         monitor: Bounds<Pixels>,
@@ -345,5 +367,22 @@ mod tests {
             bounds,
             Bounds::new(point(px(-10.5), px(-5.5)), size(px(1.0), px(1.0)))
         );
+    }
+
+    #[test]
+    fn resized_keeps_the_anchored_edges_fixed() {
+        let current = Bounds::new(point(px(1458.0), px(1201.0)), size(px(440.0), px(68.0)));
+        let taller = size(px(440.0), px(200.0));
+
+        let bottom_right =
+            MonitorPlacement::corner(Corner::BottomRight, 24.0).resized(current, taller);
+        assert_eq!(bottom_right.origin, point(px(1458.0), px(1069.0)));
+        assert_eq!(bottom_right.size, taller);
+
+        let top_left = MonitorPlacement::corner(Corner::TopLeft, 24.0).resized(current, taller);
+        assert_eq!(top_left.origin, current.origin);
+
+        let center = MonitorPlacement::center().resized(current, taller);
+        assert_eq!(center.origin, point(px(1458.0), px(1135.0)));
     }
 }

@@ -71,10 +71,14 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
             level,
             action_label,
             action_payload,
+            artifact,
             layout,
         } => {
             let action = resolve_action(action_label.as_deref(), action_payload.as_deref());
-            handle_push_notification(writer, &plugin_id, &title, &body, level, action, layout)
+            let artifact = resolve_artifact(artifact.as_deref());
+            handle_push_notification(
+                writer, &plugin_id, &title, &body, level, action, artifact, layout,
+            )
         }
         RuntimeRequest::PushStatus { plugin_id, status } => {
             handle_push_status(writer, &plugin_id, &status)
@@ -84,6 +88,7 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_push_notification(
     writer: &mut UnixStream,
     plugin_id: &str,
@@ -91,6 +96,7 @@ fn handle_push_notification(
     body: &str,
     level: NotificationLevel,
     action: Option<(&str, &str)>,
+    artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) {
     let accepted = push_plugin_known(plugin_id);
@@ -117,7 +123,7 @@ fn handle_push_notification(
         "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
         action.map(|(label, _)| label).unwrap_or("-")
     );
-    crate::surfaces::show_plugin_notification(title, body, level, action, layout);
+    crate::surfaces::show_plugin_notification(title, body, level, action, artifact, layout);
 }
 
 fn resolve_action<'a>(
@@ -128,14 +134,24 @@ fn resolve_action<'a>(
     if label.trim().is_empty() {
         return None;
     }
-    let path = std::path::Path::new(payload);
-    if !path.is_absolute() || !path.exists() {
+    if !crate::paths::is_existing_absolute_path(payload) {
         log::warn!(
             "[runtime/socket] PUSH notification action dropped: payload {payload:?} is not an existing absolute path"
         );
         return None;
     }
     Some((label, payload))
+}
+
+fn resolve_artifact(artifact: Option<&str>) -> Option<&str> {
+    let artifact = artifact?;
+    if !crate::paths::is_existing_absolute_path(artifact) {
+        log::warn!(
+            "[runtime/socket] PUSH notification artifact dropped: {artifact:?} is not an existing absolute path"
+        );
+        return None;
+    }
+    Some(artifact)
 }
 
 fn handle_push_status(writer: &mut UnixStream, plugin_id: &str, status: &serde_json::Value) {
@@ -550,6 +566,30 @@ mod tests {
         ];
         for (name, label, payload) in cases {
             assert_eq!(resolve_action(label, payload), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn artifact_resolves_only_for_an_existing_absolute_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let file = tmp.path().join("shot.png");
+        std::fs::write(&file, b"x").expect("write artifact file");
+        let existing = file.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_artifact(Some(existing.as_str())),
+            Some(existing.as_str()),
+            "an existing absolute path must be kept"
+        );
+
+        let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
+        let cases = [
+            ("missing path", Some(missing.as_str())),
+            ("relative path", Some("shot.png")),
+            ("url payload", Some("https://example.com")),
+            ("no artifact", None),
+        ];
+        for (name, artifact) in cases {
+            assert_eq!(resolve_artifact(artifact), None, "{name}");
         }
     }
 

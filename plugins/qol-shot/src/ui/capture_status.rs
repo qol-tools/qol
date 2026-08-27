@@ -12,7 +12,7 @@ pub(crate) struct CaptureStatus {
     tone: ToastTone,
     timeout: Option<Duration>,
     layout: ToastLayout,
-    saved_file: Option<(PathBuf, u32, u32)>,
+    saved_file: Option<PathBuf>,
 }
 
 impl CaptureStatus {
@@ -53,8 +53,8 @@ impl CaptureStatus {
         self
     }
 
-    pub(crate) fn saved_file(mut self, path: PathBuf, width: u32, height: u32) -> Self {
-        self.saved_file = Some((path, width, height));
+    pub(crate) fn saved_file(mut self, path: PathBuf) -> Self {
+        self.saved_file = Some(path);
         self
     }
 
@@ -64,18 +64,7 @@ impl CaptureStatus {
             .group("qol-shot")
             .key(self.context);
         let toast = match self.saved_file {
-            Some((path, width, height)) => {
-                let artifact = path.clone();
-                let folder = path.clone();
-                toast
-                    .detail_path(path.to_string_lossy().into_owned())
-                    .preview(path, width, height)
-                    .on_activate(move |_| {
-                        qol_apps::desktop_integration::open_with_default_app(&artifact)?;
-                        Ok(())
-                    })
-                    .on_folder(move |_| crate::capture::completion::reveal(&folder))
-            }
+            Some(path) => toast.artifact(path),
             None => toast,
         };
         match self.timeout {

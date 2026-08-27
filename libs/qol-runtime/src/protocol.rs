@@ -67,6 +67,10 @@ pub enum RuntimeRequest {
         action_label: Option<String>,
         #[serde(default)]
         action_payload: Option<String>,
+        /// Absolute path of the file this notification is about; the host
+        /// previews it and wires the row to open the file and reveal its folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layout: Option<NotificationLayout>,
     },
@@ -266,6 +270,7 @@ mod tests {
             level: NotificationLevel::Info,
             action_label: None,
             action_payload: None,
+            artifact: None,
             layout: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
@@ -279,6 +284,7 @@ mod tests {
             level,
             action_label,
             action_payload,
+            artifact,
             layout,
         } = serde_json::from_str(&wire).expect("deserialize")
         else {
@@ -290,6 +296,7 @@ mod tests {
         assert_eq!(level, NotificationLevel::Info);
         assert_eq!(action_label, None);
         assert_eq!(action_payload, None);
+        assert_eq!(artifact, None);
         assert_eq!(layout, None);
     }
 
@@ -302,6 +309,7 @@ mod tests {
             level: NotificationLevel::Info,
             action_label: Some("Open Folder".to_string()),
             action_payload: Some("/home/u/Videos/qol-shot.mp4".to_string()),
+            artifact: None,
             layout: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
@@ -327,6 +335,29 @@ mod tests {
     }
 
     #[test]
+    fn push_notification_with_artifact_round_trips() {
+        let request = RuntimeRequest::PushNotification {
+            plugin_id: "plugin-shot".to_string(),
+            title: "Screenshot saved".to_string(),
+            body: "shot.png".to_string(),
+            level: NotificationLevel::Info,
+            action_label: None,
+            action_payload: None,
+            artifact: Some("/home/u/Pictures/shot.png".to_string()),
+            layout: None,
+        };
+        let wire = serde_json::to_string(&request).expect("serialize");
+        assert!(wire.contains("\"artifact\":\"/home/u/Pictures/shot.png\""));
+
+        let RuntimeRequest::PushNotification { artifact, .. } =
+            serde_json::from_str(&wire).expect("deserialize")
+        else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(artifact.as_deref(), Some("/home/u/Pictures/shot.png"));
+    }
+
+    #[test]
     fn push_notification_defaults_body_and_level_when_missing() {
         let wire = r#"{"cmd":"push_notification","plugin_id":"plugin-foo","title":"Hi"}"#;
         let RuntimeRequest::PushNotification {
@@ -334,6 +365,7 @@ mod tests {
             level,
             action_label,
             action_payload,
+            artifact,
             layout,
             ..
         } = serde_json::from_str(wire).expect("deserialize")
@@ -344,6 +376,7 @@ mod tests {
         assert_eq!(level, NotificationLevel::Info);
         assert_eq!(action_label, None);
         assert_eq!(action_payload, None);
+        assert_eq!(artifact, None);
         assert_eq!(layout, None);
     }
 
@@ -356,6 +389,7 @@ mod tests {
             level: NotificationLevel::Info,
             action_label: None,
             action_payload: None,
+            artifact: None,
             layout: Some(NotificationLayout {
                 anchor: Some("bottom-right".to_string()),
                 width: Some(400.0),

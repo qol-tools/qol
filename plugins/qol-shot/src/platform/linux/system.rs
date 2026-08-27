@@ -43,6 +43,7 @@ pub fn show_saved_notification(
         message,
         NotificationLevel::Info,
         Some(("Open Folder", &payload)),
+        Some(&payload),
         Some(crate::capture::completion::corner_toast_layout()),
     ) {
         return;

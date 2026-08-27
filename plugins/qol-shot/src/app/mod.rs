@@ -644,7 +644,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     CAPTURE_STATUS_TIMEOUT,
                 )
                 .tone(qol_gpui::toast::ToastTone::Success)
-                .saved_file(path.to_path_buf(), 0, 0),
+                .saved_file(path.to_path_buf()),
                 None => crate::ui::capture_status::CaptureStatus::timed(
                     "recording",
                     "delayed",

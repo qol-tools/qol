@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod color_wheel;
 pub mod command_loop;
 pub mod dropdown;

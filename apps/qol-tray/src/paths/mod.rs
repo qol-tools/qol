@@ -83,6 +83,11 @@ pub fn is_safe_path_component(s: &str) -> bool {
     qol_plugin_api::manifest::is_valid_safe_identifier(s)
 }
 
+pub fn is_existing_absolute_path(candidate: &str) -> bool {
+    let path = std::path::Path::new(candidate);
+    path.is_absolute() && path.exists()
+}
+
 fn legacy_config_dir() -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(root) = test_path_root() {

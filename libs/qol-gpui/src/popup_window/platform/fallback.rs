@@ -43,6 +43,10 @@ pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }
 
+pub fn pointer_over_window_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn make_override_redirect(_title: &str) -> bool {
     false
 }

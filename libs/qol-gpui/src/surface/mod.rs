@@ -126,6 +126,7 @@ pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
     placement: MonitorPlacement,
+    bounds: Bounds<Pixels>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -190,6 +191,14 @@ impl SurfaceDismisser {
         self.state.size.set(size);
         self.state.expected_viewport.set(size);
         true
+    }
+
+    pub fn reposition_window(&self, origin: Point<Pixels>) -> bool {
+        crate::popup_window::reposition_window_by_title(
+            &self.current_title(),
+            origin.x.to_f64(),
+            origin.y.to_f64(),
+        )
     }
 
     pub(crate) fn current_title(&self) -> String {
@@ -457,7 +466,10 @@ impl Surface {
                 PendingReveal {
                     handle,
                     title: title.clone(),
-                    origin: bounds.origin,
+                    anchor: RevealAnchor {
+                        placement: self.placement,
+                        bounds,
+                    },
                     visible: visible.clone(),
                     reveal_pending: reveal_pending.clone(),
                     fresh_frame: fresh_frame.expect("fresh frame was scheduled"),
@@ -471,6 +483,7 @@ impl Surface {
             handle,
             dismisser,
             placement: self.placement,
+            bounds,
             constrains_size,
             visible,
             reveal_pending,
@@ -543,10 +556,22 @@ fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
         || crate::popup_window::set_window_fixed_size_by_title(title, size)
 }
 
+#[derive(Clone, Copy)]
+struct RevealAnchor {
+    placement: MonitorPlacement,
+    bounds: Bounds<Pixels>,
+}
+
+impl RevealAnchor {
+    fn origin_for(self, content: Size<Pixels>) -> Point<Pixels> {
+        self.placement.resized(self.bounds, content).origin
+    }
+}
+
 struct PendingReveal<V: Render + 'static> {
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
-    origin: Point<Pixels>,
+    anchor: RevealAnchor,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
     fresh_frame: FreshFrame,
@@ -558,7 +583,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
     let PendingReveal {
         handle,
         title,
-        origin,
+        anchor,
         visible,
         reveal_pending,
         fresh_frame,
@@ -570,7 +595,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             cx,
             handle,
             &title,
-            origin,
+            anchor,
             &fresh_frame,
             &dismiss_state,
             dismiss_generation,
@@ -712,7 +737,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             reposition_reveal_window(
                 reveal.geometry_session.as_ref(),
                 &title,
-                origin,
+                anchor.origin_for(dismiss_state.size.get()),
             );
         }
     })
@@ -890,7 +915,7 @@ async fn await_reveal_readiness<V: Render + 'static>(
     cx: &mut AsyncApp,
     handle: WindowHandle<SurfaceRoot<V>>,
     title: &str,
-    origin: Point<Pixels>,
+    anchor: RevealAnchor,
     fresh_frame: &FreshFrame,
     dismiss_state: &DismissState,
     dismiss_generation: u64,
@@ -938,7 +963,11 @@ async fn await_reveal_readiness<V: Render + 'static>(
                 };
             }
         }
-        readiness.moved |= reposition_reveal_window(geometry_session.as_ref(), title, origin);
+        readiness.moved |= reposition_reveal_window(
+            geometry_session.as_ref(),
+            title,
+            anchor.origin_for(dismiss_state.size.get()),
+        );
         readiness.layout_confirmed = fresh_frame.layout_confirmed();
         readiness.viewport_ready = fresh_frame.viewport_ready();
         readiness.fresh_frame = fresh_frame.presented();
@@ -990,6 +1019,16 @@ fn reposition_reveal_window(
         },
         |session| session.reposition(origin.x.to_f64() as i32, origin.y.to_f64() as i32),
     )
+}
+
+impl<V> OpenedSurface<V> {
+    pub(crate) fn anchored_origin(&self, content: Size<Pixels>) -> Point<Pixels> {
+        RevealAnchor {
+            placement: self.placement,
+            bounds: self.bounds,
+        }
+        .origin_for(content)
+    }
 }
 
 impl<V: Render + Focusable + 'static> OpenedSurface<V> {
@@ -1053,7 +1092,10 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 PendingReveal {
                     handle: self.handle,
                     title,
-                    origin: bounds.origin,
+                    anchor: RevealAnchor {
+                        placement: self.placement,
+                        bounds,
+                    },
                     visible: self.visible.clone(),
                     reveal_pending: self.reveal_pending.clone(),
                     fresh_frame,
@@ -1094,7 +1136,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
     let PendingReveal {
         handle,
         title,
-        origin,
+        anchor,
         visible,
         reveal_pending,
         fresh_frame,
@@ -1106,7 +1148,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             cx,
             handle,
             &title,
-            origin,
+            anchor,
             &fresh_frame,
             &dismiss_state,
             dismiss_generation,

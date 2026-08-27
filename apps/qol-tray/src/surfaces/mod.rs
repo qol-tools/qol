@@ -7,6 +7,7 @@ pub fn show_plugin_notification(
     body: &str,
     level: NotificationLevel,
     action: Option<(&str, &str)>,
+    artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) {
     let system_notifications = crate::features::notifications::use_system_notifications();
@@ -16,6 +17,7 @@ pub fn show_plugin_notification(
             body,
             notification_level_name(level),
             action,
+            artifact,
             layout,
         )
         .unwrap_or(false);

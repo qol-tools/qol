@@ -44,9 +44,10 @@ pub fn show_toast(
     body: &str,
     level: &str,
     action: Option<(&str, &str)>,
+    artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) -> anyhow::Result<bool> {
-    platform::show_toast(title, body, level, action, layout)
+    platform::show_toast(title, body, level, action, artifact, layout)
 }
 
 pub fn prewarm() {

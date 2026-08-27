@@ -25,14 +25,13 @@ const HEADER_HEIGHT: f32 = 30.0;
 const SUMMARY_HEIGHT: f32 = 36.0;
 const LIVE_BAND_HEIGHT: f32 = 20.0;
 const PREVIEW_WIDTH: f32 = 72.0;
-const FOLDER_WIDTH: f32 = 64.0;
 const DISMISS_WIDTH: f32 = 44.0;
 const GUTTER: f32 = 8.0;
+const PREVIEW_EDGE: f32 = 3.0;
 const TEXT_PAD: f32 = 16.0;
-const PREVIEW_SLOT_WIDTH: u32 = 72;
-const PREVIEW_SLOT_HEIGHT: u32 = 68;
 const MAX_ROWS_PER_GROUP: usize = 3;
 const MAX_VISIBLE_NON_LIVE_ROWS: usize = 4;
+const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);
 
 static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -150,6 +149,7 @@ fn tone_glyph(tone: ToastTone) -> &'static str {
     }
 }
 
+#[derive(Clone)]
 pub struct Toast {
     title: SharedString,
     message: SharedString,
@@ -161,42 +161,9 @@ pub struct Toast {
     timeout_explicit: bool,
     group: SharedString,
     key: Option<SharedString>,
-    preview: Option<(Arc<std::path::Path>, ObjectFit)>,
-    folder: Option<Activation>,
+    preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
+    preview_action: Option<Activation>,
     live: bool,
-}
-
-impl Clone for Toast {
-    fn clone(&self) -> Self {
-        Self {
-            title: self.title.clone(),
-            message: self.message.clone(),
-            tone: self.tone,
-            layout: self.layout,
-            timeout: self.timeout,
-            activation: self.activation.clone(),
-            message_is_path: self.message_is_path,
-            timeout_explicit: self.timeout_explicit,
-            group: self.group.clone(),
-            key: self.key.clone(),
-            preview: self
-                .preview
-                .as_ref()
-                .map(|(path, object_fit)| (path.clone(), duplicate_object_fit(object_fit))),
-            folder: self.folder.clone(),
-            live: self.live,
-        }
-    }
-}
-
-fn duplicate_object_fit(object_fit: &ObjectFit) -> ObjectFit {
-    match object_fit {
-        ObjectFit::Fill => ObjectFit::Fill,
-        ObjectFit::Contain => ObjectFit::Contain,
-        ObjectFit::Cover => ObjectFit::Cover,
-        ObjectFit::ScaleDown => ObjectFit::ScaleDown,
-        ObjectFit::None => ObjectFit::None,
-    }
 }
 
 impl Toast {
@@ -217,7 +184,7 @@ impl Toast {
             group: "".into(),
             key: None,
             preview: None,
-            folder: None,
+            preview_action: None,
             live: false,
         }
     }
@@ -263,32 +230,28 @@ impl Toast {
         self
     }
 
-    pub fn preview(
-        mut self,
-        path: impl Into<Arc<std::path::Path>>,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        let object_fit = if width < PREVIEW_SLOT_WIDTH || height < PREVIEW_SLOT_HEIGHT {
-            ObjectFit::ScaleDown
-        } else {
-            ObjectFit::Cover
-        };
-        self.preview = Some((path.into(), object_fit));
-        self
-    }
-
     pub fn live(mut self) -> Self {
         self.live = true;
         self
     }
 
-    pub fn on_folder(
+    pub fn on_preview(
         mut self,
         activation: impl Fn(&mut App) -> anyhow::Result<()> + 'static,
     ) -> Self {
-        self.folder = Some(Rc::new(activation));
+        self.preview_action = Some(Rc::new(activation));
         self
+    }
+
+    pub fn artifact(self, path: impl Into<std::path::PathBuf>) -> Self {
+        let path: Arc<std::path::Path> = path.into().into();
+        let open = path.clone();
+        let reveal = path.clone();
+        let mut toast = self.detail_path(path.to_string_lossy().into_owned());
+        toast.preview = Some(crate::artifact::preview_for(&path));
+        toast
+            .on_preview(move |_| crate::artifact::open_artifact(&open))
+            .on_activate(move |_| crate::artifact::reveal_artifact(&reveal))
     }
 
     pub fn element(&self) -> Div {
@@ -517,8 +480,6 @@ struct HostState {
     rows: Vec<ToastRow>,
     next_id: u64,
     next_generation: u64,
-    hovered: bool,
-    queued_removals: Vec<RowId>,
     expanded: bool,
 }
 
@@ -553,8 +514,6 @@ impl SlabPresenter {
                 rows: Vec::new(),
                 next_id: 0,
                 next_generation: 0,
-                hovered: false,
-                queued_removals: Vec::new(),
                 expanded: false,
             })),
             title: title.into(),
@@ -650,7 +609,6 @@ impl SlabPresenter {
                     Err(error) => {
                         let mut state = self.state.borrow_mut();
                         state.rows.clear();
-                        state.queued_removals.clear();
                         state.expanded = false;
                         return Err(error);
                     }
@@ -669,7 +627,6 @@ impl SlabPresenter {
         {
             let mut state = self.state.borrow_mut();
             state.rows.clear();
-            state.queued_removals.clear();
         }
         self.close(cx);
     }
@@ -685,21 +642,6 @@ impl SlabPresenter {
                 .collect()
         };
         self.drop_rows(&ids, cx);
-    }
-
-    fn set_hovered(&self, hovered: bool, cx: &mut App) {
-        let drained = {
-            let mut state = self.state.borrow_mut();
-            state.hovered = hovered;
-            if hovered {
-                Vec::new()
-            } else {
-                std::mem::take(&mut state.queued_removals)
-            }
-        };
-        for id in drained {
-            self.remove(id, cx);
-        }
     }
 
     fn toggle_expanded(&self, cx: &mut App) {
@@ -728,41 +670,32 @@ impl SlabPresenter {
     }
 
     fn activate(&self, id: RowId, cx: &mut App) {
-        let activation = {
-            let state = self.state.borrow();
-            state
-                .rows
-                .iter()
-                .find(|row| row.id == id)
-                .and_then(|row| row.toast.activation.clone())
-        };
-        let Some(activation) = activation else {
-            return;
-        };
-        match activation(cx) {
-            Ok(()) => self.remove(id, cx),
-            Err(error) => self.mark_row_failed(id, error, cx),
-        }
+        self.run(id, |toast| toast.activation.clone(), cx);
     }
 
-    fn run_folder(&self, id: RowId, cx: &mut App) {
+    fn open_preview(&self, id: RowId, cx: &mut App) {
+        self.run(id, |toast| toast.preview_action.clone(), cx);
+    }
+
+    fn run(&self, id: RowId, pick: impl Fn(&Toast) -> Option<Activation>, cx: &mut App) {
         let action = {
             let state = self.state.borrow();
             state
                 .rows
                 .iter()
                 .find(|row| row.id == id)
-                .and_then(|row| row.toast.folder.clone())
+                .and_then(|row| pick(&row.toast))
         };
         let Some(action) = action else {
             return;
         };
-        if let Err(error) = action(cx) {
-            self.mark_row_failed(id, error, cx);
+        match action(cx) {
+            Ok(()) => self.remove(id, cx),
+            Err(error) => self.mark_row_failed(id, error, cx),
         }
     }
 
-    fn on_timer(&self, id: RowId, generation: u64, cx: &mut App) {
+    fn on_timer(&self, id: RowId, generation: u64, pointer_inside: bool, cx: &mut App) {
         let owned = {
             let state = self.state.borrow();
             state
@@ -773,9 +706,8 @@ impl SlabPresenter {
         if !owned {
             return;
         }
-        let hovered = self.state.borrow().hovered;
-        if hovered {
-            self.state.borrow_mut().queued_removals.push(id);
+        if pointer_inside {
+            arm_timer(self.clone(), id, generation, HOVER_HOLD_RECHECK, cx);
         } else {
             self.remove(id, cx);
         }
@@ -789,7 +721,6 @@ impl SlabPresenter {
         let remains_empty = {
             let mut state = self.state.borrow_mut();
             state.rows.retain(|row| !ids.contains(&row.id));
-            state.queued_removals.retain(|queued| !ids.contains(queued));
             state.rows.is_empty()
         };
         if remains_empty {
@@ -803,7 +734,6 @@ impl SlabPresenter {
         {
             let mut state = self.state.borrow_mut();
             state.expanded = false;
-            state.queued_removals.clear();
         }
         if let Some(surface) = self.state.borrow_mut().surface.take() {
             surface.dismisser.dismiss(cx);
@@ -830,6 +760,14 @@ impl SlabPresenter {
             })
             .collect();
         (rows, state.expanded)
+    }
+
+    fn anchored_origin(&self, content: Size<Pixels>) -> Option<Point<Pixels>> {
+        self.state
+            .borrow()
+            .surface
+            .as_ref()
+            .map(|surface| surface.anchored_origin(content))
     }
 }
 
@@ -923,7 +861,13 @@ fn arm_timer(
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         cx.background_executor().timer(timeout).await;
-        let _ = cx.update(|cx| presenter.on_timer(id, generation, cx));
+        let title = presenter.title.to_string();
+        let pointer_inside = cx
+            .background_spawn(
+                async move { crate::popup_window::pointer_over_window_by_title(&title) },
+            )
+            .await;
+        let _ = cx.update(|cx| presenter.on_timer(id, generation, pointer_inside, cx));
     })
     .detach();
 }
@@ -966,8 +910,13 @@ impl Render for SlabToastView {
             header_shown,
             summary_shown,
         );
-        self.dismisser
-            .resize_window(size(px(SLAB_WIDTH), px(height)), window);
+        let target = size(px(SLAB_WIDTH), px(height));
+        let grown = window.bounds().size != target && self.dismisser.resize_window(target, window);
+        if grown {
+            if let Some(origin) = self.host.anchored_origin(target) {
+                self.dismisser.reposition_window(origin);
+            }
+        }
 
         let mut contents: Vec<AnyElement> = Vec::new();
         if header_shown {
@@ -987,11 +936,7 @@ impl Render for SlabToastView {
             contents.push(summary_row(hidden_count, palette, self.host.clone()).into_any_element());
         }
 
-        let host = self.host.clone();
-        slab_root(palette)
-            .id("toast-slab-root")
-            .on_hover(move |entered, _, cx| host.set_hovered(*entered, cx))
-            .children(contents)
+        slab_root(palette).children(contents)
     }
 }
 
@@ -1071,7 +1016,6 @@ fn summary_row(hidden_count: usize, palette: ToastPalette, host: SlabPresenter) 
 }
 
 fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> Div {
-    let id = row.id;
     let mut container = div()
         .flex_none()
         .h(px(ROW_HEIGHT))
@@ -1083,53 +1027,45 @@ fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresent
     } else if row.toast.tone == ToastTone::Danger {
         container = container.bg(rgba(crate::kit::alpha(palette.danger, 26)));
     }
-
-    let open_parts = open_zone_parts(row, palette);
-    let mut container = if row.toast.activation.is_some() {
-        let host_for_click = host.clone();
-        container.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_row()
-                .children(open_parts)
-                .id(("toast-open", id.0))
-                .cursor_pointer()
-                .hover(move |mut style| {
-                    style.background = Some(rgb(palette.surface_hovered).into());
-                    style
-                })
-                .on_click(move |_, _, cx| host_for_click.activate(id, cx)),
-        )
-    } else {
-        container.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_row()
-                .children(open_parts),
-        )
-    };
-
-    if row.toast.folder.is_some() {
-        container = container.child(gutter());
-        container = container.child(folder_control(row, palette, host.clone()));
-    }
-
-    container = container.child(gutter());
-    container = container.child(dismiss_control(row, palette, host));
     container
+        .child(preview_zone(row, palette, host.clone()))
+        .child(text_zone(row, palette, host.clone()))
+        .child(gutter())
+        .child(dismiss_control(row, palette, host))
 }
 
-fn open_zone_parts(row: &SlabSnapshotRow, palette: ToastPalette) -> Vec<AnyElement> {
-    vec![
-        preview_slot(row, palette).into_any_element(),
-        text_column(row, palette).into_any_element(),
-    ]
+fn preview_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> AnyElement {
+    let slot = preview_slot(row, palette);
+    if row.toast.preview_action.is_none() {
+        return slot.into_any_element();
+    }
+    let id = row.id;
+    slot.id(("toast-preview", id.0))
+        .cursor_pointer()
+        .hover(move |mut style| {
+            style.background = Some(rgb(palette.surface_hovered).into());
+            style.opacity = Some(0.8);
+            style
+        })
+        .on_click(move |_, _, cx| host.open_preview(id, cx))
+        .into_any_element()
+}
+
+fn text_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> AnyElement {
+    let column = text_column(row, palette);
+    if row.toast.activation.is_none() {
+        return column.into_any_element();
+    }
+    let id = row.id;
+    column
+        .id(("toast-open", id.0))
+        .cursor_pointer()
+        .hover(move |mut style| {
+            style.background = Some(rgb(palette.surface_hovered).into());
+            style
+        })
+        .on_click(move |_, _, cx| host.activate(id, cx))
+        .into_any_element()
 }
 
 fn gutter() -> Div {
@@ -1138,22 +1074,13 @@ fn gutter() -> Div {
 
 fn preview_slot(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
     let tone_color = row.toast.tone.color(palette);
-    let mut slot = div()
-        .flex_none()
-        .w(px(PREVIEW_WIDTH))
-        .h_full()
-        .overflow_hidden();
+    let mut content = div().flex_1().min_w_0().h_full().overflow_hidden();
     match &row.toast.preview {
-        Some((path, object_fit)) => {
-            slot = slot.child(
-                img(path.clone())
-                    .w_full()
-                    .h_full()
-                    .object_fit(duplicate_object_fit(object_fit)),
-            );
+        Some(preview) => {
+            content = content.child(preview.render(tone_color));
         }
         None => {
-            slot = slot
+            content = content
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1167,13 +1094,28 @@ fn preview_slot(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
                 );
         }
     }
-    slot
+    div()
+        .flex_none()
+        .w(px(PREVIEW_WIDTH))
+        .h_full()
+        .flex()
+        .flex_row()
+        .overflow_hidden()
+        .child(
+            div()
+                .flex_none()
+                .w(px(PREVIEW_EDGE))
+                .h_full()
+                .bg(rgb(tone_color)),
+        )
+        .child(content)
 }
 
 fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
     let mut column = div()
         .flex_1()
         .min_w_0()
+        .overflow_hidden()
         .h_full()
         .flex()
         .flex_col()
@@ -1224,38 +1166,12 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
         )
         .child(
             div()
-                .flex_none()
+                .min_w_0()
+                .truncate()
                 .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_secondary))
                 .child(SharedString::from(tail)),
         )
-}
-
-fn folder_control(
-    row: &SlabSnapshotRow,
-    palette: ToastPalette,
-    host: SlabPresenter,
-) -> Stateful<Div> {
-    let id = row.id;
-    div()
-        .id(("toast-folder", id.0))
-        .flex_none()
-        .w(px(FOLDER_WIDTH))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .text_size(px(qol_theme::TEXT_NANO))
-        .text_color(rgb(palette.text_secondary))
-        .hover(move |mut style| {
-            style.background = Some(rgb(palette.surface_hovered).into());
-            style.text.get_or_insert_with(Default::default).color =
-                Some(rgb(palette.accent).into());
-            style
-        })
-        .child(SharedString::from("Folder"))
-        .on_click(move |_, _, cx| host.run_folder(id, cx))
 }
 
 fn dismiss_control(
@@ -1570,46 +1486,6 @@ mod tests {
         assert!(persistent_info.timeout_explicit);
         let reinstated = persistent_info.timeout(Duration::from_secs(9));
         assert_eq!(reinstated.effective_timeout(), Some(Duration::from_secs(9)));
-    }
-
-    #[test]
-    fn preview_object_fit_scales_down_only_below_the_slot() {
-        let smaller_width = Toast::new("t", "m", ToastLayout::status()).preview(
-            std::path::Path::new("/tmp/a.png"),
-            71,
-            68,
-        );
-        assert!(matches!(
-            smaller_width.preview.expect("preview stored").1,
-            gpui::ObjectFit::ScaleDown
-        ));
-        let smaller_height = Toast::new("t", "m", ToastLayout::status()).preview(
-            std::path::Path::new("/tmp/b.png"),
-            72,
-            67,
-        );
-        assert!(matches!(
-            smaller_height.preview.expect("preview stored").1,
-            gpui::ObjectFit::ScaleDown
-        ));
-        let exactly_slot = Toast::new("t", "m", ToastLayout::status()).preview(
-            std::path::Path::new("/tmp/c.png"),
-            72,
-            68,
-        );
-        assert!(matches!(
-            exactly_slot.preview.expect("preview stored").1,
-            gpui::ObjectFit::Cover
-        ));
-        let larger = Toast::new("t", "m", ToastLayout::status()).preview(
-            std::path::Path::new("/tmp/d.png"),
-            300,
-            400,
-        );
-        assert!(matches!(
-            larger.preview.expect("preview stored").1,
-            gpui::ObjectFit::Cover
-        ));
     }
 
     #[test]

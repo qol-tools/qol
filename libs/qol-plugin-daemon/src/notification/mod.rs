@@ -17,7 +17,14 @@ pub fn send_notification_with_layout(
     layout: Option<NotificationLayout>,
 ) {
     let client = qol_runtime::PlatformStateClient::from_env();
-    if client.send_notification_with_layout(title, message, NotificationLevel::Info, None, layout) {
+    if client.send_notification_with_layout(
+        title,
+        message,
+        NotificationLevel::Info,
+        None,
+        None,
+        layout,
+    ) {
         return;
     }
     if platform::send_notification(title, message) {
