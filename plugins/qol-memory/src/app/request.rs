@@ -18,6 +18,7 @@ pub fn handle(state: &mut Arc<Mutex<WarmState>>, request: &DaemonRequest) -> Rea
         "status" => status(state),
         "continue" => continue_request(state, &request.input),
         "capture" => capture(state, &request.input),
+        "rows" => rows(state, &request.input),
         "reindex" => reindex(state),
         _ => return ReadResult::Fallback,
     };
@@ -95,6 +96,34 @@ fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         .unwrap_or_default()
         .to_string();
     Ok(json!({ "appended": appended, "key": key }))
+}
+
+fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
+    let query = string_field(input, "query", "rows")?.trim().to_string();
+    if query.is_empty() {
+        anyhow::bail!("rows: input.query must not be empty");
+    }
+    let req = AskRequest {
+        query,
+        k: DEFAULT_ASK_K,
+        brief: false,
+        exclude_session: None,
+    };
+    let log = LogOptions {
+        source: "launcher".to_string(),
+        cwd: None,
+        fact: None,
+        no_log: false,
+    };
+    let mut warm = lock_state(state);
+    let (store, aliases, units, notes) = warm.views()?;
+    let output = crate::ask::run_and_log_with_layers(store, aliases, &req, &log, units, notes)?;
+    let flow_rows = crate::ask::rows::from_output(&output, units, notes);
+    Ok(json!({
+        "verdict": output.verdict,
+        "confidence": output.confidence,
+        "rows": flow_rows,
+    }))
 }
 
 fn reindex(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
@@ -347,6 +376,66 @@ mod tests {
         assert_eq!(value["verdict"], "answered");
         assert_eq!(value["answer"]["layer"], "unit");
         assert_eq!(value["answer"]["source_kind"], "capture");
+    }
+
+    #[test]
+    fn request_rows_returns_the_answer_row_first() {
+        let fillers = [
+            unit_value(
+                "filler-01",
+                "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            ),
+            unit_value(
+                "filler-02",
+                "oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu bakery candle",
+            ),
+            unit_value(
+                "filler-03",
+                "dragon engine forest garden hammer island jacket kettle lantern mountain noodle ocean pillow quilt",
+            ),
+            unit_value(
+                "filler-04",
+                "river saddle tunnel umbrella violin window yogurt bacon donut ember falcon gravel hazel ivory",
+            ),
+        ];
+        let mut state = warm_state("rows-answer", &fillers);
+        let text =
+            "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
+        let ReadResult::HandledWithData(_) = respond(
+            &mut state,
+            "capture",
+            json!({ "text": text, "cwd": "/tmp/proj" }),
+        ) else {
+            panic!("capture must answer with data for action `capture`");
+        };
+        let ReadResult::HandledWithData(value) =
+            respond(&mut state, "rows", json!({ "query": text }))
+        else {
+            panic!("rows must answer with data for action `rows`");
+        };
+        assert_eq!(value["verdict"], "answered");
+        let rows = value["rows"].as_array().expect("rows array");
+        assert_eq!(rows[0]["kind"], "answer");
+        assert_eq!(rows[0]["title"], crate::ask::rows::title_of(text));
+    }
+
+    #[test]
+    fn request_rows_rejects_empty_query() {
+        let mut state = warm_state("rows-empty", &[]);
+        let result = respond(&mut state, "rows", json!({ "query": "   " }));
+        assert!(
+            matches!(
+                result,
+                ReadResult::Error(message) if message == "rows: input.query must not be empty"
+            ),
+            "whitespace-only query must be rejected"
+        );
+
+        let result = respond(&mut state, "rows", json!({}));
+        assert!(
+            matches!(result, ReadResult::Error(message) if message.contains("input.query")),
+            "missing query must name the field"
+        );
     }
 
     #[test]

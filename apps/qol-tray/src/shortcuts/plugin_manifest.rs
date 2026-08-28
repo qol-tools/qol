@@ -169,6 +169,7 @@ mod tests {
                 traits: None,
                 config: ConfigDeclarations::default(),
                 shortcuts,
+                launcher: None,
             },
             PathBuf::from(format!("/tmp/{id}")),
             PluginSource::Installed,

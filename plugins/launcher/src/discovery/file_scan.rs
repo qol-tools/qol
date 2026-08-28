@@ -213,7 +213,7 @@ fn is_backup_directory_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{minimal_changed_paths, refresh_files, scan_files, FileEntry};
-    use crate::discovery::search::{filtered, Fuzziness, SearchMode};
+    use crate::discovery::search::{filtered, EntrySlices, Fuzziness, SearchMode};
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
@@ -390,8 +390,11 @@ mod tests {
         let files = scan_files(vec![root]);
 
         let results = filtered(
-            &[],
-            &files,
+            EntrySlices {
+                apps: &[],
+                files: &files,
+                flows: &[],
+            },
             "budget",
             SearchMode::Files,
             Fuzziness::Balanced,

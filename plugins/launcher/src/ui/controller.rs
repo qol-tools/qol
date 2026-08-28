@@ -1,8 +1,12 @@
-use gpui::{ClipboardItem, Context, KeyDownEvent};
+use std::time::Duration;
+
+use gpui::{AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
 
 use super::input::InputEffect;
 use super::trace;
 use super::LauncherView;
+
+const FLOW_DEBOUNCE: Duration = Duration::from_millis(80);
 
 enum ClipboardShortcut {
     Copy,
@@ -26,9 +30,16 @@ impl LauncherView {
         if self.handle_clipboard_shortcut(key, secondary, cx) {
             return;
         }
-        self.store
-            .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
-        let result_count = self.store.result_count();
+        let flow_active = self.state.flow.is_some();
+        if !flow_active {
+            self.store
+                .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+        }
+        let result_count = if flow_active {
+            self.state.flow_result_count()
+        } else {
+            self.store.result_count()
+        };
         let selected_before = self.state.scroll_list.selected;
         let effect = self
             .state
@@ -58,6 +69,11 @@ impl LauncherView {
                 self.state.reset_results_position();
                 self.schedule_query_render(cx);
             }
+            InputEffect::FlowQueryChanged => {
+                self.state.clear_launch_error();
+                self.state.reset_results_position();
+                self.schedule_flow_query(cx);
+            }
             InputEffect::BoostUp | InputEffect::BoostDown => {
                 let delta = if matches!(effect, InputEffect::BoostUp) {
                     25
@@ -76,6 +92,12 @@ impl LauncherView {
             }
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => self.hide_to_ghost("key", window),
+            InputEffect::FlowExit => {
+                self.state.exit_flow();
+                trace::flow(self, "exited");
+                cx.notify();
+            }
+            InputEffect::FlowActivate => self.activate_flow_row(window, cx),
         }
     }
 
@@ -174,6 +196,12 @@ impl LauncherView {
             eprintln!("[controller] launch_selected: failed to resolve item");
             return;
         };
+        if let crate::discovery::search::ResultItem::Flow(entry) = item {
+            self.state.enter_flow(entry.clone());
+            trace::flow(self, "entered");
+            cx.notify();
+            return;
+        }
         let is_app = matches!(scored.source, crate::discovery::search::ResultSource::App);
         let name = self.store.name(scored).to_string();
         eprintln!("[controller] launching item...");
@@ -191,5 +219,90 @@ impl LauncherView {
             self.store.record_launch(&name);
         }
         self.hide_to_ghost("launch", window);
+    }
+
+    fn schedule_flow_query(&mut self, cx: &mut Context<Self>) {
+        let Some(flow) = self.state.flow.as_mut() else {
+            return;
+        };
+        flow.generation += 1;
+        flow.pending = true;
+        let generation = flow.generation;
+        let entry = flow.entry.clone();
+        let text = self.state.query.clone();
+        if text.trim().is_empty() {
+            flow.rows.clear();
+            flow.pending = false;
+            cx.notify();
+            return;
+        }
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx.background_executor().timer(FLOW_DEBOUNCE).await;
+                let should_fetch = this
+                    .update(&mut async_cx, |view, _cx| {
+                        let current = view
+                            .state
+                            .flow
+                            .as_ref()
+                            .is_some_and(|session| session.generation == generation);
+                        if current {
+                            trace::flow(view, "queried");
+                        }
+                        current
+                    })
+                    .unwrap_or(false);
+                if !should_fetch {
+                    return;
+                }
+                let outcome = async_cx
+                    .background_spawn(async move { crate::flow::fetch_rows(&entry, &text) })
+                    .await;
+                this.update(&mut async_cx, |view, cx| {
+                    let Some(session) = view.state.flow.as_mut() else {
+                        return;
+                    };
+                    if session.generation != generation {
+                        return;
+                    }
+                    let (rows, failure) = match outcome {
+                        Ok(rows) => (rows, None),
+                        Err(message) => (Vec::new(), Some(message)),
+                    };
+                    session.rows = rows;
+                    session.pending = false;
+                    if let Some(message) = failure {
+                        view.state.set_launch_error(message);
+                    }
+                    trace::flow(view, "rows");
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn activate_flow_row(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(flow) = self.state.flow.as_ref() else {
+            return;
+        };
+        let Some(row) = flow.rows.get(self.state.scroll_list.selected) else {
+            return;
+        };
+        let entry = &flow.entry;
+        if !entry.row_actions.is_empty() {
+            if let Err(message) = crate::flow::run_row_action(entry, &entry.row_actions[0], row) {
+                self.state.set_launch_error(message);
+                cx.notify();
+                return;
+            }
+        } else {
+            let text = row.copy.clone().unwrap_or_else(|| row.title.clone());
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+        trace::flow(self, "activated");
+        self.hide_to_ghost("flow", window);
     }
 }

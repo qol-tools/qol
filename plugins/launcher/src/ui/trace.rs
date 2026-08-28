@@ -165,6 +165,34 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
     let _ = (view, from);
 }
 
+pub(super) fn flow(view: &LauncherView, event: &'static str) {
+    #[cfg(debug_assertions)]
+    {
+        let (plugin, rows, generation, pending) = match view.state.flow.as_ref() {
+            Some(session) => (
+                session.entry.plugin_id.as_str(),
+                session.rows.len(),
+                session.generation,
+                session.pending,
+            ),
+            None => ("none", 0, 0, false),
+        };
+        qol_runtime::probe!(
+            "LAUNCHER_FLOW",
+            "event={} plugin={} q=\"{}\" rows={} gen={} pending={}",
+            event,
+            qol_runtime::probe::token(plugin),
+            qol_runtime::probe::quoted(&view.state.query, 120),
+            rows,
+            generation,
+            pending,
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    let _ = (view, event);
+}
+
 pub(super) fn click_away(window_title: &str, state: &str) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
@@ -265,6 +293,9 @@ fn effect_label(effect: InputEffect) -> &'static str {
         InputEffect::Dismiss => "dismiss",
         InputEffect::BoostUp => "boost_up",
         InputEffect::BoostDown => "boost_down",
+        InputEffect::FlowQueryChanged => "flow_query",
+        InputEffect::FlowActivate => "flow_activate",
+        InputEffect::FlowExit => "flow_exit",
     }
 }
 

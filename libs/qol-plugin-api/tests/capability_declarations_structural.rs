@@ -1,4 +1,4 @@
-//! Structural invariants for the restore-rule / pane-fields / launcher-provider
+//! Structural invariants for the restore-rule / pane-fields
 //! capability declarations.
 //!
 //! These tests pin the shape of capability entries that plugins write into
@@ -9,7 +9,7 @@
 //! Refs: workspace/docs/specs/2026-05-12-terminal-workspace-restore-design.md
 //! Closes: CONTRACT-2.
 
-use qol_plugin_api::capability::{LauncherProviderCapability, PaneField, RestoreRuleCapability};
+use qol_plugin_api::capability::{PaneField, RestoreRuleCapability};
 
 #[test]
 fn restore_rule_capability_requires_at_least_one_template() {
@@ -91,19 +91,4 @@ fn pane_field_serializes_to_dotted_lowercase() {
     assert_eq!(v, serde_json::Value::String("foreground.cwd".into()));
     let v = serde_json::to_value(PaneField::Title).unwrap();
     assert_eq!(v, serde_json::Value::String("title".into()));
-}
-
-#[test]
-fn launcher_provider_capability_is_a_marker() {
-    // launcher-provider takes no parameters: presence alone enables the
-    // capability. Extra fields are a malformed manifest.
-    let bare: LauncherProviderCapability = toml::from_str("").expect("bare marker parses");
-    let _ = bare;
-    let with_extra: Result<LauncherProviderCapability, _> =
-        toml::from_str(r#"endpoint = "/launcher-entries""#);
-    assert!(
-        with_extra.is_err(),
-        "LauncherProviderCapability accepted an unknown `endpoint` field. \
-         The marker capability takes no parameters."
-    );
 }

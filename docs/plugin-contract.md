@@ -94,7 +94,8 @@ Sections:
   `"LINUX"`, `" linux"`, `"linux "` silently match nothing, and `[]` means supported nowhere.
 - `[runtime]` (`RuntimeConfig`): `command` (binary basename, same charset as id -
   **no paths, no `.sh`**) and legacy optional
-  `actions: { <action-id> = [argv...] }`.
+  `actions: { <action-id> = [argv...] }`. The host also exposes runtime queries
+  over HTTP as `POST /api/plugins/{id}/queries/{query}` with a JSON body.
 - `[action.<id>]` (`ActionDeclaration`): canonical activation-surface action
   catalog. `label` is required. `kind` defaults to `run` and may be `run`,
   `settings`, or `toggle-config`. `args` supplies runtime argv for `run` and
@@ -112,6 +113,20 @@ Sections:
   `export_to_launcher` (default true), `action` (default `"open"`). `action` must
   reference an existing executable `[action.<id>]` entry when the catalog is
   present, otherwise an existing executable menu action id.
+- `[launcher]` (`LauncherSpec`): optional launcher integration. `kind` is `app`
+  (the default host behavior is unchanged) or `flow` (the launcher keeps focus
+  and runs a runtime query while the user types). `title` is required and names
+  the flow in the list. `prompt` is optional placeholder text shown while the
+  flow query is empty, falling back to `title`. `query` names the runtime query
+  and is required for `kind = "flow"` (and invalid for `kind = "app"`), as are
+  `[[launcher.row_actions]]`. Row actions use the same shape as config row
+  actions (`action`, optional `label` and `input`); each `action` must reference
+  an executable action, and `input` values may use `{field}` templates over the
+  returned row object. The flow query contract: the query must declare a `query`
+  input in `qol-runtime.toml`; it receives `{ "query": "<typed text>" }` and
+  returns an object with a `rows` array whose items carry `title` (required)
+  plus optional strings `subtitle` and `copy`, and any other fields the row
+  action templates use.
 - `[daemon]` (`DaemonConfig`): `enabled`, `command`, optional `socket` (must be an
   **absolute** path, no `..`). Presence with `enabled=true` flips the plugin to the
   host-owned daemon model (section 5).

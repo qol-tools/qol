@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::discovery;
 use crate::frecency::{self, FrequencyData};
+use qol_plugin_api::launcher_flows::FlowEntry;
 
-use super::search::{self, FrecencyConfig, Fuzziness, ResultItem, Scored, SearchMode};
+use super::search::{self, EntrySlices, FrecencyConfig, Fuzziness, ResultItem, Scored, SearchMode};
 #[cfg(debug_assertions)]
 use super::trace::{self, FilterSample};
 
@@ -24,6 +25,7 @@ struct FilterKey {
 pub struct EntryStore {
     app_entries: Arc<Vec<discovery::AppEntry>>,
     file_entries: Arc<Vec<discovery::FileEntry>>,
+    flow_entries: Arc<Vec<FlowEntry>>,
     cache: Vec<Scored>,
     cache_key: Option<FilterKey>,
     filter_history: Vec<(FilterKey, Vec<Scored>)>,
@@ -36,6 +38,7 @@ impl EntryStore {
     pub fn new(
         app_entries: Arc<Vec<discovery::AppEntry>>,
         file_entries: Arc<Vec<discovery::FileEntry>>,
+        flow_entries: Arc<Vec<FlowEntry>>,
     ) -> Self {
         let frecency_path = frecency::default_store_path(qol_conventions::launcher::WINDOW_TITLE);
         let frecency = frecency::load(&frecency_path);
@@ -43,6 +46,7 @@ impl EntryStore {
         Self {
             app_entries,
             file_entries,
+            flow_entries,
             cache: Vec::new(),
             cache_key: None,
             filter_history: Vec::new(),
@@ -122,8 +126,11 @@ impl EntryStore {
         self.cache = if incremental {
             let frecency = self.frecency_config();
             search::filtered_from_candidates(
-                &self.app_entries,
-                &self.file_entries,
+                EntrySlices {
+                    apps: &self.app_entries,
+                    files: &self.file_entries,
+                    flows: &self.flow_entries,
+                },
                 &self.filter_history.last().unwrap().1,
                 query,
                 mode,
@@ -164,14 +171,17 @@ impl EntryStore {
         &mut self,
         app_entries: Arc<Vec<discovery::AppEntry>>,
         file_entries: Arc<Vec<discovery::FileEntry>>,
+        flow_entries: Arc<Vec<FlowEntry>>,
     ) {
         if Arc::ptr_eq(&self.app_entries, &app_entries)
             && Arc::ptr_eq(&self.file_entries, &file_entries)
+            && Arc::ptr_eq(&self.flow_entries, &flow_entries)
         {
             return;
         }
         self.app_entries = app_entries;
         self.file_entries = file_entries;
+        self.flow_entries = flow_entries;
         self.cache.clear();
         self.cache_key = None;
         self.filter_history.clear();
@@ -181,6 +191,7 @@ impl EntryStore {
         match scored.source {
             search::ResultSource::App => &self.app_entries[scored.index].name,
             search::ResultSource::File => &self.file_entries[scored.index].name,
+            search::ResultSource::Flow => &self.flow_entries[scored.index].title,
         }
     }
 
@@ -188,6 +199,7 @@ impl EntryStore {
         match scored.source {
             search::ResultSource::App => self.app_entries.get(scored.index).map(ResultItem::App),
             search::ResultSource::File => self.file_entries.get(scored.index).map(ResultItem::File),
+            search::ResultSource::Flow => self.flow_entries.get(scored.index).map(ResultItem::Flow),
         }
     }
 
@@ -237,8 +249,11 @@ impl EntryStore {
     fn filtered_full(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
         let frecency = self.frecency_config();
         search::filtered(
-            &self.app_entries,
-            &self.file_entries,
+            EntrySlices {
+                apps: &self.app_entries,
+                files: &self.file_entries,
+                flows: &self.flow_entries,
+            },
             query,
             mode,
             fuzziness,

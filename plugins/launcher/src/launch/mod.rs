@@ -82,6 +82,10 @@ where
                 message: error.to_string(),
             })
         }
+        search::ResultItem::Flow(entry) => Err(LaunchError::AppFailed {
+            name: entry.title.clone(),
+            message: "flow entries open inside the launcher flow session".to_string(),
+        }),
     }
 }
 

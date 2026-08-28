@@ -18,6 +18,11 @@ description = "Units landed since the per-cwd continuation marker"
 poll_interval_ms = 60000
 input = { cwd = "working directory of the session", session = "session id being continued" }
 
+[query.rows]
+description = "Launcher rows for a question: the answer, recalled units and skill hits"
+poll_interval_ms = 60000
+input = { query = "question typed in the launcher" }
+
 [action.capture]
 description = "Append one settled fact to the store"
 agent_tool = true

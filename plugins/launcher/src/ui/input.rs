@@ -9,6 +9,9 @@ pub enum InputEffect {
     Dismiss,
     BoostUp,
     BoostDown,
+    FlowQueryChanged,
+    FlowActivate,
+    FlowExit,
 }
 
 impl LauncherState {
@@ -21,6 +24,9 @@ impl LauncherState {
         alt: bool,
         result_count: usize,
     ) -> InputEffect {
+        if self.flow.is_some() {
+            return self.apply_flow_key(key, secondary, control, shift, alt, result_count);
+        }
         let boost = secondary || control || alt;
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
@@ -112,6 +118,78 @@ impl LauncherState {
                 };
                 self.insert_char(ch);
                 InputEffect::QueryChanged
+            }
+        }
+    }
+
+    fn apply_flow_key(
+        &mut self,
+        key: &str,
+        secondary: bool,
+        control: bool,
+        shift: bool,
+        alt: bool,
+        result_count: usize,
+    ) -> InputEffect {
+        let boost = secondary || control || alt;
+        match key {
+            "escape" | "esc" => InputEffect::FlowExit,
+            "enter" => InputEffect::FlowActivate,
+            "up" if !secondary => {
+                self.move_up();
+                InputEffect::Navigate
+            }
+            "down" if !secondary => {
+                self.move_down(result_count);
+                InputEffect::Navigate
+            }
+            "left" if !boost => {
+                self.move_left(shift);
+                InputEffect::Navigate
+            }
+            "right" if !boost => {
+                self.move_right(shift);
+                InputEffect::Navigate
+            }
+            "home" => {
+                self.move_home(shift);
+                InputEffect::Navigate
+            }
+            "end" => {
+                self.move_end(shift);
+                InputEffect::Navigate
+            }
+            "backspace" => {
+                if self.backspace() {
+                    InputEffect::FlowQueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
+            }
+            "delete" => {
+                if self.delete_forward() {
+                    InputEffect::FlowQueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
+            }
+            "a" if secondary => {
+                self.select_all();
+                InputEffect::Navigate
+            }
+            "space" if !secondary && !control => {
+                self.insert_char(' ');
+                InputEffect::FlowQueryChanged
+            }
+            _ => {
+                if secondary || control || alt {
+                    return InputEffect::Ignore;
+                }
+                let Some(ch) = key_to_input_char(key, shift) else {
+                    return InputEffect::Ignore;
+                };
+                self.insert_char(ch);
+                InputEffect::FlowQueryChanged
             }
         }
     }
@@ -248,7 +326,8 @@ pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::search::Fuzziness;
+    use crate::discovery::search::{Fuzziness, SearchMode};
+    use crate::flow::FlowEntry;
 
     #[test]
     fn query_and_mode_changes_clear_launch_errors() {
@@ -372,7 +451,8 @@ mod tests {
             app("Foobar Studio"),
         ]);
         let files: Arc<Vec<FileEntry>> = Arc::new(Vec::new());
-        let mut store = EntryStore::new(apps, files);
+        let flows: Arc<Vec<crate::flow::FlowEntry>> = Arc::new(Vec::new());
+        let mut store = EntryStore::new(apps, files, flows);
 
         let mut state = LauncherState::new();
         state.mode = SearchMode::Apps;
@@ -418,5 +498,94 @@ mod tests {
             InputEffect::QueryChanged
         );
         assert_eq!(state.fuzziness, Fuzziness::Loose);
+    }
+
+    fn flow_entry(title: &str) -> FlowEntry {
+        FlowEntry {
+            plugin_id: "qol-memory".to_string(),
+            title: title.to_string(),
+            prompt: "Ask memory".to_string(),
+            query: "rows".to_string(),
+            row_actions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn flow_escape_exits_and_enter_activates() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(
+            state.apply_key("escape", false, false, false, false, 3),
+            InputEffect::FlowExit
+        );
+
+        state.enter_flow(flow_entry("qol memory"));
+        assert_eq!(
+            state.apply_key("enter", false, false, false, false, 3),
+            InputEffect::FlowActivate
+        );
+
+        state.exit_flow();
+        assert!(state.flow.is_none());
+    }
+
+    #[test]
+    fn flow_tab_is_ignored() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(
+            state.apply_key("tab", false, false, false, false, 3),
+            InputEffect::Ignore
+        );
+        assert_eq!(
+            state.apply_key("right", true, false, false, false, 3),
+            InputEffect::Ignore
+        );
+        assert_eq!(state.mode, SearchMode::Apps);
+        assert_eq!(state.fuzziness, Fuzziness::Balanced);
+    }
+
+    #[test]
+    fn flow_typing_reports_flow_query_changed() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(
+            state.apply_key("m", false, false, false, false, 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert_eq!(state.query, "m");
+
+        assert_eq!(
+            state.apply_key("space", false, false, false, false, 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert_eq!(state.query, "m ");
+
+        assert_eq!(
+            state.apply_key("backspace", false, false, false, false, 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert_eq!(state.query, "m");
+
+        assert_eq!(
+            state.apply_key("backspace", false, false, false, false, 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert!(state.query.is_empty());
+
+        assert_eq!(
+            state.apply_key("backspace", false, false, false, false, 3),
+            InputEffect::Navigate
+        );
+        assert!(state.query.is_empty());
+
+        assert_eq!(
+            state.apply_key("up", false, false, false, false, 3),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.scroll_list.selected, 0);
     }
 }

@@ -2,6 +2,8 @@ mod platform;
 
 use crate::plugins::{Plugin, PluginManager};
 use crate::shortcuts::model::{Shortcut, ShortcutAction};
+use qol_plugin_api::launcher_flows::{self, FlowEntry};
+use qol_plugin_api::manifest::LauncherKind;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -94,6 +96,52 @@ pub fn collect_plugin_settings_entries<'a>(
         .collect()
 }
 
+pub fn collect_flow_entries<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) -> Vec<FlowEntry> {
+    plugins
+        .into_iter()
+        .filter_map(|plugin| {
+            let launcher = plugin.manifest.launcher.as_ref()?;
+            if launcher.kind != LauncherKind::Flow {
+                return None;
+            }
+            let runtime =
+                match crate::plugins::config::load_runable_contract_from_root(&plugin.path) {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        log::error!(
+                            "launcher flow sync: failed to load runtime contract for {}: {}",
+                            plugin.id.as_str(),
+                            error
+                        );
+                        return None;
+                    }
+                };
+            let validated = qol_plugin_api::manifest::validate_launcher_runtime(
+                &plugin.manifest,
+                runtime.as_ref(),
+            );
+            if let Err(error) = validated {
+                log::error!(
+                    "launcher flow sync: invalid flow for {}: {}",
+                    plugin.id.as_str(),
+                    error
+                );
+                return None;
+            }
+            let title = launcher.title.clone();
+            let prompt = launcher.prompt.clone().unwrap_or_else(|| title.clone());
+            let query = launcher.query.clone()?;
+            Some(FlowEntry {
+                plugin_id: plugin.id.to_string(),
+                title,
+                prompt,
+                query,
+                row_actions: launcher.row_actions.clone(),
+            })
+        })
+        .collect()
+}
+
 pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path) {
     if let Err(e) = platform::sync(&entries, binary_path) {
         log::error!("Failed to sync launcher apps: {}", e);
@@ -101,20 +149,23 @@ pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path) {
 }
 
 pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let plugin_settings_entries = match plugin_manager.lock() {
+    let (plugin_settings_entries, flows) = match plugin_manager.lock() {
         Ok(manager) => {
             reconcile_plugin_shortcuts(manager.plugins());
-            collect_plugin_settings_entries(manager.plugins())
+            (
+                collect_plugin_settings_entries(manager.plugins()),
+                collect_flow_entries(manager.plugins()),
+            )
         }
         Err(error) => {
             log::error!(
                 "plugin manager lock poisoned during launcher sync: {}",
                 error
             );
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
     };
-    sync_launcher_entries(plugin_settings_entries);
+    sync_launcher_entries(plugin_settings_entries, flows);
 }
 
 fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
@@ -126,7 +177,7 @@ fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>)
     }
 }
 
-fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
+fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>, flows: Vec<FlowEntry>) {
     let shortcut_config = match crate::shortcuts::store::load() {
         Ok(c) => c,
         Err(e) => {
@@ -149,8 +200,19 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
             Err(_) => return,
         };
         sync_entries(entries, &bin);
+        write_flow_entries(&flows);
         platform::publish_synced();
     });
+}
+
+fn write_flow_entries(entries: &[FlowEntry]) {
+    let Some(path) = launcher_flows::flows_path() else {
+        log::warn!("Skipping launcher flow sync: no data directory");
+        return;
+    };
+    if let Err(error) = launcher_flows::write_flows(&path, entries) {
+        log::error!("Failed to write launcher flows: {}", error);
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +316,33 @@ mod tests {
             delta.shortcut_action.as_ref(),
             Some(ShortcutAction::LaunchApp { .. })
         ));
+    }
+
+    #[test]
+    fn collect_flow_entries_keeps_only_valid_flows() {
+        let runtime_toml = "schema_version = 1\n\n[query.rows]\ndescription = \"rows\"\npoll_interval_ms = 1000\ninput = { query = \"q\" }\n";
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        std::fs::write(dir_a.path().join("qol-runtime.toml"), runtime_toml).unwrap();
+        std::fs::write(dir_b.path().join("qol-runtime.toml"), runtime_toml).unwrap();
+        let manifest_a = manifest(
+            "[plugin]\nid = \"a\"\nname = \"A\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[launcher]\nkind = \"flow\"\ntitle = \"a\"\nquery = \"rows\"\n",
+        );
+        let manifest_b = manifest(
+            "[plugin]\nid = \"b\"\nname = \"B\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[launcher]\nkind = \"flow\"\ntitle = \"b\"\nquery = \"missing\"\n",
+        );
+        let plugins = [
+            Plugin::new(PluginId::new("a"), manifest_a, dir_a.path().into()),
+            Plugin::new(PluginId::new("b"), manifest_b, dir_b.path().into()),
+        ];
+
+        let flows = collect_flow_entries(plugins.iter());
+
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].plugin_id, "a");
+        assert_eq!(flows[0].title, "a");
+        assert_eq!(flows[0].prompt, "a");
+        assert_eq!(flows[0].query, "rows");
     }
 
     #[test]

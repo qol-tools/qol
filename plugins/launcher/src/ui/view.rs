@@ -7,6 +7,7 @@ use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO};
 
 use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
 use crate::discovery::search::{ResultSource, Scored, SearchMode};
+use crate::flow::{FlowEntry, FlowRow};
 
 fn current_palette() -> LauncherPalette {
     launcher_runtime()
@@ -23,6 +24,7 @@ pub fn search_bar(
     selection: Option<(usize, usize)>,
     selected: usize,
     result_count: usize,
+    placeholder: &str,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
     let counter = if result_count == 0 {
@@ -69,7 +71,7 @@ pub fn search_bar(
                         .text_size(px(TEXT_BODY))
                         .flex()
                         .items_center()
-                        .child(search_bar_content(query, cursor, selection)),
+                        .child(search_bar_content(query, cursor, selection, placeholder)),
                 )
                 .when_some(launch_error, |field, error| {
                     field.child(
@@ -94,11 +96,16 @@ pub fn search_bar(
 
 const SEARCH_VISIBLE_CHARS: usize = 25;
 
-fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usize)>) -> AnyElement {
+fn search_bar_content(
+    query: &str,
+    cursor: usize,
+    selection: Option<(usize, usize)>,
+    placeholder: &str,
+) -> AnyElement {
     if query.is_empty() {
         return div()
             .text_color(rgb(current_palette().text_muted))
-            .child("Type to search\u{2026}")
+            .child(placeholder.to_owned())
             .into_any_element();
     }
 
@@ -212,10 +219,70 @@ pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) 
     kit.row_selected(row, selected)
 }
 
+pub fn flow_row(row: &FlowRow, selected: bool, row_height: f32) -> Div {
+    let kit = qol_gpui::kit::kit();
+    let text = div()
+        .flex_1()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(
+            div()
+                .truncate()
+                .text_color(rgb(if selected {
+                    current_palette().text
+                } else {
+                    current_palette().text_muted
+                }))
+                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                .child(row.title.clone()),
+        )
+        .when_some(row.subtitle.as_deref(), |text, subtitle| {
+            text.child(
+                div()
+                    .truncate()
+                    .text_color(rgb(current_palette().text_muted))
+                    .text_size(px(qol_gpui::theme::TEXT_NANO))
+                    .child(subtitle.to_owned()),
+            )
+        });
+    let element = div()
+        .flex_none()
+        .h(px(row_height))
+        .mx(px(8.0))
+        .px(px(qol_gpui::theme::SPACE_PAD))
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
+        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        .child(kit.letter_tile(&row.title))
+        .child(text);
+    kit.row_selected(element, selected)
+}
+
+pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
+    let kit = qol_gpui::kit::kit();
+    let enter_label = entry
+        .row_actions
+        .first()
+        .and_then(|action| action.label.as_deref())
+        .unwrap_or("copy");
+    kit.hint_bar()
+        .child(kit.hint("\u{23CE}", enter_label.to_owned()))
+        .child(kit.hint("\u{2191}\u{2193}", "move"))
+        .child(kit.hint("esc", "back"))
+        .child(kit.chip(entry.title.clone(), kit.palette.accent))
+        .child(div().flex_1())
+}
+
 fn kind_label(source: ResultSource) -> &'static str {
     match source {
         ResultSource::App => "app",
         ResultSource::File => "dir",
+        ResultSource::Flow => "flow",
     }
 }
 

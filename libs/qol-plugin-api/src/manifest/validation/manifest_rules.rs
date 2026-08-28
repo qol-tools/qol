@@ -23,6 +23,10 @@ impl PluginManifest {
             self.runtime.as_ref(),
         )?;
         super::shortcut_rules::validate_shortcuts(&self.shortcuts, executable_action_ids)?;
+        super::launcher_rules::validate_optional_launcher(
+            self.launcher.as_ref(),
+            executable_action_ids,
+        )?;
         super::command_rules::validate_optional_daemon_config(self.daemon.as_ref())?;
         super::action_rules::validate_continuous_action_transport(
             &self.actions,

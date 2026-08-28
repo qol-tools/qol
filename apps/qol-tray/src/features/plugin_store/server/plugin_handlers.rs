@@ -30,7 +30,10 @@ pub(super) fn routes() -> Router<AppState> {
             post(execute_plugin_action),
         )
         .route("/plugins/{id}/settings", post(open_settings_surface))
-        .route("/plugins/{id}/queries/{query}", get(query_plugin_handler))
+        .route(
+            "/plugins/{id}/queries/{query}",
+            get(query_plugin_handler).post(query_plugin_with_input_handler),
+        )
         .route("/push-status", get(get_push_status))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
@@ -54,24 +57,54 @@ fn trace_action_resolve(
     let _ = (phase, plugin_id, action_id, started);
 }
 
+fn load_query_contract(
+    plugin_id: &str,
+    query: &str,
+) -> Result<qol_config::contract::RuntimeSpec, (StatusCode, String)> {
+    let runtime = crate::plugins::config::load_runable_contract(plugin_id)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "no runable contract".to_string()))?;
+    if !runtime.queries.contains_key(query) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("query not declared: {query}"),
+        ));
+    }
+    Ok(runtime)
+}
+
 pub(super) async fn query_plugin_handler(
     Path((id, query)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_plugin_id_bad_request(&id)?;
     tokio::task::spawn_blocking(move || {
-        let runtime = crate::plugins::config::load_runable_contract(&id)
-            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
-            .ok_or_else(|| (StatusCode::NOT_FOUND, "no runable contract".to_string()))?;
-        if !runtime.queries.contains_key(&query) {
-            return Err((
-                StatusCode::NOT_FOUND,
-                format!("query not declared: {query}"),
-            ));
-        }
+        load_query_contract(&id, &query)?;
         crate::plugins::action_executor::dispatch_query(&state.plugin_manager, &id, &query)
             .map(Json)
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await
+    .map_err(join_error_response)?
+}
+
+pub(super) async fn query_plugin_with_input_handler(
+    Path((id, query)): Path<(String, String)>,
+    State(state): State<AppState>,
+    Json(input): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_plugin_id_bad_request(&id)?;
+    tokio::task::spawn_blocking(move || {
+        load_query_contract(&id, &query)?;
+        crate::plugins::action_executor::dispatch_query_with_input(
+            &state.plugin_manager,
+            &id,
+            &query,
+            input,
+            crate::plugins::action_executor::MCP_DISPATCH_TIMEOUT,
+        )
+        .map(Json)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
     })
     .await
     .map_err(join_error_response)?

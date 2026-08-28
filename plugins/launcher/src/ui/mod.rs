@@ -58,7 +58,11 @@ impl LauncherView {
             .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()));
         Self {
             state: LauncherState::new(),
-            store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
+            store: EntryStore::new(
+                entries.app_entries.clone(),
+                entries.file_entries.clone(),
+                entries.flow_entries.clone(),
+            ),
             shared_entries: shared,
             last_entries_snapshot: entries,
             focus_handle: cx.focus_handle(),
@@ -141,8 +145,11 @@ impl LauncherView {
         let fresh = guard.entries.clone();
         drop(guard);
         self.last_entries_snapshot = fresh.clone();
-        self.store
-            .replace_entries(fresh.app_entries.clone(), fresh.file_entries.clone());
+        self.store.replace_entries(
+            fresh.app_entries.clone(),
+            fresh.file_entries.clone(),
+            fresh.flow_entries.clone(),
+        );
         true
     }
 

@@ -29,6 +29,7 @@ fn make_manifest(id: &str, name: &str, version: &str) -> PluginManifest {
         traits: None,
         shortcuts: Vec::new(),
         config: crate::plugins::manifest::ConfigDeclarations::default(),
+        launcher: None,
     }
 }
 

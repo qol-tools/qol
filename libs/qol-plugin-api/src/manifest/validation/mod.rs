@@ -2,6 +2,7 @@ mod action_rules;
 mod command_rules;
 mod dependency_rules;
 mod identity_rules;
+mod launcher_rules;
 mod manifest_rules;
 mod menu_rules;
 mod runtime_rules;
@@ -12,3 +13,4 @@ pub use command_rules::{
     validate_safe_identifier, SafeIdentifierError,
 };
 pub use identity_rules::is_valid_plugin_id;
+pub use launcher_rules::validate_launcher_runtime;

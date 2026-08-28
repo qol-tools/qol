@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod discovery;
 mod doctor;
+pub mod flow;
 pub mod launch;
 mod qol;
 pub mod ui;

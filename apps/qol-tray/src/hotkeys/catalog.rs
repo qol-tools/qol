@@ -108,6 +108,7 @@ mod tests {
             traits: None,
             shortcuts: Vec::new(),
             config: Default::default(),
+            launcher: None,
         }
     }
 

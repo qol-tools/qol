@@ -46,6 +46,7 @@ fn make_plugin(
         traits: None,
         shortcuts: Vec::new(),
         config: Default::default(),
+        launcher: None,
     };
 
     Plugin::new(

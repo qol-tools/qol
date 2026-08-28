@@ -26,6 +26,12 @@ args = ["capture"]
 [capabilities]
 doctor = true
 
+[launcher]
+kind = "flow"
+title = "qol memory"
+prompt = "Ask memory"
+query = "rows"
+
 [menu]
 label = "QoL Memory"
 items = []

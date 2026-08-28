@@ -35,6 +35,7 @@ fn base_manifest() -> PluginManifest {
         traits: None,
         config: ConfigDeclarations::default(),
         shortcuts: Vec::new(),
+        launcher: None,
     }
 }
 
@@ -679,5 +680,233 @@ mod shortcut_rules {
         };
 
         assert!(manifest.validate().is_err());
+    }
+}
+
+mod launcher_rules {
+    use super::*;
+
+    #[test]
+    fn launcher_flow_requires_query() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            prompt = "Ask memory"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.query is required for kind = \"flow\""));
+    }
+
+    #[test]
+    fn launcher_flow_rejects_invalid_query_name() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "Rows"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid launcher.query name: Rows"));
+    }
+
+    #[test]
+    fn launcher_app_rejects_query_and_row_actions() {
+        let query_toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "app"
+            title = "App"
+            query = "rows"
+        "#;
+
+        let error = validate_toml(query_toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.query is only valid for kind = \"flow\""));
+
+        let row_actions_toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "app"
+            title = "App"
+
+            [[launcher.row_actions]]
+            action = "open"
+        "#;
+
+        let error = validate_toml(row_actions_toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.row_actions are only valid for kind = \"flow\""));
+    }
+
+    #[test]
+    fn launcher_row_action_must_be_declared() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "rows"
+
+            [[launcher.row_actions]]
+            action = "missing"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.row_actions references undeclared action: missing"));
+    }
+
+    #[test]
+    fn launcher_flow_parses_and_validates() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            prompt = "Ask memory"
+            query = "rows"
+
+            [[launcher.row_actions]]
+            action = "open"
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    fn flow_manifest() -> PluginManifest {
+        manifest_from_toml(
+            r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "rows"
+        "#,
+        )
+    }
+
+    #[test]
+    fn launcher_runtime_rejects_undeclared_query() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.other]\ndescription = \"Other\"\npoll_interval_ms = 1\n",
+        )
+        .unwrap();
+
+        let error = validate_launcher_runtime(&manifest, Some(&runtime)).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher flow query not declared: rows"));
+    }
+
+    #[test]
+    fn launcher_runtime_requires_query_input() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.rows]\ndescription = \"Rows\"\npoll_interval_ms = 1\n",
+        )
+        .unwrap();
+
+        let error = validate_launcher_runtime(&manifest, Some(&runtime)).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher flow query rows must declare a query input"));
+    }
+
+    #[test]
+    fn launcher_runtime_accepts_declared_query() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.rows]\ndescription = \"Rows\"\npoll_interval_ms = 1\ninput = { query = \"typed text\" }\n",
+        )
+        .unwrap();
+
+        assert!(validate_launcher_runtime(&manifest, Some(&runtime)).is_ok());
     }
 }

@@ -1,5 +1,6 @@
 use super::layout::MAX_VISIBLE;
 use crate::discovery::search::{Fuzziness, SearchMode};
+use crate::flow::{FlowEntry, FlowRow};
 use std::time::{Duration, Instant};
 
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
@@ -40,6 +41,13 @@ pub struct NavCues {
     pub trail_direction: Option<NavDirection>,
 }
 
+pub struct FlowSession {
+    pub entry: FlowEntry,
+    pub rows: Vec<FlowRow>,
+    pub generation: u64,
+    pub pending: bool,
+}
+
 pub struct LauncherState {
     pub mode: SearchMode,
     pub fuzziness: Fuzziness,
@@ -55,6 +63,7 @@ pub struct LauncherState {
     pub last_nav_at: Option<Instant>,
     pub boost_adjusting: bool,
     pub launch_error: Option<String>,
+    pub flow: Option<FlowSession>,
 }
 
 impl LauncherState {
@@ -74,7 +83,38 @@ impl LauncherState {
             last_nav_at: None,
             boost_adjusting: false,
             launch_error: None,
+            flow: None,
         }
+    }
+
+    pub fn enter_flow(&mut self, entry: FlowEntry) {
+        self.flow = Some(FlowSession {
+            entry,
+            rows: Vec::new(),
+            generation: 0,
+            pending: false,
+        });
+        self.query.clear();
+        self.cursor = 0;
+        self.clear_selection();
+        self.clear_launch_error();
+        self.reset_results_position();
+    }
+
+    pub fn exit_flow(&mut self) {
+        self.flow = None;
+        self.query.clear();
+        self.cursor = 0;
+        self.clear_selection();
+        self.clear_launch_error();
+        self.reset_results_position();
+    }
+
+    pub fn flow_result_count(&self) -> usize {
+        self.flow
+            .as_ref()
+            .map(|session| session.rows.len())
+            .unwrap_or(0)
     }
 
     pub fn query_len(&self) -> usize {
@@ -353,5 +393,51 @@ mod tests {
         let cues = state.nav_cues();
         assert_eq!(cues.momentum_signed, NAV_MOTION_MAX as i8);
         assert_eq!(cues.trail_len, 3);
+    }
+
+    fn flow_entry(title: &str) -> FlowEntry {
+        FlowEntry {
+            plugin_id: "qol-memory".to_string(),
+            title: title.to_string(),
+            prompt: "Ask memory".to_string(),
+            query: "rows".to_string(),
+            row_actions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn enter_flow_clears_query_and_exit_flow_clears_session() {
+        let mut state = LauncherState::new();
+        state.query = "leftover".to_string();
+        state.cursor = 8;
+        state.set_launch_error("stale".to_string());
+
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(state.flow.is_some());
+        assert_eq!(state.flow_result_count(), 0);
+        assert!(state.query.is_empty());
+        assert_eq!(state.cursor, 0);
+        assert!(state.launch_error.is_none());
+        assert_eq!(state.scroll_list.selected, 0);
+
+        state.query = "look".to_string();
+        state.cursor = 4;
+        if let Some(session) = state.flow.as_mut() {
+            session.rows.push(FlowRow {
+                title: "LookPose".to_string(),
+                subtitle: None,
+                copy: None,
+                raw: serde_json::json!({}),
+            });
+        }
+        assert_eq!(state.flow_result_count(), 1);
+
+        state.exit_flow();
+        assert!(state.flow.is_none());
+        assert_eq!(state.flow_result_count(), 0);
+        assert!(state.query.is_empty());
+        assert_eq!(state.cursor, 0);
+        assert!(state.launch_error.is_none());
+        assert_eq!(state.scroll_list.selected, 0);
     }
 }

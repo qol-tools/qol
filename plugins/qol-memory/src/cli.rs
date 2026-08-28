@@ -23,6 +23,7 @@ const USAGE_CAPTURE: &str =
     "usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH]";
 const USAGE_CONTINUE: &str = "usage: qol-memory continue --cwd PATH --session ID [--store PATH]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
+const USAGE_ROWS: &str = "usage: qol-memory rows \"<query>\" [--store PATH]";
 
 type PlainHandler = Box<dyn Fn(&CommandContext) -> Result<Execution> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
@@ -39,6 +40,8 @@ struct Handlers {
     continue_json: JsonHandler,
     reindex_plain: PlainHandler,
     reindex_json: JsonHandler,
+    rows_plain: PlainHandler,
+    rows_json: JsonHandler,
 }
 
 impl Handlers {
@@ -55,6 +58,8 @@ impl Handlers {
             continue_json: Box::new(run_continue_json),
             reindex_plain: Box::new(run_reindex_plain),
             reindex_json: Box::new(run_reindex_json),
+            rows_plain: Box::new(run_rows_plain),
+            rows_json: Box::new(run_rows_json),
         }
     }
 }
@@ -86,6 +91,7 @@ fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
             handlers.reindex_plain,
             handlers.reindex_json,
         ))
+        .command(rows_command(handlers.rows_plain, handlers.rows_json))
         .doctor_checks(crate::doctor::checks())
 }
 
@@ -148,6 +154,17 @@ fn continue_command(plain: PlainHandler, json: JsonHandler) -> Command {
             "The continuation block in plain text when units were injected; \
              nothing otherwise; the outcome object with --json.",
         )
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn rows_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("rows")
+        .about("Print the launcher rows for a question.")
+        .usage(format!("{BINARY_NAME} rows \"<query>\" [--store PATH]"))
+        .detail("Rows are the answer, the recalled units and the skill hits, in that order.")
+        .output("One line per row: title, a tab, then the subtitle; the rows object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))
         .run_json(move |context| json(context))
@@ -415,6 +432,43 @@ fn parse_continue_invocation(args: &[String]) -> std::result::Result<ContinueInv
     })
 }
 
+struct RowsInvocation {
+    query: String,
+    store: Option<PathBuf>,
+}
+
+fn parse_rows_invocation(args: &[String]) -> std::result::Result<RowsInvocation, String> {
+    let mut query: Option<String> = None;
+    let mut store: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args, index, "--store", USAGE_ROWS,
+                )?));
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_rows_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                if query.is_some() {
+                    return Err(usage_rows_error("expected a single quoted query"));
+                }
+                query = Some(positional.to_string());
+                index += 1;
+            }
+        }
+    }
+    let query = match query {
+        Some(query) => query,
+        None => return Err(usage_rows_error("missing query")),
+    };
+    Ok(RowsInvocation { query, store })
+}
+
 struct ReindexInvocation {
     store: Option<PathBuf>,
 }
@@ -489,6 +543,10 @@ fn usage_continue_error(detail: &str) -> String {
 
 fn usage_reindex_error(detail: &str) -> String {
     format!("{detail}\n{USAGE_REINDEX}")
+}
+
+fn usage_rows_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_ROWS}")
 }
 
 fn run_ask_plain(context: &CommandContext) -> Result<Execution> {
@@ -702,6 +760,67 @@ fn continue_payload(invocation: &ContinueInvocation) -> Result<Value> {
     serde_json::to_value(outcome).context("failed to serialize the continue outcome")
 }
 
+fn run_rows_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_rows_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let payload = rows_payload(&invocation)?;
+    Ok(Execution::success(rows_plain_lines(&payload)))
+}
+
+fn run_rows_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_rows_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    rows_payload(&invocation)
+}
+
+fn rows_payload(invocation: &RowsInvocation) -> Result<Value> {
+    if invocation.store.is_none() {
+        match crate::app::send_request("rows", json!({ "query": invocation.query })) {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no rows payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    let aliases = crate::aliases::embedded();
+    let request = AskRequest {
+        query: invocation.query.clone(),
+        k: DEFAULT_K,
+        brief: false,
+        exclude_session: None,
+    };
+    let output = crate::ask::run_with_layers(&store, &aliases, &request, &units, &notes)?;
+    let flow_rows = crate::ask::rows::from_output(&output, &units, &notes);
+    Ok(json!({
+        "verdict": output.verdict,
+        "confidence": output.confidence,
+        "rows": flow_rows,
+    }))
+}
+
+fn rows_plain_lines(payload: &Value) -> String {
+    let mut lines = Vec::new();
+    for row in payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let title = row.get("title").and_then(Value::as_str).unwrap_or_default();
+        let subtitle = row
+            .get("subtitle")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        lines.push(format!("{title}\t{subtitle}"));
+    }
+    newline_terminated(lines.join("\n"))
+}
+
 fn run_reindex_plain(context: &CommandContext) -> Result<Execution> {
     let invocation = match parse_reindex_invocation(context.args()) {
         Ok(invocation) => invocation,
@@ -804,6 +923,7 @@ mod tests {
         capture: AtomicUsize,
         continue_cmd: AtomicUsize,
         reindex: AtomicUsize,
+        rows: AtomicUsize,
     }
 
     impl OperationCalls {
@@ -814,6 +934,7 @@ mod tests {
                 && self.capture.load(Ordering::SeqCst) == 0
                 && self.continue_cmd.load(Ordering::SeqCst) == 0
                 && self.reindex.load(Ordering::SeqCst) == 0
+                && self.rows.load(Ordering::SeqCst) == 0
         }
     }
 
@@ -829,6 +950,8 @@ mod tests {
         let continue_json_calls = Arc::clone(calls);
         let reindex_calls = Arc::clone(calls);
         let reindex_json_calls = Arc::clone(calls);
+        let rows_calls = Arc::clone(calls);
+        let rows_json_calls = Arc::clone(calls);
         Handlers {
             ask_plain: Box::new(move |_| {
                 ask_calls.ask.fetch_add(1, Ordering::SeqCst);
@@ -875,6 +998,14 @@ mod tests {
             reindex_json: Box::new(move |_: &CommandContext| {
                 reindex_json_calls.reindex.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "sentinel": "reindex" }))
+            }),
+            rows_plain: Box::new(move |_| {
+                rows_calls.rows.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel rows"))
+            }),
+            rows_json: Box::new(move |_: &CommandContext| {
+                rows_json_calls.rows.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "rows" }))
             }),
         }
     }
@@ -1012,6 +1143,8 @@ mod tests {
             vec!["help", "capture"],
             vec!["help", "continue"],
             vec!["help", "reindex"],
+            vec!["help", "rows"],
+            vec!["rows", "help"],
         ];
 
         for args in cases {
@@ -1033,6 +1166,44 @@ mod tests {
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(
             execution.stdout.contains("`daemon`"),
+            "stdout: {}",
+            execution.stdout
+        );
+        assert!(calls.all_zero());
+    }
+
+    #[test]
+    fn rows_requires_a_query() {
+        let missing = app().execute(["rows".to_string()]);
+        assert_eq!(missing.exit_code, EXIT_USAGE);
+        assert!(missing.stderr.contains(USAGE_ROWS));
+        assert!(missing.stderr.contains("missing query"));
+
+        let extra = app().execute([
+            "rows".to_string(),
+            "first".to_string(),
+            "second".to_string(),
+        ]);
+        assert_eq!(extra.exit_code, EXIT_USAGE);
+        assert!(extra.stderr.contains(USAGE_ROWS));
+
+        let unknown_flag =
+            app().execute(["rows".to_string(), "--wat".to_string(), "query".to_string()]);
+        assert_eq!(unknown_flag.exit_code, EXIT_USAGE);
+        assert!(unknown_flag.stderr.contains(USAGE_ROWS));
+    }
+
+    #[test]
+    fn rows_help_is_listed() {
+        let calls = Arc::new(OperationCalls::default());
+        let execution =
+            sentinel_app(Arc::clone(&calls)).execute(["help".to_string(), "rows".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert!(
+            execution
+                .stdout
+                .contains("Print the launcher rows for a question."),
             "stdout: {}",
             execution.stdout
         );

@@ -2,6 +2,7 @@
 use super::trace;
 use crate::discovery::{AppEntry, FileEntry};
 use crate::frecency::FrequencyData;
+use qol_plugin_api::launcher_flows::FlowEntry;
 use qol_search::{fuzzy_match_prepared, prepare_fuzzy_query, FuzzyMatch, PreparedFuzzyQuery};
 use std::collections::HashMap;
 use std::path::Path;
@@ -64,12 +65,14 @@ impl SearchMode {
 pub enum ResultItem<'a> {
     App(&'a AppEntry),
     File(&'a FileEntry),
+    Flow(&'a FlowEntry),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum ResultSource {
     App,
     File,
+    Flow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,9 +91,15 @@ pub struct Scored {
     pub manual_boost: i32,
 }
 
+#[derive(Clone, Copy)]
+pub struct EntrySlices<'a> {
+    pub apps: &'a [AppEntry],
+    pub files: &'a [FileEntry],
+    pub flows: &'a [FlowEntry],
+}
+
 pub fn filtered(
-    app_entries: &[AppEntry],
-    file_entries: &[FileEntry],
+    entries: EntrySlices<'_>,
     query: &str,
     mode: SearchMode,
     fuzziness: Fuzziness,
@@ -103,7 +112,8 @@ pub fn filtered(
 
     let boosts = frecency.map(|f| f.boosts).unwrap_or(&*EMPTY_BOOSTS);
     let results: Vec<Scored> = match mode {
-        SearchMode::Apps => app_entries
+        SearchMode::Apps => entries
+            .apps
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
@@ -112,8 +122,16 @@ pub fn filtered(
                 let boost = boosts.get(&name_key).copied().unwrap_or(0);
                 score_app(index, &entry.name, &name_key, &prepared, bonus, boost)
             })
+            .chain(
+                entries
+                    .flows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| score_flow(index, &entry.title, &prepared)),
+            )
             .collect(),
-        SearchMode::Files => file_entries
+        SearchMode::Files => entries
+            .files
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| score_file(index, &entry.name, &prepared, fuzziness))
@@ -123,8 +141,7 @@ pub fn filtered(
 }
 
 pub fn filtered_from_candidates(
-    app_entries: &[AppEntry],
-    file_entries: &[FileEntry],
+    entries: EntrySlices<'_>,
     candidates: &[Scored],
     query: &str,
     mode: SearchMode,
@@ -141,20 +158,27 @@ pub fn filtered_from_candidates(
             let boosts = frecency.map(|f| f.boosts).unwrap_or(&*EMPTY_BOOSTS);
             candidates
                 .iter()
-                .filter(|candidate| matches!(candidate.source, ResultSource::App))
-                .filter_map(|candidate| {
-                    let entry = app_entries.get(candidate.index)?;
-                    let name_key = lowercased_name(&entry.name);
-                    let bonus = frecency_bonus_for_key(&name_key, &prepared, frecency);
-                    let boost = boosts.get(&name_key).copied().unwrap_or(0);
-                    score_app(
-                        candidate.index,
-                        &entry.name,
-                        &name_key,
-                        &prepared,
-                        bonus,
-                        boost,
-                    )
+                .filter(|candidate| !matches!(candidate.source, ResultSource::File))
+                .filter_map(|candidate| match candidate.source {
+                    ResultSource::App => {
+                        let entry = entries.apps.get(candidate.index)?;
+                        let name_key = lowercased_name(&entry.name);
+                        let bonus = frecency_bonus_for_key(&name_key, &prepared, frecency);
+                        let boost = boosts.get(&name_key).copied().unwrap_or(0);
+                        score_app(
+                            candidate.index,
+                            &entry.name,
+                            &name_key,
+                            &prepared,
+                            bonus,
+                            boost,
+                        )
+                    }
+                    ResultSource::Flow => {
+                        let entry = entries.flows.get(candidate.index)?;
+                        score_flow(candidate.index, &entry.title, &prepared)
+                    }
+                    ResultSource::File => None,
                 })
                 .collect()
         }
@@ -162,7 +186,7 @@ pub fn filtered_from_candidates(
             .iter()
             .filter(|candidate| matches!(candidate.source, ResultSource::File))
             .filter_map(|candidate| {
-                let entry = file_entries.get(candidate.index)?;
+                let entry = entries.files.get(candidate.index)?;
                 score_file(candidate.index, &entry.name, &prepared, fuzziness)
             })
             .collect(),
@@ -265,6 +289,31 @@ fn score_file(
         index,
         m,
         match_kind,
+        frecency_bonus: 0,
+        manual_boost: 0,
+    })
+}
+
+const FLOW_PIN_BONUS: i32 = 10_000;
+
+fn score_flow(index: usize, title: &str, query: &PreparedQuery<'_>) -> Option<Scored> {
+    #[cfg(debug_assertions)]
+    trace::count_fuzzy_call();
+    let mut m = fuzzy_match_prepared(&query.fuzzy, title)?;
+    let title_key = lowercased_name(title);
+    if title_key.starts_with(&query.lower)
+        || title_key
+            .split_whitespace()
+            .any(|word| word.starts_with(&query.lower))
+        || contains_at_word_boundary(&title_key, &query.lower)
+    {
+        m.score -= FLOW_PIN_BONUS;
+    }
+    Some(Scored {
+        source: ResultSource::Flow,
+        index,
+        m,
+        match_kind: classify_lowered_match(&title_key, &query.lower),
         frecency_bonus: 0,
         manual_boost: 0,
     })
@@ -403,13 +452,24 @@ mod tests {
             prop_assume!(ext != other_ext);
 
             let apps: Vec<DesktopEntry> = Vec::new();
+            let flows: Vec<FlowEntry> = Vec::new();
             let files = vec![
                 FileEntry { name: format!("alpha.{ext}"), path: PathBuf::from("/tmp/alpha") },
                 FileEntry { name: format!("beta.{other_ext}"), path: PathBuf::from("/tmp/beta") },
                 FileEntry { name: "gamma".to_string(), path: PathBuf::from("/tmp/gamma") },
             ];
             let query = format!("{query_stem}.{ext}");
-            let results = filtered(&apps, &files, &query, SearchMode::Files, Fuzziness::Strict, None);
+            let results = filtered(
+                EntrySlices {
+                    apps: &apps,
+                    files: &files,
+                    flows: &flows,
+                },
+                &query,
+                SearchMode::Files,
+                Fuzziness::Strict,
+                None,
+            );
 
             for result in results {
                 prop_assert!(
@@ -425,6 +485,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn flow_title_prefix_ranks_before_apps() {
+        let apps = vec![DesktopEntry {
+            name: "Memory Manager".to_string(),
+            exec: vec!["x".to_string()],
+            path: PathBuf::from("/a/mem"),
+        }];
+        let files: Vec<FileEntry> = Vec::new();
+        let flows = vec![FlowEntry {
+            plugin_id: "qol-memory".to_string(),
+            title: "qol memory".to_string(),
+            prompt: "qol memory".to_string(),
+            query: "rows".to_string(),
+            row_actions: Vec::new(),
+        }];
+
+        let results = filtered(
+            EntrySlices {
+                apps: &apps,
+                files: &files,
+                flows: &flows,
+            },
+            "mem",
+            SearchMode::Apps,
+            Fuzziness::Balanced,
+            None,
+        );
+        assert_eq!(results.len(), 2);
+        assert!(matches!(results[0].source, ResultSource::Flow));
+        assert_eq!(flows[results[0].index].title, "qol memory");
+        assert!(matches!(results[1].source, ResultSource::App));
+
+        let results = filtered(
+            EntrySlices {
+                apps: &apps,
+                files: &files,
+                flows: &flows,
+            },
+            "manager",
+            SearchMode::Apps,
+            Fuzziness::Balanced,
+            None,
+        );
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0].source, ResultSource::App));
+        assert_eq!(apps[results[0].index].name, "Memory Manager");
     }
 
     #[test]

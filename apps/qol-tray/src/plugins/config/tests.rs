@@ -1173,6 +1173,7 @@ mod scoped_io {
             traits: None,
             shortcuts: Vec::new(),
             config,
+            launcher: None,
         }
     }
 

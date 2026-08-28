@@ -16,6 +16,8 @@ use crate::skills::{self, Freshness, Served, SkillsIndex};
 use crate::store::{dedupe_user_units, is_boilerplate_unit, NotesLayer, Store, Unit, UnitsLayer};
 use crate::text;
 
+pub mod rows;
+
 const SNIPPET_WINDOW: usize = 240;
 const SKILL_CAP: usize = 2048;
 const TOP_NOTE_LIMIT: usize = 5;

@@ -1,7 +1,7 @@
 //! Capability declarations for plugins that participate in the workspace
 //! restore flow.
 //!
-//! Three capabilities are added by this module:
+//! Two capabilities are added by this module:
 //!
 //! - `restore-rule`: a plugin advertises which template ids it can claim
 //!   and (optionally) which `PaneSnapshot` fields it needs access to.
@@ -10,8 +10,6 @@
 //!   `PaneField` enum itself is re-exported from `qol_runtime`, where
 //!   the runtime broker enforces the same wire vocabulary; one source
 //!   of truth, no drift.
-//! - `launcher-provider`: marker that the plugin can emit dynamic
-//!   launcher entries via the runtime's `/launcher-entries` endpoint.
 //!
 //! All declaration types use `#[serde(deny_unknown_fields)]` so a forged
 //! or future manifest field cannot silently extend the contract.
@@ -50,9 +48,3 @@ where
     }
     Ok(v)
 }
-
-/// Marker capability: a plugin that declares this can publish dynamic
-/// launcher entries via the runtime's aggregator. Takes no parameters.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LauncherProviderCapability {}

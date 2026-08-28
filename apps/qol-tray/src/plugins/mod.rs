@@ -135,6 +135,7 @@ mod tests {
             traits: None,
             config: Default::default(),
             shortcuts: vec![],
+            launcher: None,
         };
         Plugin::new(PluginId::new(id), manifest, std::path::PathBuf::new())
     }

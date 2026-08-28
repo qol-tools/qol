@@ -14,6 +14,7 @@ use std::time::Duration;
 pub use qol_apps::AppEntry;
 use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_gpui::PlatformStateClient;
+use qol_plugin_api::launcher_flows::{self, FlowEntry};
 use qol_watch::{WatchNotice, WatchRoot};
 
 use platform::AppRoot;
@@ -33,6 +34,7 @@ pub struct FileEntry {
 pub struct PreloadedEntries {
     pub app_entries: Arc<Vec<AppEntry>>,
     pub file_entries: Arc<Vec<FileEntry>>,
+    pub flow_entries: Arc<Vec<FlowEntry>>,
 }
 
 impl PreloadedEntries {
@@ -40,6 +42,7 @@ impl PreloadedEntries {
         Self {
             app_entries: Arc::new(Vec::new()),
             file_entries: Arc::new(Vec::new()),
+            flow_entries: Arc::new(Vec::new()),
         }
     }
 }
@@ -80,6 +83,13 @@ pub(crate) fn paths() -> DiscoveryPaths {
 pub fn load_file_entries() -> Vec<FileEntry> {
     let roots = configured_file_roots();
     load_file_entries_from_roots(&roots)
+}
+
+fn load_flow_entries() -> Vec<FlowEntry> {
+    let Some(path) = launcher_flows::flows_path() else {
+        return Vec::new();
+    };
+    launcher_flows::read_flows(&path)
 }
 
 fn load_file_entries_from_roots(roots: &[PathBuf]) -> Vec<FileEntry> {
@@ -140,10 +150,16 @@ impl AppCache {
     }
 }
 
-fn publish(entries: &SharedEntries, cache: &AppCache, file_entries: &Arc<Vec<FileEntry>>) {
+fn publish(
+    entries: &SharedEntries,
+    cache: &AppCache,
+    file_entries: &Arc<Vec<FileEntry>>,
+    flow_entries: &Arc<Vec<FlowEntry>>,
+) {
     let fresh = Arc::new(PreloadedEntries {
         app_entries: Arc::new(cache.snapshot()),
         file_entries: file_entries.clone(),
+        flow_entries: flow_entries.clone(),
     });
     if let Ok(mut guard) = entries.lock() {
         guard.entries = fresh;
@@ -197,7 +213,8 @@ pub(crate) fn start(entries: SharedEntries) {
         let mut cache = AppCache::default();
         cache.rescan_all(&roots);
         let mut file_entries = Arc::new(load_file_entries_from_roots(&file_roots));
-        publish(&entries, &cache, &file_entries);
+        let mut flow_entries = Arc::new(load_flow_entries());
+        publish(&entries, &cache, &file_entries, &flow_entries);
         eprintln!(
             "[launcher] index: initial load complete ({} roots)",
             roots.len()
@@ -280,6 +297,9 @@ pub(crate) fn start(entries: SharedEntries) {
                     continue;
                 }
                 Ok(WatchSignal::HostHint(dir)) => {
+                    let fresh_flows = Arc::new(load_flow_entries());
+                    let flows_changed = fresh_flows.as_ref() != flow_entries.as_ref();
+                    flow_entries = fresh_flows;
                     if let Some(root) = find_containing_root(&dir, &roots) {
                         dirty.insert(root.path.clone());
                         eprintln!(
@@ -287,6 +307,8 @@ pub(crate) fn start(entries: SharedEntries) {
                             dir.display(),
                             root.path.display()
                         );
+                    } else if flows_changed {
+                        publish(&entries, &cache, &file_entries, &flow_entries);
                     } else {
                         eprintln!(
                             "[launcher] index: host hint {} matches no root, ignoring",
@@ -347,7 +369,7 @@ pub(crate) fn start(entries: SharedEntries) {
                 );
             }
             if publish_needed {
-                publish(&entries, &cache, &file_entries);
+                publish(&entries, &cache, &file_entries, &flow_entries);
             }
         }
     });

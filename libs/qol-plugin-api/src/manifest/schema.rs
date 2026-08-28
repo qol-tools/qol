@@ -84,6 +84,25 @@ macro_rules! string_newtype {
 
 string_newtype!(PluginId, "a plugin id string");
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LauncherKind {
+    App,
+    Flow,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct LauncherSpec {
+    pub kind: LauncherKind,
+    pub title: String,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub row_actions: Vec<qol_config::contract::RowActionSpec>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginManifest {
     #[serde(default = "super::default_manifest_version")]
@@ -108,6 +127,8 @@ pub struct PluginManifest {
     pub config: ConfigDeclarations,
     #[serde(default)]
     pub shortcuts: Vec<ShortcutDeclaration>,
+    #[serde(default)]
+    pub launcher: Option<LauncherSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
