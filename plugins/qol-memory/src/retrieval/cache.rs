@@ -160,7 +160,7 @@ fn load_cache_file(path: &Path) -> anyhow::Result<Index> {
     let mut docs: Vec<super::IndexDoc> = Vec::with_capacity(file.rows.len());
     for row in &file.rows {
         let mut tf: HashMap<String, u32> = HashMap::new();
-        for pair in row.tf.chunks_exact(2) {
+        for pair in row.tf.as_chunks::<2>().0 {
             if let Some(term) = file.terms.get(pair[0] as usize) {
                 tf.insert(term.clone(), pair[1]);
             }
