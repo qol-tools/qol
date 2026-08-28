@@ -6301,6 +6301,7 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-log",
+ "qol-mcp",
  "qol-plugin-daemon",
  "qol-process",
  "qol-profile-sync",

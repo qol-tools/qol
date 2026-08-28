@@ -5,19 +5,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
+use qol_mcp::{
+    jsonrpc::{error_response, result_response, ErrorCode},
+    ServerInfo, ToolHost, ToolResult, ToolSpec,
+};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionInventory, SpawnSurface, TerminalSessionService,
 };
 use serde_json::{json, Value};
 
-const PROTOCOL_VERSION: &str = "2025-03-26";
 const SERVER_NAME: &str = "qol-sessions-mcp";
-
-const ERROR_PARSE: i64 = -32700;
-const ERROR_INVALID_REQUEST: i64 = -32600;
-const ERROR_METHOD_NOT_FOUND: i64 = -32601;
-const ERROR_INVALID_PARAMS: i64 = -32602;
 
 #[cfg(test)]
 const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(250);
@@ -133,50 +131,29 @@ impl McpSessionServer {
         let method = match message.get("method").and_then(Value::as_str) {
             Some(method) => method,
             None => {
-                return Some(error(
-                    message.get("id").cloned(),
-                    ERROR_INVALID_REQUEST,
+                return Some(error_response(
+                    message.get("id").cloned().unwrap_or(Value::Null),
+                    ErrorCode::InvalidRequest,
                     "invalid request: missing method",
                 ));
             }
         };
         let id = message.get("id").cloned().unwrap();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
-        Some(self.handle(method, params, id))
+        self.handle(method, params, id)
     }
 
-    fn handle(&self, method: &str, params: Value, id: Value) -> Value {
-        match method {
-            "initialize" => {
-                let requested = params
-                    .get("protocolVersion")
-                    .and_then(Value::as_str)
-                    .filter(|version| version.starts_with("2024-") || version.starts_with("2025-"))
-                    .unwrap_or(PROTOCOL_VERSION);
-                result(
-                    id,
-                    json!({
-                        "protocolVersion": requested,
-                        "capabilities": { "tools": { "listChanged": false } },
-                        "serverInfo": {
-                            "name": SERVER_NAME,
-                            "version": env!("CARGO_PKG_VERSION"),
-                        },
-                    }),
-                )
-            }
-            "ping" => result(id, json!({})),
-            "tools/list" => result(id, json!({ "tools": tool_definitions() })),
-            "tools/call" => self.call_tool(id, params),
-            "notifications/initialized"
-            | "notifications/cancelled"
-            | "notifications/roots/list_changed" => result(id, json!({})),
-            _ => error(
-                Some(id),
-                ERROR_METHOD_NOT_FOUND,
-                format!("method not found: {method}"),
-            ),
+    fn handle(&self, method: &str, params: Value, id: Value) -> Option<Value> {
+        if method == "tools/call" {
+            return Some(self.call_tool(id, params));
         }
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        qol_mcp::handle(self, message)
     }
 
     fn call_tool(&self, id: Value, params: Value) -> Value {
@@ -192,39 +169,45 @@ impl McpSessionServer {
         let name = params.get("name").and_then(Value::as_str);
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
         let Some(name) = name else {
-            return error(
-                Some(id.clone()),
-                ERROR_INVALID_PARAMS,
+            return error_response(
+                id.clone(),
+                ErrorCode::InvalidParams,
                 "tools/call requires a tool name",
             );
         };
-        let outcome = match name {
-            "sessions_list" => self.tool_list_sessions(),
-            "session_spawn" => self.tool_spawn(arguments, cancel),
-            "session_fork" => self.tool_fork(arguments),
-            "session_submit" => self.tool_submit(arguments),
-            "session_bridge" => self.tool_bridge(arguments, cancel),
-            "session_loop_close" => self.close_loop(arguments),
-            "session_close" => self.tool_close(arguments),
-            other => {
-                return error(
-                    Some(id.clone()),
-                    ERROR_INVALID_PARAMS,
-                    format!("unknown tool: {other}"),
-                );
-            }
+        let Some(outcome) = self.dispatch_tool(name, arguments, cancel) else {
+            return error_response(
+                id.clone(),
+                ErrorCode::InvalidParams,
+                format!("unknown tool: {name}"),
+            );
         };
-        let (text, is_error) = match outcome {
-            Ok(text) => (text, false),
-            Err(message) => (message, true),
+        let tool_result = match outcome {
+            Ok(text) => ToolResult::text(text),
+            Err(message) => ToolResult::error(message),
         };
-        result(
+        result_response(
             id.clone(),
-            json!({
-                "content": [{ "type": "text", "text": text }],
-                "isError": is_error,
-            }),
+            serde_json::to_value(&tool_result).unwrap_or_default(),
         )
+    }
+
+    fn dispatch_tool(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<Result<String, String>> {
+        match name {
+            "sessions_list" => Some(self.tool_list_sessions()),
+            "session_spawn" => Some(self.tool_spawn(arguments, cancel)),
+            "session_fork" => Some(self.tool_fork(arguments)),
+            "session_submit" => Some(self.tool_submit(arguments)),
+            "session_bridge" => Some(self.tool_bridge(arguments, cancel)),
+            "session_loop_close" => Some(self.close_loop(arguments)),
+            "session_close" => Some(self.tool_close(arguments)),
+            _ => None,
+        }
     }
 
     fn tool_list_sessions(&self) -> Result<String, String> {
@@ -536,6 +519,29 @@ impl McpSessionServer {
     }
 }
 
+impl ToolHost for McpSessionServer {
+    fn server_info(&self) -> ServerInfo {
+        ServerInfo {
+            name: SERVER_NAME.to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        }
+    }
+
+    fn list(&self) -> Vec<ToolSpec> {
+        super::contract::mcp_tool_specs()
+    }
+
+    fn call(&self, name: &str, arguments: Value) -> ToolResult {
+        let outcome = self
+            .dispatch_tool(name, arguments, None)
+            .unwrap_or_else(|| Err(format!("unknown tool: {name}")));
+        match outcome {
+            Ok(text) => ToolResult::text(text),
+            Err(message) => ToolResult::error(message),
+        }
+    }
+}
+
 pub(super) struct LoopCloseCommand<'a> {
     pub(super) binding: &'a SessionBinding,
     pub(super) completion_marker: &'a str,
@@ -768,7 +774,7 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
             }
         }
         if let Some(id) = id {
-            write_response(writer, &result(id, json!({})))?;
+            write_response(writer, &result_response(id, json!({})))?;
         }
         return Ok(());
     }
@@ -778,9 +784,9 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
     let Some(method) = method else {
         write_response(
             writer,
-            &error(
-                Some(id),
-                ERROR_INVALID_REQUEST,
+            &error_response(
+                id,
+                ErrorCode::InvalidRequest,
                 "invalid request: missing method",
             ),
         )?;
@@ -842,7 +848,9 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
         return Ok(());
     }
     let params = message.get("params").cloned().unwrap_or(Value::Null);
-    write_response(writer, &server.handle(method, params, id))?;
+    if let Some(response) = server.handle(method, params, id) {
+        write_response(writer, &response)?;
+    }
     Ok(())
 }
 
@@ -866,7 +874,11 @@ fn parse_json_line(line: &str) -> Result<Option<Value>, Value> {
     }
     match serde_json::from_str(line) {
         Ok(message) => Ok(Some(message)),
-        Err(_) => Err(error(None, ERROR_PARSE, "parse error: invalid JSON")),
+        Err(_) => Err(error_response(
+            Value::Null,
+            ErrorCode::ParseError,
+            "parse error: invalid JSON",
+        )),
     }
 }
 
@@ -958,31 +970,6 @@ fn pattern_visible(screen: &str, pattern: &str, last_sent: Option<&str>) -> bool
     screen
         .lines()
         .any(|line| line.contains(pattern) && !line.contains(sent))
-}
-
-fn tool_definitions() -> Vec<Value> {
-    super::contract::tool_specs()
-        .iter()
-        .map(|spec| {
-            json!({
-                "name": spec.name,
-                "description": spec.description,
-                "inputSchema": spec.input_schema,
-            })
-        })
-        .collect()
-}
-
-fn result(id: Value, value: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": value })
-}
-
-fn error(id: Option<Value>, code: i64, message: impl Into<String>) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id.unwrap_or(Value::Null),
-        "error": { "code": code, "message": message.into() }
-    })
 }
 
 #[cfg(test)]
@@ -1583,8 +1570,38 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(response["result"]["protocolVersion"], "2025-03-26");
         assert_eq!(response["result"]["serverInfo"]["name"], SERVER_NAME);
+    }
+
+    #[test]
+    fn initialize_negotiates_protocol_through_qol_mcp() {
+        let (server, _) = server(Vec::new(), false, false);
+        let echoed = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    1,
+                    "initialize",
+                    json!({ "protocolVersion": "2024-11-05" }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(echoed["result"]["protocolVersion"], "2024-11-05");
+        let fallback = server
+            .handle_line(
+                &serde_json::to_string(&request(
+                    2,
+                    "initialize",
+                    json!({ "protocolVersion": "1999-01-01" }),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            fallback["result"]["protocolVersion"],
+            qol_mcp::LATEST_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -1611,6 +1628,22 @@ mod tests {
                 "session_close"
             ]
         );
+    }
+
+    #[test]
+    fn tools_list_through_shared_handler_matches_contract() {
+        let (server, _) = server(Vec::new(), false, false);
+        let response = server
+            .handle_line(&serde_json::to_string(&request(3, "tools/list", json!({}))).unwrap())
+            .unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let specs = super::super::contract::mcp_tool_specs();
+        assert_eq!(tools.len(), specs.len());
+        for (tool, spec) in tools.iter().zip(&specs) {
+            assert_eq!(tool["name"], spec.name);
+            assert_eq!(tool["description"], spec.description);
+            assert_eq!(tool["inputSchema"], spec.input_schema);
+        }
     }
 
     #[test]
@@ -2578,16 +2611,16 @@ mod tests {
         let (server, _) = server(Vec::new(), false, false);
         assert_eq!(
             server.handle_line("{not json").unwrap()["error"]["code"],
-            ERROR_PARSE
+            ErrorCode::ParseError.code()
         );
         assert_eq!(
             tool_call(&server, "unknown", json!({}))["error"]["code"],
-            ERROR_INVALID_PARAMS
+            ErrorCode::InvalidParams.code()
         );
         let unknown = server
             .handle_line(&serde_json::to_string(&request(8, "resources/list", json!({}))).unwrap())
             .unwrap();
-        assert_eq!(unknown["error"]["code"], ERROR_METHOD_NOT_FOUND);
+        assert_eq!(unknown["error"]["code"], ErrorCode::MethodNotFound.code());
         assert!(server
             .handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
             .is_none());

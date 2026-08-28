@@ -311,6 +311,17 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
+pub(crate) fn mcp_tool_specs() -> Vec<qol_mcp::ToolSpec> {
+    tool_specs()
+        .into_iter()
+        .map(|spec| qol_mcp::ToolSpec {
+            name: spec.name.to_string(),
+            description: spec.description.to_string(),
+            input_schema: spec.input_schema,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +344,18 @@ mod tests {
                 "session_close"
             ]
         );
+    }
+
+    #[test]
+    fn mcp_tool_specs_keeps_order_and_schemas() {
+        let local = tool_specs();
+        let shared = mcp_tool_specs();
+        assert_eq!(shared.len(), local.len());
+        for (local_spec, shared_spec) in local.iter().zip(&shared) {
+            assert_eq!(shared_spec.name, local_spec.name);
+            assert_eq!(shared_spec.description, local_spec.description);
+            assert_eq!(shared_spec.input_schema, local_spec.input_schema);
+        }
     }
 
     #[test]
