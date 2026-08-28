@@ -5,7 +5,7 @@ description = "Answer a question from the settled agent session history"
 poll_interval_ms = 60000
 agent_tool = true
 tool_description = "Retrieve settled facts from the user's agent session history. Ask in plain words; the answer names the matching prior sessions and skills."
-input = { query = "question in plain words", cwd = "optional working directory for scoping", exclude_session = "optional session id to exclude" }
+input = { query = "question in plain words", cwd = "optional working directory for scoping", exclude_session = "optional session id to exclude", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [query.status]
 description = "Store size, index freshness and pending candidates"
@@ -16,18 +16,18 @@ tool_description = "Report the qol-memory store size, index freshness and pendin
 [query.continue]
 description = "Units landed since the per-cwd continuation marker"
 poll_interval_ms = 60000
-input = { cwd = "working directory of the session", session = "session id being continued" }
+input = { cwd = "working directory of the session", session = "session id being continued", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [query.rows]
 description = "Launcher rows for a question: the answer, recalled units and skill hits"
 poll_interval_ms = 60000
-input = { query = "question typed in the launcher" }
+input = { query = "question typed in the launcher", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [action.capture]
 description = "Append one settled fact to the store"
 agent_tool = true
 tool_description = "Remember one settled fact for future sessions. Write one self-contained sentence carrying the identifiers a later reader needs (paths, commits, names, dates). It is stored verbatim, scoped to cwd, and comes back through qol-memory__ask and the session-start continue block. Calling it twice with the same text and cwd stores one fact."
-input = { text = "the fact as one self-contained sentence", cwd = "absolute working directory of the project the fact belongs to" }
+input = { text = "the fact as one self-contained sentence", cwd = "absolute working directory of the project the fact belongs to", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [action.reindex]
 description = "Drop the persisted BM25 indexes and rebuild them"

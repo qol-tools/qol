@@ -15,15 +15,16 @@ const DEFAULT_LOG_SOURCE: &str = "ask-cli";
 
 const USAGE_ASK: &str = concat!(
     "usage: qol-memory ask \"<query>\" [--k N] [--exclude-session ID] [--brief] ",
-    "[--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH]"
+    "[--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH] [--agent-home DIR]"
 );
 const USAGE_STATUS: &str = "usage: qol-memory status [--store PATH]";
 const USAGE_RUN: &str = "usage: qol-memory run";
 const USAGE_CAPTURE: &str =
-    "usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH]";
-const USAGE_CONTINUE: &str = "usage: qol-memory continue --cwd PATH --session ID [--store PATH]";
+    "usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH] [--agent-home DIR]";
+const USAGE_CONTINUE: &str =
+    "usage: qol-memory continue --cwd PATH --session ID [--store PATH] [--agent-home DIR]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
-const USAGE_ROWS: &str = "usage: qol-memory rows \"<query>\" [--store PATH]";
+const USAGE_ROWS: &str = "usage: qol-memory rows \"<query>\" [--store PATH] [--agent-home DIR]";
 
 type PlainHandler = Box<dyn Fn(&CommandContext) -> Result<Execution> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
@@ -100,7 +101,8 @@ fn ask_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .about("Answer a question from your agent history memory.")
         .usage(format!(
             "{BINARY_NAME} ask \"<query>\" [--k N] [--exclude-session ID] [--brief] \
-             [--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH]"
+             [--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH] \
+             [--agent-home DIR]"
         ))
         .detail("The first positional argument is the query; quote it.")
         .detail(format!(
@@ -140,6 +142,7 @@ fn capture_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .about("Append one settled fact or one whole unit to the memory store.")
         .usage(USAGE_CAPTURE)
         .detail("Pass a fact with --text and --cwd, or a whole unit as a JSON object with --unit.")
+        .detail("--agent-home names the caller's agent home; it is stamped on the unit.")
         .output("The `appended: <n>` line in plain text; the appended count with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))
@@ -150,6 +153,7 @@ fn continue_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("continue")
         .about("Print the units that landed since the per-cwd continuation marker.")
         .usage(USAGE_CONTINUE)
+        .detail("--agent-home names the caller's agent home used for visibility.")
         .output(
             "The continuation block in plain text when units were injected; \
              nothing otherwise; the outcome object with --json.",
@@ -162,7 +166,7 @@ fn continue_command(plain: PlainHandler, json: JsonHandler) -> Command {
 fn rows_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("rows")
         .about("Print the launcher rows for a question.")
-        .usage(format!("{BINARY_NAME} rows \"<query>\" [--store PATH]"))
+        .usage(USAGE_ROWS)
         .detail("Rows are the answer, the recalled units and the skill hits, in that order.")
         .output("One line per row: title, a tab, then the subtitle; the rows object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
@@ -193,6 +197,7 @@ fn parse_ask_invocation(args: &[String]) -> std::result::Result<CliAskInvocation
         k: DEFAULT_K,
         brief: false,
         exclude_session: None,
+        agent_home: None,
     };
     let mut log_options = LogOptions {
         source: DEFAULT_LOG_SOURCE.to_string(),
@@ -219,6 +224,10 @@ fn parse_ask_invocation(args: &[String]) -> std::result::Result<CliAskInvocation
             "--exclude-session" => {
                 request.exclude_session =
                     Some(value_flag(args, index, "--exclude-session")?.to_string());
+                index += 2;
+            }
+            "--agent-home" => {
+                request.agent_home = Some(value_flag(args, index, "--agent-home")?.to_string());
                 index += 2;
             }
             "--log-source" => {
@@ -263,6 +272,8 @@ fn parse_ask_invocation(args: &[String]) -> std::result::Result<CliAskInvocation
         None => return Err(usage_error("missing query")),
     };
     request.query = query;
+    request.agent_home =
+        Some(qol_agent_homes::Registry::load().resolve_caller(request.agent_home.as_deref()));
     Ok(CliAskInvocation {
         request,
         log_options,
@@ -300,6 +311,7 @@ fn parse_status_invocation(args: &[String]) -> std::result::Result<Option<PathBu
 struct CaptureInvocation {
     unit: Value,
     store: Option<PathBuf>,
+    agent_home: Option<String>,
 }
 
 fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvocation, String> {
@@ -307,6 +319,7 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
     let mut text: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut store: Option<PathBuf> = None;
+    let mut agent_home: Option<String> = None;
     let mut index = 0usize;
     while index < args.len() {
         let token = args[index].as_str();
@@ -338,6 +351,11 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
                     "--store",
                     USAGE_CAPTURE,
                 )?));
+                index += 2;
+            }
+            "--agent-home" => {
+                let value = value_flag_with(args, index, "--agent-home", USAGE_CAPTURE)?;
+                agent_home = Some(value.to_string());
                 index += 2;
             }
             other if other.starts_with("--") => {
@@ -372,19 +390,26 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
         }
         crate::ingest::capture_unit(text.trim(), cwd.trim(), &crate::text::now_iso())
     };
-    Ok(CaptureInvocation { unit, store })
+    let agent_home = Some(qol_agent_homes::Registry::load().resolve_caller(agent_home.as_deref()));
+    Ok(CaptureInvocation {
+        unit,
+        store,
+        agent_home,
+    })
 }
 
 struct ContinueInvocation {
     cwd: String,
     session: String,
     store: Option<PathBuf>,
+    agent_home: Option<String>,
 }
 
 fn parse_continue_invocation(args: &[String]) -> std::result::Result<ContinueInvocation, String> {
     let mut cwd: Option<String> = None;
     let mut session: Option<String> = None;
     let mut store: Option<PathBuf> = None;
+    let mut agent_home: Option<String> = None;
     let mut index = 0usize;
     while index < args.len() {
         let token = args[index].as_str();
@@ -407,6 +432,11 @@ fn parse_continue_invocation(args: &[String]) -> std::result::Result<ContinueInv
                 )?));
                 index += 2;
             }
+            "--agent-home" => {
+                let value = value_flag_with(args, index, "--agent-home", USAGE_CONTINUE)?;
+                agent_home = Some(value.to_string());
+                index += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(usage_continue_error(&format!("unknown flag `{other}`")));
             }
@@ -425,21 +455,25 @@ fn parse_continue_invocation(args: &[String]) -> std::result::Result<ContinueInv
         Some(session) => session,
         None => return Err(usage_continue_error("--session is required")),
     };
+    let agent_home = Some(qol_agent_homes::Registry::load().resolve_caller(agent_home.as_deref()));
     Ok(ContinueInvocation {
         cwd,
         session,
         store,
+        agent_home,
     })
 }
 
 struct RowsInvocation {
     query: String,
     store: Option<PathBuf>,
+    agent_home: Option<String>,
 }
 
 fn parse_rows_invocation(args: &[String]) -> std::result::Result<RowsInvocation, String> {
     let mut query: Option<String> = None;
     let mut store: Option<PathBuf> = None;
+    let mut agent_home: Option<String> = None;
     let mut index = 0usize;
     while index < args.len() {
         let token = args[index].as_str();
@@ -448,6 +482,11 @@ fn parse_rows_invocation(args: &[String]) -> std::result::Result<RowsInvocation,
                 store = Some(PathBuf::from(value_flag_with(
                     args, index, "--store", USAGE_ROWS,
                 )?));
+                index += 2;
+            }
+            "--agent-home" => {
+                let value = value_flag_with(args, index, "--agent-home", USAGE_ROWS)?;
+                agent_home = Some(value.to_string());
                 index += 2;
             }
             other if other.starts_with("--") => {
@@ -466,7 +505,12 @@ fn parse_rows_invocation(args: &[String]) -> std::result::Result<RowsInvocation,
         Some(query) => query,
         None => return Err(usage_rows_error("missing query")),
     };
-    Ok(RowsInvocation { query, store })
+    let agent_home = Some(qol_agent_homes::Registry::load().resolve_caller(agent_home.as_deref()));
+    Ok(RowsInvocation {
+        query,
+        store,
+        agent_home,
+    })
 }
 
 struct ReindexInvocation {
@@ -595,6 +639,7 @@ fn ask_via_socket(invocation: &CliAskInvocation) -> Result<Option<AskOutput>> {
         "k": invocation.request.k,
         "brief": invocation.request.brief,
         "exclude_session": invocation.request.exclude_session,
+        "agent_home": invocation.request.agent_home,
         "log_source": invocation.log_options.source,
         "log_cwd": invocation.log_options.cwd,
         "log_fact": invocation.log_options.fact,
@@ -689,7 +734,11 @@ fn run_capture_json(context: &CommandContext) -> Result<Value> {
 
 fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
     if invocation.store.is_none() {
-        match crate::app::send_request("capture", json!({ "unit": invocation.unit.clone() })) {
+        let input = json!({
+            "unit": invocation.unit.clone(),
+            "agent_home": invocation.agent_home,
+        });
+        match crate::app::send_request("capture", input) {
             Ok(Some(value)) => {
                 let appended = value
                     .get("appended")
@@ -710,8 +759,14 @@ fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
 fn in_process_capture(invocation: &CaptureInvocation) -> Result<usize> {
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
+    let mut unit = invocation.unit.clone();
+    if let Some(fields) = unit.as_object_mut() {
+        if let Some(agent_home) = invocation.agent_home.as_deref() {
+            fields.insert("agent_home".to_string(), json!(agent_home));
+        }
+    }
     let mut keys = crate::ingest::KeySet::load(&store)?;
-    crate::ingest::append_units(&store, std::slice::from_ref(&invocation.unit), &mut keys)
+    crate::ingest::append_units(&store, std::slice::from_ref(&unit), &mut keys)
 }
 
 fn run_continue_plain(context: &CommandContext) -> Result<Execution> {
@@ -742,6 +797,7 @@ fn continue_payload(invocation: &ContinueInvocation) -> Result<Value> {
         let input = json!({
             "cwd": invocation.cwd,
             "session": invocation.session,
+            "agent_home": invocation.agent_home,
         });
         match crate::app::send_request("continue", input) {
             Ok(Some(value)) => return Ok(value),
@@ -755,6 +811,7 @@ fn continue_payload(invocation: &ContinueInvocation) -> Result<Value> {
     let request = crate::continue_recall::ContinueRequest {
         cwd: invocation.cwd.clone(),
         session: invocation.session.clone(),
+        agent_home: invocation.agent_home.clone(),
     };
     let outcome = crate::continue_recall::run(&store, &request)?;
     serde_json::to_value(outcome).context("failed to serialize the continue outcome")
@@ -776,7 +833,10 @@ fn run_rows_json(context: &CommandContext) -> Result<Value> {
 
 fn rows_payload(invocation: &RowsInvocation) -> Result<Value> {
     if invocation.store.is_none() {
-        match crate::app::send_request("rows", json!({ "query": invocation.query })) {
+        match crate::app::send_request(
+            "rows",
+            json!({ "query": invocation.query, "agent_home": invocation.agent_home }),
+        ) {
             Ok(Some(value)) => return Ok(value),
             Ok(None) => anyhow::bail!("qol-memory daemon returned no rows payload"),
             Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
@@ -793,6 +853,7 @@ fn rows_payload(invocation: &RowsInvocation) -> Result<Value> {
         k: DEFAULT_K,
         brief: false,
         exclude_session: None,
+        agent_home: invocation.agent_home.clone(),
     };
     let output = crate::ask::run_with_layers(&store, &aliases, &request, &units, &notes)?;
     let flow_rows = crate::ask::rows::from_output(&output, &units, &notes);
@@ -1071,6 +1132,111 @@ mod tests {
     }
 
     #[test]
+    fn agent_home_flag_defaults_to_an_explicit_caller() {
+        let ask = parse_args(&["query"]).expect("ask parses");
+        assert!(!ask
+            .request
+            .agent_home
+            .as_deref()
+            .expect("explicit agent home")
+            .is_empty());
+        let flagged_ask =
+            parse_args(&["--agent-home", "/tmp/h1", "query"]).expect("ask flag parses");
+        assert_eq!(flagged_ask.request.agent_home.as_deref(), Some("/tmp/h1"));
+
+        let capture =
+            parse_capture_args(&["--text", "fact", "--cwd", "/p"]).expect("capture parses");
+        assert!(!capture
+            .agent_home
+            .as_deref()
+            .expect("explicit home")
+            .is_empty());
+        let flagged_capture =
+            parse_capture_args(&["--text", "fact", "--cwd", "/p", "--agent-home", "/tmp/h2"])
+                .expect("capture flag parses");
+        assert_eq!(flagged_capture.agent_home.as_deref(), Some("/tmp/h2"));
+
+        let continue_args: Vec<String> = ["--cwd", "/repo", "--session", "s"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let continue_invocation =
+            parse_continue_invocation(&continue_args).expect("continue parses");
+        assert!(!continue_invocation
+            .agent_home
+            .as_deref()
+            .expect("explicit home")
+            .is_empty());
+        let flagged_continue: Vec<String> = [
+            "--cwd",
+            "/repo",
+            "--session",
+            "s",
+            "--agent-home",
+            "/tmp/h3",
+        ]
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect();
+        let flagged_continue_invocation =
+            parse_continue_invocation(&flagged_continue).expect("continue flag parses");
+        assert_eq!(
+            flagged_continue_invocation.agent_home.as_deref(),
+            Some("/tmp/h3")
+        );
+
+        let rows_args: Vec<String> = ["query"].iter().map(|arg| (*arg).to_string()).collect();
+        let rows_invocation = parse_rows_invocation(&rows_args).expect("rows parses");
+        assert!(!rows_invocation
+            .agent_home
+            .as_deref()
+            .expect("explicit home")
+            .is_empty());
+        let flagged_rows: Vec<String> = ["--agent-home", "/tmp/h4", "query"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let flagged_rows_invocation =
+            parse_rows_invocation(&flagged_rows).expect("rows flag parses");
+        assert_eq!(
+            flagged_rows_invocation.agent_home.as_deref(),
+            Some("/tmp/h4")
+        );
+
+        let home = std::path::PathBuf::from(std::env::var("HOME").expect("HOME is set"));
+        let expected = home.join("h").to_string_lossy().into_owned();
+        let tilde_ask = parse_args(&["--agent-home", "~/h", "query"]).expect("ask tilde parses");
+        assert_eq!(
+            tilde_ask.request.agent_home.as_deref(),
+            Some(expected.as_str())
+        );
+        let tilde_capture =
+            parse_capture_args(&["--text", "fact", "--cwd", "/p", "--agent-home", "~/h/"])
+                .expect("capture tilde parses");
+        assert_eq!(tilde_capture.agent_home.as_deref(), Some(expected.as_str()));
+        let tilde_continue: Vec<String> =
+            ["--cwd", "/repo", "--session", "s", "--agent-home", "~/h"]
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .collect();
+        let tilde_continue_invocation =
+            parse_continue_invocation(&tilde_continue).expect("continue tilde parses");
+        assert_eq!(
+            tilde_continue_invocation.agent_home.as_deref(),
+            Some(expected.as_str())
+        );
+        let tilde_rows: Vec<String> = ["--agent-home", "~/h/", "query"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let tilde_rows_invocation = parse_rows_invocation(&tilde_rows).expect("rows tilde parses");
+        assert_eq!(
+            tilde_rows_invocation.agent_home.as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
     fn empty_store_status_and_ask_exit_one_with_the_store_error() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1322,7 +1488,7 @@ mod tests {
         let report: DoctorReport =
             serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 8);
+        assert_eq!(report.checks.len(), 9);
         let ids = report
             .checks
             .iter()
@@ -1332,6 +1498,7 @@ mod tests {
             ids,
             vec![
                 "platform_supported",
+                "agent_homes",
                 "store_dir",
                 "units_layer",
                 "notes_layer",

@@ -17,6 +17,7 @@ pub const SETTINGS_SURFACE_SOCKET_FILE: &str = "settings-surface.sock";
 pub const SETTINGS_SURFACE_APP_ID: &str = "qol-settings-surface";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
+pub const HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home";
 pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";

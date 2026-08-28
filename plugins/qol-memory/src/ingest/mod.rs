@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use qol_agent_homes::Registry;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
@@ -28,36 +29,70 @@ const MAX_DEPTH: usize = 8;
 
 struct IgnoreRule(String, Option<Regex>);
 
+pub const SUPPORTED_SOURCES: [&str; 2] = ["claude", "pi"];
+
+pub struct IngestRoot {
+    pub path: PathBuf,
+    pub source: &'static str,
+    pub agent_home: String,
+}
+
 pub struct IngestRoots {
-    pub pi: PathBuf,
-    pub claude: PathBuf,
+    pub roots: Vec<IngestRoot>,
 }
 
 impl IngestRoots {
     pub fn resolve() -> IngestRoots {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let pi = std::env::var_os("QOL_MEMORY_PI_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".pi").join("agent").join("sessions"));
-        let claude = std::env::var_os("QOL_MEMORY_CLAUDE_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".claude").join("projects"));
-        IngestRoots { pi, claude }
+        IngestRoots::from_registry(&Registry::load())
     }
 
-    pub fn source_of(&self, path: &Path) -> Option<&'static str> {
-        if path.starts_with(&self.pi) {
-            Some("pi")
-        } else if path.starts_with(&self.claude) {
-            Some("claude")
-        } else {
-            None
+    pub fn from_registry(registry: &Registry) -> IngestRoots {
+        let mut roots: Vec<IngestRoot> = registry
+            .transcript_roots()
+            .into_iter()
+            .filter(|(home, _)| SUPPORTED_SOURCES.contains(&home.harness.id()))
+            .map(|(home, path)| IngestRoot {
+                path,
+                source: home.harness.id(),
+                agent_home: home.id,
+            })
+            .collect();
+        for source in ["pi", "claude"] {
+            let Some(path) = env_root(source) else {
+                continue;
+            };
+            let harness = match source {
+                "pi" => qol_agent_homes::Harness::Pi,
+                _ => qol_agent_homes::Harness::Claude,
+            };
+            let agent_home = registry.current(harness).id;
+            roots.retain(|root| root.source != source);
+            roots.push(IngestRoot {
+                path,
+                source,
+                agent_home,
+            });
         }
+        IngestRoots { roots }
     }
+
+    pub fn source_of(&self, path: &Path) -> Option<(&'static str, &str)> {
+        self.roots
+            .iter()
+            .find(|root| path.starts_with(&root.path))
+            .map(|root| (root.source, root.agent_home.as_str()))
+    }
+}
+
+fn env_root(source: &str) -> Option<PathBuf> {
+    let name = match source {
+        "pi" => "QOL_MEMORY_PI_DIR",
+        "claude" => "QOL_MEMORY_CLAUDE_DIR",
+        _ => return None,
+    };
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 pub struct KeySet {
@@ -133,21 +168,24 @@ pub fn capture_unit(text: &str, cwd: &str, ts: &str) -> serde_json::Value {
 pub fn is_ignored(roots: &IngestRoots, path: &Path) -> bool {
     let lossy = path.to_string_lossy();
     let raw: &str = lossy.as_ref();
-    let pi_lossy = roots.pi.to_string_lossy();
-    let pi: &str = pi_lossy.as_ref();
-    let claude_lossy = roots.claude.to_string_lossy();
-    let claude: &str = claude_lossy.as_ref();
-    let rel = if !pi.is_empty() && raw.starts_with(pi) {
-        format!("~pi{}", &raw[pi.len()..])
-    } else if !claude.is_empty() && raw.starts_with(claude) {
-        format!("~claude{}", &raw[claude.len()..])
-    } else {
-        raw.to_string()
-    };
-    let normalized = rel.replace('\\', "/");
+    let mut rels: Vec<String> = vec![raw.to_string()];
+    for root in &roots.roots {
+        let root_lossy = root.path.to_string_lossy();
+        let root_str: &str = root_lossy.as_ref();
+        if !root_str.is_empty() && raw.starts_with(root_str) {
+            rels.push(format!("~{}{}", root.source, &raw[root_str.len()..]));
+        }
+    }
+    let normalized: Vec<String> = rels.iter().map(|rel| rel.replace('\\', "/")).collect();
     ignore_rules().iter().any(|rule| match rule {
-        IgnoreRule(_, Some(built)) => built.is_match(&rel) || built.is_match(&normalized),
-        IgnoreRule(text, None) => rel.contains(text) || normalized.contains(text),
+        IgnoreRule(_, Some(built)) => {
+            rels.iter().any(|rel| built.is_match(rel))
+                || normalized.iter().any(|rel| built.is_match(rel))
+        }
+        IgnoreRule(text, None) => {
+            rels.iter().any(|rel| rel.contains(text))
+                || normalized.iter().any(|rel| rel.contains(text))
+        }
     })
 }
 
@@ -260,7 +298,7 @@ pub fn ingest_paths(
     let mut report = IngestReport::default();
     let mut persisted = state::IngestState::load(store);
     for path in paths {
-        let Some(source) = roots.source_of(path) else {
+        let Some((source, agent_home)) = roots.source_of(path) else {
             continue;
         };
         if is_ignored(roots, path) {
@@ -293,7 +331,7 @@ pub fn ingest_paths(
             }
             None => transcript::ParseCursor::default(),
         };
-        let parsed = transcript::parse_file(path, source, cursor)?;
+        let parsed = transcript::parse_file(path, source, agent_home, cursor)?;
         let appended = append_units(store, &parsed.units, keys)?;
         report.files += 1;
         report.appended += appended;
@@ -316,8 +354,10 @@ pub fn ingest_paths(
 }
 
 pub fn walk_roots(roots: &IngestRoots) -> Vec<PathBuf> {
-    let mut paths = walk_root(roots, &roots.pi, 0);
-    paths.extend(walk_root(roots, &roots.claude, 0));
+    let mut paths = Vec::new();
+    for root in &roots.roots {
+        paths.extend(walk_root(roots, &root.path, 0));
+    }
     paths
 }
 
@@ -417,13 +457,47 @@ mod tests {
     }
 
     fn roots_in(dir: &TempDir) -> IngestRoots {
-        let roots = IngestRoots {
-            pi: dir.0.join("pi"),
-            claude: dir.0.join("claude"),
-        };
-        std::fs::create_dir_all(&roots.pi).unwrap();
-        std::fs::create_dir_all(&roots.claude).unwrap();
+        let pi = dir.0.join("pi");
+        let claude = dir.0.join("claude");
+        std::fs::create_dir_all(&pi).unwrap();
+        std::fs::create_dir_all(&claude).unwrap();
+        IngestRoots {
+            roots: vec![
+                IngestRoot {
+                    path: pi,
+                    source: "pi",
+                    agent_home: "test-pi".to_string(),
+                },
+                IngestRoot {
+                    path: claude,
+                    source: "claude",
+                    agent_home: "test-claude".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn root_dir(roots: &IngestRoots, source: &str) -> PathBuf {
         roots
+            .roots
+            .iter()
+            .find(|root| root.source == source)
+            .unwrap()
+            .path
+            .clone()
+    }
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GUARD: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        GUARD
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    fn clear_transcript_env_vars() {
+        std::env::remove_var("QOL_MEMORY_PI_DIR");
+        std::env::remove_var("QOL_MEMORY_CLAUDE_DIR");
     }
 
     #[test]
@@ -473,18 +547,14 @@ mod tests {
     fn ignore_rules_match_snapshot_semantics() {
         let dir = TempDir::new("ignore");
         let roots = roots_in(&dir);
-        assert!(is_ignored(
-            &roots,
-            &roots.pi.join("sub").join("token-file.jsonl")
-        ));
-        assert!(is_ignored(
-            &roots,
-            &roots.claude.join("api-secret-keys.jsonl")
-        ));
-        assert!(is_ignored(&roots, &roots.claude.join("deep").join(".env")));
-        assert!(is_ignored(&roots, &roots.claude.join(".env.local")));
-        assert!(!is_ignored(&roots, &roots.pi.join("plain.jsonl")));
-        assert!(!is_ignored(&roots, &roots.pi.join("c.jsonl")));
+        let pi = root_dir(&roots, "pi");
+        let claude = root_dir(&roots, "claude");
+        assert!(is_ignored(&roots, &pi.join("sub").join("token-file.jsonl")));
+        assert!(is_ignored(&roots, &claude.join("api-secret-keys.jsonl")));
+        assert!(is_ignored(&roots, &claude.join("deep").join(".env")));
+        assert!(is_ignored(&roots, &claude.join(".env.local")));
+        assert!(!is_ignored(&roots, &pi.join("plain.jsonl")));
+        assert!(!is_ignored(&roots, &pi.join("c.jsonl")));
     }
 
     #[test]
@@ -559,7 +629,7 @@ mod tests {
         let dir = TempDir::new("resume");
         let store = store_in(&dir);
         let roots = roots_in(&dir);
-        let path = roots.pi.join("a.jsonl");
+        let path = root_dir(&roots, "pi").join("a.jsonl");
         std::fs::write(
             &path,
             concat!(
@@ -611,7 +681,7 @@ mod tests {
         let dir = TempDir::new("shrunk");
         let store = store_in(&dir);
         let roots = roots_in(&dir);
-        let path = roots.claude.join("a.jsonl");
+        let path = root_dir(&roots, "claude").join("a.jsonl");
         let line = |text: &str| {
             format!("{{\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}},\"sessionId\":\"sx\",\"cwd\":\"/wx\",\"timestamp\":\"2026-02-01T00:00:00.000Z\"}}\n")
         };
@@ -651,5 +721,103 @@ mod tests {
         let third = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
         assert_eq!(third.reparsed, 1);
         assert_eq!(third.appended, 4);
+    }
+
+    #[test]
+    fn from_registry_without_declared_homes_yields_one_root_per_supported_harness() {
+        let _guard = env_guard();
+        clear_transcript_env_vars();
+        let user_home = PathBuf::from("/qol-memory-fake-home");
+        let registry = qol_agent_homes::Registry::load_from(None, &user_home, &|_| None);
+        let roots = IngestRoots::from_registry(&registry);
+        assert_eq!(roots.roots.len(), 2);
+        for source in SUPPORTED_SOURCES {
+            assert!(roots.roots.iter().any(|root| root.source == source));
+        }
+        let claude = roots
+            .roots
+            .iter()
+            .find(|root| root.source == "claude")
+            .unwrap();
+        assert_eq!(claude.path, user_home.join(".claude").join("projects"));
+        assert_eq!(
+            claude.agent_home,
+            user_home.join(".claude").to_string_lossy().into_owned()
+        );
+    }
+
+    #[test]
+    fn two_declared_claude_homes_are_both_walked_and_sourced() {
+        let _guard = env_guard();
+        clear_transcript_env_vars();
+        let dir = TempDir::new("two-homes");
+        let file = dir.0.join("agents.toml");
+        std::fs::write(
+            &file,
+            concat!(
+                "[[home]]\n",
+                "harness = \"claude\"\n",
+                "path = \"~/claude-one\"\n",
+                "\n",
+                "[[home]]\n",
+                "harness = \"claude\"\n",
+                "path = \"~/claude-two\"\n",
+            ),
+        )
+        .unwrap();
+        let registry = qol_agent_homes::Registry::load_from(Some(&file), &dir.0, &|_| None);
+        let roots = IngestRoots::from_registry(&registry);
+        let claude_roots: Vec<&IngestRoot> = roots
+            .roots
+            .iter()
+            .filter(|root| root.source == "claude")
+            .collect();
+        assert_eq!(claude_roots.len(), 3);
+        let first = dir.0.join("claude-one").join("projects");
+        let second = dir.0.join("claude-two").join("projects");
+        assert!(claude_roots.iter().any(|root| root.path == first));
+        assert!(claude_roots.iter().any(|root| root.path == second));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("a.jsonl"), "").unwrap();
+        std::fs::write(second.join("b.jsonl"), "").unwrap();
+        assert_eq!(
+            walk_roots(&roots),
+            vec![first.join("a.jsonl"), second.join("b.jsonl")]
+        );
+        let first_home = dir.0.join("claude-one").to_string_lossy().into_owned();
+        let second_home = dir.0.join("claude-two").to_string_lossy().into_owned();
+        assert_eq!(
+            roots.source_of(&first.join("a.jsonl")),
+            Some(("claude", first_home.as_str()))
+        );
+        assert_eq!(
+            roots.source_of(&second.join("b.jsonl")),
+            Some(("claude", second_home.as_str()))
+        );
+    }
+
+    #[test]
+    fn env_var_replaces_that_harness_roots_with_current_home() {
+        let _guard = env_guard();
+        clear_transcript_env_vars();
+        let user_home = PathBuf::from("/qol-memory-env-home");
+        let registry = qol_agent_homes::Registry::load_from(None, &user_home, &|_| None);
+        std::env::set_var("QOL_MEMORY_CLAUDE_DIR", "/env-home/.claude/projects");
+        let roots = IngestRoots::from_registry(&registry);
+        std::env::remove_var("QOL_MEMORY_CLAUDE_DIR");
+        let claude_roots: Vec<&IngestRoot> = roots
+            .roots
+            .iter()
+            .filter(|root| root.source == "claude")
+            .collect();
+        assert_eq!(claude_roots.len(), 1);
+        assert_eq!(
+            claude_roots[0].path,
+            PathBuf::from("/env-home/.claude/projects")
+        );
+        assert_eq!(claude_roots[0].agent_home, "/qol-memory-env-home/.claude");
+        let pi = roots.roots.iter().find(|root| root.source == "pi").unwrap();
+        assert_eq!(pi.agent_home, "/qol-memory-env-home/.pi/agent");
     }
 }

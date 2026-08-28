@@ -15,6 +15,11 @@ pub fn checks() -> Vec<DoctorCheck> {
             platform_supported_check,
         ),
         DoctorCheck::new(
+            "agent_homes",
+            "Verify every registered agent home transcript root exists.",
+            agent_homes_check,
+        ),
+        DoctorCheck::new(
             "store_dir",
             "Verify the memory store directory exists.",
             store_dir_check,
@@ -50,6 +55,89 @@ pub fn checks() -> Vec<DoctorCheck> {
             aliases_valid_check,
         ),
     ]
+}
+
+fn agent_homes_check() -> Result<DoctorCheckResult> {
+    let registry = qol_agent_homes::Registry::load();
+    let mut warnings: Vec<String> = Vec::new();
+    if let Some(error) = registry.load_error() {
+        let file = qol_config::config_dir()
+            .map(|dir| {
+                dir.join(qol_agent_homes::REGISTRY_FILE_NAME)
+                    .display()
+                    .to_string()
+            })
+            .unwrap_or_else(|| qol_agent_homes::REGISTRY_FILE_NAME.to_string());
+        warnings.push(format!("{file} could not be loaded: {error}"));
+    }
+    let roots = crate::ingest::IngestRoots::from_registry(&registry);
+    let mut listed: Vec<String> = Vec::new();
+    let mut absent: Vec<String> = Vec::new();
+    let mut broken: Vec<String> = Vec::new();
+    for root in &roots.roots {
+        let home_path = registry
+            .homes()
+            .iter()
+            .find(|home| home.id == root.agent_home)
+            .map(|home| home.path.clone())
+            .unwrap_or_else(|| {
+                root.path
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| root.path.clone())
+            });
+        if !home_path.exists() {
+            absent.push(root.agent_home.clone());
+        } else if !root.path.is_dir() {
+            broken.push(format!("{} -> {}", root.agent_home, root.path.display()));
+        } else {
+            listed.push(format!("{} -> {}", root.agent_home, root.path.display()));
+        }
+    }
+    if !broken.is_empty() {
+        warnings.push(format!(
+            "transcript root directories are missing: {}",
+            broken.join(", ")
+        ));
+    }
+    let mut unregistered: Vec<String> = Vec::new();
+    for harness in [
+        qol_agent_homes::Harness::Claude,
+        qol_agent_homes::Harness::Pi,
+    ] {
+        let current = registry.current(harness);
+        if !registry.is_registered(&current.id) {
+            warnings.push(format!(
+                "the current {} home {} is not registered",
+                harness.id(),
+                current.id
+            ));
+            unregistered.push(format!(
+                "qol agents add {} {}",
+                harness.id(),
+                current.path.display()
+            ));
+        }
+    }
+    if warnings.is_empty() {
+        let mut parts = listed;
+        if !absent.is_empty() {
+            parts.push(format!("absent homes: {}", absent.join(", ")));
+        }
+        parts.push("a caller sees its own home plus shared homes".to_string());
+        Ok(DoctorCheckResult::ok(
+            "agent_homes",
+            format!("Agent homes and transcript roots: {}.", parts.join("; ")),
+        ))
+    } else {
+        let result = DoctorCheckResult::warn("agent_homes", warnings.join("; "));
+        let result = if unregistered.is_empty() {
+            result
+        } else {
+            result.with_fix(format!("register it with {}", unregistered.join(" or ")))
+        };
+        Ok(result)
+    }
 }
 
 fn store_dir_check() -> Result<DoctorCheckResult> {
@@ -135,10 +223,13 @@ fn index_cache_check() -> Result<DoctorCheckResult> {
             ))
         }
     };
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(None);
+    let slug = crate::agent_home::cache_slug(&caller);
     let user_units_input: Vec<crate::store::Unit> = layer
         .items
         .iter()
-        .filter(|unit| unit.kind == "user")
+        .filter(|unit| unit.kind == "user" && crate::agent_home::visible(unit, &caller, &registry))
         .cloned()
         .collect();
     let user_units = crate::store::dedupe_user_units(&user_units_input);
@@ -149,19 +240,21 @@ fn index_cache_check() -> Result<DoctorCheckResult> {
             text: unit.text.as_str(),
         })
         .collect();
+    let layer_name = format!("user-{slug}");
     Ok(
-        match cache_state(store.root(), "user", &refs, Some(&layer.path)) {
+        match cache_state(store.root(), &layer_name, &refs, Some(&layer.path)) {
             CacheState::Fresh => DoctorCheckResult::ok(
                 "index_cache",
-                "User index cache matches the current units layer.",
+                format!("User index cache for caller {caller} matches the current units layer."),
             ),
             CacheState::Stale => DoctorCheckResult::warn(
                 "index_cache",
-                "User index cache is stale; rebuilt on next ask.",
+                format!("User index cache for caller {caller} is stale; rebuilt on next ask."),
             ),
-            CacheState::Missing => {
-                DoctorCheckResult::warn("index_cache", "No user index cache; built on next ask.")
-            }
+            CacheState::Missing => DoctorCheckResult::warn(
+                "index_cache",
+                format!("No user index cache for caller {caller}; built on next ask."),
+            ),
         },
     )
 }

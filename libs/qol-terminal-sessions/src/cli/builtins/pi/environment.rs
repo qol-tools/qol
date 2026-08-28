@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use qol_agent_homes::{Harness, Registry};
+
 #[cfg(test)]
 use super::metadata::id_from_path;
 
@@ -158,38 +160,10 @@ fn child_pids(pid: i32) -> Vec<i32> {
 }
 
 fn session_dir(cwd: &str) -> Option<PathBuf> {
-    let base = match session_dir_override() {
-        Some(base) => base,
-        None => agent_dir()?.join("sessions"),
-    };
+    let registry = Registry::load();
+    let current = registry.current(Harness::Pi);
+    let base = registry.transcript_root(&current)?;
     Some(base.join(session_dir_name(cwd)))
-}
-
-fn session_dir_override() -> Option<PathBuf> {
-    let dir = std::env::var_os("PI_CODING_AGENT_SESSION_DIR")?;
-    expand_tilde(PathBuf::from(dir))
-}
-
-fn agent_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR") {
-        let dir = PathBuf::from(dir);
-        return expand_tilde(dir);
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".pi").join("agent"))
-}
-
-fn expand_tilde(path: PathBuf) -> Option<PathBuf> {
-    let text = path.to_str()?;
-    if text == "~" {
-        return std::env::var_os("HOME").map(PathBuf::from);
-    }
-    let Some(rest) = text.strip_prefix("~/") else {
-        return Some(path);
-    };
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(rest))
 }
 
 fn session_dir_name(cwd: &str) -> String {

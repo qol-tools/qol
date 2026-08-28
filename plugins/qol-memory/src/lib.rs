@@ -1,3 +1,4 @@
+pub mod agent_home;
 pub mod aliases;
 pub mod app;
 pub mod ask;

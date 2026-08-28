@@ -7,6 +7,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
+use qol_agent_homes::{Harness, Registry};
+
 use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
@@ -105,8 +107,9 @@ impl ClaudeMetadataResolver {
         let root = if let Some(root) = &self.projects_root {
             root.clone()
         } else {
-            PathBuf::from(std::env::var_os("HOME")?)
-                .join(".claude")
+            Registry::load()
+                .current(Harness::Claude)
+                .path
                 .join("projects")
         };
         Some(root.join(project_dir_name(&session.cwd)))

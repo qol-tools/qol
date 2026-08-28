@@ -146,6 +146,8 @@ pub struct Unit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
@@ -259,6 +261,7 @@ mod tests {
         Unit {
             key: key.to_string(),
             source: None,
+            agent_home: None,
             file: None,
             session: None,
             cwd: None,

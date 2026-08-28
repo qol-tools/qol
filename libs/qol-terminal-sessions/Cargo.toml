@@ -7,6 +7,7 @@ description = "Backend-neutral live terminal session discovery and interaction"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+qol-agent-homes.workspace = true
 qol-config.workspace = true
 qol-runtime.workspace = true
 qol-watch.workspace = true

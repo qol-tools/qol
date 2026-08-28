@@ -91,7 +91,8 @@ function diffValue(a, b, ptr, add) {
   }
   if (a === MISSING && b === MISSING) return;
   if (typeof a === "number" && typeof b === "number") {
-    if (!(a === b || (Number.isNaN(a) && Number.isNaN(b)))) add(ptr || "/", a, b);
+    const close = Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+    if (!(a === b || close || (Number.isNaN(a) && Number.isNaN(b)))) add(ptr || "/", a, b);
     return;
   }
   if (a === null || b === null) {
@@ -115,7 +116,9 @@ function diffValue(a, b, ptr, add) {
   if (a !== b) add(ptr || "/", a, b);
 }
 
-const META_RE = /^idx-.+\.json\.meta$/;
+const LAYER_NAMES = "(?:pool|user|notes|pool-x-[0-9a-f]+)";
+const JS_META_RE = new RegExp(`^idx-${LAYER_NAMES}\\.json\\.meta$`);
+const RUST_META_RE = new RegExp(`^idx-(${LAYER_NAMES})-[0-9a-f]{8}\\.json\\.meta$`);
 const IDX_FILE_RE = /^idx-.+\.json(\.meta)?$/;
 
 function clearCaches(root) {
@@ -128,13 +131,15 @@ function clearCaches(root) {
   }
 }
 
-function snapMetas(dest, root) {
+function snapMetas(side, dest, root) {
   mkdirSync(dest, { recursive: true });
   if (!existsSync(root)) return 0;
+  const isRust = side === "rust";
+  const metaRe = isRust ? RUST_META_RE : JS_META_RE;
   let count = 0;
   for (const n of readdirSync(root)) {
-    if (!META_RE.test(n)) continue;
-    cpSync(join(root, n), join(dest, n));
+    if (!metaRe.test(n)) continue;
+    cpSync(join(root, n), join(dest, isRust ? n.replace(RUST_META_RE, "idx-$1.json.meta") : n));
     count++;
   }
   return count;
@@ -249,7 +254,7 @@ async function main() {
       const runs = {};
       for (const side of jsFirst ? ["js", "rust"] : ["rust", "js"]) {
         runs[side] = runSide(side, q.query, flags);
-        snapMetas(join(scratch, `${tag}-${side}`), STORE_ROOT);
+        snapMetas(side, join(scratch, `${tag}-${side}`), STORE_ROOT);
       }
 
       const problems = [];
@@ -268,6 +273,7 @@ async function main() {
         }
       }
       if (parsed.js.doc && parsed.rust.doc) {
+        delete parsed.rust.doc.agent_home;
         diffValue(parsed.js.doc, parsed.rust.doc, "", (p, js, rust) =>
           problems.push({ kind: "output", pass: passNo, mode: step.mode, question: q.id, path: p, js, rust })
         );

@@ -126,6 +126,7 @@ mod tests {
         Unit {
             key: key.to_string(),
             source: None,
+            agent_home: None,
             file: None,
             session: None,
             cwd: None,

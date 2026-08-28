@@ -280,6 +280,20 @@ the `input` map, where every parameter is a required string. Flagged entries
 must have a non-empty description and input names matching the runable name
 charset.
 
+MCP callers identify themselves with the `x-qol-agent-home` HTTP header, whose
+value is the caller's agent home id (see `docs/agent-homes.md`). The runable
+input `agent_home` is host reserved: the host never publishes it in a tool
+schema, always supplies it from the header (overwriting a caller-supplied
+value), and plugins must not declare `agent_home` for any other meaning. When
+a tool accepts `agent_home`, the caller sends no header, and the registry is
+partitioned, the host fails the call with "caller identity missing: no
+x-qol-agent-home header; run qol mcp configure <harness>, restart the harness,
+and update the qol CLI if qol mcp headers prints no x-qol-agent-home" instead
+of dispatching; with a single home per harness the plugin resolves its default
+as today. The plain routes
+`/api/plugins/{id}/queries/{query}` and `/actions/{action}` copy the same
+header into `input["agent_home"]` when the runable declares it.
+
 Cross-file: an `action` field's `action` and a `list`/`status`/`qr_code` field's
 `query` must reference a declared runtime entry; a `stream = "..."` attribute is
 allowed only on `color`/`number` fields.

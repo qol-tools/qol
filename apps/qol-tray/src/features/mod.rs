@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod auth;
 pub mod github_auth;
 pub mod gpu_driver_sync;

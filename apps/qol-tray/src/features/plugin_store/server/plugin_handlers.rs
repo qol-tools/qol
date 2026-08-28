@@ -8,11 +8,12 @@ use crate::plugins::action_executor::ActionExecutionError;
 use crate::plugins::capabilities::{PermissionState, PermissionStatus};
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use qol_config::contract::IndexMap;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -91,11 +92,23 @@ pub(super) async fn query_plugin_handler(
 pub(super) async fn query_plugin_with_input_handler(
     Path((id, query)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_plugin_id_bad_request(&id)?;
+    let agent_home = crate::features::agents::header_agent_home(&headers);
     tokio::task::spawn_blocking(move || {
-        load_query_contract(&id, &query)?;
+        let runtime = load_query_contract(&id, &query)?;
+        let input = amend_input_with_agent_home(
+            input,
+            accepts_agent_home(
+                runtime
+                    .queries
+                    .get(&query)
+                    .and_then(|entry| entry.input.as_ref()),
+            ),
+            agent_home,
+        );
         crate::plugins::action_executor::dispatch_query_with_input(
             &state.plugin_manager,
             &id,
@@ -108,6 +121,26 @@ pub(super) async fn query_plugin_with_input_handler(
     })
     .await
     .map_err(join_error_response)?
+}
+
+fn amend_input_with_agent_home(
+    mut input: serde_json::Value,
+    accepts: bool,
+    agent_home: Option<String>,
+) -> serde_json::Value {
+    if let (true, Some(agent_home)) = (accepts, agent_home) {
+        if let Some(map) = input.as_object_mut() {
+            map.insert(
+                "agent_home".to_owned(),
+                serde_json::Value::String(agent_home),
+            );
+        }
+    }
+    input
+}
+
+fn accepts_agent_home(input: Option<&IndexMap<String, String>>) -> bool {
+    input.is_some_and(|map| map.contains_key("agent_home"))
 }
 
 pub(super) async fn list_plugins(
@@ -167,6 +200,7 @@ pub(super) async fn uninstall_plugin(
 pub(super) async fn execute_plugin_action(
     Path((id, action)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     input: Option<Json<serde_json::Value>>,
 ) -> (StatusCode, Json<ExecuteActionResult>) {
     qol_runtime::probe!("ACTION_RECV", "plugin={} action={}", id, action);
@@ -177,12 +211,26 @@ pub(super) async fn execute_plugin_action(
     let worker_id = id.clone();
     let worker_action = action.clone();
     let worker_input = input.map(|Json(value)| value).unwrap_or_default();
+    let agent_home = crate::features::agents::header_agent_home(&headers);
     #[cfg(debug_assertions)]
     let resolve_started = std::time::Instant::now();
     #[cfg(not(debug_assertions))]
     let resolve_started = ();
     match tokio::task::spawn_blocking(move || {
         trace_action_resolve("start", &worker_id, &worker_action, &resolve_started);
+        let accepts = crate::plugins::config::load_runable_contract(&worker_id)
+            .ok()
+            .flatten()
+            .map(|runtime| {
+                accepts_agent_home(
+                    runtime
+                        .actions
+                        .get(&worker_action)
+                        .and_then(|entry| entry.input.as_ref()),
+                )
+            })
+            .unwrap_or(false);
+        let worker_input = amend_input_with_agent_home(worker_input, accepts, agent_home);
         let result = crate::plugins::action_executor::try_execute_action_with_input_result(
             &plugin_manager,
             &worker_id,
@@ -377,4 +425,91 @@ fn log_and_message(
     }
     log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUNTIME_WITH_AGENT_HOME: &str = r#"
+schema_version = 1
+
+[query.do_it]
+description = "does it"
+poll_interval_ms = 1000
+input = { question = "Question", agent_home = "Agent home id" }
+
+[action.do_that]
+description = "does it"
+input = { question = "Question", agent_home = "Agent home id" }
+"#;
+
+    #[test]
+    fn query_input_copies_agent_home_only_when_declared_and_header_present() {
+        let runtime =
+            qol_config::contract::parse_runtime_spec_str(RUNTIME_WITH_AGENT_HOME).unwrap();
+        let accepts = |query: &str| {
+            accepts_agent_home(
+                runtime
+                    .queries
+                    .get(query)
+                    .and_then(|entry| entry.input.as_ref()),
+            )
+        };
+        let amended = amend_input_with_agent_home(
+            serde_json::json!({"question": "q"}),
+            accepts("do_it"),
+            Some("/home/k/.claude-work".to_owned()),
+        );
+        assert_eq!(amended["question"], "q");
+        assert_eq!(amended["agent_home"], "/home/k/.claude-work");
+        let undeclared = amend_input_with_agent_home(
+            serde_json::json!({"question": "q", "agent_home": "caller-chosen"}),
+            accepts("missing"),
+            Some("/home/k/.claude-work".to_owned()),
+        );
+        assert_eq!(
+            undeclared,
+            serde_json::json!({"question": "q", "agent_home": "caller-chosen"})
+        );
+        let headerless = amend_input_with_agent_home(
+            serde_json::json!({"question": "q"}),
+            accepts("do_it"),
+            None,
+        );
+        assert_eq!(headerless, serde_json::json!({"question": "q"}));
+    }
+
+    #[test]
+    fn action_input_copies_agent_home_only_when_declared_and_header_present() {
+        let runtime =
+            qol_config::contract::parse_runtime_spec_str(RUNTIME_WITH_AGENT_HOME).unwrap();
+        let accepts = |action: &str| {
+            accepts_agent_home(
+                runtime
+                    .actions
+                    .get(action)
+                    .and_then(|entry| entry.input.as_ref()),
+            )
+        };
+        let amended = amend_input_with_agent_home(
+            serde_json::json!({"question": "q"}),
+            accepts("do_that"),
+            Some("/home/k/.claude-work".to_owned()),
+        );
+        assert_eq!(amended["question"], "q");
+        assert_eq!(amended["agent_home"], "/home/k/.claude-work");
+        let undeclared = amend_input_with_agent_home(
+            serde_json::json!({"question": "q"}),
+            accepts("missing"),
+            Some("/home/k/.claude-work".to_owned()),
+        );
+        assert_eq!(undeclared, serde_json::json!({"question": "q"}));
+        let headerless = amend_input_with_agent_home(
+            serde_json::json!({"question": "q"}),
+            accepts("do_it"),
+            None,
+        );
+        assert_eq!(headerless, serde_json::json!({"question": "q"}));
+    }
 }

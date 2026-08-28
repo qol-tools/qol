@@ -44,6 +44,7 @@ linux_evdev = ["dep:evdev"]
 embedded-ui = ["rust-embed/debug-embed"]
 
 [dependencies]
+qol-agent-homes.workspace = true
 qol-build-identity.workspace = true
 qol-conventions.workspace = true
 qol-dev-build.workspace = true

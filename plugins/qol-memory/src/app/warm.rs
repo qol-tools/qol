@@ -4,11 +4,9 @@ use std::time::UNIX_EPOCH;
 use anyhow::Result;
 
 use crate::aliases::AliasMap;
-use crate::ask::{doc_refs, notes_refs};
+use crate::ask::{doc_refs, notes_refs, visible_notes};
 use crate::retrieval::cache;
-use crate::store::{
-    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
-};
+use crate::store::{dedupe_user_units, is_boilerplate_unit, NotesLayer, Store, Unit, UnitsLayer};
 
 pub struct WarmState {
     store: Store,
@@ -155,12 +153,21 @@ fn mtime_millis(meta: &std::fs::Metadata) -> u64 {
 
 pub fn reindex(store: &Store) -> Result<Vec<String>> {
     remove_index_files(store.root());
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(None);
+    let slug = crate::agent_home::cache_slug(&caller);
+    let pool_layer = format!("pool-{slug}");
+    let user_layer = format!("user-{slug}");
+    let notes_layer = format!("notes-{slug}");
     let units = store.read_units()?;
     let notes = store.read_notes()?;
     let user_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
+        .filter(|unit| {
+            crate::store::in_answer_pool(&unit.kind)
+                && crate::agent_home::visible(unit, &caller, &registry)
+        })
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_input);
@@ -169,25 +176,21 @@ pub fn reindex(store: &Store) -> Result<Vec<String>> {
         .filter(|unit| !is_boilerplate_unit(unit))
         .cloned()
         .collect();
-    let note_items: Vec<Note> = notes.items.clone();
+    let note_items = visible_notes(&notes.items, &units.items, &caller, &registry);
     cache::build_or_load(
         store.root(),
-        "pool",
+        &pool_layer,
         &doc_refs(&pool_units),
         Some(&units.path),
     );
     cache::build_or_load(
         store.root(),
-        "user",
+        &user_layer,
         &doc_refs(&user_units),
         Some(&units.path),
     );
-    cache::build_or_load(store.root(), "notes", &notes_refs(&note_items), None);
-    Ok(vec![
-        "pool".to_string(),
-        "user".to_string(),
-        "notes".to_string(),
-    ])
+    cache::build_or_load(store.root(), &notes_layer, &notes_refs(&note_items), None);
+    Ok(vec![pool_layer, user_layer, notes_layer])
 }
 
 fn remove_index_files(root: &Path) {
@@ -328,19 +331,40 @@ mod tests {
         )
         .expect("write notes");
         let store = Store::resolve(Some(&root)).expect("store resolves");
+        let registry = qol_agent_homes::Registry::load();
+        let caller = registry.resolve_caller(None);
+        let slug = crate::agent_home::cache_slug(&caller);
+        let pool_index = format!("idx-pool-{slug}.json");
+        let pool_meta = format!("idx-pool-{slug}.json.meta");
+        let user_index = format!("idx-user-{slug}.json");
+        let notes_index = format!("idx-notes-{slug}.json");
 
         let layers = reindex(&store).expect("first reindex");
-        assert_eq!(layers, vec!["pool", "user", "notes"]);
-        assert!(root.join("idx-pool.json").exists());
-        assert!(root.join("idx-pool.json.meta").exists());
-        assert!(root.join("idx-user.json").exists());
-        assert!(root.join("idx-notes.json").exists());
+        assert_eq!(
+            layers,
+            vec![
+                format!("pool-{slug}"),
+                format!("user-{slug}"),
+                format!("notes-{slug}")
+            ]
+        );
+        assert!(root.join(&pool_index).exists());
+        assert!(root.join(&pool_meta).exists());
+        assert!(root.join(&user_index).exists());
+        assert!(root.join(&notes_index).exists());
         let stale_meta = "{\"fingerprint\":\"stale\"}";
-        std::fs::write(root.join("idx-pool.json.meta"), stale_meta).expect("stale meta");
+        std::fs::write(root.join(&pool_meta), stale_meta).expect("stale meta");
 
         let layers = reindex(&store).expect("second reindex");
-        assert_eq!(layers, vec!["pool", "user", "notes"]);
-        let meta = std::fs::read_to_string(root.join("idx-pool.json.meta")).expect("rebuilt meta");
+        assert_eq!(
+            layers,
+            vec![
+                format!("pool-{slug}"),
+                format!("user-{slug}"),
+                format!("notes-{slug}")
+            ]
+        );
+        let meta = std::fs::read_to_string(root.join(&pool_meta)).expect("rebuilt meta");
         assert_ne!(meta, stale_meta);
 
         std::fs::remove_dir_all(&root).ok();

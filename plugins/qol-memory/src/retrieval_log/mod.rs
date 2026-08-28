@@ -99,6 +99,7 @@ pub struct RetrievalEvent {
     pub source: String,
     pub session: Option<String>,
     pub cwd: Option<String>,
+    pub agent_home: String,
     pub query: String,
     pub verdict: String,
     pub confidence: String,
@@ -301,6 +302,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(first["verdict"], "answered");
+        assert_eq!(first["agent_home"], "/home/tester/.claude");
         assert_eq!(first["exclusion"]["exclude_session"], false);
         assert_eq!(first["recalled_keys"][0], "note-key");
 
@@ -317,6 +319,7 @@ mod tests {
             source: "ask-cli".to_string(),
             session: None,
             cwd: None,
+            agent_home: "/home/tester/.claude".to_string(),
             query: "dock position".to_string(),
             verdict: "answered".to_string(),
             confidence: "high".to_string(),

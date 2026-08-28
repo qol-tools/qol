@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Result};
 use qol_mcp::{
     jsonrpc::{error_response, result_response, ErrorCode},
-    ServerInfo, ToolHost, ToolResult, ToolSpec,
+    Caller, ServerInfo, ToolHost, ToolResult, ToolSpec,
 };
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
@@ -153,7 +153,7 @@ impl McpSessionServer {
             "method": method,
             "params": params,
         });
-        qol_mcp::handle(self, message)
+        qol_mcp::handle(self, message, &Caller::default())
     }
 
     fn call_tool(&self, id: Value, params: Value) -> Value {
@@ -531,7 +531,7 @@ impl ToolHost for McpSessionServer {
         super::contract::mcp_tool_specs()
     }
 
-    fn call(&self, name: &str, arguments: Value) -> ToolResult {
+    fn call(&self, name: &str, arguments: Value, _caller: &Caller) -> ToolResult {
         let outcome = self
             .dispatch_tool(name, arguments, None)
             .unwrap_or_else(|| Err(format!("unknown tool: {name}")));

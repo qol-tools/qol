@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
+use qol_agent_homes::{Harness, Registry};
+
 pub(super) trait CodexEnvironment: Send + Sync {
     fn open_rollout(&self, pid: i32) -> Option<PathBuf>;
     fn session_index_path(&self) -> Option<PathBuf>;
@@ -20,9 +22,12 @@ impl CodexEnvironment for SystemCodexEnvironment {
     }
 
     fn session_index_path(&self) -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join(".codex").join("session_index.jsonl"))
+        Some(
+            Registry::load()
+                .current(Harness::Codex)
+                .path
+                .join("session_index.jsonl"),
+        )
     }
 }
 

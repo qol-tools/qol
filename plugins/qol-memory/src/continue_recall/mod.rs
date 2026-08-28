@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
+use qol_agent_homes::Registry;
+
+use crate::agent_home;
 use crate::store::seal::try_sealed_text;
 use crate::store::{Store, BOILERPLATE_MARKERS};
 use crate::text::{collapse_ws, parse_iso_millis, utf16_len, utf16_slice};
@@ -17,6 +20,7 @@ const CAP_COMPACTION: usize = 1;
 pub struct ContinueRequest {
     pub cwd: String,
     pub session: String,
+    pub agent_home: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -37,10 +41,10 @@ pub fn run(store: &Store, request: &ContinueRequest) -> anyhow::Result<ContinueO
     if store.root().join("continue.disabled").exists() {
         return Ok(emit(store, outcome("disabled", Some("flag-file"))));
     }
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(request.agent_home.as_deref());
     let marker = read_marker(store);
-    let entry = marker
-        .get("cwds")
-        .and_then(|cwds| cwds.get(request.cwd.as_str()));
+    let entry = marker_entry(&marker, &request.cwd, &caller);
     let entry_ms = entry
         .and_then(|item| item.get("ts"))
         .and_then(Value::as_str)
@@ -56,13 +60,35 @@ pub fn run(store: &Store, request: &ContinueRequest) -> anyhow::Result<ContinueO
         .and_then(Value::as_u64)
         .is_some_and(|count| (total_lines as u64) < count);
     if store_reset {
-        let _ = write_marker(store, &marker, &request.cwd, &request.session, total_lines);
+        let _ = write_marker(
+            store,
+            &marker,
+            &request.cwd,
+            &caller,
+            &request.session,
+            total_lines,
+        );
         return Ok(emit(store, outcome("gate-miss", Some("store-reset"))));
     }
     let text = try_sealed_text(store.root(), &raw)
         .unwrap_or_else(|| String::from_utf8_lossy(&raw).into_owned());
-    let picked = pick_units(&parse_units(&text), entry_ms, &request.session);
-    if write_marker(store, &marker, &request.cwd, &request.session, total_lines).is_err() {
+    let picked = pick_units(
+        &parse_units(&text),
+        entry_ms,
+        &request.session,
+        &caller,
+        &registry,
+    );
+    if write_marker(
+        store,
+        &marker,
+        &request.cwd,
+        &caller,
+        &request.session,
+        total_lines,
+    )
+    .is_err()
+    {
         return Ok(emit(store, outcome("abstain", Some("marker-write-error"))));
     }
     if picked.len() >= MIN_DELTA {
@@ -147,10 +173,23 @@ fn read_marker(store: &Store) -> Value {
     }
 }
 
+fn marker_entry<'a>(marker: &'a Value, cwd: &str, caller: &str) -> Option<&'a Value> {
+    let slot = marker.get("cwds")?.get(cwd)?;
+    if slot
+        .get("ts")
+        .and_then(Value::as_str)
+        .is_some_and(|ts| !ts.is_empty())
+    {
+        return Some(slot);
+    }
+    slot.get(caller)
+}
+
 fn write_marker(
     store: &Store,
     marker: &Value,
     cwd: &str,
+    caller: &str,
     session: &str,
     units_count: usize,
 ) -> anyhow::Result<()> {
@@ -162,8 +201,15 @@ fn write_marker(
     let Some(cwds) = map.get_mut("cwds").and_then(Value::as_object_mut) else {
         anyhow::bail!("qol-memory: continue marker has no cwds map");
     };
-    cwds.insert(
-        cwd.to_string(),
+    let slot = cwds.entry(cwd.to_string()).or_insert_with(|| json!({}));
+    let Some(slot_map) = slot.as_object_mut() else {
+        anyhow::bail!("qol-memory: continue marker cwd slot is not an object");
+    };
+    if slot_map.contains_key("ts") {
+        slot_map.clear();
+    }
+    slot_map.insert(
+        caller.to_string(),
         json!({
             "ts": now.clone(),
             "session": session,
@@ -192,10 +238,18 @@ fn parse_units(text: &str) -> Vec<Value> {
         .collect()
 }
 
-fn pick_units(units: &[Value], entry_ms: i64, session: &str) -> Vec<Value> {
+fn pick_units(
+    units: &[Value],
+    entry_ms: i64,
+    session: &str,
+    caller: &str,
+    registry: &Registry,
+) -> Vec<Value> {
     let mut candidates: Vec<&Value> = units
         .iter()
-        .filter(|unit| is_candidate(unit, entry_ms, session))
+        .filter(|unit| {
+            is_candidate(unit, entry_ms, session) && home_visible(unit, caller, registry)
+        })
         .collect();
     candidates.sort_by(|left, right| {
         let order = ts_ms(right).cmp(&ts_ms(left));
@@ -231,6 +285,13 @@ fn pick_units(units: &[Value], entry_ms: i64, session: &str) -> Vec<Value> {
         }
     }
     picked
+}
+
+fn home_visible(unit: &Value, caller: &str, registry: &Registry) -> bool {
+    match serde_json::from_value::<crate::store::Unit>(unit.clone()) {
+        Ok(parsed) => agent_home::visible(&parsed, caller, registry),
+        Err(_) => false,
+    }
 }
 
 fn is_candidate(unit: &Value, entry_ms: i64, session: &str) -> bool {
@@ -399,16 +460,19 @@ mod tests {
         .unwrap();
     }
 
-    fn read_marker_field(store: &Store, cwd: &str, field: &str) -> Value {
+    const CALLER: &str = "/home/tester/.claude";
+
+    fn read_marker_field(store: &Store, cwd: &str, caller: &str, field: &str) -> Value {
         let text = std::fs::read_to_string(store.continue_marker_path()).unwrap();
         let marker: Value = serde_json::from_str(&text).unwrap();
-        marker["cwds"][cwd][field].clone()
+        marker["cwds"][cwd][caller][field].clone()
     }
 
     fn request() -> ContinueRequest {
         ContinueRequest {
             cwd: "/proj".to_string(),
             session: "current".to_string(),
+            agent_home: Some(CALLER.to_string()),
         }
     }
 
@@ -434,10 +498,13 @@ mod tests {
             }
         );
         assert_eq!(
-            read_marker_field(&store, "/proj", "session"),
+            read_marker_field(&store, "/proj", CALLER, "session"),
             json!("current")
         );
-        assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(3));
+        assert_eq!(
+            read_marker_field(&store, "/proj", CALLER, "units_count"),
+            json!(3)
+        );
         let log = std::fs::read_to_string(store.root().join("hook.log")).unwrap();
         assert!(log.contains("\"stage\":\"injected\""));
         assert!(log.contains("\"count\":3"));
@@ -459,10 +526,13 @@ mod tests {
             }
         );
         assert_eq!(
-            read_marker_field(&store, "/proj", "session"),
+            read_marker_field(&store, "/proj", CALLER, "session"),
             json!("current")
         );
-        assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(3));
+        assert_eq!(
+            read_marker_field(&store, "/proj", CALLER, "units_count"),
+            json!(3)
+        );
         let log = std::fs::read_to_string(store.root().join("hook.log")).unwrap();
         assert!(log.contains("\"reason\":\"below-min-delta\""));
         assert!(log.contains("\"delta\":0"));
@@ -484,12 +554,162 @@ mod tests {
             }
         );
         assert_eq!(
-            read_marker_field(&store, "/proj", "session"),
+            read_marker_field(&store, "/proj", CALLER, "session"),
             json!("current")
         );
-        assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(3));
+        assert_eq!(
+            read_marker_field(&store, "/proj", CALLER, "units_count"),
+            json!(3)
+        );
         let log = std::fs::read_to_string(store.root().join("hook.log")).unwrap();
         assert!(log.contains("\"reason\":\"store-reset\""));
+    }
+
+    #[test]
+    fn continue_filters_candidates_by_agent_home_visibility() {
+        let (_dir, store) = store_in("home-scope");
+        let mine_unit = |key: &str, session: &str, ts: &str, text: &str| {
+            json!({
+                "key": key,
+                "source": "pi",
+                "file": "a.jsonl",
+                "agent_home": "/tmp/qol-home-mine",
+                "session": session,
+                "cwd": "/proj",
+                "kind": "user",
+                "ts": ts,
+                "text": text
+            })
+        };
+        let theirs = json!({
+            "key": "eeeeffff00001111",
+            "source": "pi",
+            "file": "a.jsonl",
+            "agent_home": "/tmp/qol-home-theirs",
+            "session": "cccccccc-3333",
+            "cwd": "/proj",
+            "kind": "user",
+            "ts": "2026-08-02T12:00:00.000Z",
+            "text": "Ship the tray icon change and update the changelog file with release notes"
+        });
+        let body = [
+            mine_unit(
+                "0123456789abcdef",
+                "aaaaaaaa-1111",
+                "2026-08-02T10:00:00.000Z",
+                "Fix the launcher bug and verify the fix end to end in a guest run",
+            ),
+            mine_unit(
+                "fedcba9876543210",
+                "bbbbbbbb-2222",
+                "2026-08-02T11:00:00.000Z",
+                "Document the picker flow and record the decision in the research notes",
+            ),
+            theirs,
+        ]
+        .iter()
+        .map(|unit| serde_json::to_string(unit).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(store.units_path(), body).unwrap();
+        write_marker_fixture(&store, "2026-08-01T00:00:00.000Z", 3);
+        let mut scoped = request();
+        scoped.agent_home = Some("/tmp/qol-home-mine".to_string());
+        let outcome = run(&store, &scoped).unwrap();
+        assert_eq!(outcome.count, 2);
+        let block = outcome.block.as_deref().expect("injected block");
+        assert!(block.contains("Fix the launcher bug and verify the fix end to end in a guest run"));
+        assert!(block
+            .contains("Document the picker flow and record the decision in the research notes"));
+        assert!(!block.contains(
+            "Ship the tray icon change and update the changelog file with release notes"
+        ));
+    }
+
+    #[test]
+    fn continue_keeps_one_watermark_per_caller_per_cwd() {
+        let (_dir, store) = store_in("per-caller");
+        const HOME_A: &str = "/tmp/qol-home-a";
+        const HOME_B: &str = "/tmp/qol-home-b";
+        const SENTENCE_A: &str =
+            "Fix the launcher bug and verify the fix end to end in a guest run";
+        const SENTENCE_B: &str =
+            "Ship the tray icon change and update the changelog file with release notes";
+        let unit_for = |key: &str, home: &str, session: &str, ts: &str, text: &str| {
+            json!({
+                "key": key,
+                "source": "claude",
+                "file": "a.jsonl",
+                "agent_home": home,
+                "session": session,
+                "cwd": "/proj",
+                "kind": "user",
+                "ts": ts,
+                "text": text
+            })
+        };
+        let body = [
+            unit_for(
+                "0123456789abcdef",
+                HOME_A,
+                "aaaaaaaa-1111",
+                "2026-08-02T10:00:00.000Z",
+                SENTENCE_A,
+            ),
+            unit_for(
+                "fedcba9876543210",
+                HOME_A,
+                "bbbbbbbb-2222",
+                "2026-08-02T10:30:00.000Z",
+                SENTENCE_A,
+            ),
+            unit_for(
+                "1111222233334444",
+                HOME_B,
+                "cccccccc-3333",
+                "2026-08-02T11:00:00.000Z",
+                SENTENCE_B,
+            ),
+            unit_for(
+                "5555666677778888",
+                HOME_B,
+                "dddddddd-4444",
+                "2026-08-02T11:30:00.000Z",
+                SENTENCE_B,
+            ),
+        ]
+        .iter()
+        .map(|unit| serde_json::to_string(unit).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(store.units_path(), body).unwrap();
+
+        let mut for_home_a = request();
+        for_home_a.agent_home = Some(HOME_A.to_string());
+        let first_a = run(&store, &for_home_a).unwrap();
+        assert_eq!(first_a.stage, "injected");
+        assert_eq!(first_a.count, 2);
+        let block_a = first_a.block.as_deref().expect("injected block");
+        assert!(block_a.contains(SENTENCE_A));
+        assert!(!block_a.contains(SENTENCE_B));
+
+        let mut for_home_b = request();
+        for_home_b.agent_home = Some(HOME_B.to_string());
+        let first_b = run(&store, &for_home_b).unwrap();
+        assert_eq!(first_b.stage, "injected");
+        assert_eq!(first_b.count, 2);
+        let block_b = first_b.block.as_deref().expect("injected block");
+        assert!(block_b.contains(SENTENCE_B));
+        assert!(!block_b.contains(SENTENCE_A));
+
+        assert_eq!(
+            read_marker_field(&store, "/proj", HOME_A, "units_count"),
+            json!(4)
+        );
+        assert_eq!(
+            read_marker_field(&store, "/proj", HOME_B, "units_count"),
+            json!(4)
+        );
     }
 
     #[test]
@@ -498,6 +718,7 @@ mod tests {
         let capture_unit = json!({
             "key": "aaaabbbbccccdddd",
             "source": "agent",
+            "agent_home": CALLER,
             "cwd": "/proj",
             "kind": "capture",
             "ts": "2026-08-02T13:00:00.000Z",
@@ -535,6 +756,9 @@ mod tests {
                 block: Some(expected.to_string()),
             }
         );
-        assert_eq!(read_marker_field(&store, "/proj", "units_count"), json!(2));
+        assert_eq!(
+            read_marker_field(&store, "/proj", CALLER, "units_count"),
+            json!(2)
+        );
     }
 }

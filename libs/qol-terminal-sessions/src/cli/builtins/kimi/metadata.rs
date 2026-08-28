@@ -6,6 +6,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::Deserialize;
 
+use qol_agent_homes::{Harness, Registry};
+
 use crate::cli::CliActivityEvidence;
 use crate::{SessionBinding, SessionFacts};
 
@@ -124,24 +126,7 @@ impl KimiMetadataResolver {
 }
 
 fn kimi_subscription_home() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("KIMI_CODE_HOME") {
-        return expand_tilde(PathBuf::from(dir));
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".kimi-code"))
-}
-
-fn expand_tilde(path: PathBuf) -> Option<PathBuf> {
-    let text = path.to_str()?;
-    if text != "~" && !text.starts_with("~/") {
-        return Some(path);
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    if text == "~" || text == "~/" {
-        return Some(home);
-    }
-    Some(home.join(text.strip_prefix("~/")?))
+    Some(Registry::load().current(Harness::Kimi).path)
 }
 
 fn cached_location(

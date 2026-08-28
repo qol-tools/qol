@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use qol_agent_homes::{Harness, Registry};
 use serde::Deserialize;
 
 #[derive(Clone)]
@@ -77,32 +78,7 @@ impl KimiEnvironment for SystemKimiEnvironment {
 }
 
 fn kimi_home() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("KIMI_CODE_HOME") {
-        let dir = PathBuf::from(dir);
-        return expand_tilde(dir);
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".kimi-code"))
-}
-
-fn expand_tilde(path: PathBuf) -> Option<PathBuf> {
-    let text = path.to_str()?;
-    if text != "~" && !text.starts_with("~/") {
-        return Some(path);
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(expand_tilde_from(text, &home))
-}
-
-fn expand_tilde_from(text: &str, home: &Path) -> PathBuf {
-    if text == "~" || text == "~/" {
-        return home.to_path_buf();
-    }
-    if let Some(relative) = text.strip_prefix("~/") {
-        return home.join(relative);
-    }
-    PathBuf::from(text)
+    Some(Registry::load().current(Harness::Kimi).path)
 }
 
 #[derive(Deserialize)]
@@ -113,28 +89,4 @@ struct IndexEntry {
     session_dir: String,
     #[serde(rename = "workDir")]
     work_dir: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-
-    use super::expand_tilde_from;
-
-    #[test]
-    fn literal_tilde_paths_stay_under_home() {
-        let home = Path::new("/home/tester");
-        let cases = [
-            ("~", home.to_path_buf()),
-            ("~/", home.to_path_buf()),
-            ("~/.kimi-code", home.join(".kimi-code")),
-            ("~someone/kimi", PathBuf::from("~someone/kimi")),
-            ("relative", PathBuf::from("relative")),
-            ("/opt/kimi", PathBuf::from("/opt/kimi")),
-        ];
-
-        for (input, expected) in cases {
-            assert_eq!(expand_tilde_from(input, home), expected, "input: {input}");
-        }
-    }
 }

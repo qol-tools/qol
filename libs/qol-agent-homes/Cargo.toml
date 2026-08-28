@@ -1,0 +1,15 @@
+[package]
+name = "qol-agent-homes"
+version = "0.1.0"
+edition = "2021"
+description = "Single source of truth for agent harness homes (Claude Code, codex, kimi, pi)"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+dirs = "6.0"
+qol-config.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

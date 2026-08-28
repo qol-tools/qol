@@ -15,6 +15,7 @@ anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6.0"
 qol-config.workspace = true
+qol-agent-homes.workspace = true
 qol-apps.workspace = true
 qol-artifact.workspace = true
 qol-build-identity.workspace = true

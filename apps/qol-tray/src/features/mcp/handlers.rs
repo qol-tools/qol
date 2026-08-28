@@ -1,12 +1,15 @@
 use axum::{
     body::Bytes,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
-use qol_mcp::jsonrpc::{error_response, ErrorCode};
+use qol_mcp::{
+    jsonrpc::{error_response, ErrorCode},
+    Caller,
+};
 use std::sync::Arc;
 
 pub(super) type SharedHost = Arc<dyn qol_mcp::ToolHost + Send + Sync>;
@@ -17,7 +20,10 @@ pub(super) fn router_with_host(host: SharedHost) -> Router {
         .with_state(host)
 }
 
-async fn post_message(State(host): State<SharedHost>, body: Bytes) -> Response {
+async fn post_message(State(host): State<SharedHost>, headers: HeaderMap, body: Bytes) -> Response {
+    let caller = Caller {
+        agent_home: crate::features::agents::header_agent_home(&headers),
+    };
     let message = match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(value) => value,
         Err(error) => {
@@ -28,7 +34,9 @@ async fn post_message(State(host): State<SharedHost>, body: Bytes) -> Response {
             )
         }
     };
-    match tokio::task::spawn_blocking(move || qol_mcp::handle(host.as_ref(), message)).await {
+    match tokio::task::spawn_blocking(move || qol_mcp::handle(host.as_ref(), message, &caller))
+        .await
+    {
         Ok(Some(value)) => (StatusCode::OK, Json(value)).into_response(),
         Ok(None) => StatusCode::ACCEPTED.into_response(),
         Err(error) => jsonrpc_error(
@@ -59,6 +67,7 @@ async fn end_session() -> StatusCode {
 mod tests {
     use super::*;
     use axum::body::Body;
+    use qol_conventions::HTTP_AGENT_HOME_HEADER;
     use tower::ServiceExt;
 
     struct FakeHost;
@@ -79,13 +88,32 @@ mod tests {
             }]
         }
 
-        fn call(&self, _name: &str, arguments: serde_json::Value) -> qol_mcp::ToolResult {
-            qol_mcp::ToolResult::structured(arguments)
+        fn call(
+            &self,
+            _name: &str,
+            arguments: serde_json::Value,
+            caller: &qol_mcp::Caller,
+        ) -> qol_mcp::ToolResult {
+            qol_mcp::ToolResult::structured(serde_json::json!({
+                "arguments": arguments,
+                "agent_home": caller.agent_home,
+            }))
         }
     }
 
     async fn send(method: &'static str, body: Option<&str>) -> Response {
-        let builder = axum::http::Request::builder().method(method).uri("/");
+        send_with_agent_home(method, body, None).await
+    }
+
+    async fn send_with_agent_home(
+        method: &'static str,
+        body: Option<&str>,
+        agent_home: Option<&str>,
+    ) -> Response {
+        let mut builder = axum::http::Request::builder().method(method).uri("/");
+        if let Some(agent_home) = agent_home {
+            builder = builder.header(HTTP_AGENT_HOME_HEADER, agent_home);
+        }
         let request = match body {
             Some(payload) => builder
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
@@ -150,5 +178,31 @@ mod tests {
     async fn delete_ends_the_session() {
         let response = send("DELETE", None).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn agent_home_header_reaches_the_host_trimmed_and_blank_is_dropped() {
+        let echo = r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
+        let response =
+            send_with_agent_home("POST", Some(echo), Some("  /home/k/.claude-work ")).await;
+        let payload = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(
+            value["result"]["structuredContent"]["agent_home"],
+            "/home/k/.claude-work"
+        );
+        for agent_home in [None, Some("   ")] {
+            let response = send_with_agent_home("POST", Some(echo), agent_home).await;
+            let payload = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(
+                value["result"]["structuredContent"]["agent_home"],
+                serde_json::Value::Null
+            );
+        }
     }
 }

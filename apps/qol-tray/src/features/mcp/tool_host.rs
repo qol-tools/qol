@@ -29,7 +29,12 @@ impl qol_mcp::ToolHost for PluginToolHost {
         specs
     }
 
-    fn call(&self, name: &str, arguments: serde_json::Value) -> qol_mcp::ToolResult {
+    fn call(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        caller: &qol_mcp::Caller,
+    ) -> qol_mcp::ToolResult {
         let binding = match bindings(&self.plugin_manager)
             .into_iter()
             .find(|binding| binding.spec.name == name)
@@ -37,6 +42,13 @@ impl qol_mcp::ToolHost for PluginToolHost {
             Some(binding) => binding,
             None => return qol_mcp::ToolResult::error(format!("unknown tool: {name}")),
         };
+        let arguments =
+            match with_agent_home_argument(arguments, caller, binding.accepts_agent_home, || {
+                qol_agent_homes::Registry::load().is_partitioned()
+            }) {
+                Ok(arguments) => arguments,
+                Err(message) => return qol_mcp::ToolResult::error(message),
+            };
         qol_runtime::probe!(
             "TRAY_MCP",
             "event=tool_called plugin={} runable={} kind={}",
@@ -75,6 +87,44 @@ impl qol_mcp::ToolHost for PluginToolHost {
     }
 }
 
+const MISSING_AGENT_HOME_ERROR: &str =
+    "caller identity missing: no x-qol-agent-home header; run qol mcp configure <harness>, restart the harness, and update the qol CLI if qol mcp headers prints no x-qol-agent-home";
+
+fn with_agent_home_argument(
+    arguments: serde_json::Value,
+    caller: &qol_mcp::Caller,
+    accepts_agent_home: bool,
+    partitioned: impl FnOnce() -> bool,
+) -> Result<serde_json::Value, String> {
+    let mut arguments = if arguments.is_null() {
+        serde_json::json!({})
+    } else {
+        arguments
+    };
+    if !accepts_agent_home {
+        return Ok(arguments);
+    }
+    match caller.agent_home.as_deref() {
+        Some(agent_home) => {
+            let Some(map) = arguments.as_object_mut() else {
+                return Err("arguments must be a JSON object".to_owned());
+            };
+            map.insert(
+                "agent_home".to_owned(),
+                serde_json::Value::String(agent_home.to_owned()),
+            );
+            Ok(arguments)
+        }
+        None => {
+            if partitioned() {
+                Err(MISSING_AGENT_HOME_ERROR.to_owned())
+            } else {
+                Ok(arguments)
+            }
+        }
+    }
+}
+
 fn tool_failed(binding: &ToolBinding, error: &str) -> qol_mcp::ToolResult {
     qol_runtime::probe!(
         "TRAY_MCP",
@@ -102,6 +152,7 @@ struct ToolBinding {
     plugin_id: String,
     runable: String,
     kind: RunableKind,
+    accepts_agent_home: bool,
     spec: qol_mcp::ToolSpec,
 }
 
@@ -148,6 +199,10 @@ fn bindings_for_contract(plugin_id: &str, runtime: &RuntimeSpec) -> Vec<ToolBind
             plugin_id: plugin_id.to_string(),
             runable: name.clone(),
             kind: RunableKind::Query,
+            accepts_agent_home: entry
+                .input
+                .as_ref()
+                .is_some_and(|map| map.contains_key("agent_home")),
             spec: tool_spec(
                 plugin_id,
                 name,
@@ -164,6 +219,10 @@ fn bindings_for_contract(plugin_id: &str, runtime: &RuntimeSpec) -> Vec<ToolBind
             plugin_id: plugin_id.to_string(),
             runable: name.clone(),
             kind: RunableKind::Action,
+            accepts_agent_home: entry
+                .input
+                .as_ref()
+                .is_some_and(|map| map.contains_key("agent_home")),
             spec: tool_spec(
                 plugin_id,
                 name,
@@ -181,10 +240,15 @@ fn tool_spec(
     description: &str,
     input: Option<&IndexMap<String, String>>,
 ) -> qol_mcp::ToolSpec {
+    let published = input.map(|map| {
+        let mut published = map.clone();
+        published.shift_remove("agent_home");
+        published
+    });
     qol_mcp::ToolSpec {
         name: tool_name(plugin_id, runable),
         description: description.to_string(),
-        input_schema: qol_mcp::input_schema(input.unwrap_or(&IndexMap::new())),
+        input_schema: qol_mcp::input_schema(published.as_ref().unwrap_or(&IndexMap::new())),
     }
 }
 
@@ -245,5 +309,110 @@ agent_tool = true
             serde_json::json!({"type": "object", "properties": {}, "required": []})
         );
         assert!(matches!(&bindings[1].kind, RunableKind::Action));
+    }
+
+    #[test]
+    fn published_schema_omits_the_reserved_agent_home_input() {
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.ask]
+description = "ask"
+poll_interval_ms = 1000
+agent_tool = true
+tool_description = "Ask memory"
+input = { question = "Question to ask", agent_home = "Agent home id" }
+"#,
+        )
+        .unwrap();
+        let bindings = bindings_for_contract("memory", &runtime);
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].accepts_agent_home);
+        let properties = bindings[0].spec.input_schema["properties"]
+            .as_object()
+            .unwrap();
+        assert!(properties.contains_key("question"));
+        assert!(!properties.contains_key("agent_home"));
+        assert_eq!(
+            bindings[0].spec.input_schema["required"],
+            serde_json::json!(["question"])
+        );
+    }
+
+    #[test]
+    fn agent_home_is_injected_and_overwrites_a_caller_supplied_value() {
+        let caller = qol_mcp::Caller {
+            agent_home: Some("/home/k/.claude-work".to_owned()),
+        };
+        let arguments = with_agent_home_argument(
+            serde_json::json!({"question": "q", "agent_home": "caller-chosen"}),
+            &caller,
+            true,
+            || false,
+        )
+        .unwrap();
+        assert_eq!(
+            arguments,
+            serde_json::json!({"question": "q", "agent_home": "/home/k/.claude-work"})
+        );
+        let untouched = with_agent_home_argument(
+            serde_json::json!({"agent_home": "caller-chosen"}),
+            &caller,
+            false,
+            || false,
+        )
+        .unwrap();
+        assert_eq!(
+            untouched,
+            serde_json::json!({"agent_home": "caller-chosen"})
+        );
+    }
+
+    #[test]
+    fn null_arguments_become_an_object_when_agent_home_is_injected() {
+        let caller = qol_mcp::Caller {
+            agent_home: Some("/home/k/.claude-work".to_owned()),
+        };
+        let arguments =
+            with_agent_home_argument(serde_json::Value::Null, &caller, true, || false).unwrap();
+        assert_eq!(
+            arguments,
+            serde_json::json!({"agent_home": "/home/k/.claude-work"})
+        );
+        let untouched =
+            with_agent_home_argument(serde_json::Value::Null, &caller, false, || false).unwrap();
+        assert_eq!(untouched, serde_json::json!({}));
+    }
+
+    #[test]
+    fn missing_caller_fails_closed_only_on_a_partitioned_registry() {
+        let caller = qol_mcp::Caller::default();
+        let error =
+            with_agent_home_argument(serde_json::json!({"question": "q"}), &caller, true, || true)
+                .unwrap_err();
+        assert_eq!(
+            error,
+            "caller identity missing: no x-qol-agent-home header; run qol mcp configure <harness>, restart the harness, and update the qol CLI if qol mcp headers prints no x-qol-agent-home"
+        );
+        let forwarded =
+            with_agent_home_argument(serde_json::json!({"question": "q"}), &caller, true, || {
+                false
+            })
+            .unwrap();
+        assert_eq!(forwarded, serde_json::json!({"question": "q"}));
+    }
+
+    #[test]
+    fn non_object_arguments_fail_when_injection_is_expected() {
+        let caller = qol_mcp::Caller {
+            agent_home: Some("/home/k/.claude-work".to_owned()),
+        };
+        let first = serde_json::json!(["entry"]);
+        let error = with_agent_home_argument(first, &caller, true, || false).unwrap_err();
+        assert_eq!(error, "arguments must be a JSON object");
+        let second = serde_json::json!(["entry"]);
+        let forwarded = with_agent_home_argument(second, &caller, false, || false).unwrap();
+        assert_eq!(forwarded, serde_json::json!(["entry"]));
     }
 }

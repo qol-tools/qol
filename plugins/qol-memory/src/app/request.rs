@@ -34,6 +34,7 @@ fn ask(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         k: number_field(input, "k", "ask")?.unwrap_or(DEFAULT_ASK_K as u64) as usize,
         brief: bool_field(input, "brief", "ask")?.unwrap_or(false),
         exclude_session: optional_string_field(input, "exclude_session", "ask")?,
+        agent_home: optional_string_field(input, "agent_home", "ask")?,
     };
     let log = LogOptions {
         source: optional_string_field(input, "log_source", "ask")?
@@ -63,7 +64,7 @@ fn continue_request(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Valu
 }
 
 fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
-    let unit = match input.get("unit") {
+    let mut unit = match input.get("unit") {
         Some(unit) => {
             if !unit.is_object() {
                 anyhow::bail!("capture: input.unit must be a JSON object");
@@ -84,6 +85,12 @@ fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
             crate::ingest::capture_unit(text, cwd, &crate::text::now_iso())
         }
     };
+    let registry = qol_agent_homes::Registry::load();
+    let caller =
+        registry.resolve_caller(optional_string_field(input, "agent_home", "capture")?.as_deref());
+    if let Some(fields) = unit.as_object_mut() {
+        fields.insert("agent_home".to_string(), json!(caller));
+    }
     let mut warm = lock_state(state);
     let store = warm.store().clone();
     let appended = crate::ingest::append_units(&store, std::slice::from_ref(&unit), warm.keys())?;
@@ -108,6 +115,7 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         k: DEFAULT_ASK_K,
         brief: false,
         exclude_session: None,
+        agent_home: optional_string_field(input, "agent_home", "rows")?,
     };
     let log = LogOptions {
         source: "launcher".to_string(),
@@ -466,6 +474,36 @@ mod tests {
             matches!(result, ReadResult::Error(message) if message == "capture: input.unit must be a JSON object"),
             "non-object unit must name the field"
         );
+    }
+
+    #[test]
+    fn request_capture_stamps_and_overwrites_the_agent_home() {
+        let mut state = warm_state("capture-home", &[]);
+        let ReadResult::HandledWithData(_) = respond(
+            &mut state,
+            "capture",
+            json!({
+                "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+                "cwd": "/tmp/proj",
+                "agent_home": "/tmp/qol-home-mine"
+            }),
+        ) else {
+            panic!("capture must answer with data for action `capture`");
+        };
+        let mut provided = unit_value("u-stamp", "a provided whole unit stamped by the handler");
+        provided["agent_home"] = json!("/tmp/qol-home-other");
+        let ReadResult::HandledWithData(_) = respond(
+            &mut state,
+            "capture",
+            json!({ "unit": provided, "agent_home": "/tmp/qol-home-mine" }),
+        ) else {
+            panic!("capture must answer with data for action `capture`");
+        };
+        let warm = state.lock().expect("lock");
+        let stored = std::fs::read_to_string(warm.store().units_path()).expect("read units");
+        assert_eq!(stored.lines().filter(|line| !line.is_empty()).count(), 2);
+        assert!(stored.contains("\"agent_home\":\"/tmp/qol-home-mine\""));
+        assert!(!stored.contains("/tmp/qol-home-other"));
     }
 
     #[test]

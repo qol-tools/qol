@@ -18,7 +18,12 @@ pub struct Parsed {
     pub cursor: ParseCursor,
 }
 
-pub fn parse_file(path: &Path, source: &str, cursor: ParseCursor) -> anyhow::Result<Parsed> {
+pub fn parse_file(
+    path: &Path,
+    source: &str,
+    agent_home: &str,
+    cursor: ParseCursor,
+) -> anyhow::Result<Parsed> {
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(cursor.offset))?;
     let mut data = Vec::new();
@@ -44,6 +49,7 @@ pub fn parse_file(path: &Path, source: &str, cursor: ParseCursor) -> anyhow::Res
         handle_event(
             &event,
             source,
+            agent_home,
             &file_name,
             &mut session,
             &mut cwd,
@@ -63,6 +69,7 @@ pub fn parse_file(path: &Path, source: &str, cursor: ParseCursor) -> anyhow::Res
 fn handle_event(
     event: &Value,
     source: &str,
+    agent_home: &str,
     file: &str,
     session: &mut Option<String>,
     cwd: &mut Option<String>,
@@ -79,7 +86,9 @@ fn handle_event(
             let ts = to_iso(message.get("timestamp"));
             if message.get("role").and_then(Value::as_str) == Some("user") {
                 let text = redact(&text_of(content));
-                units.push(user_unit(source, file, &ts, &text, session, cwd));
+                units.push(user_unit(
+                    source, agent_home, file, &ts, &text, session, cwd,
+                ));
             }
         }
         Some("compaction") => {
@@ -89,6 +98,7 @@ fn handle_event(
             units.push(json!({
                 "key": unit_key(source, file, ts.as_str(), &text),
                 "source": source,
+                "agent_home": agent_home,
                 "file": file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
@@ -113,6 +123,7 @@ fn handle_event(
             units.push(json!({
                 "key": unit_key(source, file, ts.as_str(), &text),
                 "source": source,
+                "agent_home": agent_home,
                 "file": file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
@@ -150,7 +161,9 @@ fn handle_event(
                 *cwd = Some(dir.to_owned());
             }
             let ts = to_iso(event.get("timestamp"));
-            units.push(user_unit(source, file, &ts, &text, session, cwd));
+            units.push(user_unit(
+                source, agent_home, file, &ts, &text, session, cwd,
+            ));
         }
         Some("summary") => {
             let text = redact(event.get("summary").and_then(Value::as_str).unwrap_or(""));
@@ -161,6 +174,7 @@ fn handle_event(
             units.push(json!({
                 "key": unit_key(source, file, ts.as_str(), &text),
                 "source": source,
+                "agent_home": agent_home,
                 "file": file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
@@ -175,6 +189,7 @@ fn handle_event(
 
 fn user_unit(
     source: &str,
+    agent_home: &str,
     file: &str,
     ts: &Value,
     text: &str,
@@ -184,6 +199,7 @@ fn user_unit(
     json!({
         "key": unit_key(source, file, ts.as_str(), text),
         "source": source,
+        "agent_home": agent_home,
         "file": file,
         "session": session.clone(),
         "cwd": cwd.clone(),
@@ -315,7 +331,8 @@ mod tests {
             "\n"
         );
         std::fs::write(&path, body).unwrap();
-        let parsed = parse_file(&path, "pi", ParseCursor::default()).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
         assert_eq!(parsed.units.len(), 3);
 
         let user = &parsed.units[0];
@@ -331,6 +348,10 @@ mod tests {
             Some("2026-08-27T08-39-05-000Z.jsonl")
         );
         assert_eq!(user.get("source").and_then(Value::as_str), Some("pi"));
+        assert_eq!(
+            user.get("agent_home").and_then(Value::as_str),
+            Some("/test-home/.pi/agent")
+        );
         assert_eq!(
             user.get("text").and_then(Value::as_str),
             Some("fix the launcher bug")
@@ -384,10 +405,20 @@ mod tests {
             "\n"
         );
         std::fs::write(&path, body).unwrap();
-        let parsed = parse_file(&path, "claude", ParseCursor::default()).unwrap();
+        let parsed = parse_file(
+            &path,
+            "claude",
+            "/test-home/.claude",
+            ParseCursor::default(),
+        )
+        .unwrap();
         assert_eq!(parsed.units.len(), 2);
         let user = &parsed.units[0];
         assert_eq!(user.get("kind").and_then(Value::as_str), Some("user"));
+        assert_eq!(
+            user.get("agent_home").and_then(Value::as_str),
+            Some("/test-home/.claude")
+        );
         assert_eq!(user.get("session").and_then(Value::as_str), Some("s9"));
         assert_eq!(user.get("cwd").and_then(Value::as_str), Some("/work"));
         let summary = &parsed.units[1];

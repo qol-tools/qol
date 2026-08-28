@@ -9,13 +9,22 @@ pub struct ServerInfo {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Caller {
+    pub agent_home: Option<String>,
+}
+
 pub trait ToolHost {
     fn server_info(&self) -> ServerInfo;
     fn list(&self) -> Vec<ToolSpec>;
-    fn call(&self, name: &str, arguments: serde_json::Value) -> ToolResult;
+    fn call(&self, name: &str, arguments: serde_json::Value, caller: &Caller) -> ToolResult;
 }
 
-pub fn handle(host: &dyn ToolHost, message: serde_json::Value) -> Option<serde_json::Value> {
+pub fn handle(
+    host: &dyn ToolHost,
+    message: serde_json::Value,
+    caller: &Caller,
+) -> Option<serde_json::Value> {
     let object = match message {
         serde_json::Value::Object(object) => object,
         _ => {
@@ -54,7 +63,7 @@ pub fn handle(host: &dyn ToolHost, message: serde_json::Value) -> Option<serde_j
             id,
             serde_json::json!({"tools": host.list()}),
         )),
-        "tools/call" => match call_tool(host, &params) {
+        "tools/call" => match call_tool(host, &params, caller) {
             Ok(result) => Some(result_response(id, result)),
             Err((code, message)) => Some(error_response(id, code, message)),
         },
@@ -85,6 +94,7 @@ fn initialize_result(host: &dyn ToolHost, params: &serde_json::Value) -> serde_j
 fn call_tool(
     host: &dyn ToolHost,
     params: &serde_json::Value,
+    caller: &Caller,
 ) -> Result<serde_json::Value, (ErrorCode, String)> {
     let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
         return Err((ErrorCode::InvalidParams, "missing tool name".to_string()));
@@ -96,7 +106,7 @@ fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let result = host.call(name, arguments);
+    let result = host.call(name, arguments, caller);
     Ok(serde_json::to_value(&result).unwrap_or_default())
 }
 
@@ -130,12 +140,42 @@ mod tests {
             ]
         }
 
-        fn call(&self, name: &str, arguments: serde_json::Value) -> ToolResult {
+        fn call(&self, name: &str, arguments: serde_json::Value, _caller: &Caller) -> ToolResult {
             match name {
                 "echo" => ToolResult::structured(arguments),
                 "fail" => ToolResult::error("boom"),
                 _ => ToolResult::error("unknown tool"),
             }
+        }
+    }
+
+    fn handle(host: &dyn ToolHost, message: serde_json::Value) -> Option<serde_json::Value> {
+        super::handle(host, message, &Caller::default())
+    }
+
+    struct CallerHost {
+        seen: std::sync::Mutex<Option<Caller>>,
+    }
+
+    impl ToolHost for CallerHost {
+        fn server_info(&self) -> ServerInfo {
+            ServerInfo {
+                name: "caller-test".to_string(),
+                version: "0.0.0".to_string(),
+            }
+        }
+
+        fn list(&self) -> Vec<ToolSpec> {
+            vec![ToolSpec {
+                name: "echo".to_string(),
+                description: "echoes arguments".to_string(),
+                input_schema: json!({"type": "object"}),
+            }]
+        }
+
+        fn call(&self, _name: &str, arguments: serde_json::Value, caller: &Caller) -> ToolResult {
+            *self.seen.lock().unwrap() = Some(caller.clone());
+            ToolResult::structured(arguments)
         }
     }
 
@@ -308,6 +348,29 @@ mod tests {
             handle(&FakeHost, request(4, "tools/call", json!({"name": "fail"}))).expect("response");
         assert_eq!(response["result"]["content"][0]["text"], "boom");
         assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn tools_call_passes_the_caller_to_the_host() {
+        let host = CallerHost {
+            seen: std::sync::Mutex::new(None),
+        };
+        super::handle(
+            &host,
+            request(4, "tools/call", json!({"name": "echo"})),
+            &Caller {
+                agent_home: Some("/home/k/.claude-work".to_owned()),
+            },
+        )
+        .expect("response");
+        assert_eq!(
+            host.seen
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|caller| caller.agent_home.as_deref()),
+            Some("/home/k/.claude-work")
+        );
     }
 
     #[test]

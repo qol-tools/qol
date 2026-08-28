@@ -2,7 +2,7 @@ use super::CliArgs;
 use anyhow::{anyhow, Result};
 use qol_headless::{Command, Execution, HeadlessApp};
 
-use crate::commands::sessions;
+use crate::commands::{agents, sessions};
 
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     let has_help = args.values.iter().any(|value| {
@@ -10,7 +10,8 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
             .to_str()
             .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
     });
-    if !args.values.is_empty() && !has_help && !args.json {
+    let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
+    if !is_agents && !args.values.is_empty() && !has_help && !args.json {
         return Ok(None);
     }
     if !has_help
@@ -318,6 +319,63 @@ fn app() -> HeadlessApp {
                     )?;
                     Ok(qol_headless::PlainTextOutput::empty())
                 }),
+            ),
+        )
+        .command(
+            command(
+                "agents",
+                "Inspect and manage the agent home registry.",
+                "qol agents <list|current|add|remove>",
+                "One registry file (agents.toml in the qol config directory) declares the agent homes this machine knows; see docs/agent-homes.md.",
+                "Home rows, home ids, or confirmation lines on stdout; diagnostics on stderr.",
+                "Exits non-zero when a harness name or path is invalid or the registry file cannot be read or written.",
+            )
+            .run_plain_text(|context| agents::run(context.args()))
+            .subcommand(
+                command(
+                    "list",
+                    "List every registered agent home plus unregistered env homes.",
+                    "qol agents list [--json]",
+                    "One tab-separated row per home: harness, id, shared or -, default or -, then declared, implicit, or unregistered; each harness whose env home is set but not registered adds one extra unregistered row.",
+                    "Tab-separated rows on stdout, or the homes JSON object with --json.",
+                    "Exits non-zero when the registry cannot be read.",
+                )
+                .run_plain_text(|_| agents::list_plain())
+                .run_json(|_| agents::list_json()),
+            )
+            .subcommand(
+                command(
+                    "current",
+                    "Print the current agent home for a harness.",
+                    "qol agents current <claude|codex|kimi|pi> [--json]",
+                    "The harness home env var wins when set; otherwise the harness default home applies. Scripts call this verb.",
+                    "The home id on stdout, or the AgentHome JSON with --json.",
+                    "Exits non-zero when the harness name is unknown.",
+                )
+                .run_plain_text(|context| agents::current_plain(context.args()))
+                .run_json(|context| agents::current_json(context.args())),
+            )
+            .subcommand(
+                command(
+                    "add",
+                    "Add or update an agent home in the registry file.",
+                    "qol agents add <claude|codex|kimi|pi> <path> [--shared] [--default]",
+                    "Appends or updates the [[home]] entry in agents.toml, creating the file; --default clears default on that harness's other entries; prints the resulting row after the confirmation.",
+                    "A confirmation line on stdout; diagnostics on stderr.",
+                    "Exits non-zero when the harness name or path is invalid or the registry file cannot be written.",
+                )
+                .run_plain_text(|context| agents::add_plain(context.args())),
+            )
+            .subcommand(
+                command(
+                    "remove",
+                    "Remove an agent home from the registry file.",
+                    "qol agents remove <path>",
+                    "Removes every [[home]] entry whose normalized path matches, regardless of harness, and errors when nothing matched; comments and formatting survive.",
+                    "A confirmation line naming the removed harnesses on stdout; diagnostics on stderr.",
+                    "Exits non-zero when the entry is absent or the registry file cannot be written.",
+                )
+                .run_plain_text(|context| agents::remove_plain(context.args())),
             ),
         )
         .command(

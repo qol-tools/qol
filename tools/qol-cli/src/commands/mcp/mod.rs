@@ -1,11 +1,12 @@
 use std::ffi::OsString;
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_conventions::{local_base_url, HTTP_AUTH_HEADER};
+use qol_agent_homes::{Harness, Registry};
+use qol_conventions::{local_base_url, HTTP_AGENT_HOME_HEADER, HTTP_AUTH_HEADER};
 
 mod configure;
 
-use configure::{apply_codex_entry, apply_json_entry, codex_entry_text, json_entry, Harness};
+use configure::{apply_codex_entry, apply_json_entry, codex_entry_text, config_path, json_entry};
 
 const USAGE: &str = "qol mcp <url|token|headers|configure>";
 
@@ -40,7 +41,7 @@ fn run_configure(args: &[OsString]) -> Result<()> {
         .ok_or_else(|| anyhow!("usage: {USAGE}"))?;
     let harness =
         Harness::parse(name).ok_or_else(|| anyhow!("unknown harness `{name}`; usage: {USAGE}"))?;
-    let path = harness.config_path()?;
+    let path = config_path(harness)?;
     let document = std::fs::read_to_string(&path).with_context(|| {
         format!(
             "config file not found at {}; create it before running qol mcp configure",
@@ -49,23 +50,35 @@ fn run_configure(args: &[OsString]) -> Result<()> {
     })?;
     let url = url_text();
     let token = token_text()?;
-    let (updated, entry_text) = match harness {
+    let (updated, entry_text, baked) = match harness {
         Harness::Codex => {
-            let updated = apply_codex_entry(&document, &url, &token)?;
-            let entry = codex_entry_text(&url, &token)?;
-            (updated, entry)
+            let agent_home = Registry::load().current(Harness::Codex).id;
+            let updated = apply_codex_entry(&document, &url, &token, &agent_home)?;
+            let entry = codex_entry_text(&url, &token, &agent_home)?;
+            (updated, entry, Some(agent_home))
         }
-        other => {
-            let entry = json_entry(other, &url, &token);
+        Harness::Kimi => {
+            let agent_home = Registry::load().current(Harness::Kimi).id;
+            let entry = json_entry(Harness::Kimi, &url, &token, &agent_home);
             let text = serde_json::to_string_pretty(&entry)
                 .map_err(|error| anyhow!("failed to render the mcp entry: {error}"))?;
-            (apply_json_entry(&document, entry)?, text)
+            (apply_json_entry(&document, entry)?, text, Some(agent_home))
+        }
+        other => {
+            let agent_home = Registry::load().current(other).id;
+            let entry = json_entry(other, &url, &token, &agent_home);
+            let text = serde_json::to_string_pretty(&entry)
+                .map_err(|error| anyhow!("failed to render the mcp entry: {error}"))?;
+            (apply_json_entry(&document, entry)?, text, None)
         }
     };
     std::fs::write(&path, updated)
         .with_context(|| format!("failed to write {}", path.display()))?;
     println!("updated {}", path.display());
     println!("{entry_text}");
+    if let Some(agent_home) = baked {
+        println!("agent home {agent_home} baked in; run qol mcp configure again after re-homing");
+    }
     Ok(())
 }
 
@@ -92,6 +105,10 @@ fn headers_text(token: &str) -> Result<String> {
         HTTP_AUTH_HEADER.to_owned(),
         serde_json::Value::String(token.to_owned()),
     );
+    headers.insert(
+        HTTP_AGENT_HOME_HEADER.to_owned(),
+        serde_json::Value::String(Registry::load().current(Harness::Claude).id),
+    );
     serde_json::to_string(&serde_json::Value::Object(headers))
         .map_err(|error| anyhow!("failed to serialize the headers object: {error}"))
 }
@@ -111,7 +128,8 @@ Usage:
 Details:
   url prints the local streamable HTTP endpoint URL served by qol-tray.
   token prints the tray HTTP auth token from the qol config directory.
-  headers prints a compact JSON object mapping the auth header to the token.
+  headers prints a compact JSON object mapping the auth header to the token and
+  the x-qol-agent-home header to the agent home id.
   configure writes or replaces the qol MCP entry in the named harness's user
   config; claude and pi reference the qol CLI for their headers and token,
   while codex and kimi embed the token value directly. Existing servers,

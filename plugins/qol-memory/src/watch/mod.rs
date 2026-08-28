@@ -14,13 +14,12 @@ pub struct WatchHandle {
 }
 
 pub fn spawn(roots: IngestRoots, state: Arc<Mutex<WarmState>>) -> Result<WatchHandle, WatchError> {
-    let (watch, batches) = qol_watch::settled(
-        &[
-            WatchRoot::deep(roots.pi.clone()),
-            WatchRoot::deep(roots.claude.clone()),
-        ],
-        SETTLE_WINDOW,
-    )?;
+    let watch_roots: Vec<WatchRoot> = roots
+        .roots
+        .iter()
+        .map(|root| WatchRoot::deep(root.path.clone()))
+        .collect();
+    let (watch, batches) = qol_watch::settled(&watch_roots, SETTLE_WINDOW)?;
     std::thread::Builder::new()
         .name("qol-memory-watch".to_owned())
         .spawn(move || drain(batches, roots, state))

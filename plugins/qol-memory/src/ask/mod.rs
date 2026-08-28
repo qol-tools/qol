@@ -8,6 +8,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::agent_home;
 use crate::aliases::AliasMap;
 use crate::retrieval::cache;
 use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef};
@@ -28,6 +29,7 @@ pub struct AskRequest {
     pub k: usize,
     pub brief: bool,
     pub exclude_session: Option<String>,
+    pub agent_home: Option<String>,
 }
 
 #[derive(Debug)]
@@ -288,10 +290,16 @@ pub fn run_with_layers(
     units: &UnitsLayer,
     notes_layer: &NotesLayer,
 ) -> Result<AskOutput> {
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(req.agent_home.as_deref());
+    let slug = agent_home::cache_slug(&caller);
     let user_units_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
+        .filter(|unit| {
+            crate::store::in_answer_pool(&unit.kind)
+                && agent_home::visible(unit, &caller, &registry)
+        })
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_units_input);
@@ -317,8 +325,8 @@ pub fn run_with_layers(
         .collect();
 
     let answer_layer = exclude_session.as_deref().map_or_else(
-        || "pool".to_string(),
-        |session| format!("pool-x-{}", text::utf16_slice(session, 0, 8)),
+        || format!("pool-{slug}"),
+        |session| format!("pool-x-{}-{slug}", text::utf16_slice(session, 0, 8)),
     );
     let answer_refs = doc_refs(&answer_pool);
     let answer_idx =
@@ -345,7 +353,12 @@ pub fn run_with_layers(
         .collect();
 
     let user_refs = doc_refs(&user_units);
-    let all_idx = cache::build_or_load(store.root(), "user", &user_refs, Some(&units.path));
+    let all_idx = cache::build_or_load(
+        store.root(),
+        &format!("user-{slug}"),
+        &user_refs,
+        Some(&units.path),
+    );
     let ranked_all: Vec<UnitHit> = bm25_ranks(&units_query, &all_idx, req.k)
         .into_iter()
         .filter_map(|ranked| {
@@ -379,14 +392,15 @@ pub fn run_with_layers(
         })
         .collect();
 
-    let notes: Vec<crate::store::Note> = notes_layer.items.clone();
+    let notes: Vec<crate::store::Note> =
+        visible_notes(&notes_layer.items, &units.items, &caller, &registry);
     let notes_refs = notes_refs(&notes);
     let notes_idx = if notes.is_empty() {
         None
     } else {
         Some(cache::build_or_load(
             store.root(),
-            "notes",
+            &format!("notes-{slug}"),
             &notes_refs,
             None,
         ))
@@ -724,6 +738,7 @@ pub fn run_with_layers(
 
     Ok(AskOutput {
         query: req.query.clone(),
+        agent_home: caller,
         verdict,
         confidence,
         reason,
@@ -766,6 +781,28 @@ fn is_boilerplate_unit_user(hit: &UnitHit) -> bool {
     crate::store::BOILERPLATE_MARKERS
         .iter()
         .any(|marker| hit.text.contains(marker))
+}
+
+pub(crate) fn visible_notes(
+    notes: &[crate::store::Note],
+    units: &[Unit],
+    caller: &str,
+    registry: &qol_agent_homes::Registry,
+) -> Vec<crate::store::Note> {
+    let unit_keys: HashSet<&str> = units.iter().map(|unit| unit.key.as_str()).collect();
+    let visible_unit_keys: HashSet<&str> = units
+        .iter()
+        .filter(|unit| agent_home::visible(unit, caller, registry))
+        .map(|unit| unit.key.as_str())
+        .collect();
+    notes
+        .iter()
+        .filter(|note| match note.source_key.as_deref() {
+            Some(key) if unit_keys.contains(key) => visible_unit_keys.contains(key),
+            _ => true,
+        })
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn doc_refs(items: &[Unit]) -> Vec<DocRef<'_>> {
@@ -982,6 +1019,7 @@ pub fn run_and_log_with_layers(
             source: log.source.clone(),
             session: exclude_session.clone(),
             cwd: log.cwd.clone(),
+            agent_home: out.agent_home.clone(),
             query: out.query.clone(),
             verdict: out.verdict.clone(),
             confidence: out.confidence.clone(),
@@ -1061,10 +1099,17 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
     let sealed = store.root().join("units.seal.json").exists()
         && store.root().join("units.seal.gz").exists();
 
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(None);
+    let slug = agent_home::cache_slug(&caller);
+
     let user_units_input: Vec<Unit> = units
         .items
         .iter()
-        .filter(|unit| crate::store::in_answer_pool(&unit.kind))
+        .filter(|unit| {
+            crate::store::in_answer_pool(&unit.kind)
+                && agent_home::visible(unit, &caller, &registry)
+        })
         .cloned()
         .collect();
     let user_units = dedupe_user_units(&user_units_input);
@@ -1075,7 +1120,7 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
         .collect();
     let pool_refs = doc_refs(&pool_units);
     let user_refs = doc_refs(&user_units);
-    let note_items: Vec<crate::store::Note> = notes.items.clone();
+    let note_items = visible_notes(&notes.items, &units.items, &caller, &registry);
     let note_refs = notes_refs(&note_items);
 
     let cache_label = |state: cache::CacheState| match state {
@@ -1085,17 +1130,22 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
     };
     let pool_state = cache_label(cache::cache_state(
         store.root(),
-        "pool",
+        &format!("pool-{slug}"),
         &pool_refs,
         Some(&units.path),
     ));
     let user_state = cache_label(cache::cache_state(
         store.root(),
-        "user",
+        &format!("user-{slug}"),
         &user_refs,
         Some(&units.path),
     ));
-    let notes_state = cache_label(cache::cache_state(store.root(), "notes", &note_refs, None));
+    let notes_state = cache_label(cache::cache_state(
+        store.root(),
+        &format!("notes-{slug}"),
+        &note_refs,
+        None,
+    ));
 
     let skills_value = match skills::load_index(&store.skills_index_path()) {
         Some(index) => json!({
@@ -1145,6 +1195,8 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
 #[derive(Serialize, Deserialize)]
 pub struct AskOutput {
     pub query: String,
+    #[serde(default)]
+    pub agent_home: String,
     pub verdict: String,
     pub confidence: String,
     pub reason: String,
@@ -1350,6 +1402,7 @@ mod tests {
                 k: 5,
                 brief,
                 exclude_session: None,
+                agent_home: None,
             },
         )
         .expect("ask runs")
@@ -1510,10 +1563,120 @@ mod tests {
             k: 5,
             brief: false,
             exclude_session: Some("sess-live-aaa1".to_string()),
+            agent_home: None,
         };
         let excluded_out = run(&store, &AliasMap::default(), &excluded).expect("excluded ask runs");
         assert_eq!(excluded_out.counts.units, 4);
-        assert!(root.join("idx-pool-x-sess-liv.json").exists());
+        let registry = qol_agent_homes::Registry::load();
+        let caller = registry.resolve_caller(None);
+        let slug = agent_home::cache_slug(&caller);
+        assert!(root
+            .join(format!("idx-pool-x-sess-liv-{slug}.json"))
+            .exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_scopes_units_to_the_caller_home_and_shared_homes() {
+        let root = temp_root("home-scope");
+        let registry = qol_agent_homes::Registry::load();
+        let caller = "/tmp/qol-home-mine";
+        let units = [
+            json!({
+                "key": "u-mine",
+                "agent_home": caller,
+                "kind": "user",
+                "ts": "2026-08-01T09:00:00.000Z",
+                "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+            }),
+            json!({
+                "key": "u-theirs",
+                "agent_home": "/tmp/qol-home-theirs",
+                "kind": "user",
+                "ts": "2026-08-01T10:00:00.000Z",
+                "text": "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+            }),
+            json!({
+                "key": "u-shared",
+                "agent_home": registry.default_for(qol_agent_homes::Harness::Pi).id,
+                "kind": "user",
+                "ts": "2026-08-01T11:00:00.000Z",
+                "text": "aurora quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+            }),
+        ];
+        let body = units
+            .iter()
+            .map(|unit| unit.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        write_units(&root, &body);
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run(
+            &store,
+            &AliasMap::default(),
+            &AskRequest {
+                query: "ember zephyr aurora quartz".to_string(),
+                k: 5,
+                brief: false,
+                exclude_session: None,
+                agent_home: Some(caller.to_string()),
+            },
+        )
+        .expect("ask runs");
+        assert_eq!(out.agent_home, caller);
+        let keys: Vec<&str> = out
+            .units
+            .as_ref()
+            .expect("full ask keeps units")
+            .iter()
+            .map(|unit| unit.key.as_str())
+            .collect();
+        assert!(keys.contains(&"u-mine"));
+        assert!(keys.contains(&"u-shared"));
+        assert!(!keys.contains(&"u-theirs"));
+        let slug = agent_home::cache_slug(caller);
+        assert!(root.join(format!("idx-user-{slug}.json")).exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn status_reports_the_default_caller_cache_layers() {
+        let root = temp_root("status-layers");
+        build_fixture(&root);
+        let foreign = json!({
+            "key": "u-foreign",
+            "agent_home": "/tmp/qol-home-private",
+            "kind": "user",
+            "ts": "2026-08-01T12:00:00.000Z",
+            "text": "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+        });
+        write_units(&root, &format!("{}\n{}", fixture_units(), foreign));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "does the clipboard history ring survive tray restarts",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        assert_eq!(out.counts.units, 4);
+        let units = store.read_units().expect("units layer");
+        let notes = store.read_notes().expect("notes layer");
+        let value = status_with_layers(&store, &units, &notes).expect("status runs");
+        assert_eq!(value["index_caches"]["pool"], "fresh");
+        assert_eq!(value["index_caches"]["user"], "fresh");
+        assert_eq!(value["index_caches"]["notes"], "fresh");
+        crate::app::warm::reindex(&store).expect("reindex runs");
+        run_ask(
+            &store,
+            "does the clipboard history ring survive tray restarts",
+            false,
+        );
+        let units = store.read_units().expect("units layer");
+        let notes = store.read_notes().expect("notes layer");
+        let value = status_with_layers(&store, &units, &notes).expect("status runs");
+        assert_eq!(value["index_caches"]["pool"], "fresh");
+        assert_eq!(value["index_caches"]["user"], "fresh");
+        assert_eq!(value["index_caches"]["notes"], "fresh");
         fs::remove_dir_all(&root).ok();
     }
 

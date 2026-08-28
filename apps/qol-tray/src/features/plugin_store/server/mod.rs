@@ -305,6 +305,7 @@ fn api_router(app_state: AppState, http_security: security::HttpSecurity) -> Rou
     let api = plugin_handlers::routes()
         .merge(settings::routes())
         .merge(crate::features::github_auth::routes())
+        .merge(crate::features::agents::routes())
         .merge(crate::features::auth::routes())
         .merge(meta_handlers::routes())
         .merge(shortcut_handlers::routes())
