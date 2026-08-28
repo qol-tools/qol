@@ -68,6 +68,10 @@ pub(super) struct BridgeOutcome {
     pub(super) next_command: String,
     #[serde(default)]
     pub(super) recovered_from_watch_snapshot: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stall_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) recovery_command: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1213,6 +1217,8 @@ fn resume_owned(
                     elapsed_ms: started.elapsed().as_millis(),
                     next_command: format!("qol sessions next {}", binding.token()),
                     recovered_from_watch_snapshot: true,
+                    stall_reason: None,
+                    recovery_command: None,
                 });
             }
             Err(error) => return Err(error).context("bridge screen read failed"),
@@ -1256,13 +1262,14 @@ fn resume_owned(
     let joined = session_is_pi(interpreter, &target);
     if kickstart {
         let marker = CompletionMarker::from_token(&round.completion_marker)?;
-        terminals
-            .send_text(
-                binding,
-                &kickstart_prompt(&marker, joined),
-                DeliveryMode::Submit,
-            )
-            .context("bridge kickstart delivery failed")?;
+        let prompt = kickstart_prompt(&marker, joined);
+        deliver_kickstart(
+            terminals,
+            binding,
+            &prompt,
+            &marker.left,
+            DELIVERY_VERIFY_WINDOW,
+        )?;
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
             "event=kickstarted target_backend={}",
@@ -1403,6 +1410,57 @@ pub(super) fn delivery_observed(
     }
 }
 
+fn kickstart_submitted(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    fragment: &str,
+    window: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + window;
+    loop {
+        let screen = terminals
+            .read_screen_relaxed(binding)
+            .context("bridge screen read failed")?;
+        let unsent = qol_terminal_sessions::cli::editor_draft(&screen)
+            .is_some_and(|draft| screen_contains_ignoring_whitespace(&draft, fragment));
+        if !unsent {
+            return Ok(true);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(DELIVERY_VERIFY_INTERVAL.min(deadline - now));
+    }
+}
+
+fn deliver_kickstart(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    prompt: &str,
+    fragment: &str,
+    window: Duration,
+) -> Result<()> {
+    for attempt in 0..2 {
+        terminals
+            .send_text(binding, prompt, DeliveryMode::Submit)
+            .context("bridge kickstart delivery failed")?;
+        if kickstart_submitted(terminals, binding, fragment, window)? {
+            return Ok(());
+        }
+        qol_runtime::probe!(
+            "CLI_SESSION_BRIDGE",
+            "event=kickstart_unsubmitted target_backend={} attempt={}",
+            binding.session_id().backend(),
+            attempt + 1
+        );
+    }
+    bail!(
+        "the kickstart text was typed into `{binding}` but never left its editor; the lane is not accepting input. Clear it with `qol sessions close {}` and spawn a fresh lane",
+        binding.token()
+    )
+}
+
 pub(super) fn session_liveness<'a>(
     terminals: &'a TerminalSessionService,
     interpreter: &'a CliSessionInterpreter,
@@ -1497,11 +1555,15 @@ pub(super) fn wait_for_completion(
         role,
         session: binding.token(),
         completion_marker: marker.to_owned(),
+        stall_reason: outcome
+            .stalled
+            .then(|| stall_kind(&outcome.screen).to_owned()),
         screen: outcome.screen,
         reads: outcome.reads,
         elapsed_ms: outcome.elapsed.as_millis(),
         next_command: format!("qol sessions next {}", binding.token()),
         recovered_from_watch_snapshot: false,
+        recovery_command: outcome.stalled.then(|| recovery_command(&binding.token())),
     })
 }
 
@@ -1524,12 +1586,26 @@ fn outcome(
         role,
         session: binding.token(),
         completion_marker: marker.to_owned(),
+        stall_reason: stalled.then(|| stall_kind(&screen).to_owned()),
+        recovery_command: stalled.then(|| recovery_command(&binding.token())),
         screen,
         reads,
         elapsed_ms: started.elapsed().as_millis(),
         next_command: format!("qol sessions next {}", binding.token()),
         recovered_from_watch_snapshot: false,
     }
+}
+
+pub(super) fn stall_kind(screen: &str) -> &'static str {
+    match qol_terminal_sessions::cli::provider_error_line(screen) {
+        Some(_) => "provider_error",
+        None if screen.trim().is_empty() => "no_screen",
+        None => "frozen",
+    }
+}
+
+fn recovery_command(session: &str) -> String {
+    format!("qol sessions close {session}")
 }
 
 fn session_is_pi(interpreter: &CliSessionInterpreter, facts: &SessionFacts) -> bool {
@@ -1636,16 +1712,9 @@ fn wait_for_pi_round(
             if activity == Some(false)
                 || (activity.is_none() && last_signal.elapsed() >= stall_after * 4)
             {
+                let screen = terminals.read_screen_relaxed(binding).unwrap_or_default();
                 return Ok(outcome(
-                    false,
-                    submitted,
-                    true,
-                    role,
-                    binding,
-                    marker,
-                    String::new(),
-                    reads,
-                    started,
+                    false, submitted, true, role, binding, marker, screen, reads, started,
                 ));
             }
         }
@@ -2297,6 +2366,129 @@ mod tests {
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(round.completed);
         assert_eq!(round.screen.as_deref(), Some("the finished report"));
+    }
+
+    fn recorded_pi_screen(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../libs/qol-terminal-sessions/tests/fixtures/pi_real")
+            .join(name);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("missing fixture {}: {error}", path.display()))
+    }
+
+    #[test]
+    fn a_stalled_pi_round_returns_the_lane_screen_with_a_reason_and_a_recovery_command() {
+        let root = tempfile::TempDir::new().unwrap();
+        let frozen = recorded_pi_screen("frozen_spinner_a.txt");
+        let backend = FakeBackend::new(
+            facts(&"v1:fake:7:100".parse().unwrap()),
+            vec![frozen.clone(); 16],
+        );
+        let strategy = Arc::new(PiWaitStrategy {
+            marked: std::sync::Mutex::new(None),
+            since_report: std::sync::Mutex::new(None),
+        });
+        let (terminals, interpreter, pending, binding) = pi_wait_harness(&root, backend, strategy);
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let outcome = wait_for_pi_round(
+            &terminals,
+            &interpreter,
+            &pending,
+            &binding,
+            "QOL_BRIDGE_DONE_round",
+            Some(SystemTime::now()),
+            Duration::from_secs(30),
+            rx,
+            false,
+            true,
+            &|| Some(false),
+            Duration::from_millis(20),
+            Role::Lane,
+            None,
+        )
+        .unwrap();
+
+        assert!(!outcome.completed);
+        assert!(outcome.stalled);
+        assert!(
+            !outcome.screen.is_empty(),
+            "a stalled round must carry the lane screen, not an empty string"
+        );
+        assert_eq!(outcome.stall_reason.as_deref(), Some("provider_error"));
+        assert_eq!(
+            outcome.recovery_command.as_deref(),
+            Some("qol sessions close v1:fake:7:100")
+        );
+    }
+
+    #[test]
+    fn a_stall_without_a_provider_error_reports_a_frozen_lane() {
+        assert_eq!(
+            stall_kind(&recorded_pi_screen("prompt_echo_with_token.txt")),
+            "frozen"
+        );
+        assert_eq!(
+            stall_kind(&recorded_pi_screen("provider_error_terminated.txt")),
+            "provider_error"
+        );
+        assert_eq!(stall_kind(""), "no_screen");
+    }
+
+    #[test]
+    fn a_kickstart_left_in_the_editor_is_retried_and_then_reported_as_undelivered() {
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let stuck = recorded_pi_screen("token_in_editor.txt");
+        let backend = FakeBackend::new(facts(&binding), vec![stuck; 32]);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+
+        let error = deliver_kickstart(
+            &terminals,
+            &binding,
+            "kickstart prompt",
+            "QOL_BRIDGE_DONE_9a62a1a6",
+            Duration::from_millis(20),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("never left its editor"),
+            "an unsubmitted kickstart must be definitive: {error}"
+        );
+        assert!(
+            error.contains("qol sessions close v1:fake:7:100"),
+            "the failure must name the one-call recovery: {error}"
+        );
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            2,
+            "an unsubmitted kickstart is retried once before it gives up"
+        );
+    }
+
+    #[test]
+    fn a_kickstart_that_leaves_the_editor_is_accepted_on_the_first_send() {
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        let running = recorded_pi_screen("frozen_spinner_a.txt");
+        let backend = FakeBackend::new(facts(&binding), vec![running; 8]);
+        let terminals = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+
+        deliver_kickstart(
+            &terminals,
+            &binding,
+            "kickstart prompt",
+            "QOL_BRIDGE_DONE_9a62a1a6",
+            Duration::from_millis(20),
+        )
+        .unwrap();
+
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
     }
 
     #[test]

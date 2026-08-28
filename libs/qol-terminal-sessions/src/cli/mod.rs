@@ -22,6 +22,7 @@ pub use evidence::{
 };
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
 pub use model::{CliSessionDescriptor, CliTool, CliToolColor, CliToolId};
+pub use screen::{activity_signature, editor_draft, provider_error_line};
 pub use subscription::{CliSessionSubscription, CliSessionSubscriptionError};
 
 pub type CliSessionChangeHandler = Arc<dyn Fn() + Send + Sync + 'static>;

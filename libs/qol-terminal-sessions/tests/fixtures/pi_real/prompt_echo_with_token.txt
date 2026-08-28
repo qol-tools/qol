@@ -1,0 +1,48 @@
+    (agent capture), confidence capped medium", out.signals.note_token_coverage == 0.5, and out.signals.top_note_score.unwrap() >= Gates::DEFAULTS.note_score.
+
+ 2. ask_keeps_a_full_coverage_note_ahead_of_a_capture: identical layout but the extra note is {"key":"n-full","cls":"decision","source_kind":"decision","source_ts":"2026-08-04T09:00:00.000Z","text":"Decision:
+    ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz are catalogued"} (all fourteen words). Ask the same query. Assert verdict "answered", answer.layer "note", answer.key
+    "n-full".
+
+ If a score or coverage number cannot land as described, adjust only the extra note's wording and state the final texts in your report.
+
+ REPORT: the diff and the final note texts.
+
+ Completion token:
+ QOL_BRIDGE_DONE_9a62a1a69874fa89a31a
+
+ Thinking...
+
+ read plugins/qol-memory/src/ask/mod.rs
+
+ Thinking...
+
+ read plugins/qol-memory/src/ask/mod.rs:1472
+
+ Thinking...
+
+ Now let me look at the retrieval module to understand the idf computation, and check crate::ingest::CAPTURE_KIND and capture_unit.
+
+ $ cd /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory && ls src && ls src/retrieval* 2>/dev/null; grep -n "CAPTURE_KIND\|pub fn capture_unit" src/ingest/mod.rs | head -20
+
+ ... (21 earlier lines, ctrl+o to expand)
+ src/retrieval_log:
+ mod.rs
+ 155:pub const CAPTURE_KIND: &str = "capture";
+ 157:pub fn capture_unit(text: &str, cwd: &str, ts: &str) -> serde_json::Value {
+ 162:        "kind": CAPTURE_KIND,
+
+ Took 0.0s
+
+ read plugins/qol-memory/src/retrieval/mod.rs
+
+ Thinking...
+
+ Operation aborted
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo (qm-recall)
+↑40k ↓1.1k R97k $0.005 4.9%/1.0M (auto)                                                                                                                                                     (zai) glm-5.3-flash • max
+🔌 MCP: 3 servers enabled

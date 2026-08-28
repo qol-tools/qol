@@ -2633,7 +2633,7 @@ mod tests {
     }
 
     #[test]
-    fn session_close_requires_a_spawned_session_with_a_closed_loop() {
+    fn session_close_needs_a_spawned_session_and_clears_a_hung_round_in_one_call() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
@@ -2670,17 +2670,21 @@ mod tests {
             .to_owned();
         let spawned = "v1:kitty:spawn-mcp-lane:200";
         let binding: SessionBinding = spawned.parse().unwrap();
-        let open_loop = tool_call(&server, "session_close", json!({ "session": spawned }));
-        assert_eq!(open_loop["result"]["isError"], true);
-        assert!(open_loop["result"]["content"][0]["text"]
+        server
+            .pending
+            .observe(&binding, &spawned_marker, true)
+            .unwrap();
+        let awaiting_review = tool_call(&server, "session_close", json!({ "session": spawned }));
+        assert_eq!(awaiting_review["result"]["isError"], true);
+        assert!(awaiting_review["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("open feature loop"));
+            .contains("awaiting review"));
         assert!(backend.closed.lock().unwrap().is_empty());
 
         server
             .pending
-            .acknowledge(&binding, &spawned_marker, false)
+            .observe(&binding, &spawned_marker, false)
             .unwrap();
         let closed = tool_call(&server, "session_close", json!({ "session": spawned }));
         assert_eq!(closed["result"]["isError"], false);
@@ -2689,11 +2693,19 @@ mod tests {
         assert_eq!(outcome["closed"], true);
         assert_eq!(outcome["key"], "mcp-lane");
         assert_eq!(outcome["tool"], "codex");
+        assert_eq!(
+            outcome["discarded_round"], spawned_marker,
+            "closing a hung lane discards its open round in the same call"
+        );
         assert_eq!(backend.closed.lock().unwrap().len(), 1);
+        assert!(
+            server.pending.pending_round(&binding).unwrap().is_none(),
+            "no checkpoint may survive the close"
+        );
     }
 
     #[test]
-    fn session_close_refuses_the_calling_terminal_and_dead_targets() {
+    fn session_close_refuses_the_calling_terminal_and_is_idempotent_on_a_dead_target() {
         let (server, backend) = server(Vec::new(), false, false);
         *backend.current.lock().unwrap() = true;
         let refused = tool_call(&server, "session_close", json!({ "session": token() }));
@@ -2709,11 +2721,12 @@ mod tests {
             "session_close",
             json!({ "session": "v1:fake:999:1" }),
         );
-        assert_eq!(missing["result"]["isError"], true);
-        assert!(missing["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("not a live session"));
+        assert_eq!(missing["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(missing["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["closed"], true);
+        assert_eq!(outcome["terminal_state"], "already_gone");
         assert!(backend.closed.lock().unwrap().is_empty());
     }
 

@@ -1159,7 +1159,8 @@ fn refuse_second_ungrouped_lane(
         }
         let label = round.label.unwrap_or_else(|| round.session.clone());
         bail!(
-            "lane `{label}` is still running an open round on `{}`, and a second ungrouped lane would wake you once per lane. Spawn the whole set in one call by passing `lanes`, one entry per lane, so they aggregate into a single combined report, or pass `group` to join them yourself",
+            "lane `{label}` is still running an open round on `{}`, and a second ungrouped lane would wake you once per lane. Spawn the whole set in one call by passing `lanes`, one entry per lane, so they aggregate into a single combined report, or pass `group` to join them yourself. If that lane is hung rather than working, clear it in one call with `qol sessions close {}`",
+            round.session,
             round.session
         );
     }

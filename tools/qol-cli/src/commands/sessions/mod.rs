@@ -704,11 +704,27 @@ fn next_rows(
             }));
             continue;
         }
-        let marker_printed = binding.as_ref().is_some_and(|binding| {
-            terminals
-                .read_screen_relaxed(binding)
-                .is_ok_and(|screen| marker_present(&screen, &round.completion_marker))
+        let facts = binding.as_ref().and_then(|binding| {
+            live.as_ref().and_then(|sessions| {
+                sessions
+                    .iter()
+                    .find(|session| session.id == *binding.session_id())
+            })
         });
+        let agreement = facts
+            .and_then(|facts| interpreter.transcript_completion(facts, &round.completion_marker));
+        let transcript_agrees =
+            if facts.is_some_and(|facts| interpreter.transcript_supported(facts)) {
+                agreement == Some(true)
+            } else {
+                agreement != Some(false)
+            };
+        let marker_printed = transcript_agrees
+            && binding.as_ref().is_some_and(|binding| {
+                terminals
+                    .read_screen_relaxed(binding)
+                    .is_ok_and(|screen| marker_present(&screen, &round.completion_marker))
+            });
         if marker_printed {
             rows.push(serde_json::json!({
                 "phase": "collect",
@@ -735,7 +751,7 @@ fn next_rows(
                     round.session,
                     bridge::TIMEOUT_MAX_MS
                 ),
-                "instruction": "The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the session is instead visibly hung mid-action, run `qol sessions interrupt <session>` first to send its tool-appropriate stop key.",
+                "instruction": format!("The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the kickstart never leaves the session's editor, or the session is hung on a provider error, clear the lane in one call with `qol sessions close {}` and spawn a fresh one.", round.session),
             }));
         } else {
             rows.push(serde_json::json!({
@@ -1128,6 +1144,114 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("qol sessions resume v1:fake:2:200"));
+    }
+
+    struct TranscriptTool {
+        tool: qol_terminal_sessions::cli::CliTool,
+        agreement: Option<bool>,
+    }
+
+    impl qol_terminal_sessions::cli::CliSessionStrategy for TranscriptTool {
+        fn tool(&self) -> &qol_terminal_sessions::cli::CliTool {
+            &self.tool
+        }
+
+        fn matches(&self, _session: &qol_terminal_sessions::SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(
+            &self,
+            _session: &qol_terminal_sessions::SessionFacts,
+        ) -> qol_terminal_sessions::cli::CliSessionDescriptor {
+            qol_terminal_sessions::cli::CliSessionDescriptor {
+                tool: self.tool.clone(),
+                display_name: None,
+                external_id: None,
+                external_id_authoritative: false,
+                has_activity: None,
+                evidence: qol_terminal_sessions::cli::CliSessionEvidence::default(),
+            }
+        }
+
+        fn transcript_supported(&self) -> bool {
+            true
+        }
+
+        fn transcript_completion(
+            &self,
+            _session: &qol_terminal_sessions::SessionFacts,
+            _marker: &str,
+        ) -> Option<bool> {
+            self.agreement
+        }
+    }
+
+    fn transcript_interpreter(agreement: Option<bool>) -> CliSessionInterpreter {
+        let tool = qol_terminal_sessions::cli::pi_tool();
+        CliSessionInterpreter::from_strategies([Arc::new(TranscriptTool { tool, agreement })
+            as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>])
+        .unwrap()
+    }
+
+    const ECHOED_PROMPT_SCREEN: &str = concat!(
+        "Completion token:\n",
+        "QOL_BRIDGE_DONE_live\n",
+        "\n",
+        "Thinking...\n",
+        "\u{2800} Working...\n",
+    );
+
+    #[test]
+    fn next_does_not_collect_a_marker_the_lane_never_answered_with() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        let (terminals, _) =
+            fake_terminals_showing(vec![fake_facts("2", 200)], Some(ECHOED_PROMPT_SCREEN));
+
+        let rows = next_rows(
+            &terminals,
+            &transcript_interpreter(Some(false)),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_ne!(
+            rows[0]["phase"], "collect",
+            "an echoed prompt or an unsent editor draft is not a completion: {:?}",
+            rows[0]
+        );
+    }
+
+    #[test]
+    fn next_collects_when_the_transcript_agrees_the_lane_answered() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        let (terminals, _) = fake_terminals_showing(
+            vec![fake_facts("2", 200)],
+            Some("lane report body\nQOL_BRIDGE_DONE_live"),
+        );
+
+        let rows = next_rows(
+            &terminals,
+            &transcript_interpreter(Some(true)),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["phase"], "collect");
     }
 
     #[test]

@@ -215,6 +215,78 @@ pub(super) fn kimi_questionnaire(text: &str) -> bool {
     numbered && footer
 }
 
+pub fn provider_error_line(text: &str) -> Option<&str> {
+    let line = transcript_region(text)
+        .into_iter()
+        .rev()
+        .find(|line| !is_progress_line(line))?;
+    let trimmed = line.trim();
+    let detail = trimmed.strip_prefix("Error: ")?;
+    (!detail.trim().is_empty()).then_some(trimmed)
+}
+
+fn transcript_region(text: &str) -> Vec<&str> {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let footer = lines
+        .iter()
+        .rev()
+        .take_while(|line| !is_rule_line(line))
+        .count();
+    let rules = lines.len() - footer;
+    let start = lines[..rules]
+        .iter()
+        .rposition(|line| !is_rule_line(line))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    lines[..start].to_vec()
+}
+
+fn is_progress_line(line: &str) -> bool {
+    let bare = activity_signature(line);
+    bare == "Thinking..." || bare == "Working..." || bare.starts_with("Took ")
+}
+
+pub fn editor_draft(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let last = lines.iter().rposition(|line| is_rule_line(line))?;
+    let first = lines[..last].iter().rposition(|line| is_rule_line(line))?;
+    let draft = lines[first + 1..last]
+        .iter()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!draft.trim().is_empty()).then_some(draft)
+}
+
+pub fn activity_signature(text: &str) -> String {
+    let mut signature = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for character in text.chars() {
+        if is_animation_glyph(character) {
+            continue;
+        }
+        if character.is_whitespace() {
+            pending_space = !signature.is_empty();
+            continue;
+        }
+        if pending_space {
+            signature.push(' ');
+            pending_space = false;
+        }
+        signature.push(character);
+    }
+    signature
+}
+
+fn is_animation_glyph(character: char) -> bool {
+    matches!(character as u32, 0x2800..=0x28FF)
+        || is_moon_phase(character)
+        || character == '\u{FE0F}'
+}
+
 pub(super) fn contains_any(text: &str, markers: &[&str]) -> bool {
     markers.iter().any(|marker| text.contains(marker))
 }

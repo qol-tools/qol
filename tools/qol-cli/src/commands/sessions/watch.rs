@@ -18,6 +18,7 @@ use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
 const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(5);
 const STALL_AFTER: Duration = Duration::from_secs(15 * 60);
+const FAULT_AFTER: Duration = Duration::from_secs(2 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
 const WAKE_COMPOSER_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -30,6 +31,7 @@ pub(super) struct WatchConfig {
     poll_base: Duration,
     poll_cap: Duration,
     stall_after: Duration,
+    fault_after: Duration,
 }
 
 impl Default for WatchConfig {
@@ -38,6 +40,7 @@ impl Default for WatchConfig {
             poll_base: POLL_BASE,
             poll_cap: POLL_CAP,
             stall_after: STALL_AFTER,
+            fault_after: FAULT_AFTER,
         }
     }
 }
@@ -49,6 +52,7 @@ impl WatchConfig {
             poll_base: Duration::from_millis(1),
             poll_cap: Duration::from_millis(4),
             stall_after: Duration::from_secs(3600),
+            fault_after: Duration::from_secs(3600),
         }
     }
 }
@@ -60,6 +64,7 @@ struct WatchedRound {
     marker: String,
     reads: u64,
     last_screen: Option<String>,
+    last_signature: Option<String>,
     last_change: Instant,
     marker_seen: bool,
     runtime_working_seen: bool,
@@ -87,6 +92,7 @@ impl WatchedRound {
             marker: round.completion_marker,
             reads: 0,
             last_screen: None,
+            last_signature: None,
             last_change: Instant::now(),
             marker_seen: false,
             runtime_working_seen: false,
@@ -100,6 +106,17 @@ impl WatchedRound {
             started_at: round.started_at,
             transcript_paths: round.transcript_paths,
         })
+    }
+
+    fn observe_screen(&mut self, screen: &str) -> bool {
+        let signature = qol_terminal_sessions::cli::activity_signature(screen);
+        let moved = self.last_signature.as_deref() != Some(signature.as_str());
+        self.last_screen = Some(screen.to_owned());
+        if moved {
+            self.last_signature = Some(signature);
+            self.last_change = Instant::now();
+        }
+        moved
     }
 
     fn capture_external_id_bounded(
@@ -225,6 +242,28 @@ fn completion_event_base(markerless: bool) -> &'static str {
     }
 }
 
+fn finish_lane(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    round: &WatchedRound,
+    wake_delivered: bool,
+) -> Result<()> {
+    if !round.autoclose {
+        return Ok(());
+    }
+    close_lane_terminal(terminals, &round.binding);
+    if !wake_delivered {
+        return Ok(());
+    }
+    pending.close_checkpoints_for_session(&round.session)?;
+    qol_runtime::probe!(
+        "CLI_SESSION_WATCH",
+        "event=checkpoint_closed session={} autoclose=true",
+        round.session
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn complete_seen_round(
     terminals: &TerminalSessionService,
@@ -271,15 +310,7 @@ fn complete_seen_round(
             &round.driver,
             sleep,
         )? {
-            if round.autoclose && delivery.delivered {
-                close_lane_terminal(terminals, &round.binding);
-                pending.close_checkpoints_for_session(&round.session)?;
-                qol_runtime::probe!(
-                    "CLI_SESSION_WATCH",
-                    "event=checkpoint_closed session={} autoclose=true",
-                    round.session
-                );
-            }
+            finish_lane(terminals, pending, round, delivery.delivered)?;
             qol_runtime::probe!(
                 "CLI_SESSION_WATCH",
                 "event={}_group session={} group={} reads={} delivered={} autoclose={}",
@@ -301,10 +332,7 @@ fn complete_seen_round(
             )?;
             return Ok(RoundPoll::of(false, true));
         }
-        if round.autoclose {
-            close_lane_terminal(terminals, &round.binding);
-            pending.close_checkpoints_for_session(&round.session)?;
-        }
+        finish_lane(terminals, pending, round, true)?;
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
             "event={}_group_awaiting group={} session={} reads={}",
@@ -336,15 +364,7 @@ fn complete_seen_round(
         wake_msg,
         sleep,
     )?;
-    if round.autoclose && delivery.delivered {
-        close_lane_terminal(terminals, &round.binding);
-        pending.close_checkpoints_for_session(&round.session)?;
-        qol_runtime::probe!(
-            "CLI_SESSION_WATCH",
-            "event=checkpoint_closed session={} autoclose=true",
-            round.session
-        );
-    }
+    finish_lane(terminals, pending, round, delivery.delivered)?;
     pending.observe(&round.binding, &round.marker, true)?;
     pending.store_screen(&round.binding, &round.marker, tail)?;
     qol_runtime::probe!(
@@ -791,10 +811,7 @@ fn poll_round(
                     );
                 }
                 round.marker_seen = true;
-                if round.last_screen.as_deref() != Some(screen.as_str()) {
-                    round.last_screen = Some(screen.clone());
-                    round.last_change = Instant::now();
-                }
+                round.observe_screen(&screen);
                 return Ok(RoundPoll::of(true, true));
             }
         }
@@ -824,16 +841,15 @@ fn poll_round(
         }
         _ => {}
     }
-    let mut changed = false;
-    if round.last_screen.as_deref() != Some(screen.as_str()) {
-        round.last_screen = Some(screen.clone());
-        round.last_change = Instant::now();
-        changed = true;
-    }
+    let changed = round.observe_screen(&screen);
     let turn_end_seen = round.runtime_working_seen || round.transcript_ready_seen;
     let finished_turn = turn_end_seen && round.ready_polls >= 3;
-    let screen_quiet = round.last_change.elapsed() >= config.stall_after;
-    if finished_turn || screen_quiet {
+    let quiet_for = round.last_change.elapsed();
+    let screen_quiet = quiet_for >= config.stall_after;
+    let fault = (quiet_for >= config.fault_after)
+        .then(|| qol_terminal_sessions::cli::provider_error_line(&screen))
+        .flatten();
+    if finished_turn || screen_quiet || fault.is_some() {
         let report = capture_report(
             &round.transcript_paths,
             interpreter,
@@ -842,7 +858,7 @@ fn poll_round(
             &screen,
         );
         let idle_msg = markerless_wake_message(
-            finished_turn,
+            markerless_reason(finished_turn, fault),
             trace_dir,
             &round.session,
             &clean_screen(screen_tail(&report)),
@@ -1525,22 +1541,41 @@ fn wake_message(
     }
 }
 
+fn markerless_reason(finished_turn: bool, fault: Option<&str>) -> MarkerlessReason {
+    match (fault, finished_turn) {
+        (Some(error), _) => MarkerlessReason::Faulted(error.to_owned()),
+        (None, true) => MarkerlessReason::FinishedTurn,
+        (None, false) => MarkerlessReason::Idle,
+    }
+}
+
+enum MarkerlessReason {
+    FinishedTurn,
+    Idle,
+    Faulted(String),
+}
+
 fn markerless_wake_message(
-    finished_turn: bool,
+    reason: MarkerlessReason,
     trace_dir: &std::path::Path,
     session: &str,
     cleaned: &str,
     label: Option<&str>,
 ) -> String {
-    let sentence = if finished_turn {
-        format!(
-            "qol sessions: lane {session} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
-        )
-    } else {
-        format!(
-            "qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
-        )
+    let cause = match &reason {
+        MarkerlessReason::FinishedTurn => {
+            format!("qol sessions: lane {session} finished its turn without printing its completion marker.")
+        }
+        MarkerlessReason::Idle => {
+            format!("qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.")
+        }
+        MarkerlessReason::Faulted(error) => format!(
+            "qol sessions: lane {session} stopped on a provider error ({error}) and produced no further output."
+        ),
     };
+    let sentence = format!(
+        "{cause}\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
+    );
     lane_report_wake_message(&sentence, cleaned, trace_dir, session, label)
 }
 
@@ -2292,10 +2327,15 @@ mod tests {
     }
 
     fn fast_config(stall_after: Duration) -> WatchConfig {
+        fault_config(stall_after, Duration::from_secs(3600))
+    }
+
+    fn fault_config(stall_after: Duration, fault_after: Duration) -> WatchConfig {
         WatchConfig {
             poll_base: Duration::from_millis(1),
             poll_cap: Duration::from_millis(4),
             stall_after,
+            fault_after,
         }
     }
 
@@ -3082,7 +3122,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let session = "v1:pi:7:100";
         let body = "line one\nline two\nline three";
-        let wake = markerless_wake_message(true, dir.path(), session, body, None);
+        let wake = markerless_wake_message(
+            MarkerlessReason::FinishedTurn,
+            dir.path(),
+            session,
+            body,
+            None,
+        );
         let report_path = sanitize_lane_path(dir.path(), session);
         assert_eq!(
             wake,
@@ -3103,7 +3149,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let session = "v1:pi:7:100";
         let body = "line one\nline two\nline three";
-        let wake = markerless_wake_message(false, dir.path(), session, body, None);
+        let wake = markerless_wake_message(MarkerlessReason::Idle, dir.path(), session, body, None);
         let report_path = sanitize_lane_path(dir.path(), session);
         assert_eq!(
             wake,
@@ -3249,7 +3295,7 @@ mod tests {
     }
 
     #[test]
-    fn autoclose_is_skipped_when_the_wake_cannot_be_delivered_and_a_trace_is_left() {
+    fn autoclose_still_closes_the_lane_when_the_wake_cannot_be_delivered_and_a_trace_is_left() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -3290,12 +3336,16 @@ mod tests {
             events[0]["wake_error"].as_str().is_some(),
             "an undeliverable wake must name its error in the event"
         );
-        assert!(
-            backend.closed.lock().unwrap().is_empty(),
-            "the lane must stay open when the wake could not be delivered"
+        assert_eq!(
+            backend.closed.lock().unwrap().len(),
+            1,
+            "a terminal state always closes the lane terminal"
         );
         let round = pending.pending_round(&binding).unwrap().unwrap();
-        assert!(round.completed, "the round still completed");
+        assert!(
+            round.completed,
+            "the checkpoint stays open and collectable when the wake could not be delivered"
+        );
         let trace = root.path().join("wake-failed-v1_fake_7_100.json");
         assert!(trace.exists(), "a failed wake must leave a durable trace");
         let record: serde_json::Value =
@@ -3811,6 +3861,7 @@ mod tests {
                 poll_base: Duration::from_millis(30),
                 poll_cap: Duration::from_millis(120),
                 stall_after: Duration::from_secs(3600),
+                fault_after: Duration::from_secs(3600),
             },
             &mut |duration| requested.push(duration),
         )
@@ -4404,6 +4455,7 @@ mod tests {
                     poll_base: Duration::from_millis(50),
                     poll_cap: Duration::from_millis(50),
                     stall_after: Duration::from_secs(3600),
+                    fault_after: Duration::from_secs(3600),
                 },
             )
             .unwrap();
@@ -4818,6 +4870,7 @@ mod tests {
                 round,
                 out: Vec::new(),
                 stall_after: Duration::from_secs(3600),
+                fault_after: Duration::from_secs(3600),
             }
         }
 
@@ -4848,11 +4901,17 @@ mod tests {
         round: WatchedRound,
         out: Vec<u8>,
         stall_after: Duration,
+        fault_after: Duration,
     }
 
     impl LaneSim {
         fn stall_after(mut self, stall_after: Duration) -> Self {
             self.stall_after = stall_after;
+            self
+        }
+
+        fn fault_after(mut self, fault_after: Duration) -> Self {
+            self.fault_after = fault_after;
             self
         }
 
@@ -4882,7 +4941,7 @@ mod tests {
                 &mut self.round,
                 &mut self.out,
                 sim.trace_dir(),
-                fast_config(self.stall_after),
+                fault_config(self.stall_after, self.fault_after),
                 &mut |_| {},
             )
             .unwrap()
@@ -4930,6 +4989,83 @@ mod tests {
         fn settled(&self, sim: &SessionSim) -> bool {
             self.open_round(sim).is_none_or(|round| round.completed)
         }
+    }
+
+    fn recorded_pi_screen(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../libs/qol-terminal-sessions/tests/fixtures/pi_real")
+            .join(name);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("missing fixture {}: {error}", path.display()))
+    }
+
+    #[test]
+    fn sim_a_rotating_spinner_is_not_screen_movement() {
+        let sim = SessionSim::new();
+        let frames = vec![
+            recorded_pi_screen("frozen_spinner_a.txt"),
+            recorded_pi_screen("frozen_spinner_b.txt"),
+            recorded_pi_screen("frozen_spinner_a.txt"),
+            recorded_pi_screen("frozen_spinner_b.txt"),
+        ];
+        assert_ne!(frames[0], frames[1], "the recorded frames must differ");
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            frames,
+        );
+
+        assert!(lane.poll(&sim).changed, "the first read is always movement");
+        for _ in 0..3 {
+            assert!(
+                !lane.poll(&sim).changed,
+                "a rotating spinner must not restart the stall clock"
+            );
+        }
+    }
+
+    #[test]
+    fn sim_a_lane_frozen_on_a_provider_error_wakes_with_the_error_and_closes() {
+        let sim = SessionSim::new();
+        let mut lane = sim
+            .lane(
+                "7",
+                100,
+                "QOL_BRIDGE_DONE_round",
+                true,
+                None,
+                None,
+                Transcript::Working,
+                vec![
+                    recorded_pi_screen("frozen_spinner_a.txt"),
+                    recorded_pi_screen("frozen_spinner_b.txt"),
+                    recorded_pi_screen("frozen_spinner_a.txt"),
+                    recorded_pi_screen("frozen_spinner_b.txt"),
+                ],
+            )
+            .fault_after(Duration::ZERO);
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        let wake = lane.wakes().join("\n");
+        assert!(
+            wake.contains("stopped on a provider error (Error: terminated)"),
+            "the wake must name the fault: {wake}"
+        );
+        assert_eq!(
+            lane.closed(),
+            1,
+            "a faulted lane closes its terminal like any other terminal state"
+        );
+        assert!(lane.settled(&sim), "the round must not stay open");
     }
 
     #[test]
@@ -5731,7 +5867,7 @@ mod tests {
     }
 
     #[test]
-    fn sim_a_grouped_lane_keeps_its_terminal_when_the_combined_wake_fails() {
+    fn sim_a_grouped_lane_closes_and_keeps_its_checkpoint_when_the_combined_wake_fails() {
         let sim = SessionSim::new();
         let group = "undeliverable-set";
         let mut lane_a = sim.lane(
@@ -5766,8 +5902,8 @@ mod tests {
         assert_eq!(events[0]["delivered"], false);
         assert_eq!(
             lane_b.closed(),
-            0,
-            "the lane stays open as the report surface when the combined wake could not land"
+            1,
+            "a terminal state always closes the lane terminal"
         );
         assert!(
             lane_b.open_round(&sim).is_some(),

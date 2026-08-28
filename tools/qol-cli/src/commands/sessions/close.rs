@@ -31,6 +31,8 @@ pub(super) struct CloseOutcome {
     pub(super) terminal_state: TerminalCloseState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) close_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) discarded_round: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +85,7 @@ pub(super) fn close_spawned_terminal(
             close_detail: Some(format!(
                 "terminal `{binding}` is no longer live; nothing left to close"
             )),
+            discarded_round: None,
         });
     };
     let Some(identity) = facts.spawn_identity.clone() else {
@@ -98,6 +101,7 @@ pub(super) fn close_spawned_terminal(
             closed: false,
             terminal_state: TerminalCloseState::CloseFailed,
             close_detail: Some(error.to_string()),
+            discarded_round: None,
         });
     }
     qol_runtime::probe!(
@@ -113,6 +117,7 @@ pub(super) fn close_spawned_terminal(
         closed: true,
         terminal_state: TerminalCloseState::Closed,
         close_detail: None,
+        discarded_round: None,
     })
 }
 
@@ -159,15 +164,23 @@ pub(super) fn execute(
     pending: &PendingBridgeStore,
     binding: &SessionBinding,
 ) -> Result<CloseOutcome> {
-    if let Some(round) = pending.pending_round(binding)? {
-        bail!(
-            "session `{binding}` still has an open feature loop (marker {}); call session_loop_close first",
+    let hung = match pending.pending_round(binding)? {
+        Some(round) if round.completed => bail!(
+            "session `{binding}` holds a completed round awaiting review (marker {}); review it and call session_loop_close",
             round.completion_marker
+        ),
+        Some(round) => Some(round.completion_marker),
+        None => None,
+    };
+    let mut outcome = close_spawned_terminal(terminals, binding)?;
+    if let Some(marker) = hung {
+        pending.discard(binding)?;
+        outcome.discarded_round = Some(marker);
+        qol_runtime::probe!(
+            "CLI_SESSION_SPAWN",
+            "event=close_discarded_hung_round session={}",
+            binding.token()
         );
-    }
-    let outcome = close_spawned_terminal(terminals, binding)?;
-    if outcome.terminal_state == TerminalCloseState::AlreadyGone {
-        bail!("close target `{binding}` is not a live session");
     }
     Ok(outcome)
 }

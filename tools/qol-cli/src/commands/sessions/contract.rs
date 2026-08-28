@@ -296,7 +296,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_close",
             label: "Close an implementation session",
-            description: "Terminate a spawned implementation session's terminal after its feature loop is closed. Refuses the calling terminal, sessions without a spawn identity, and sessions whose loop is still open; close the loop via session_loop_close first.",
+            description: "Terminate a spawned implementation session's terminal. This is the one-call recovery for a hung lane: an open round is discarded with the close, and closing a terminal that is already gone succeeds. Refuses the calling terminal, sessions without a spawn identity, and a lane holding a completed round awaiting review; review that round and use session_loop_close.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
