@@ -106,6 +106,17 @@ impl CliSessionInterpreter {
             .find_map(|strategy| strategy.transcript_report(paths, since, marker))
     }
 
+    pub fn transcript_fault(
+        &self,
+        paths: &[std::path::PathBuf],
+        since: std::time::SystemTime,
+        marker: &str,
+    ) -> Option<String> {
+        self.strategies
+            .iter()
+            .find_map(|strategy| strategy.transcript_fault(paths, since, marker))
+    }
+
     pub fn transcript_runtime(
         &self,
         paths: &[std::path::PathBuf],

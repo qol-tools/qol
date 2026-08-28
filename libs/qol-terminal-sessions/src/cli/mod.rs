@@ -63,6 +63,15 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn transcript_fault(
+        &self,
+        _paths: &[std::path::PathBuf],
+        _since: std::time::SystemTime,
+        _marker: &str,
+    ) -> Option<String> {
+        None
+    }
+
     fn transcript_runtime(
         &self,
         _paths: &[std::path::PathBuf],

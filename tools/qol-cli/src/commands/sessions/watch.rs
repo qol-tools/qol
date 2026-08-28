@@ -470,6 +470,7 @@ fn poll_round(
         Ok(screen) => screen,
         Err(_) => {
             if session_gone(terminals, &round.binding) {
+                let fault = round_fault(interpreter, round);
                 let rescue: Option<(String, bool)> = if round.marker_seen {
                     Some((round.last_screen.clone().unwrap_or_default(), false))
                 } else if let Some(report) =
@@ -603,7 +604,8 @@ fn poll_round(
                         group,
                         &round.session,
                         &format!(
-                            "the lane terminal exited before it reported a completion marker\n\n{}",
+                            "{}\n\n{}",
+                            gone_cause(fault.as_deref()),
                             clean_screen(screen_tail(&last))
                         ),
                         round.label.as_deref(),
@@ -663,13 +665,12 @@ fn poll_round(
                 if !pending.claim_wake(&round.binding, "gone")? {
                     return Ok(RoundPoll::of(false, false));
                 }
-                let delivery = deliver_wake(
-                    terminals,
-                    trace_dir,
-                    &round.session,
-                    &round.driver,
-                    "gone",
-                    &wake_message(
+                let gone_message = match fault.as_deref() {
+                    Some(error) => format!(
+                        "qol sessions: lane {} died mid-turn on a provider error ({error}); its round was discarded. Start a fresh lane if the work still matters.",
+                        round.session
+                    ),
+                    None => wake_message(
                         trace_dir,
                         &round.session,
                         "gone",
@@ -678,6 +679,14 @@ fn poll_round(
                         false,
                         round.label.as_deref(),
                     ),
+                };
+                let delivery = deliver_wake(
+                    terminals,
+                    trace_dir,
+                    &round.session,
+                    &round.driver,
+                    "gone",
+                    &gone_message,
                     sleep,
                 )?;
                 emit_gone(out, &round.session, &delivery)?;
@@ -846,9 +855,12 @@ fn poll_round(
     let finished_turn = turn_end_seen && round.ready_polls >= 3;
     let quiet_for = round.last_change.elapsed();
     let screen_quiet = quiet_for >= config.stall_after;
-    let fault = (quiet_for >= config.fault_after)
-        .then(|| qol_terminal_sessions::cli::provider_error_line(&screen))
-        .flatten();
+    let fault = round_fault(interpreter, round).or_else(|| {
+        (quiet_for >= config.fault_after)
+            .then(|| qol_terminal_sessions::cli::provider_error_line(&screen))
+            .flatten()
+            .map(str::to_owned)
+    });
     if finished_turn || screen_quiet || fault.is_some() {
         let report = capture_report(
             &round.transcript_paths,
@@ -858,7 +870,7 @@ fn poll_round(
             &screen,
         );
         let idle_msg = markerless_wake_message(
-            markerless_reason(finished_turn, fault),
+            markerless_reason(finished_turn, fault.as_deref()),
             trace_dir,
             &round.session,
             &clean_screen(screen_tail(&report)),
@@ -1538,6 +1550,20 @@ fn wake_message(
         _ => format!(
             "qol sessions: lane {session} wake {event}."
         ),
+    }
+}
+
+fn round_fault(interpreter: &CliSessionInterpreter, round: &WatchedRound) -> Option<String> {
+    let since = round.started_at?;
+    interpreter.transcript_fault(&round.transcript_paths, since, &round.marker)
+}
+
+fn gone_cause(fault: Option<&str>) -> String {
+    match fault {
+        Some(error) => format!(
+            "the lane died mid-turn on a provider error ({error}) before it reported a completion marker"
+        ),
+        None => "the lane terminal exited before it reported a completion marker".to_owned(),
     }
 }
 
@@ -4667,6 +4693,7 @@ mod tests {
         marked: std::sync::atomic::AtomicBool,
         owned: std::sync::atomic::AtomicBool,
         runtime_override: std::sync::Mutex<Option<CliRuntimeState>>,
+        fault: std::sync::Mutex<Option<String>>,
     }
 
     impl FakeTool {
@@ -4683,6 +4710,7 @@ mod tests {
                 marked: std::sync::atomic::AtomicBool::new(false),
                 owned: std::sync::atomic::AtomicBool::new(true),
                 runtime_override: std::sync::Mutex::new(None),
+                fault: std::sync::Mutex::new(None),
             });
             fake.set(transcript);
             fake
@@ -4709,6 +4737,10 @@ mod tests {
 
         fn set_transcript_runtime(&self, runtime: CliRuntimeState) {
             *self.runtime_override.lock().unwrap() = Some(runtime);
+        }
+
+        fn set_fault(&self, fault: Option<String>) {
+            *self.fault.lock().unwrap() = fault;
         }
     }
 
@@ -4791,6 +4823,18 @@ mod tests {
                 return None;
             }
             self.report.lock().unwrap().clone()
+        }
+
+        fn transcript_fault(
+            &self,
+            paths: &[std::path::PathBuf],
+            _since: SystemTime,
+            _marker: &str,
+        ) -> Option<String> {
+            if paths.is_empty() {
+                return None;
+            }
+            self.fault.lock().unwrap().clone()
         }
 
         fn transcript_runtime(
@@ -4929,6 +4973,10 @@ mod tests {
 
         fn set_transcript_runtime(&self, runtime: CliRuntimeState) {
             self.tool.set_transcript_runtime(runtime);
+        }
+
+        fn set_fault(&self, fault: Option<String>) {
+            self.tool.set_fault(fault);
         }
 
         fn poll(&mut self, sim: &SessionSim) -> RoundPoll {
@@ -5605,6 +5653,94 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed");
         assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_lane_whose_transcript_records_a_provider_error_names_it_not_a_missing_marker() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["reading gpui source".to_owned(); 6],
+        );
+        lane.set_fault(Some("terminated".to_owned()));
+        lane.transcript(Transcript::Finished);
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        let wake = lane.wakes().join("\n");
+        assert!(
+            wake.contains("stopped on a provider error (terminated)"),
+            "the wake must name the transcript fault: {wake}"
+        );
+        assert!(
+            !wake.contains("finished its turn without printing"),
+            "a faulted lane must not read as a lane that forgot its marker: {wake}"
+        );
+    }
+
+    #[test]
+    fn sim_a_lane_that_dies_on_a_provider_error_reports_the_error_with_the_gone_wake() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["reading gpui source".to_owned(); 2],
+        );
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+        lane.set_fault(Some("terminated".to_owned()));
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "gone");
+        let wake = lane.wakes().join("\n");
+        assert!(
+            wake.contains("died mid-turn on a provider error (terminated)"),
+            "a dead lane must say why it died: {wake}"
+        );
+    }
+
+    #[test]
+    fn sim_a_grouped_lane_that_dies_on_a_provider_error_names_it_in_the_fragment() {
+        let sim = SessionSim::new();
+        let group = "qm-recall-scout";
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            Some(group),
+            Some("qm-ask-verdict"),
+            Transcript::Working,
+            vec!["grep plugins/qol-memory".to_owned(); 2],
+        );
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+        lane.set_fault(Some("terminated".to_owned()));
+
+        lane.run(&sim);
+
+        let combined = sim.combined(group).expect("the group combines one member");
+        assert!(
+            combined.contains("died mid-turn on a provider error (terminated)"),
+            "the combined report must name the fault: {combined}"
+        );
     }
 
     #[test]

@@ -395,6 +395,7 @@ fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
 struct TerminalAssistant {
     text: String,
     timestamp_millis: Option<i64>,
+    fault: Option<String>,
 }
 
 fn latest_terminal_assistant(path: &Path) -> Option<TerminalAssistant> {
@@ -451,10 +452,25 @@ fn terminal_assistant(line: &[u8]) -> Option<TerminalAssistant> {
         .and_then(Value::as_str)
         .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
         .map(|stamp| stamp.timestamp_millis());
+    let fault = fault_detail(message);
     Some(TerminalAssistant {
         text,
         timestamp_millis,
+        fault,
     })
+}
+
+fn fault_detail(message: &Value) -> Option<String> {
+    let stop_reason = message.get("stopReason").and_then(Value::as_str)?;
+    let error_message = message
+        .get("errorMessage")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty());
+    if !matches!(stop_reason, "error" | "aborted") && error_message.is_none() {
+        return None;
+    }
+    Some(error_message.unwrap_or(stop_reason).to_owned())
 }
 
 pub(super) fn terminal_report_after(path: &Path, since_millis: i64) -> Option<String> {
@@ -464,6 +480,15 @@ pub(super) fn terminal_report_after(path: &Path, since_millis: i64) -> Option<St
         return None;
     }
     (!assistant.text.is_empty()).then_some(assistant.text)
+}
+
+pub(super) fn terminal_fault_after(path: &Path, since_millis: i64) -> Option<String> {
+    let assistant = latest_terminal_assistant(path)?;
+    let stamp = assistant.timestamp_millis?;
+    if stamp < since_millis {
+        return None;
+    }
+    assistant.fault
 }
 
 pub(super) fn marked_terminal_text(path: &Path, marker: &str) -> Option<String> {
@@ -518,6 +543,22 @@ pub(super) fn transcript_report(
         }
         if let Some(text) = terminal_report_after(path, since_millis) {
             return Some(text);
+        }
+    }
+    None
+}
+
+pub(super) fn transcript_fault(
+    paths: &[std::path::PathBuf],
+    since_millis: i64,
+    marker: &str,
+) -> Option<String> {
+    for path in paths {
+        if !transcript_owned_by(path, marker) {
+            continue;
+        }
+        if let Some(fault) = terminal_fault_after(path, since_millis) {
+            return Some(fault);
         }
     }
     None
@@ -593,6 +634,82 @@ mod tests {
             file.write_all(line.as_bytes()).unwrap();
         }
         (root, path)
+    }
+
+    #[test]
+    fn a_turn_that_died_on_a_provider_error_reports_the_fault_where_the_report_is_empty() {
+        use super::{terminal_fault_after, terminal_report_after};
+        let boundary = chrono::DateTime::parse_from_rfc3339("2026-08-28T20:22:00.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let (_root, path) = write(&[concat!(
+            "{\"type\":\"message\",\"timestamp\":\"2026-08-28T20:30:14.059Z\",",
+            "\"message\":{\"role\":\"assistant\",",
+            "\"content\":[{\"type\":\"thinking\",\"thinking\":\"reading gpui source\"}],",
+            "\"stopReason\":\"error\",\"errorMessage\":\"terminated\"}}\n"
+        )
+        .to_string()]);
+        assert_eq!(
+            terminal_report_after(&path, boundary),
+            None,
+            "the faulted turn carries no report text"
+        );
+        assert_eq!(
+            terminal_fault_after(&path, boundary).as_deref(),
+            Some("terminated")
+        );
+    }
+
+    #[test]
+    fn an_aborted_turn_faults_and_a_clean_turn_does_not() {
+        use super::terminal_fault_after;
+        let boundary = chrono::DateTime::parse_from_rfc3339("2026-08-28T20:22:00.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let cases = [
+            (
+                "aborted",
+                Some("Operation aborted"),
+                Some("Operation aborted"),
+            ),
+            ("error", None, Some("error")),
+            ("stop", None, None),
+            ("end_turn", None, None),
+        ];
+        for (stop_reason, error_message, expected) in cases {
+            let detail = error_message
+                .map(|message| format!(",\"errorMessage\":\"{message}\""))
+                .unwrap_or_default();
+            let (_root, path) = write(&[format!(
+                concat!(
+                    "{{\"type\":\"message\",\"timestamp\":\"2026-08-28T20:30:14.059Z\",",
+                    "\"message\":{{\"role\":\"assistant\",",
+                    "\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],",
+                    "\"stopReason\":\"{}\"{}}}}}\n"
+                ),
+                stop_reason, detail
+            )]);
+            assert_eq!(
+                terminal_fault_after(&path, boundary).as_deref(),
+                expected,
+                "stopReason {stop_reason} must fault as {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fault_from_an_earlier_round_never_leaks_into_this_one() {
+        use super::terminal_fault_after;
+        let boundary = chrono::DateTime::parse_from_rfc3339("2026-08-28T20:22:00.000Z")
+            .unwrap()
+            .timestamp_millis();
+        let (_root, path) = write(&[concat!(
+            "{\"type\":\"message\",\"timestamp\":\"2026-08-28T19:00:00.000Z\",",
+            "\"message\":{\"role\":\"assistant\",\"content\":[],",
+            "\"stopReason\":\"error\",\"errorMessage\":\"terminated\"}}\n"
+        )
+        .to_string()]);
+        assert_eq!(terminal_fault_after(&path, boundary), None);
     }
 
     #[test]
