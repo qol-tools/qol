@@ -343,29 +343,31 @@ fn spawn_build(
     bins: &[&str],
     identity: &qol_build_identity::BuildIdentityEnvironment,
 ) -> Result<CargoChild, String> {
-    let mut command = tray_build_command(root, manifest_path, bins);
+    let mut command = tray_build_command(root, manifest_path, bins)?;
     identity.apply_to(&mut command);
     spawn_piped(command).map_err(|error| format!("Failed to run cargo build: {}", error))
 }
 
-fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Command {
+fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Result<Command, String> {
+    let tray_dir = manifest_path.parent().unwrap_or(root);
+    let feature_root = match qol_workspace::workspace_root_from(tray_dir) {
+        Ok(workspace_root) => workspace_root,
+        Err(_) => root.to_path_buf(),
+    };
     let mut command = Command::new("cargo");
-    command.arg("build");
+    command.arg("build").arg("--workspace");
     for bin in bins {
         command.arg("--bin").arg(bin);
     }
+    for flag in crate::dev_feature_flags(&feature_root)? {
+        command.arg("--features").arg(flag);
+    }
     command
-        .args([
-            "--features",
-            Platform.tray_dev_features(),
-            "--message-format",
-            "json",
-            "--manifest-path",
-        ])
+        .args(["--message-format", "json", "--manifest-path"])
         .arg(manifest_path)
         .current_dir(root);
     crate::configure_dev_cargo(&mut command);
-    command
+    Ok(command)
 }
 
 struct RunningCargo<'a> {
@@ -773,47 +775,47 @@ path = \"src/main.rs\"
 
     #[test]
     fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
-        let root = Path::new("/repo/qol");
-        let manifest = root.join("Cargo.toml");
-        let features = Platform.tray_dev_features();
-        let cases: [(&[&str], Vec<&str>); 2] = [
-            (
-                &["qol-tray"],
-                vec![
-                    "build",
-                    "--bin",
-                    "qol-tray",
-                    "--features",
-                    features,
-                    "--message-format",
-                    "json",
-                    "--manifest-path",
-                ],
-            ),
-            (
-                &["qol-tray", "qol-tray-doctor"],
-                vec![
-                    "build",
-                    "--bin",
-                    "qol-tray",
-                    "--bin",
-                    "qol-tray-doctor",
-                    "--features",
-                    features,
-                    "--message-format",
-                    "json",
-                    "--manifest-path",
-                ],
-            ),
-        ];
+        let tmp = TempDir::new().unwrap();
+        let workspace_root = tmp.path();
+        let tray_dir = workspace_root.join("apps").join("qol-tray");
+        let workspace_manifest = workspace_root.join("Cargo.toml");
+        let tray_manifest = tray_dir.join("Cargo.toml");
+        std::fs::create_dir_all(&tray_dir).unwrap();
+        std::fs::write(
+            &workspace_manifest,
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(&tray_manifest, "[package]\nname = \"qol-tray\"\n").unwrap();
+        let flags = crate::dev_feature_flags(workspace_root).unwrap();
+        assert!(flags.contains(&"qol-tray/dev".to_string()));
+        let cases: [&[&str]; 2] = [&["qol-tray"], &["qol-tray", "qol-tray-doctor"]];
 
-        for (bins, expected_prefix) in cases {
-            let command = tray_build_command(root, &manifest, bins);
-            let mut expected: Vec<_> = expected_prefix.into_iter().map(OsStr::new).collect();
+        let assert_command = |root: &Path, manifest: &Path, bins: &[&str]| {
+            let command = tray_build_command(root, manifest, bins).unwrap();
+            let mut expected: Vec<&OsStr> = vec![OsStr::new("build"), OsStr::new("--workspace")];
+            for bin in bins {
+                expected.push(OsStr::new("--bin"));
+                expected.push(OsStr::new(bin));
+            }
+            for flag in &flags {
+                expected.push(OsStr::new("--features"));
+                expected.push(OsStr::new(flag));
+            }
+            expected.push(OsStr::new("--message-format"));
+            expected.push(OsStr::new("json"));
+            expected.push(OsStr::new("--manifest-path"));
             expected.push(manifest.as_os_str());
             assert_eq!(command.get_args().collect::<Vec<_>>(), expected);
             assert_eq!(command.get_current_dir(), Some(root));
             assert_eq!(command.get_program(), OsStr::new("cargo"));
+        };
+
+        for bins in cases {
+            assert_command(workspace_root, &workspace_manifest, bins);
+        }
+        for bins in cases {
+            assert_command(&tray_dir, &tray_manifest, bins);
         }
     }
 

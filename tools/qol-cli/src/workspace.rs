@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) use qol_workspace::{
-    cargo_package_name, display_name, monorepo_plugin_dirs, non_host_plugin_packages,
-    plugin_build_features, qualified_plugin_build_features, read_plugin_source,
+    cargo_bin_name, cargo_package_name, display_name, monorepo_plugin_dirs,
+    non_host_plugin_packages, qualified_plugin_build_features, read_plugin_source,
     scan_buildable_plugins, sibling_crates, BuildablePlugin,
 };
 

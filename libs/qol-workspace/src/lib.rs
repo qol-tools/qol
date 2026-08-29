@@ -190,6 +190,34 @@ pub fn cargo_package_name(crate_dir: &Path) -> Result<String> {
         .ok_or_else(|| anyhow!("{} has no [package].name", manifest.display()))
 }
 
+pub fn cargo_bin_name(crate_dir: &Path) -> Result<String> {
+    let manifest = crate_dir.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest)
+        .with_context(|| format!("failed to read {}", manifest.display()))?;
+    let parsed: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", manifest.display()))?;
+    parsed
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .and_then(|bins| bins.first())
+        .and_then(|bin| bin.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            parsed
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "{} has no [[bin]] name or [package] name",
+                manifest.display()
+            )
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSource {
     pub id: String,
@@ -326,6 +354,16 @@ pub fn qualified_plugin_build_features(plugin_dir: &Path) -> Result<Vec<String>>
         .into_iter()
         .map(|feature| format!("{package}/{feature}"))
         .collect())
+}
+
+pub fn workspace_dev_features(root: &Path) -> Result<Vec<String>> {
+    let mut features = Vec::new();
+    for plugin in scan_buildable_plugins(root)?.buildable {
+        features.extend(qualified_plugin_build_features(&plugin.dir)?);
+    }
+    features.sort();
+    features.dedup();
+    Ok(features)
 }
 
 pub fn display_name(path: &Path) -> String {
@@ -585,6 +623,57 @@ mod tests {
         let source = read_plugin_source(&plugin).unwrap();
         assert_eq!(source.id, "plugin-real");
         assert_eq!(source.name, "plugin-real");
+    }
+
+    #[test]
+    fn cargo_bin_name_prefers_first_bin_table_and_falls_back_to_package_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let with_bin = tmp.path().join("with-bin");
+        fs::create_dir_all(&with_bin).unwrap();
+        fs::write(
+            with_bin.join("Cargo.toml"),
+            "[package]\nname = \"plugin-cli-sessions\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"cli-sessions\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+        assert_eq!(cargo_bin_name(&with_bin).unwrap(), "cli-sessions");
+
+        let without_bin = tmp.path().join("without-bin");
+        fs::create_dir_all(&without_bin).unwrap();
+        fs::write(
+            without_bin.join("Cargo.toml"),
+            "[package]\nname = \"plugin-removeapp\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(cargo_bin_name(&without_bin).unwrap(), "plugin-removeapp");
+    }
+
+    #[test]
+    fn workspace_dev_features_unions_and_sorts_plugin_build_features() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("mono");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        write_plugin_dir(
+            &workspace.join("plugins").join("b"),
+            "b-pkg",
+            &plugin_toml(
+                "plugin-b",
+                "\"linux\", \"macos\", \"windows\"",
+                "[runtime]\ncommand = \"b\"\n\n[build]\nfeatures = [\"two\", \"one\"]\n",
+            ),
+        );
+        write_plugin_dir(
+            &workspace.join("plugins").join("a"),
+            "a-pkg",
+            &plugin_toml(
+                "plugin-a",
+                "\"linux\", \"macos\", \"windows\"",
+                "[runtime]\ncommand = \"a\"\n\n[build]\nfeatures = [\"one\"]\n",
+            ),
+        );
+
+        let features = workspace_dev_features(&workspace).unwrap();
+        assert_eq!(features, vec!["a-pkg/one", "b-pkg/one", "b-pkg/two"]);
     }
 
     #[test]

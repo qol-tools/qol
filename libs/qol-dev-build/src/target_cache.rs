@@ -2,8 +2,18 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-const PROTECTED_TARGET_ROOTS: [&str; 3] = ["debug", "qol-dev", "qol-env"];
-const REMOVED_DEBUG_DIRS: [&str; 2] = ["incremental", "examples"];
+const PROTECTED_TARGET_ROOTS: [&str; 7] = [
+    "debug",
+    "qol-dev",
+    "qol-env",
+    "release",
+    "qol-check",
+    "qol-lint",
+    "sherpa-onnx-prebuilt",
+];
+const REMOVED_DEBUG_DIRS: [&str; 1] = ["examples"];
+const DEBUG_BUILD_LOCK_FILES: [&str; 3] =
+    [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
 pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
 
@@ -159,7 +169,33 @@ pub fn prunable_target_bytes(target: &Path) -> u64 {
     prunable_with_ceiling(target, SWEPT_CACHE_CEILING)
 }
 
+fn hold_debug_build_locks(debug: &Path) -> Result<Vec<fs::File>, String> {
+    let mut held = Vec::new();
+    for name in DEBUG_BUILD_LOCK_FILES {
+        let path = debug.join(name);
+        let file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{} ({error})", path.display())),
+        };
+        match file.try_lock() {
+            Ok(()) => held.push(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "cargo is building in {}; prune skipped",
+                    debug.display()
+                ))
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(format!("{} ({error})", path.display()))
+            }
+        }
+    }
+    Ok(held)
+}
+
 fn prune_with_ceiling(target: &Path, ceiling: u64) -> Result<(), String> {
+    let _build_locks = hold_debug_build_locks(&target.join("debug"))?;
     let entries = fs::read_dir(target).map_err(|error| {
         format!(
             "failed to read target directory {}: {error}",
@@ -335,9 +371,12 @@ mod tests {
         let mtime_of = |age_rank: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(age_rank);
         let cases = [
             ("qol-env/lane/qol-tray", None, true),
-            ("release/libfoo.rlib", None, false),
+            ("release/libfoo.rlib", None, true),
+            ("qol-check/lint-cache/data", None, true),
+            ("qol-lint/cache.bin", None, true),
+            ("sherpa-onnx-prebuilt/model.bin", None, true),
             ("cargo-timings/timing.html", None, false),
-            ("debug/incremental/foo/dep-graph.bin", None, false),
+            ("debug/incremental/foo/dep-graph.bin", None, true),
             ("debug/examples/demo", None, false),
             ("debug/deps/libold.rlib", Some(1), false),
             ("debug/build/foo/output", Some(2), true),
@@ -362,7 +401,7 @@ mod tests {
         }
         let ceiling = 8;
 
-        let removed_roots = 4 * 4;
+        let removed_roots = 2 * 4;
         let swept_excess = 3 * 4 - ceiling;
         assert_eq!(
             prunable_with_ceiling(target, ceiling),
@@ -378,6 +417,33 @@ mod tests {
         assert_eq!(prunable_with_ceiling(target, ceiling), 0);
     }
 
+    #[test]
+    fn prune_skips_while_cargo_holds_the_debug_build_lock() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path();
+        let debug = target.join("debug");
+        fs::create_dir_all(&debug).expect("debug dir");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(debug.join(".cargo-lock"))
+            .expect("lock file");
+        lock.lock().expect("acquire lock");
+        fs::create_dir_all(target.join("cargo-timings")).expect("root dir");
+        fs::write(target.join("cargo-timings/timing.html"), b"xxxx").expect("file");
+
+        let error = prune_with_ceiling(target, 0).expect_err("held build lock must skip the prune");
+
+        assert!(error.contains("cargo is building"), "error: {error}");
+        assert!(
+            target.join("cargo-timings/timing.html").exists(),
+            "nothing may be removed while the lock is held"
+        );
+        assert!(debug.join(".cargo-lock").exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn target_prune_continues_past_unremovable_entries() {
@@ -385,7 +451,7 @@ mod tests {
 
         let root = tempfile::tempdir().expect("tempdir");
         let target = root.path();
-        let locked = target.join("release");
+        let locked = target.join("cargo-timings");
         fs::create_dir_all(&locked).expect("locked dir");
         fs::write(locked.join("held.rlib"), b"x").expect("held file");
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).expect("lock perms");
@@ -397,7 +463,7 @@ mod tests {
             prune_cargo_target_dir(target).expect_err("locked entry must surface as an error");
 
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("unlock perms");
-        assert!(error.contains("release"), "error: {error}");
+        assert!(error.contains("cargo-timings"), "error: {error}");
         assert!(
             !removable.exists(),
             "one unremovable entry must not stop the rest of the prune"

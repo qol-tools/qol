@@ -347,10 +347,6 @@ fn log_applied(action: &FixAction) {
             );
         }
         #[cfg(feature = "dev")]
-        FixAction::PruneCargoIncrementalCache { path } => {
-            log::info!("doctor: pruned cargo incremental cache {}", path.display());
-        }
-        #[cfg(feature = "dev")]
         FixAction::PruneCargoTargetDir { target } => {
             log::info!(
                 "doctor: pruned stale cargo target caches under {}",

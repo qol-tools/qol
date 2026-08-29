@@ -1279,17 +1279,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
-        let release = running.join("target").join("release");
-        write_tree(&release, 16);
-        std::fs::write(release.join("held.rlib"), b"x").expect("held file");
-        std::fs::set_permissions(&release, std::fs::Permissions::from_mode(0o555))
+        let cargo_timings = running.join("target").join("cargo-timings");
+        write_tree(&cargo_timings, 16);
+        std::fs::write(cargo_timings.join("held.rlib"), b"x").expect("held file");
+        std::fs::set_permissions(&cargo_timings, std::fs::Permissions::from_mode(0o555))
             .expect("lock perms");
         write_tree(&running.join("target").join("sandbox"), 8);
 
         let (report, _) =
             cleanup_disk_usage_in(&running, &progress(), &no_host_caches()).expect("cleanup");
 
-        std::fs::set_permissions(&release, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&cargo_timings, std::fs::Permissions::from_mode(0o755))
             .expect("unlock perms");
         assert!(
             !running.join("target").join("sandbox").exists(),
@@ -1297,7 +1297,7 @@ mod tests {
         );
         let row = &report.rows[0];
         assert!(
-            row.detail.contains("release") && row.detail.contains("Permission denied"),
+            row.detail.contains("cargo-timings") && row.detail.contains("Permission denied"),
             "the failure reason must be visible: {}",
             row.detail
         );

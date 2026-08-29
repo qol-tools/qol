@@ -109,7 +109,7 @@ fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
         )),
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} with {} prunable; removing secondary target roots, incremental caches, and the oldest debug artifacts over the {} ceiling",
+                "cargo target directory is {} with {} prunable; removing stale secondary target roots and the oldest debug artifacts over the {} ceiling",
                 format_bytes(bytes),
                 format_bytes(prunable),
                 format_bytes(SWEPT_CACHE_CEILING)

@@ -9,7 +9,7 @@ use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    cargo_build_command, dev_repo_root, display_name, qualified_plugin_build_features, repo_root,
+    cargo_bin_name, cargo_build_command, dev_repo_root, display_name, repo_root,
     scan_buildable_plugins, BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
@@ -30,7 +30,7 @@ pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
 pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
 const DEV_PREBUILD_FRESH_ENV: &str = "QOL_DEV_PREBUILD_FRESH";
 pub(crate) const DEV_RELOAD_PROGRESS_PREFIX: &str = "[qol dev:reload-progress]\t";
-pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 5] = ["build", "-p", "qol", "--bin", "qol"];
+pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 4] = ["build", "--workspace", "--bin", "qol"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrayTarget {
@@ -636,6 +636,9 @@ fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
         return Ok(());
     }
     let mut command = cargo_build_command(root, &QOL_CLI_BUILD_ARGS);
+    for feature in qol_dev_build::dev_feature_flags(root).map_err(anyhow::Error::msg)? {
+        command.arg("--features").arg(feature);
+    }
     qol_dev_build::configure_dev_cargo(&mut command);
     run_dev_step(
         "build",
@@ -706,11 +709,8 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
         .map(|p| display_name(&p.dir))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut features = Vec::new();
-    for plugin in &stale {
-        features.extend(qualified_plugin_build_features(&plugin.dir)?);
-    }
-    let mut command = plugin_batch_command(root, &stale, &features);
+    let features = qol_dev_build::dev_feature_flags(root).map_err(anyhow::Error::msg)?;
+    let mut command = plugin_batch_command(root, &stale, &features)?;
     let result = run_dev_step("build", StepKind::Pending, &label, &mut command, verbose);
     if result.is_err() {
         eprintln!("qol dev: plugin batch build failed");
@@ -767,17 +767,21 @@ fn persist_batch_fingerprints(plugins: &[BuildablePlugin]) {
     }
 }
 
-fn plugin_batch_command(root: &Path, plugins: &[BuildablePlugin], features: &[String]) -> Command {
+fn plugin_batch_command(
+    root: &Path,
+    plugins: &[BuildablePlugin],
+    features: &[String],
+) -> Result<Command> {
     let mut command = Command::new("cargo");
-    command.current_dir(root).arg("build");
+    command.current_dir(root).arg("build").arg("--workspace");
     for plugin in plugins {
-        command.arg("-p").arg(&plugin.package_name);
+        command.arg("--bin").arg(cargo_bin_name(&plugin.dir)?);
     }
     for feature in features {
         command.arg("--features").arg(feature);
     }
     qol_dev_build::configure_dev_cargo(&mut command);
-    command
+    Ok(command)
 }
 
 fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
@@ -1112,33 +1116,54 @@ mod tests {
     }
 
     #[test]
-    fn plugin_batch_build_carries_declared_features() {
+    fn plugin_batch_build_selects_workspace_bins_with_shared_features() {
+        let tmp = TempDir::new().unwrap();
+        let voice = tmp.path().join("qol-voice");
+        std::fs::create_dir_all(&voice).unwrap();
+        std::fs::write(
+            voice.join("Cargo.toml"),
+            "[package]\nname = \"qol-voice\"\n",
+        )
+        .unwrap();
+        let alt_tab = tmp.path().join("alt-tab");
+        std::fs::create_dir_all(&alt_tab).unwrap();
+        std::fs::write(
+            alt_tab.join("Cargo.toml"),
+            "[package]\nname = \"plugin-alt-tab\"\n\n[[bin]]\nname = \"alt-tab-bin\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
         let plugins = [
             BuildablePlugin {
-                dir: PathBuf::from("/repo/qol/plugins/qol-voice"),
+                dir: voice.clone(),
                 package_name: "qol-voice".to_string(),
             },
             BuildablePlugin {
-                dir: PathBuf::from("/repo/qol/plugins/alt-tab"),
-                package_name: "alt-tab".to_string(),
+                dir: alt_tab.clone(),
+                package_name: "plugin-alt-tab".to_string(),
             },
         ];
         let features = ["qol-voice/local-stt".to_string()];
-        let command = plugin_batch_command(Path::new("/repo/qol"), &plugins, &features);
+        let command = plugin_batch_command(Path::new("/repo/qol"), &plugins, &features).unwrap();
         let args: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(
-            args[..6],
+            args[..8],
             [
                 OsStr::new("build"),
-                OsStr::new("-p"),
+                OsStr::new("--workspace"),
+                OsStr::new("--bin"),
                 OsStr::new("qol-voice"),
-                OsStr::new("-p"),
-                OsStr::new("alt-tab"),
+                OsStr::new("--bin"),
+                OsStr::new("alt-tab-bin"),
                 OsStr::new("--features"),
+                OsStr::new("qol-voice/local-stt"),
             ],
-            "the dev lane must build plugins with the features plugin.toml declares"
+            "the dev lane must build workspace bins with one shared feature list"
         );
-        assert_eq!(args[6], OsStr::new("qol-voice/local-stt"));
+        assert_eq!(
+            command.get_current_dir(),
+            Some(Path::new("/repo/qol")),
+            "the batch build runs from the workspace root"
+        );
     }
 
     #[test]

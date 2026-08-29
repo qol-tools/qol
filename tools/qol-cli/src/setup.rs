@@ -52,7 +52,11 @@ pub(crate) fn run_setup_with_install(root: &Path, verbose: bool, install: bool) 
         .arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
+        .arg("--workspace")
         .args(["--bin", "qol", "--locked", "--offline"]);
+    for feature in qol_dev_build::dev_feature_flags(root).map_err(anyhow::Error::msg)? {
+        command.arg("--features").arg(feature);
+    }
     qol_dev_build::configure_dev_cargo(&mut command);
     let artifacts = run_cargo_step(
         "install",

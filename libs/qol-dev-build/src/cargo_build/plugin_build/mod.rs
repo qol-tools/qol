@@ -76,22 +76,30 @@ where
 {
     log::info!("Building linked plugin via cargo: {}", plugin_id);
     on_progress(0, "Preparing build".to_string());
-    spawn_build(path).map_err(|error| failed_spawn(plugin_id, error))
+    let root = match qol_workspace::workspace_root_from(path) {
+        Ok(root) => root,
+        Err(error) => return Err(failed_spawn(plugin_id, error.to_string())),
+    };
+    spawn_build(&root, path).map_err(|error| failed_spawn(plugin_id, error))
 }
 
-fn spawn_build(path: &Path) -> Result<CargoChild, std::io::Error> {
+fn spawn_build(root: &Path, path: &Path) -> Result<CargoChild, String> {
+    let bin_name = qol_workspace::cargo_bin_name(path).map_err(|error| error.to_string())?;
     let mut command = Command::new("cargo");
     command
         .arg("build")
+        .arg("--workspace")
+        .arg("--bin")
+        .arg(bin_name)
         .env("CARGO_TERM_PROGRESS_WHEN", "always")
         .env("CARGO_TERM_PROGRESS_WIDTH", "80")
         .env("CARGO_TERM_COLOR", "never")
-        .current_dir(path);
-    for feature in qol_workspace::plugin_build_features(path) {
-        command.arg("--features").arg(feature);
+        .current_dir(root);
+    for flag in crate::dev_feature_flags(root)? {
+        command.arg("--features").arg(flag);
     }
     crate::configure_dev_cargo(&mut command);
-    spawn_piped(command)
+    spawn_piped(command).map_err(|error| error.to_string())
 }
 
 pub(super) fn build_cargo_plugins_with_progress(
@@ -242,19 +250,24 @@ fn build_cargo_plugin_batch_with_progress(
     for plugin_id in &plugin_ids {
         on_progress(plugin_id, 0, "Preparing build".to_string());
     }
-    let package_names = plugins
+    let bin_names = plugins
         .iter()
-        .map(|(_, path)| qol_workspace::cargo_package_name(path).map_err(|error| error.to_string()))
+        .map(|(_, path)| qol_workspace::cargo_bin_name(path).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>();
-    let package_names = match package_names {
-        Ok(package_names) => package_names,
+    let bin_names = match bin_names {
+        Ok(bin_names) => bin_names,
+        Err(error) => return failed_batch(plugins, error),
+    };
+    let feature_flags = match crate::dev_feature_flags(root) {
+        Ok(flags) => flags,
         Err(error) => return failed_batch(plugins, error),
     };
     let label = plugin_ids.join(",");
     let started = Instant::now();
     let wrapper_mode = match std::env::var_os("QOL_DEV_RUSTC_WRAPPER") {
+        None => "ambient",
+        Some(value) if value.is_empty() => "disabled",
         Some(_) => "custom",
-        None => "disabled",
     };
     log::debug!(
         "[dev-build] event=batch_start plugin_ids={} rustc_wrapper={}",
@@ -264,21 +277,18 @@ fn build_cargo_plugin_batch_with_progress(
     let mut command = Command::new("cargo");
     command
         .arg("build")
+        .arg("--workspace")
         .arg("--message-format")
         .arg("json")
         .env("CARGO_TERM_PROGRESS_WHEN", "always")
         .env("CARGO_TERM_PROGRESS_WIDTH", "80")
         .env("CARGO_TERM_COLOR", "never")
         .current_dir(root);
-    for package_name in &package_names {
-        command.arg("-p").arg(package_name);
+    for bin_name in &bin_names {
+        command.arg("--bin").arg(bin_name);
     }
-    for (package_name, (_, path)) in package_names.iter().zip(plugins) {
-        for feature in qol_workspace::plugin_build_features(path) {
-            command
-                .arg("--features")
-                .arg(format!("{package_name}/{feature}"));
-        }
+    for flag in &feature_flags {
+        command.arg("--features").arg(flag);
     }
     crate::configure_dev_cargo(&mut command);
     let CargoChild {
@@ -460,7 +470,7 @@ fn persist_fingerprint_sidecar(plugin_id: &str, path: &Path) {
     }
 }
 
-fn failed_spawn(plugin_id: &str, error: std::io::Error) -> BuildResult {
+fn failed_spawn(plugin_id: &str, error: String) -> BuildResult {
     let message = format!("Failed to run cargo build: {}", error);
     log::error!("Build error for {}: {}", plugin_id, message);
     super::failed_build(plugin_id, message)
@@ -606,6 +616,7 @@ mod tests {
         .unwrap();
         std::fs::write(bad.join("build.rs"), "fn main() {}\n").unwrap();
         std::fs::write(bad.join("src/lib.rs"), "pub fn bad() -> {}\n").unwrap();
+        std::fs::write(bad.join("src/main.rs"), "fn main() {}\n").unwrap();
         let plugins = [("good", good.as_path()), ("bad", bad.as_path())];
         let mut progress = |_: &str, _: u8, _: String| {};
 
@@ -679,6 +690,7 @@ mod tests {
             )
             .unwrap();
             std::fs::write(package.join("src/lib.rs"), source).unwrap();
+            std::fs::write(package.join("src/main.rs"), "fn main() {}\n").unwrap();
         }
         let plugins = [("first", first.as_path()), ("second", second.as_path())];
         let mut progress = |_: &str, _: u8, _: String| {};

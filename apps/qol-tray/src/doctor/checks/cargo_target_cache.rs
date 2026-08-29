@@ -1,4 +1,3 @@
-use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
@@ -37,7 +36,7 @@ impl DoctorCheck for CargoTargetCacheCheck {
         let size = self
             .sizes
             .get_or_compute(CACHE_TTL, || compute_cache(&root, dir_size));
-        report_for(size, cargo_incremental_dir(&root))
+        report_for(size)
     }
 }
 
@@ -98,7 +97,7 @@ fn cargo_incremental_dir(root: &Path) -> PathBuf {
     root.join("target").join("debug").join("incremental")
 }
 
-fn report_for(size: CacheSize, path: PathBuf) -> CheckReport {
+fn report_for(size: CacheSize) -> CheckReport {
     match size {
         CacheSize::Missing => CheckReport::ok("cargo incremental cache has not been created yet"),
         CacheSize::Bytes(bytes) if bytes <= WARN_BYTES => CheckReport::ok(format!(
@@ -107,12 +106,12 @@ fn report_for(size: CacheSize, path: PathBuf) -> CheckReport {
         )),
         CacheSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo incremental cache is {} over the {} limit",
+                "cargo incremental cache is {} over the {} limit; it is kept because deleting it forces cold rebuilds",
                 format_bytes(bytes),
                 format_bytes(WARN_BYTES)
             ),
             ID,
-            vec![FixAction::PruneCargoIncrementalCache { path }],
+            vec![],
         ),
         CacheSize::Unreadable(reason) => CheckReport::ok(format!(
             "cargo incremental cache unreadable, skipping: {reason}"
@@ -126,34 +125,27 @@ mod tests {
 
     #[test]
     fn missing_cache_is_ok_without_fix() {
-        let report = report_for(
-            CacheSize::Missing,
-            PathBuf::from("/target/debug/incremental"),
-        );
+        let report = report_for(CacheSize::Missing);
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
     }
 
     #[test]
     fn cache_below_limit_is_ok_without_fix() {
-        let report = report_for(
-            CacheSize::Bytes(WARN_BYTES),
-            PathBuf::from("/target/debug/incremental"),
-        );
+        let report = report_for(CacheSize::Bytes(WARN_BYTES));
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
         assert!(report.summary.contains("8.0 GiB"));
     }
 
     #[test]
-    fn cache_above_limit_warns_with_incremental_fix() {
-        let path = PathBuf::from("/target/debug/incremental");
-        let report = report_for(CacheSize::Bytes(WARN_BYTES + 1), path.clone());
+    fn cache_above_limit_warns_without_fix() {
+        let report = report_for(CacheSize::Bytes(WARN_BYTES + 1));
         assert_eq!(report.issues.len(), 1);
-        assert_eq!(
-            report.fixes,
-            vec![FixAction::PruneCargoIncrementalCache { path }]
-        );
+        assert!(report.fixes.is_empty());
+        assert!(report
+            .summary
+            .contains("it is kept because deleting it forces cold rebuilds"));
     }
 
     #[test]
