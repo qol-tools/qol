@@ -3,9 +3,11 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
-use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_NANO};
+use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_MICRO, TEXT_NANO};
+use qol_gpui::trail::{Trail, TrailItem};
 
 use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
+use super::state::TrailFocus;
 use crate::discovery::search::{ResultSource, Scored, SearchMode};
 use crate::flow::{FlowEntry, FlowRow};
 
@@ -226,48 +228,67 @@ pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) 
     kit.row_selected(row, selected)
 }
 
-pub fn flow_row(row: &FlowRow, selected: bool, row_height: f32) -> Div {
-    let kit = qol_gpui::kit::kit();
-    let text = div()
-        .flex_1()
-        .min_w(px(0.0))
-        .overflow_hidden()
+pub fn trail_body(kit: &qol_gpui::kit::Kit, rows: &[FlowRow], focus: TrailFocus) -> Trail {
+    let items = rows
+        .iter()
+        .map(|row| {
+            let node = &crate::flow::trail_of(&row.raw)[0];
+            TrailItem::new(node.at.clone(), node.tag.clone(), node.text.clone()).struck(node.struck)
+        })
+        .collect();
+    Trail::new("flow-trail", items)
+        .focus(focus.from, focus.from_index, focus.to)
+        .seq(focus.seq)
+        .settled(focus.settled)
+        .palette(kit.palette)
+}
+
+pub fn detail_body(kit: &qol_gpui::kit::Kit, row: &FlowRow, height: f32) -> Div {
+    let text = row.copy.clone().unwrap_or_else(|| row.title.clone());
+    let detail = crate::flow::detail_of(&row.raw);
+    let mut fields = div().flex().flex_col().gap(px(5.0));
+    for (label, value) in &detail {
+        fields = fields.child(
+            div()
+                .flex()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .w(px(92.0))
+                        .flex_none()
+                        .text_color(rgb(kit.palette.text_muted))
+                        .text_size(px(TEXT_NANO))
+                        .child(label.to_uppercase()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_color(rgb(kit.palette.text_secondary))
+                        .text_size(px(TEXT_NANO))
+                        .child(value.clone()),
+                ),
+        );
+    }
+    div()
         .flex()
         .flex_col()
-        .justify_center()
+        .h(px(height))
+        .w_full()
+        .overflow_hidden()
+        .p(px(14.0))
+        .pt(px(16.0))
+        .gap(px(14.0))
         .child(
             div()
-                .truncate()
-                .text_color(rgb(if selected {
-                    current_palette().text
-                } else {
-                    current_palette().text_muted
-                }))
-                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                .child(row.title.clone()),
+                .text_color(rgb(kit.palette.text_primary))
+                .text_size(px(TEXT_MICRO))
+                .line_height(px(18.0))
+                .line_clamp(12)
+                .child(text),
         )
-        .when_some(row.subtitle.as_deref(), |text, subtitle| {
-            text.child(
-                div()
-                    .truncate()
-                    .text_color(rgb(current_palette().text_muted))
-                    .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .child(subtitle.to_owned()),
-            )
-        });
-    let element = div()
-        .flex_none()
-        .h(px(row_height))
-        .mx(px(8.0))
-        .px(px(qol_gpui::theme::SPACE_PAD))
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-        .child(kit.letter_tile(&row.title))
-        .child(text);
-    kit.row_selected(element, selected)
+        .when(!detail.is_empty(), |body| body.child(fields))
 }
 
 pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
@@ -279,9 +300,19 @@ pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
         .unwrap_or("copy");
     kit.hint_bar()
         .child(kit.hint("\u{23CE}", enter_label.to_owned()))
-        .child(kit.hint("\u{2191}\u{2193}", "move"))
+        .child(kit.hint("\u{2193}", "back in time"))
+        .child(kit.hint("\u{2191}", "forward"))
         .child(kit.hint("esc", "back"))
         .child(kit.chip(entry.title.clone(), kit.palette.accent))
+        .child(div().flex_1())
+}
+
+pub fn hint_bar_detail() -> Div {
+    let kit = qol_gpui::kit::kit();
+    kit.hint_bar()
+        .child(kit.hint("\u{23CE}", "copy"))
+        .child(kit.hint("\u{2191}\u{2193}", "move"))
+        .child(kit.hint("esc", "back"))
         .child(div().flex_1())
 }
 

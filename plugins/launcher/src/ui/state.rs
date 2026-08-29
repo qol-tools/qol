@@ -41,12 +41,27 @@ pub struct NavCues {
     pub trail_direction: Option<NavDirection>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrailFocus {
+    pub from: f32,
+    pub from_index: usize,
+    pub to: usize,
+    pub seq: u64,
+    pub settled: bool,
+}
+
 pub struct FlowSession {
     pub entry: FlowEntry,
     pub rows: Vec<FlowRow>,
     pub generation: u64,
     pub pending: bool,
     pub in_flight: bool,
+    pub trail_from: f32,
+    pub trail_from_index: usize,
+    pub trail_to: usize,
+    pub trail_seq: u64,
+    pub trail_started: Option<std::time::Instant>,
+    pub detail: bool,
 }
 
 pub struct LauncherState {
@@ -95,6 +110,12 @@ impl LauncherState {
             generation: 0,
             pending: false,
             in_flight: false,
+            trail_from: 0.0,
+            trail_from_index: 0,
+            trail_to: 0,
+            trail_seq: 0,
+            trail_started: None,
+            detail: false,
         });
         self.query.clear();
         self.cursor = 0;
@@ -110,6 +131,56 @@ impl LauncherState {
         self.clear_selection();
         self.clear_launch_error();
         self.reset_results_position();
+    }
+
+    pub fn flow_trail_focus(&mut self) -> Option<TrailFocus> {
+        let selected = self.scroll_list.selected;
+        let session = self.flow.as_mut()?;
+        if session.trail_to != selected {
+            let elapsed = session
+                .trail_started
+                .map_or(u64::MAX, |start| start.elapsed().as_millis() as u64);
+            session.trail_from =
+                qol_gpui::trail::motion::position_at(session.trail_from, session.trail_to, elapsed);
+            session.trail_from_index = session.trail_to;
+            session.trail_to = selected;
+            session.trail_seq += 1;
+            session.trail_started = Some(std::time::Instant::now());
+        }
+        let settled = session.trail_started.is_none_or(|start| {
+            start.elapsed().as_millis() as u64 >= qol_gpui::trail::motion::SETTLE_MS
+        });
+        Some(TrailFocus {
+            from: session.trail_from,
+            from_index: session.trail_from_index,
+            to: session.trail_to,
+            seq: session.trail_seq,
+            settled,
+        })
+    }
+
+    pub fn open_flow_detail(&mut self) -> bool {
+        match self.flow.as_mut() {
+            Some(session) if !session.detail => {
+                session.detail = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn close_flow_detail(&mut self) -> bool {
+        match self.flow.as_mut() {
+            Some(session) if session.detail => {
+                session.detail = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn flow_detail_open(&self) -> bool {
+        self.flow.as_ref().is_some_and(|session| session.detail)
     }
 
     pub fn flow_result_count(&self) -> usize {
@@ -441,5 +512,110 @@ mod tests {
         assert_eq!(state.cursor, 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
+    }
+
+    fn trail_fields(focus: Option<TrailFocus>) -> (usize, usize, u64) {
+        let focus = focus.expect("flow focus");
+        (focus.from_index, focus.to, focus.seq)
+    }
+
+    #[test]
+    fn flow_trail_focus_starts_at_zero_zero_seq_zero() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(trail_fields(state.flow_trail_focus()), (0, 0, 0));
+    }
+
+    #[test]
+    fn fresh_flow_trail_focus_is_settled() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        let focus = state.flow_trail_focus().expect("flow focus");
+        assert!(focus.settled);
+    }
+
+    #[test]
+    fn focus_right_after_a_move_is_not_settled() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        state.scroll_list.selected = 2;
+        let focus = state.flow_trail_focus().expect("flow focus");
+        assert!(!focus.settled);
+    }
+
+    #[test]
+    fn flow_trail_focus_follows_selection_and_repeats_stably() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        assert_eq!(trail_fields(state.flow_trail_focus()), (0, 0, 0));
+
+        state.scroll_list.selected = 2;
+        assert_eq!(trail_fields(state.flow_trail_focus()), (0, 2, 1));
+        assert_eq!(trail_fields(state.flow_trail_focus()), (0, 2, 1));
+    }
+
+    #[test]
+    fn immediate_second_move_departs_from_the_interrupted_head() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        state.scroll_list.selected = 2;
+        let first = state.flow_trail_focus().expect("flow focus");
+        assert_eq!(first.seq, 1);
+
+        state.scroll_list.selected = 5;
+        let second = state.flow_trail_focus().expect("flow focus");
+        assert_eq!(second.from_index, 2);
+        assert_eq!(second.to, 5);
+        assert_eq!(second.seq, 2);
+        assert!(second.from <= second.from_index as f32);
+    }
+
+    #[test]
+    fn flow_trail_focus_is_none_without_a_flow() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(state.flow_trail_focus(), None);
+    }
+
+    #[test]
+    fn open_flow_detail_requires_a_flow_and_reports_the_change() {
+        let mut state = LauncherState::new();
+        assert!(!state.open_flow_detail());
+        assert!(!state.flow_detail_open());
+
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(state.open_flow_detail());
+        assert!(state.flow_detail_open());
+    }
+
+    #[test]
+    fn close_flow_detail_reports_the_change_and_closes() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(state.open_flow_detail());
+
+        assert!(state.close_flow_detail());
+        assert!(!state.flow_detail_open());
+
+        state.exit_flow();
+        assert!(!state.close_flow_detail());
+        assert!(!state.flow_detail_open());
+    }
+
+    #[test]
+    fn detail_open_and_close_are_idempotent() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert!(state.open_flow_detail());
+        assert!(!state.open_flow_detail());
+        assert!(state.flow_detail_open());
+
+        assert!(state.close_flow_detail());
+        assert!(!state.close_flow_detail());
+        assert!(!state.flow_detail_open());
     }
 }

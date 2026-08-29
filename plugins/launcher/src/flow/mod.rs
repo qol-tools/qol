@@ -18,7 +18,7 @@ pub fn parse_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
     let Some(rows) = payload.get("rows").and_then(|rows| rows.as_array()) else {
         return Err("flow response has no rows array".to_string());
     };
-    Ok(rows
+    let mut rows: Vec<FlowRow> = rows
         .iter()
         .filter_map(|item| {
             let title = item.get("title")?.as_str()?;
@@ -36,7 +36,98 @@ pub fn parse_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
             })
         })
         .take(MAX_ROWS)
-        .collect())
+        .collect();
+    rows.sort_by(|a, b| row_date_key(a).cmp(&row_date_key(b)));
+    Ok(rows)
+}
+
+fn row_date_key(row: &FlowRow) -> (bool, std::cmp::Reverse<&str>) {
+    let at = row
+        .raw
+        .get("trail")
+        .and_then(|trail| trail.as_array())
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.get("at"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    (at.is_empty(), std::cmp::Reverse(at))
+}
+
+pub struct TrailNode {
+    pub at: String,
+    pub tag: String,
+    pub text: String,
+    pub struck: bool,
+}
+
+pub fn trail_of(raw: &serde_json::Value) -> Vec<TrailNode> {
+    let Some(entries) = raw.get("trail").and_then(|trail| trail.as_array()) else {
+        return vec![fallback_node(raw)];
+    };
+    let nodes: Vec<TrailNode> = entries
+        .iter()
+        .filter_map(|entry| {
+            let text = entry.get("text")?.as_str()?;
+            if text.is_empty() {
+                return None;
+            }
+            Some(TrailNode {
+                at: entry
+                    .get("at")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                tag: entry
+                    .get("tag")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                text: text.to_string(),
+                struck: entry
+                    .get("struck")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+    if nodes.is_empty() {
+        return vec![fallback_node(raw)];
+    }
+    nodes
+}
+
+fn fallback_node(raw: &serde_json::Value) -> TrailNode {
+    TrailNode {
+        at: String::new(),
+        tag: raw
+            .get("subtitle")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string(),
+        text: raw
+            .get("title")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string(),
+        struck: false,
+    }
+}
+
+pub fn detail_of(raw: &serde_json::Value) -> Vec<(String, String)> {
+    let Some(entries) = raw.get("detail").and_then(|detail| detail.as_array()) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let label = entry.get("label")?.as_str()?;
+            let value = entry.get("value")?.as_str()?;
+            if label.is_empty() || value.is_empty() {
+                return None;
+            }
+            Some((label.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<Vec<FlowRow>, String> {
@@ -158,6 +249,119 @@ mod tests {
         assert_eq!(
             parse_rows(&serde_json::json!({ "rows": [1, 2] })),
             Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn parse_rows_sorts_newest_first_with_undated_last() {
+        let payload = serde_json::json!({
+            "rows": [
+                { "title": "aug 1", "trail": [{ "at": "2026-08-01", "text": "x" }] },
+                { "title": "aug 12", "trail": [{ "at": "2026-08-12", "text": "x" }] },
+                { "title": "undated" },
+                { "title": "aug 5", "trail": [{ "at": "2026-08-05", "text": "x" }] }
+            ]
+        });
+        let rows = parse_rows(&payload).unwrap();
+        let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+        assert_eq!(titles, ["aug 12", "aug 5", "aug 1", "undated"]);
+    }
+
+    #[test]
+    fn trail_of_parses_a_well_formed_trail_in_order() {
+        let row = serde_json::json!({
+            "title": "t",
+            "trail": [
+                { "at": "now", "tag": "true now", "text": "newest fact" },
+                { "at": "then", "tag": "superseded", "text": "older fact", "struck": true },
+                { "at": "", "tag": "", "text": "plain entry" }
+            ]
+        });
+        let nodes = trail_of(&row);
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].at, "now");
+        assert_eq!(nodes[0].tag, "true now");
+        assert_eq!(nodes[0].text, "newest fact");
+        assert!(!nodes[0].struck);
+        assert_eq!(nodes[1].at, "then");
+        assert_eq!(nodes[1].tag, "superseded");
+        assert_eq!(nodes[1].text, "older fact");
+        assert!(nodes[1].struck);
+        assert_eq!(nodes[2].text, "plain entry");
+        assert_eq!(nodes[2].at, "");
+        assert!(!nodes[2].struck);
+    }
+
+    #[test]
+    fn trail_of_falls_back_to_title_and_subtitle_without_a_usable_trail() {
+        let row = serde_json::json!({
+            "title": "the clipboard ring survives restarts",
+            "subtitle": "capture 2026-08-02"
+        });
+        let nodes = trail_of(&row);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].text, "the clipboard ring survives restarts");
+        assert_eq!(nodes[0].tag, "capture 2026-08-02");
+        assert_eq!(nodes[0].at, "");
+        assert!(!nodes[0].struck);
+
+        for trail in [
+            serde_json::json!("nope"),
+            serde_json::json!([]),
+            serde_json::json!([{ "text": "" }, 3]),
+        ] {
+            let row = serde_json::json!({
+                "title": "still divable",
+                "subtitle": "skill qol-voice",
+                "trail": trail
+            });
+            let nodes = trail_of(&row);
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].text, "still divable");
+            assert_eq!(nodes[0].tag, "skill qol-voice");
+        }
+    }
+
+    #[test]
+    fn trail_of_keeps_only_entries_with_usable_text() {
+        let row = serde_json::json!({
+            "title": "t",
+            "trail": ["a string", 7, null, { "at": "now", "tag": "true now", "text": "kept" }]
+        });
+        let nodes = trail_of(&row);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].text, "kept");
+        assert_eq!(nodes[0].at, "now");
+        assert_eq!(nodes[0].tag, "true now");
+        assert!(!nodes[0].struck);
+    }
+
+    #[test]
+    fn detail_of_keeps_valid_fields_in_order_and_skips_unusable_rows() {
+        let row = serde_json::json!({
+            "detail": [
+                { "label": "verdict", "value": "kept" },
+                { "label": "", "value": "skipped empty label" },
+                { "label": "score", "value": "0.42" },
+                { "label": "skipped empty value", "value": "" }
+            ]
+        });
+        assert_eq!(
+            detail_of(&row),
+            vec![
+                ("verdict".to_string(), "kept".to_string()),
+                ("score".to_string(), "0.42".to_string())
+            ]
+        );
+
+        assert_eq!(detail_of(&serde_json::json!({ "title": "t" })), Vec::new());
+
+        let row = serde_json::json!({
+            "detail": ["a string", 7, { "label": "kind", "value": "capture" }]
+        });
+        assert_eq!(
+            detail_of(&row),
+            vec![("kind".to_string(), "capture".to_string())]
         );
     }
 

@@ -16,6 +16,25 @@ pub struct FlowRow {
     pub copy: String,
     pub key: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trail: Vec<TrailEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail: Vec<DetailField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetailField {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrailEntry {
+    pub at: String,
+    pub tag: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub struck: bool,
 }
 
 pub fn title_of(text: &str) -> String {
@@ -33,6 +52,36 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
     let mut used: HashSet<String> = HashSet::new();
 
     if let Some(answer) = &output.answer {
+        let mut trail = vec![TrailEntry {
+            at: date_of(answer.source_ts.as_deref()),
+            tag: "true now".to_string(),
+            text: answer.text.clone(),
+            struck: false,
+        }];
+        if let Some(Some(superseded)) = &answer.superseded {
+            for entry in superseded {
+                trail.push(TrailEntry {
+                    at: date_of(entry.source_ts.as_deref()),
+                    tag: "superseded".to_string(),
+                    text: entry.text.clone(),
+                    struck: true,
+                });
+            }
+        }
+        let mut detail = Vec::new();
+        detail.extend(detail_field("verdict", Some(output.verdict.clone())));
+        detail.extend(detail_field("confidence", Some(output.confidence.clone())));
+        detail.extend(detail_field("layer", Some(answer.layer.clone())));
+        detail.extend(detail_field("class", answer.cls.clone()));
+        detail.extend(detail_field("source", Some(answer.source_kind.clone())));
+        detail.extend(detail_field("when", answer.source_ts.clone()));
+        detail.extend(detail_field("score", Some(format!("{:.2}", answer.score))));
+        detail.extend(detail_field(
+            "margin",
+            answer.margin.map(|raw| format!("{raw:.2}")),
+        ));
+        detail.extend(detail_field("session", answer.session.clone()));
+        detail.extend(detail_field("key", Some(answer.key.clone())));
         rows.push(FlowRow {
             title: title_of(&answer.text),
             subtitle: Some(format!(
@@ -44,6 +93,8 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
             copy: answer.text.clone(),
             key: answer.key.clone(),
             kind: "answer".to_string(),
+            trail,
+            detail,
         });
         used.insert(answer.key.clone());
     }
@@ -54,12 +105,26 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
                 break;
             }
             if unit.kind == crate::ingest::CAPTURE_KIND && !used.contains(&unit.key) {
+                let mut detail = Vec::new();
+                detail.extend(detail_field("kind", Some(unit.kind.clone())));
+                detail.extend(detail_field("when", unit.ts.clone()));
+                detail.extend(detail_field("session", unit.session.clone()));
+                detail.extend(detail_field("cwd", unit.cwd.clone()));
+                detail.extend(detail_field("score", Some(format!("{:.2}", unit.score))));
+                detail.extend(detail_field("key", Some(unit.key.clone())));
                 rows.push(FlowRow {
                     title: title_of(&unit.text),
                     subtitle: Some(format!("{} {}", unit.kind, date_of(unit.ts.as_deref()))),
                     copy: unit.text.clone(),
                     key: unit.key.clone(),
                     kind: unit.kind.clone(),
+                    trail: vec![TrailEntry {
+                        at: date_of(unit.ts.as_deref()),
+                        tag: unit.kind.clone(),
+                        text: unit.text.clone(),
+                        struck: false,
+                    }],
+                    detail,
                 });
                 used.insert(unit.key.clone());
             }
@@ -88,12 +153,24 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         let Some((text, kind)) = hit else {
             continue;
         };
+        let mut detail = Vec::new();
+        detail.extend(detail_field("kind", Some(kind.clone())));
+        detail.extend(detail_field("when", recall.source_ts.clone()));
+        detail.extend(detail_field("score", Some(format!("{:.2}", recall.score))));
+        detail.extend(detail_field("key", Some(recall.key.clone())));
         rows.push(FlowRow {
             title: title_of(&text),
             subtitle: Some(format!("{} {}", kind, date_of(recall.source_ts.as_deref()))),
-            copy: text,
+            copy: text.clone(),
             key: recall.key.clone(),
-            kind,
+            kind: kind.clone(),
+            trail: vec![TrailEntry {
+                at: date_of(recall.source_ts.as_deref()),
+                tag: kind.clone(),
+                text: text.clone(),
+                struck: false,
+            }],
+            detail,
         });
         used.insert(recall.key.clone());
     }
@@ -104,16 +181,35 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         }
         let name = hit.name.clone().unwrap_or_else(|| hit.id.clone());
         let section = hit.section.clone().unwrap_or_default();
+        let mut detail = Vec::new();
+        detail.extend(detail_field("skill", Some(hit.id.clone())));
+        detail.extend(detail_field("section", hit.section.clone()));
+        detail.extend(detail_field("status", Some(hit.status.clone())));
+        detail.extend(detail_field("head", hit.head.clone()));
+        detail.extend(detail_field(
+            "dirty",
+            hit.dirty.map(|flag| flag.to_string()),
+        ));
         rows.push(FlowRow {
             title: format!("{}: {}", name, section).trim().to_string(),
             subtitle: Some(format!("skill {}", hit.id)),
             copy: hit.content.clone().flatten().unwrap_or_default(),
             key: hit.id.clone(),
             kind: "skill".to_string(),
+            trail: Vec::new(),
+            detail,
         });
     }
 
     rows
+}
+
+fn detail_field(label: &str, value: Option<String>) -> Option<DetailField> {
+    let value = value.filter(|raw| !raw.is_empty())?;
+    Some(DetailField {
+        label: label.to_string(),
+        value,
+    })
 }
 
 fn date_of(ts: Option<&str>) -> String {
@@ -127,6 +223,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::ask::Superseded;
     use crate::store::{Note, Unit};
 
     #[test]
@@ -163,6 +260,20 @@ mod tests {
             source_ts: None,
             source_kind: None,
         }
+    }
+
+    fn empty_layers() -> (UnitsLayer, NotesLayer) {
+        (
+            UnitsLayer {
+                run: "live".to_string(),
+                path: PathBuf::from("units.jsonl"),
+                items: vec![],
+            },
+            NotesLayer {
+                run: None,
+                items: vec![],
+            },
+        )
     }
 
     fn output_fixture(answer_key: &str, recalled: Vec<Value>, units: Value) -> AskOutput {
@@ -277,6 +388,171 @@ mod tests {
         assert_eq!(duplicate_rows[0].kind, "answer");
         assert_eq!(duplicate_rows[0].key, "c-1");
         assert_eq!(duplicate_rows[1].kind, "skill");
+    }
+
+    #[test]
+    fn answer_trail_orders_true_now_then_struck_superseded_oldest_last() {
+        let mut output = output_fixture("n-ans", vec![], Value::Null);
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.superseded = Some(Some(vec![
+            Superseded {
+                text: "newer stale text".to_string(),
+                source_ts: Some("2026-08-03T08:00:00.000Z".to_string()),
+            },
+            Superseded {
+                text: "older stale text".to_string(),
+                source_ts: Some("2026-08-01T08:00:00.000Z".to_string()),
+            },
+        ]));
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].trail.len(), 3);
+        assert_eq!(rows[0].trail[0].tag, "true now");
+        assert_eq!(rows[0].trail[0].at, "2026-08-04");
+        assert_eq!(
+            rows[0].trail[0].text,
+            "the   clipboard ring survives tray restarts"
+        );
+        assert!(!rows[0].trail[0].struck);
+        assert_eq!(rows[0].trail[1].tag, "superseded");
+        assert_eq!(rows[0].trail[1].at, "2026-08-03");
+        assert_eq!(rows[0].trail[1].text, "newer stale text");
+        assert!(rows[0].trail[1].struck);
+        assert_eq!(rows[0].trail[2].tag, "superseded");
+        assert_eq!(rows[0].trail[2].at, "2026-08-01");
+        assert_eq!(rows[0].trail[2].text, "older stale text");
+        assert!(rows[0].trail[2].struck);
+    }
+
+    #[test]
+    fn row_without_history_carries_exactly_one_trail_entry() {
+        let output = output_fixture("n-ans", vec![], Value::Null);
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].trail.len(), 1);
+        assert_eq!(rows[0].trail[0].tag, "true now");
+        assert_eq!(rows[0].trail[0].at, "2026-08-04");
+        assert_eq!(
+            rows[0].trail[0].text,
+            "the   clipboard ring survives tray restarts"
+        );
+        assert!(!rows[0].trail[0].struck);
+    }
+
+    #[test]
+    fn trail_is_absent_from_serialised_json_when_empty() {
+        let row = FlowRow {
+            title: "row title".to_string(),
+            subtitle: None,
+            copy: "row copy".to_string(),
+            key: "k-1".to_string(),
+            kind: "answer".to_string(),
+            trail: vec![],
+            detail: vec![],
+        };
+
+        let value = serde_json::to_value(&row).expect("row serialises");
+        assert!(value.get("trail").is_none());
+
+        let parsed: FlowRow = serde_json::from_value(value).expect("row without trail parses");
+        assert!(parsed.trail.is_empty());
+    }
+
+    #[test]
+    fn detail_is_absent_from_serialised_json_when_empty() {
+        let row = FlowRow {
+            title: "row title".to_string(),
+            subtitle: None,
+            copy: "row copy".to_string(),
+            key: "k-1".to_string(),
+            kind: "answer".to_string(),
+            trail: vec![],
+            detail: vec![],
+        };
+
+        let value = serde_json::to_value(&row).expect("row serialises");
+        assert!(value.get("detail").is_none());
+
+        let parsed: FlowRow = serde_json::from_value(value).expect("row without detail parses");
+        assert!(parsed.detail.is_empty());
+    }
+
+    #[test]
+    fn answer_row_detail_carries_verdict_confidence_key_in_order_and_omits_absent_margin() {
+        let mut output = output_fixture("n-ans", vec![], Value::Null);
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.margin = None;
+        answer.session = Some("s-1".to_string());
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        let labels: Vec<&str> = rows[0].detail.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "verdict",
+                "confidence",
+                "layer",
+                "class",
+                "source",
+                "when",
+                "score",
+                "session",
+                "key"
+            ]
+        );
+        assert_eq!(rows[0].detail[0].value, "answered");
+        assert_eq!(rows[0].detail[1].value, "high");
+        assert_eq!(rows[0].detail[8].value, "n-ans");
+        assert_eq!(
+            rows[0]
+                .detail
+                .iter()
+                .find(|f| f.label == "when")
+                .map(|f| f.value.as_str()),
+            Some("2026-08-04T08:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn capture_row_detail_carries_kind_when_key_and_omits_absent_cwd() {
+        let output = output_fixture(
+            "n-ans",
+            vec![],
+            json!([
+                {
+                    "key": "c-1",
+                    "score": 12.0,
+                    "kind": "capture",
+                    "text": "captured fact text",
+                    "ts": "2026-08-02T12:00:00.000Z",
+                    "snippet": "captured fact text"
+                }
+            ]),
+        );
+        let empty_units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![],
+        };
+        let empty_notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &empty_units, &empty_notes);
+
+        let labels: Vec<&str> = rows[1].detail.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, vec!["kind", "when", "score", "key"]);
+        assert_eq!(rows[1].detail[0].value, "capture");
+        assert_eq!(rows[1].detail[1].value, "2026-08-02T12:00:00.000Z");
+        assert_eq!(rows[1].detail[2].value, "12.00");
+        assert_eq!(rows[1].detail[3].value, "c-1");
     }
 
     #[test]

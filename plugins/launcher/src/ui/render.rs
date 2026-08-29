@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::*;
 
 use super::layout::{
-    window_height_for, window_height_for_rows, FLOW_ROW_HEIGHT, HEADER_HEIGHT, MAX_VISIBLE,
-    ROW_HEIGHT, WINDOW_WIDTH,
+    window_height_for, window_height_for_detail, window_height_for_rows, window_height_for_trail,
+    FLOW_ROW_HEIGHT, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH,
 };
 #[cfg(debug_assertions)]
 use super::trace;
@@ -125,6 +125,7 @@ impl Render for LauncherView {
             self.store.result_count()
         };
         self.state.sync_result_window(result_count);
+        let trail_focus = self.state.flow_trail_focus();
         let visible_range = self.state.scroll_list.visible_range(result_count);
         let visible = visible_range.len();
         let scroll_offset = visible_range.start;
@@ -138,8 +139,20 @@ impl Render for LauncherView {
             self.ensure_trail_decay_tick(cx);
         }
         self.state.take_edge_hit();
-        let target_height = if flow_active {
-            window_height_for(visible, FLOW_ROW_HEIGHT)
+        let detail = self.state.flow_detail_open();
+        let detail_ready =
+            detail
+                && self.state.flow.as_ref().is_some_and(|session| {
+                    session.rows.get(self.state.scroll_list.selected).is_some()
+                });
+        let target_height = if detail_ready {
+            window_height_for_detail()
+        } else if flow_active {
+            if result_count > 0 {
+                window_height_for_trail()
+            } else {
+                window_height_for(0, FLOW_ROW_HEIGHT)
+            }
         } else {
             window_height_for_rows(visible)
         };
@@ -155,10 +168,11 @@ impl Render for LauncherView {
             .unwrap_or("")
             .to_string();
         let rows = if flow_active {
-            self.build_flow_rows(scroll_offset, visible)
+            Vec::new()
         } else {
             self.build_visible_rows(scroll_offset, visible)
         };
+        let kit = qol_gpui::kit::kit();
         #[cfg(debug_assertions)]
         {
             let rows_us = t1.elapsed().as_micros();
@@ -205,11 +219,6 @@ impl Render for LauncherView {
             .flow
             .as_ref()
             .is_some_and(|session| session.pending);
-        let wheel_row_height = if flow_active {
-            FLOW_ROW_HEIGHT
-        } else {
-            ROW_HEIGHT
-        };
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)
@@ -246,36 +255,91 @@ impl Render for LauncherView {
                 flow_prompt.as_deref().unwrap_or("Type to search\u{2026}"),
             ))
             .when(result_count > 0, |root| {
-                root.child(
-                    div()
-                        .id("launcher-results")
-                        .h(px(results_height))
-                        .w_full()
-                        .overflow_hidden()
-                        .flex()
-                        .flex_col()
-                        .py(px(super::layout::LIST_PAD_Y))
-                        .gap(px(super::layout::ROW_GAP))
-                        .bg(view::bg_color())
-                        .on_scroll_wheel(cx.listener(
-                            move |this: &mut Self,
-                                  event: &ScrollWheelEvent,
-                                  _window,
-                                  cx: &mut Context<Self>| {
-                                let rows = qol_gpui::scroll_list::wheel_rows(
-                                    &event.delta,
-                                    wheel_row_height,
-                                );
-                                this.state.scroll_list.wheel_by(rows, result_count);
-                                cx.notify();
-                            },
-                        ))
-                        .children(rows),
-                )
+                if flow_active {
+                    if detail_ready {
+                        match self
+                            .state
+                            .flow
+                            .as_ref()
+                            .and_then(|session| session.rows.get(self.state.scroll_list.selected))
+                        {
+                            Some(row) => root.child(
+                                div()
+                                    .id("launcher-results")
+                                    .h(px(results_height))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .bg(view::bg_color())
+                                    .child(view::detail_body(&kit, row, results_height)),
+                            ),
+                            None => root,
+                        }
+                    } else {
+                        match self.state.flow.as_ref().zip(trail_focus) {
+                            Some((session, focus)) => root.child(
+                                div()
+                                    .id("launcher-results")
+                                    .h(px(results_height))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .bg(view::bg_color())
+                                    .on_scroll_wheel(cx.listener(
+                                        move |this: &mut Self,
+                                              event: &ScrollWheelEvent,
+                                              _window,
+                                              cx: &mut Context<Self>| {
+                                            let rows = qol_gpui::scroll_list::wheel_rows(
+                                                &event.delta,
+                                                qol_gpui::trail::motion::ROW_H,
+                                            );
+                                            for _ in 0..rows.max(0) as usize {
+                                                this.state.scroll_list.move_down(result_count);
+                                            }
+                                            for _ in 0..(-rows).max(0) as usize {
+                                                this.state.scroll_list.move_up();
+                                            }
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(view::trail_body(&kit, &session.rows, focus)),
+                            ),
+                            None => root,
+                        }
+                    }
+                } else {
+                    root.child(
+                        div()
+                            .id("launcher-results")
+                            .h(px(results_height))
+                            .w_full()
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col()
+                            .py(px(super::layout::LIST_PAD_Y))
+                            .gap(px(super::layout::ROW_GAP))
+                            .bg(view::bg_color())
+                            .on_scroll_wheel(cx.listener(
+                                move |this: &mut Self,
+                                      event: &ScrollWheelEvent,
+                                      _window,
+                                      cx: &mut Context<Self>| {
+                                    let rows =
+                                        qol_gpui::scroll_list::wheel_rows(&event.delta, ROW_HEIGHT);
+                                    this.state.scroll_list.wheel_by(rows, result_count);
+                                    cx.notify();
+                                },
+                            ))
+                            .children(rows),
+                    )
+                }
             })
-            .child(match flow_entry.as_ref() {
-                Some(entry) => view::hint_bar_flow(entry),
-                None => view::hint_bar(self.state.mode),
+            .child(if detail_ready {
+                view::hint_bar_detail()
+            } else {
+                match flow_entry.as_ref() {
+                    Some(entry) => view::hint_bar_flow(entry),
+                    None => view::hint_bar(self.state.mode),
+                }
             })
     }
 }
@@ -334,20 +398,5 @@ impl LauncherView {
             ));
         }
         rows
-    }
-
-    fn build_flow_rows(&self, scroll_offset: usize, visible: usize) -> Vec<Div> {
-        let Some(session) = self.state.flow.as_ref() else {
-            return Vec::new();
-        };
-        let selected = self.state.scroll_list.selected;
-        session
-            .rows
-            .iter()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(visible)
-            .map(|(i, row)| view::flow_row(row, i == selected, FLOW_ROW_HEIGHT))
-            .collect()
     }
 }

@@ -1,8 +1,9 @@
 use std::time::Duration;
 
-use gpui::{AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
+use gpui::{px, size, AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
 
 use super::input::InputEffect;
+use super::layout::{full_window_height, window_height_for_detail, WINDOW_WIDTH};
 use super::trace;
 use super::LauncherView;
 
@@ -99,6 +100,8 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::FlowActivate => self.activate_flow_row(window, cx),
+            InputEffect::FlowDetail => self.open_flow_detail(window, cx),
+            InputEffect::FlowDetailClose => self.close_flow_detail(window, cx),
         }
     }
 
@@ -318,5 +321,23 @@ impl LauncherView {
         }
         trace::flow(self, "activated");
         self.hide_to_ghost("flow", window);
+    }
+
+    fn open_flow_detail(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        if !self.state.open_flow_detail() {
+            return;
+        }
+        window.resize(size(px(WINDOW_WIDTH), px(window_height_for_detail())));
+        trace::flow(self, "detail_open");
+        cx.notify();
+    }
+
+    fn close_flow_detail(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        if !self.state.close_flow_detail() {
+            return;
+        }
+        window.resize(size(px(WINDOW_WIDTH), px(full_window_height())));
+        trace::flow(self, "detail_close");
+        cx.notify();
     }
 }

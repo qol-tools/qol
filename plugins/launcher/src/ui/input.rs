@@ -11,6 +11,8 @@ pub enum InputEffect {
     BoostDown,
     FlowQueryChanged,
     FlowActivate,
+    FlowDetail,
+    FlowDetailClose,
     FlowExit,
 }
 
@@ -131,10 +133,25 @@ impl LauncherState {
         alt: bool,
         result_count: usize,
     ) -> InputEffect {
+        if self.flow_detail_open() {
+            return match key {
+                "escape" | "esc" => InputEffect::FlowDetailClose,
+                "enter" => InputEffect::FlowActivate,
+                "up" => {
+                    self.move_up();
+                    InputEffect::Navigate
+                }
+                "down" => {
+                    self.move_down(result_count);
+                    InputEffect::Navigate
+                }
+                _ => InputEffect::Ignore,
+            };
+        }
         let boost = secondary || control || alt;
         match key {
             "escape" | "esc" => InputEffect::FlowExit,
-            "enter" => InputEffect::FlowActivate,
+            "enter" => InputEffect::FlowDetail,
             "up" if !secondary => {
                 self.move_up();
                 InputEffect::Navigate
@@ -511,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn flow_escape_exits_and_enter_activates() {
+    fn flow_escape_exits_and_enter_opens_detail() {
         let mut state = LauncherState::new();
         state.enter_flow(flow_entry("qol memory"));
 
@@ -523,11 +540,47 @@ mod tests {
         state.enter_flow(flow_entry("qol memory"));
         assert_eq!(
             state.apply_key("enter", false, false, false, false, 3),
-            InputEffect::FlowActivate
+            InputEffect::FlowDetail
         );
 
         state.exit_flow();
         assert!(state.flow.is_none());
+    }
+
+    #[test]
+    fn open_detail_routes_keys_and_shields_the_query() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        state.query = "seed".to_string();
+        state.cursor = 4;
+        assert!(state.open_flow_detail());
+
+        assert_eq!(
+            state.apply_key("escape", false, false, false, false, 3),
+            InputEffect::FlowDetailClose
+        );
+        assert_eq!(
+            state.apply_key("enter", false, false, false, false, 3),
+            InputEffect::FlowActivate
+        );
+        assert_eq!(
+            state.apply_key("x", false, false, false, false, 3),
+            InputEffect::Ignore
+        );
+        assert_eq!(state.query, "seed");
+        assert_eq!(state.cursor, 4);
+
+        assert_eq!(
+            state.apply_key("down", false, false, false, false, 3),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.scroll_list.selected, 1);
+
+        assert_eq!(
+            state.apply_key("up", false, false, false, false, 3),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.scroll_list.selected, 0);
     }
 
     #[test]

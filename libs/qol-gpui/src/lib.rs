@@ -25,11 +25,13 @@ pub mod spinner;
 pub mod status_indicator;
 pub mod surface;
 pub mod toast;
+pub mod trail;
 pub mod window;
 
 pub use format::format_bytes;
 pub use spinner::Spinner;
 pub use status_indicator::StatusIndicator;
+pub use trail::Trail;
 
 pub mod theme {
     pub use qol_theme::*;

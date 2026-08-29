@@ -6288,6 +6288,7 @@ dependencies = [
  "dirs 6.0.0",
  "git2",
  "libc",
+ "qol-agent-homes",
  "qol-apps",
  "qol-artifact",
  "qol-build-identity",
@@ -6316,6 +6317,17 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",
+]
+
+[[package]]
+name = "qol-agent-homes"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "qol-config",
+ "serde",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -6578,6 +6590,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "qol-agent-homes",
  "qol-config",
  "qol-conventions",
  "qol-fs",
@@ -6731,6 +6744,7 @@ name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
  "chrono",
+ "qol-agent-homes",
  "qol-config",
  "qol-runtime",
  "qol-watch",
@@ -6779,6 +6793,7 @@ dependencies = [
  "objc2-foundation",
  "png 0.17.16",
  "proptest",
+ "qol-agent-homes",
  "qol-app-icon",
  "qol-apps",
  "qol-artifact",

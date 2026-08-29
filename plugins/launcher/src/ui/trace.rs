@@ -28,6 +28,7 @@ pub(super) struct RenderSignature {
     target_h: i32,
     visual_h: i32,
     selected_name: String,
+    trail_index: usize,
 }
 
 #[cfg(debug_assertions)]
@@ -246,6 +247,11 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
         target_h: (super::layout::HEADER_HEIGHT + sample.results_height).round() as i32,
         visual_h: sample.target_height.round() as i32,
         selected_name: qol_runtime::probe::compact(&sample.selected_name, 80),
+        trail_index: if view.state.flow.is_some() {
+            view.state.scroll_list.selected
+        } else {
+            0
+        },
     };
 
     if view.last_render_trace.as_ref() == Some(&signature) {
@@ -296,6 +302,8 @@ fn effect_label(effect: InputEffect) -> &'static str {
         InputEffect::FlowQueryChanged => "flow_query",
         InputEffect::FlowActivate => "flow_activate",
         InputEffect::FlowExit => "flow_exit",
+        InputEffect::FlowDetail => "flow_detail",
+        InputEffect::FlowDetailClose => "flow_detail_close",
     }
 }
 
