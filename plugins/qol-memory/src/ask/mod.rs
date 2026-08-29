@@ -11,10 +11,12 @@ use serde_json::{json, Value};
 use crate::agent_home;
 use crate::aliases::AliasMap;
 use crate::retrieval::cache;
-use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef};
+use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef, Index};
 use crate::retrieval_log::{self, Exclusion, RetrievalEvent};
 use crate::skills::{self, Freshness, Served, SkillsIndex};
-use crate::store::{dedupe_user_units, is_boilerplate_unit, NotesLayer, Store, Unit, UnitsLayer};
+use crate::store::{
+    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
+};
 use crate::text;
 
 pub mod rows;
@@ -281,6 +283,16 @@ fn fixed2_string(value: f64) -> String {
     }
 }
 
+pub struct WarmIndexes<'a> {
+    pub answer: &'a Index,
+    pub all: &'a Index,
+    pub notes: &'a Index,
+    pub user_units: &'a [Unit],
+    pub answer_pool: &'a [Unit],
+    pub visible_notes: &'a [Note],
+    pub by_key: &'a HashMap<String, usize>,
+}
+
 pub fn run(store: &Store, aliases: &AliasMap, req: &AskRequest) -> Result<AskOutput> {
     let units = store.read_units()?;
     let notes = store.read_notes()?;
@@ -294,19 +306,20 @@ pub fn run_with_layers(
     units: &UnitsLayer,
     notes_layer: &NotesLayer,
 ) -> Result<AskOutput> {
+    run_with_warm(store, aliases, req, units, notes_layer, None)
+}
+
+fn run_with_warm(
+    store: &Store,
+    aliases: &AliasMap,
+    req: &AskRequest,
+    units: &UnitsLayer,
+    notes_layer: &NotesLayer,
+    warm: Option<&WarmIndexes<'_>>,
+) -> Result<AskOutput> {
     let registry = qol_agent_homes::Registry::load();
     let caller = registry.resolve_caller(req.agent_home.as_deref());
     let slug = agent_home::cache_slug(&caller);
-    let user_units_input: Vec<Unit> = units
-        .items
-        .iter()
-        .filter(|unit| {
-            crate::store::in_answer_pool(&unit.kind)
-                && agent_home::visible(unit, &caller, &registry)
-        })
-        .cloned()
-        .collect();
-    let user_units = dedupe_user_units(&user_units_input);
 
     let exclude_session: Option<String> = req
         .exclude_session
@@ -317,68 +330,126 @@ pub fn run_with_layers(
     qtokens0.retain(|token| !stopword_set().contains(token.as_str()));
     let qtokens = crate::aliases::expand_tokens(&qtokens0, aliases);
 
-    let answer_pool: Vec<Unit> = user_units
-        .iter()
-        .filter(|unit| {
-            !is_boilerplate_unit(unit)
-                && exclude_session
-                    .as_deref()
-                    .is_none_or(|skip| unit.session.as_deref() != Some(skip))
-        })
-        .cloned()
-        .collect();
+    let user_units_input: Vec<Unit>;
+    let user_units_owned: Vec<Unit>;
+    let answer_pool_owned: Vec<Unit>;
+    let user_units: &[Unit];
+    let answer_pool: &[Unit];
+    if let Some(indexes) = warm {
+        user_units = indexes.user_units;
+        answer_pool = indexes.answer_pool;
+    } else {
+        user_units_input = units
+            .items
+            .iter()
+            .filter(|unit| {
+                crate::store::in_answer_pool(&unit.kind)
+                    && agent_home::visible(unit, &caller, &registry)
+            })
+            .cloned()
+            .collect();
+        user_units_owned = dedupe_user_units(&user_units_input);
+        answer_pool_owned = user_units_owned
+            .iter()
+            .filter(|unit| {
+                !is_boilerplate_unit(unit)
+                    && exclude_session
+                        .as_deref()
+                        .is_none_or(|skip| unit.session.as_deref() != Some(skip))
+            })
+            .cloned()
+            .collect();
+        user_units = &user_units_owned;
+        answer_pool = &answer_pool_owned;
+    }
 
-    let answer_layer = exclude_session.as_deref().map_or_else(
-        || format!("pool-{slug}"),
-        |session| format!("pool-x-{}-{slug}", text::utf16_slice(session, 0, 8)),
-    );
-    let answer_refs = doc_refs(&answer_pool);
-    let answer_idx =
-        cache::build_or_load(store.root(), &answer_layer, &answer_refs, Some(&units.path));
+    let warm_answer = warm.map(|indexes| indexes.answer);
+    let answer_owned;
+    let answer_idx: &Index = match warm_answer {
+        Some(index) => index,
+        None => {
+            let answer_layer = exclude_session.as_deref().map_or_else(
+                || format!("pool-{slug}"),
+                |session| format!("pool-x-{}-{slug}", text::utf16_slice(session, 0, 8)),
+            );
+            answer_owned = cache::build_or_load(
+                store.root(),
+                &answer_layer,
+                &doc_refs(answer_pool),
+                Some(&units.path),
+            );
+            &answer_owned
+        }
+    };
     let units_query =
         crate::aliases::expand_tokens_keep(&text::tokens(&req.query), aliases).join(" ");
-    let answer_ranked: Vec<UnitHit> = bm25_ranks(&units_query, &answer_idx, req.k)
+    let widened = warm_answer.is_some() && exclude_session.is_some() && req.k > 0;
+    let answer_fetch = if widened { req.k * 2 + 16 } else { req.k };
+    let mut answer_ranked: Vec<UnitHit> = bm25_ranks(&units_query, answer_idx, answer_fetch)
         .into_iter()
         .filter_map(|ranked| {
-            answer_pool
-                .iter()
-                .find(|unit| unit.key == ranked.key)
-                .map(|unit| UnitHit {
-                    key: ranked.key,
-                    score: ranked.score,
-                    kind: unit.kind.clone(),
-                    source: unit.source.clone(),
-                    session: unit.session.clone(),
-                    cwd: unit.cwd.clone(),
-                    ts: unit.ts.clone(),
-                    text: unit.text.clone(),
-                })
+            let unit = match warm {
+                Some(indexes) => {
+                    let position = *indexes.by_key.get(&ranked.key)?;
+                    indexes.user_units.get(position)?
+                }
+                None => answer_pool.iter().find(|unit| unit.key == ranked.key)?,
+            };
+            if exclude_session
+                .as_deref()
+                .is_some_and(|skip| unit.session.as_deref() == Some(skip))
+            {
+                return None;
+            }
+            Some(UnitHit {
+                key: ranked.key,
+                score: ranked.score,
+                kind: unit.kind.clone(),
+                source: unit.source.clone(),
+                session: unit.session.clone(),
+                cwd: unit.cwd.clone(),
+                ts: unit.ts.clone(),
+                text: unit.text.clone(),
+            })
         })
         .collect();
+    if widened {
+        answer_ranked.truncate(req.k);
+    }
 
-    let user_refs = doc_refs(&user_units);
-    let all_idx = cache::build_or_load(
-        store.root(),
-        &format!("user-{slug}"),
-        &user_refs,
-        Some(&units.path),
-    );
-    let ranked_all: Vec<UnitHit> = bm25_ranks(&units_query, &all_idx, req.k)
+    let all_owned;
+    let all_idx: &Index = match warm {
+        Some(indexes) => indexes.all,
+        None => {
+            all_owned = cache::build_or_load(
+                store.root(),
+                &format!("user-{slug}"),
+                &doc_refs(user_units),
+                Some(&units.path),
+            );
+            &all_owned
+        }
+    };
+    let ranked_all: Vec<UnitHit> = bm25_ranks(&units_query, all_idx, req.k)
         .into_iter()
         .filter_map(|ranked| {
-            user_units
-                .iter()
-                .find(|unit| unit.key == ranked.key)
-                .map(|unit| UnitHit {
-                    key: ranked.key,
-                    score: ranked.score,
-                    kind: unit.kind.clone(),
-                    source: unit.source.clone(),
-                    session: unit.session.clone(),
-                    cwd: unit.cwd.clone(),
-                    ts: unit.ts.clone(),
-                    text: unit.text.clone(),
-                })
+            let unit = match warm {
+                Some(indexes) => {
+                    let position = *indexes.by_key.get(&ranked.key)?;
+                    indexes.user_units.get(position)?
+                }
+                None => user_units.iter().find(|unit| unit.key == ranked.key)?,
+            };
+            Some(UnitHit {
+                key: ranked.key,
+                score: ranked.score,
+                kind: unit.kind.clone(),
+                source: unit.source.clone(),
+                session: unit.session.clone(),
+                cwd: unit.cwd.clone(),
+                ts: unit.ts.clone(),
+                text: unit.text.clone(),
+            })
         })
         .collect();
     let top_units: Vec<UnitOut> = ranked_all
@@ -396,18 +467,27 @@ pub fn run_with_layers(
         })
         .collect();
 
-    let notes: Vec<crate::store::Note> =
-        visible_notes(&notes_layer.items, &units.items, &caller, &registry);
-    let notes_refs = notes_refs(&notes);
-    let notes_idx = if notes.is_empty() {
-        None
-    } else {
-        Some(cache::build_or_load(
-            store.root(),
-            &format!("notes-{slug}"),
-            &notes_refs,
-            None,
-        ))
+    let notes_owned: Vec<Note>;
+    let notes: &[Note] = match warm {
+        Some(indexes) => indexes.visible_notes,
+        None => {
+            notes_owned = visible_notes(&notes_layer.items, &units.items, &caller, &registry);
+            &notes_owned
+        }
+    };
+    let notes_index_owned;
+    let notes_idx: Option<&Index> = match warm {
+        Some(indexes) => Some(indexes.notes),
+        None if notes.is_empty() => None,
+        None => {
+            notes_index_owned = cache::build_or_load(
+                store.root(),
+                &format!("notes-{slug}"),
+                &notes_refs(notes),
+                None,
+            );
+            Some(&notes_index_owned)
+        }
     };
     let notes_query = qtokens.join(" ");
     let ranked_note_hits: Vec<(&crate::store::Note, f64)> = match &notes_idx {
@@ -1039,7 +1119,7 @@ pub fn run_and_log(
 ) -> Result<AskOutput> {
     let units = store.read_units()?;
     let notes = store.read_notes()?;
-    run_and_log_with_layers(store, aliases, req, log, &units, &notes)
+    run_and_log_with_layers(store, aliases, req, log, &units, &notes, None)
 }
 
 pub fn run_and_log_with_layers(
@@ -1049,9 +1129,10 @@ pub fn run_and_log_with_layers(
     log: &LogOptions,
     units: &UnitsLayer,
     notes: &NotesLayer,
+    warm: Option<&WarmIndexes<'_>>,
 ) -> Result<AskOutput> {
     let started = Instant::now();
-    let out = run_with_layers(store, aliases, req, units, notes)?;
+    let out = run_with_warm(store, aliases, req, units, notes, warm)?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     if !log.no_log {
@@ -1622,6 +1703,125 @@ mod tests {
         assert!(root
             .join(format!("idx-pool-x-sess-liv-{slug}.json"))
             .exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warm_ask_with_excluded_session_never_answers_from_that_session() {
+        let root = temp_root("warm-exclude");
+        let tail = "quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
+        let mut lines = vec![
+            json!({
+                "key": "u-a1",
+                "session": "sess-live-aaa1",
+                "kind": "user",
+                "ts": "2026-08-01T09:00:00.000Z",
+                "text": "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+            })
+            .to_string(),
+            json!({
+                "key": "u-a2",
+                "session": "sess-live-aaa1",
+                "kind": "user",
+                "ts": "2026-08-01T10:00:00.000Z",
+                "text": "bravo charlie delta echo foxtrot golf hotel india juliet kilo lima alpha"
+            })
+            .to_string(),
+            json!({
+                "key": "u-b",
+                "session": "sess-live-bbb2",
+                "kind": "user",
+                "ts": "2026-08-01T11:00:00.000Z",
+                "text": "lima kilo juliet india hotel golf foxtrot echo delta charlie bravo alpha"
+            })
+            .to_string(),
+        ];
+        for (index, first) in [
+            "ember", "saddle", "tunnel", "violin", "window", "yogurt", "copper", "silver", "velvet",
+        ]
+        .iter()
+        .enumerate()
+        {
+            lines.push(
+                json!({
+                    "key": format!("f-{index}"),
+                    "session": "sess-live-ccc3",
+                    "kind": "user",
+                    "ts": format!("2026-08-02T09:{index:02}:00.000Z"),
+                    "text": format!("{first} {tail}"),
+                })
+                .to_string(),
+            );
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let units_layer = store.read_units().expect("units read");
+        let notes_layer = NotesLayer {
+            run: None,
+            items: Vec::new(),
+        };
+        let registry = qol_agent_homes::Registry::load();
+        let caller = registry.resolve_caller(None);
+        let user_units: Vec<Unit> = units_layer
+            .items
+            .iter()
+            .filter(|unit| {
+                crate::store::in_answer_pool(&unit.kind)
+                    && agent_home::visible(unit, &caller, &registry)
+            })
+            .cloned()
+            .collect();
+        let pool: Vec<Unit> = user_units
+            .iter()
+            .filter(|unit| !is_boilerplate_unit(unit))
+            .cloned()
+            .collect();
+        let answer_index = build_index(&doc_refs(&pool));
+        let all_index = build_index(&doc_refs(&user_units));
+        let notes_index = build_index(&[]);
+        let by_key: HashMap<String, usize> = user_units
+            .iter()
+            .enumerate()
+            .map(|(position, unit)| (unit.key.clone(), position))
+            .collect();
+        let warm = WarmIndexes {
+            answer: &answer_index,
+            all: &all_index,
+            notes: &notes_index,
+            user_units: &user_units,
+            answer_pool: &pool,
+            visible_notes: &[],
+            by_key: &by_key,
+        };
+        let req = AskRequest {
+            query: "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+                .to_string(),
+            k: 2,
+            brief: false,
+            exclude_session: Some("sess-live-aaa1".to_string()),
+            agent_home: None,
+        };
+        let log = LogOptions {
+            source: "test".to_string(),
+            cwd: None,
+            fact: None,
+            no_log: true,
+        };
+        let out = run_and_log_with_layers(
+            &store,
+            &AliasMap::default(),
+            &req,
+            &log,
+            &units_layer,
+            &notes_layer,
+            Some(&warm),
+        )
+        .expect("warm ask runs");
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("unit answer resolves");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.key, "u-b");
+        assert_eq!(answer.session.as_deref(), Some("sess-live-bbb2"));
         fs::remove_dir_all(&root).ok();
     }
 

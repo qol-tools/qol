@@ -1,12 +1,16 @@
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 
 use crate::aliases::AliasMap;
-use crate::ask::{doc_refs, notes_refs, visible_notes};
-use crate::retrieval::cache;
-use crate::store::{dedupe_user_units, is_boilerplate_unit, NotesLayer, Store, Unit, UnitsLayer};
+use crate::ask::{doc_refs, notes_refs, visible_notes, WarmIndexes};
+use crate::retrieval::{build_index, cache, DocRef, Index};
+use crate::store::{
+    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
+};
 
 pub struct WarmState {
     store: Store,
@@ -17,8 +21,19 @@ pub struct WarmState {
 
 struct CachedLayers {
     fingerprint: LayerFingerprint,
+    caller: String,
     units: UnitsLayer,
     notes: NotesLayer,
+    user_units: Vec<Unit>,
+    answer_pool: Vec<Unit>,
+    visible_notes: Vec<Note>,
+    answer: Index,
+    all: Index,
+    notes_index: Index,
+    dedupe_seen: HashSet<String>,
+    by_key: HashMap<String, usize>,
+    indexed_keys: HashSet<String>,
+    notes_dirty: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +78,36 @@ impl WarmState {
         Ok((&self.store, &self.aliases, &cache.units, &cache.notes))
     }
 
+    pub(crate) fn ask_views(
+        &mut self,
+        caller: &str,
+    ) -> Result<(
+        &Store,
+        &AliasMap,
+        &UnitsLayer,
+        &NotesLayer,
+        Option<WarmIndexes<'_>>,
+    )> {
+        self.refresh_layers()?;
+        let cache = self.layers_cache.as_ref().expect("layers cache is fresh");
+        let indexes = (cache.caller == caller).then_some(WarmIndexes {
+            answer: &cache.answer,
+            all: &cache.all,
+            notes: &cache.notes_index,
+            user_units: &cache.user_units,
+            answer_pool: &cache.answer_pool,
+            visible_notes: &cache.visible_notes,
+            by_key: &cache.by_key,
+        });
+        Ok((
+            &self.store,
+            &self.aliases,
+            &cache.units,
+            &cache.notes,
+            indexes,
+        ))
+    }
+
     pub fn push_units(&mut self, units: &[serde_json::Value]) {
         if self.layers_cache.is_none() {
             return;
@@ -78,8 +123,12 @@ impl WarmState {
             }
         }
         if let Some(cache) = self.layers_cache.as_mut() {
+            let registry = qol_agent_homes::Registry::load();
+            extend_unit_indexes(cache, &parsed, &registry);
             cache.units.items.extend(parsed);
-            cache.fingerprint = layer_fingerprint(&self.store);
+            let fresh = layer_fingerprint(&self.store);
+            cache.fingerprint.units_len = fresh.units_len;
+            cache.fingerprint.units_mtime_ms = fresh.units_mtime_ms;
         }
     }
 
@@ -87,24 +136,162 @@ impl WarmState {
         self.layers_cache = None;
     }
 
+    pub fn invalidate_notes_index(&mut self) {
+        if let Some(cache) = self.layers_cache.as_mut() {
+            cache.notes_dirty = true;
+        }
+    }
+
     fn refresh_layers(&mut self) -> Result<()> {
         let fingerprint = layer_fingerprint(&self.store);
-        if self
-            .layers_cache
-            .as_ref()
-            .is_some_and(|cache| cache.fingerprint == fingerprint)
-        {
+        if self.layers_cache.is_none() {
+            self.layers_cache = Some(build_layers(&self.store, fingerprint)?);
             return Ok(());
         }
-        let units = self.store.read_units()?;
-        let notes = self.store.read_notes()?;
-        self.layers_cache = Some(CachedLayers {
-            fingerprint,
-            units,
-            notes,
-        });
+        let Some(cache) = self.layers_cache.as_ref() else {
+            return Ok(());
+        };
+        if cache.fingerprint == fingerprint && !cache.notes_dirty {
+            return Ok(());
+        }
+        let prev = cache.fingerprint.clone();
+        let notes_changed = cache.notes_dirty || prev.notes_run != fingerprint.notes_run;
+        let caller = cache.caller.clone();
+        let appended = if cache.units.run == "live" && fingerprint.units_len > prev.units_len {
+            read_units_tail(&self.store.units_path(), prev.units_len).ok()
+        } else {
+            None
+        };
+        if appended.is_none()
+            && (fingerprint.units_len != prev.units_len
+                || fingerprint.units_mtime_ms != prev.units_mtime_ms)
+        {
+            self.layers_cache = Some(build_layers(&self.store, fingerprint)?);
+            return Ok(());
+        }
+        if let Some((units, consumed)) = appended {
+            let registry = qol_agent_homes::Registry::load();
+            let Some(cache) = self.layers_cache.as_mut() else {
+                return Ok(());
+            };
+            extend_unit_indexes(cache, &units, &registry);
+            cache.units.items.extend(units);
+            cache.fingerprint.units_len = prev.units_len + consumed;
+            cache.fingerprint.units_mtime_ms = fingerprint.units_mtime_ms;
+        }
+        if notes_changed {
+            let notes = self.store.read_notes()?;
+            let registry = qol_agent_homes::Registry::load();
+            let Some(cache) = self.layers_cache.as_mut() else {
+                return Ok(());
+            };
+            let visible = visible_notes(&notes.items, &cache.units.items, &caller, &registry);
+            cache.notes = notes;
+            cache.visible_notes = visible;
+            cache.notes_index = build_index(&notes_refs(&cache.visible_notes));
+            cache.fingerprint.notes_run = fingerprint.notes_run;
+            cache.notes_dirty = false;
+        }
         Ok(())
     }
+}
+
+fn build_layers(store: &Store, fingerprint: LayerFingerprint) -> Result<CachedLayers> {
+    let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    let registry = qol_agent_homes::Registry::load();
+    let caller = registry.resolve_caller(None);
+    let user_input: Vec<Unit> = units
+        .items
+        .iter()
+        .filter(|unit| {
+            crate::store::in_answer_pool(&unit.kind)
+                && crate::agent_home::visible(unit, &caller, &registry)
+        })
+        .cloned()
+        .collect();
+    let user_units = dedupe_user_units(&user_input);
+    let answer_pool: Vec<Unit> = user_units
+        .iter()
+        .filter(|unit| !is_boilerplate_unit(unit))
+        .cloned()
+        .collect();
+    let visible = visible_notes(&notes.items, &units.items, &caller, &registry);
+    let dedupe_seen: HashSet<String> = user_units
+        .iter()
+        .map(|unit| crate::text::collapse_ws_lower(&unit.text))
+        .collect();
+    let by_key: HashMap<String, usize> = user_units
+        .iter()
+        .enumerate()
+        .map(|(position, unit)| (unit.key.clone(), position))
+        .collect();
+    let indexed_keys: HashSet<String> = user_units.iter().map(|unit| unit.key.clone()).collect();
+    let answer_index = build_index(&doc_refs(&answer_pool));
+    let all_index = build_index(&doc_refs(&user_units));
+    let notes_index = build_index(&notes_refs(&visible));
+    Ok(CachedLayers {
+        fingerprint,
+        caller,
+        units,
+        notes,
+        user_units,
+        answer_pool,
+        visible_notes: visible,
+        answer: answer_index,
+        all: all_index,
+        notes_index,
+        dedupe_seen,
+        by_key,
+        indexed_keys,
+        notes_dirty: false,
+    })
+}
+
+fn extend_unit_indexes(
+    cache: &mut CachedLayers,
+    units: &[Unit],
+    registry: &qol_agent_homes::Registry,
+) {
+    for unit in units {
+        if !crate::store::in_answer_pool(&unit.kind)
+            || !crate::agent_home::visible(unit, &cache.caller, registry)
+            || !cache
+                .dedupe_seen
+                .insert(crate::text::collapse_ws_lower(&unit.text))
+            || !cache.indexed_keys.insert(unit.key.clone())
+        {
+            continue;
+        }
+        let refs = [DocRef {
+            key: unit.key.as_str(),
+            text: unit.text.as_str(),
+        }];
+        cache.all.extend(&refs);
+        cache
+            .by_key
+            .insert(unit.key.clone(), cache.user_units.len());
+        cache.user_units.push(unit.clone());
+        if !is_boilerplate_unit(unit) {
+            cache.answer.extend(&refs);
+            cache.answer_pool.push(unit.clone());
+        }
+    }
+}
+
+fn read_units_tail(path: &Path, from: u64) -> Result<(Vec<Unit>, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() < from {
+        return Err(anyhow::anyhow!("units file shrank while reading its tail"));
+    }
+    file.seek(SeekFrom::Start(from))?;
+    let mut tail = String::new();
+    file.read_to_string(&mut tail)?;
+    let mut units = Vec::new();
+    for line in tail.split('\n').filter(|line| !line.is_empty()) {
+        units.push(serde_json::from_str::<Unit>(line)?);
+    }
+    Ok((units, tail.len() as u64))
 }
 
 fn layer_fingerprint(store: &Store) -> LayerFingerprint {
@@ -312,6 +499,111 @@ mod tests {
         warm.push_units(&[json!({ "key": 7 })]);
 
         assert!(warm.layers_cache.is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warm_indexes_extend_and_rebuild_with_units_growth() {
+        let root = temp_store("index-extend");
+        let first = unit_value("u-1", "first settled fact about the daemon");
+        let second = unit_value("u-2", "second settled fact about the watcher");
+        let boiler = unit_value("u-3", "continued from a previous conversation noise");
+        write_units_file(&root, std::slice::from_ref(&first));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let mut warm = WarmState::open(store, AliasMap::default()).expect("warm opens");
+        warm.layers().expect("layers load");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.all.n, 1);
+        assert_eq!(cache.answer.n, 1);
+        assert!(cache.indexed_keys.contains("u-1"));
+
+        write_units_file(&root, &[first.clone(), second.clone()]);
+        warm.layers().expect("layers refresh");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.units.items.len(), 2);
+        assert_eq!(cache.all.n, 2);
+        assert_eq!(cache.answer.n, 2);
+        assert!(cache.indexed_keys.contains("u-2"));
+
+        write_units_file(&root, &[first.clone(), second.clone(), boiler.clone()]);
+        warm.layers().expect("layers refresh");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.all.n, 3);
+        assert_eq!(cache.answer.n, 2);
+
+        write_units_file(&root, std::slice::from_ref(&first));
+        warm.layers().expect("layers rebuild after shrink");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.units.items.len(), 1);
+        assert_eq!(cache.all.n, 1);
+        assert_eq!(cache.answer.n, 1);
+        assert!(cache.indexed_keys.contains("u-1"));
+        assert!(!cache.indexed_keys.contains("u-2"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warm_notes_index_rebuilds_on_notes_run_change() {
+        let root = temp_store("notes-run");
+        write_units_file(
+            &root,
+            &[unit_value("u-1", "first settled fact about the daemon")],
+        );
+        let run = root.join("notes").join("2026-08-05T10-00-00-000Z");
+        std::fs::create_dir_all(&run).expect("notes run dir");
+        std::fs::write(
+            run.join("notes.jsonl"),
+            "{\"key\":\"n-1\",\"cls\":\"decision\",\"text\":\"Decision: keep the daemon warm\"}\n",
+        )
+        .expect("write notes");
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let mut warm = WarmState::open(store, AliasMap::default()).expect("warm opens");
+        warm.layers().expect("layers load");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.notes_index.n, 1);
+
+        let newer = root.join("notes").join("2026-08-06T10-00-00-000Z");
+        std::fs::create_dir_all(&newer).expect("new notes run dir");
+        std::fs::write(
+            newer.join("notes.jsonl"),
+            "{\"key\":\"n-1\",\"cls\":\"decision\",\"text\":\"Decision: keep the daemon warm\"}\n{\"key\":\"n-2\",\"cls\":\"decision\",\"text\":\"Decision: refresh only the notes index\"}\n",
+        )
+        .expect("write notes");
+        warm.layers().expect("layers refresh");
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        assert_eq!(cache.notes_index.n, 2);
+        assert_eq!(cache.all.n, 1);
+        assert_eq!(cache.units.items.len(), 1);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn push_units_updates_by_key_and_answer_pool() {
+        let root = temp_store("push-derived");
+        let first = unit_value("u-1", "first settled fact about the daemon");
+        write_units_file(&root, std::slice::from_ref(&first));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let mut warm = WarmState::open(store, AliasMap::default()).expect("warm opens");
+        warm.layers().expect("layers load");
+
+        let second = unit_value("u-2", "second settled fact about the watcher");
+        let boiler = unit_value("u-3", "continued from a previous conversation noise");
+        write_units_file(&root, &[first, second.clone(), boiler.clone()]);
+        warm.push_units(&[second, boiler]);
+
+        let cache = warm.layers_cache.as_ref().expect("cache present");
+        let second_position = *cache
+            .by_key
+            .get("u-2")
+            .expect("by_key resolves the pushed unit");
+        assert_eq!(cache.user_units[second_position].key, "u-2");
+        assert_eq!(cache.user_units.len(), 3);
+        assert!(cache.answer_pool.iter().any(|unit| unit.key == "u-1"));
+        assert!(cache.answer_pool.iter().any(|unit| unit.key == "u-2"));
+        assert!(!cache.answer_pool.iter().any(|unit| unit.key == "u-3"));
+
         std::fs::remove_dir_all(&root).ok();
     }
 

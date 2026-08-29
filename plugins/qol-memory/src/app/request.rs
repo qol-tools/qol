@@ -44,8 +44,17 @@ fn ask(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         no_log: bool_field(input, "no_log", "ask")?.unwrap_or(false),
     };
     let mut warm = lock_state(state);
-    let (store, aliases, units, notes) = warm.views()?;
-    let output = crate::ask::run_and_log_with_layers(store, aliases, &req, &log, units, notes)?;
+    let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
+    let (store, aliases, units, notes, indexes) = warm.ask_views(&caller)?;
+    let output = crate::ask::run_and_log_with_layers(
+        store,
+        aliases,
+        &req,
+        &log,
+        units,
+        notes,
+        indexes.as_ref(),
+    )?;
     serde_json::to_value(output).context("failed to encode the qol-memory ask response")
 }
 
@@ -124,8 +133,17 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         no_log: false,
     };
     let mut warm = lock_state(state);
-    let (store, aliases, units, notes) = warm.views()?;
-    let output = crate::ask::run_and_log_with_layers(store, aliases, &req, &log, units, notes)?;
+    let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
+    let (store, aliases, units, notes, indexes) = warm.ask_views(&caller)?;
+    let output = crate::ask::run_and_log_with_layers(
+        store,
+        aliases,
+        &req,
+        &log,
+        units,
+        notes,
+        indexes.as_ref(),
+    )?;
     let flow_rows = crate::ask::rows::from_output(&output, units, notes);
     Ok(json!({
         "verdict": output.verdict,

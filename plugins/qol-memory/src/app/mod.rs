@@ -31,7 +31,7 @@ pub fn run_daemon() -> Result<()> {
     };
     let ingest_state = Arc::clone(&state);
     let ingest_roots = IngestRoots::resolve();
-    std::thread::Builder::new()
+    let ingest_thread = std::thread::Builder::new()
         .name("qol-memory-initial-ingest".to_owned())
         .spawn(move || {
             let paths = ingest::walk_roots(&ingest_roots);
@@ -42,7 +42,6 @@ pub fn run_daemon() -> Result<()> {
                 };
                 let store = warm.store().clone();
                 match ingest::ingest_paths(&store, &ingest_roots, chunk, warm.keys()) {
-                    Ok(report) if report.appended > 0 => warm.invalidate_layers(),
                     Ok(_) => {}
                     Err(error) => {
                         eprintln!("qol-memory: initial ingest failed: {error:#}");
@@ -66,7 +65,7 @@ pub fn run_daemon() -> Result<()> {
                         Ok(guard) => guard,
                         Err(poisoned) => poisoned.into_inner(),
                     };
-                    warm.invalidate_layers();
+                    warm.invalidate_notes_index();
                 }
                 Ok(_) => {}
                 Err(error) if crate::distill::is_busy(&error) => {}
@@ -80,6 +79,22 @@ pub fn run_daemon() -> Result<()> {
             }
         })
         .context("failed to start the qol-memory initial ingest thread")?;
+    if ingest_thread.join().is_err() {
+        eprintln!("qol-memory: initial ingest thread panicked");
+    }
+    {
+        let mut warm = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Err(error) = warm.layers() {
+            eprintln!("qol-memory: initial warm build failed: {error:#}");
+            qol_runtime::probe!(
+                "QOL_MEMORY_DAEMON",
+                "event=initial_warm_failed error={error}"
+            );
+        }
+    }
     let listen_result =
         core_daemon::run_stateful_request_listener(&DAEMON_CONFIG, state, request::handle)
             .context("qol-memory daemon listener failed");

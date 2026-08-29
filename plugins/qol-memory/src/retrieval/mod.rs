@@ -70,6 +70,34 @@ pub fn build_index(items: &[DocRef<'_>]) -> Index {
     }
 }
 
+impl Index {
+    pub fn extend(&mut self, items: &[DocRef<'_>]) {
+        for item in items {
+            let mut tf: HashMap<String, u32> = HashMap::new();
+            for t in tokens(item.text) {
+                *tf.entry(t).or_insert(0) += 1;
+            }
+            for t in tf.keys() {
+                *self.df.entry(t.clone()).or_insert(0) += 1;
+            }
+            let len = utf16_len(item.text);
+            self.total_length += len;
+            self.docs.push(IndexDoc {
+                key: item.key.to_string(),
+                tf,
+                len,
+            });
+        }
+        self.n = self.docs.len();
+        self.avgdl = self.total_length as f64 / std::cmp::max(1, self.n) as f64;
+        self.idf = self
+            .df
+            .iter()
+            .map(|(t, count)| (t.clone(), idf_value(self.n, *count)))
+            .collect();
+    }
+}
+
 pub fn bm25_ranks(query: &str, idx: &Index, k: usize) -> Vec<Ranked> {
     let qt = tokens(query);
     if qt.is_empty() {
@@ -195,6 +223,35 @@ mod tests {
         assert!((ranked[0].score - ranked[1].score).abs() < 1e-15);
         assert_eq!(ranked[2].score, 0.0);
         assert_eq!(bm25_ranks("gamma", &idx, 99).len(), 3);
+    }
+
+    #[test]
+    fn extend_matches_build_index_ranking() {
+        let (head, tail) = CORPUS.split_at(2);
+        let mut extended = build_index(&refs(head));
+        extended.extend(&refs(tail));
+        let built = build_index(&refs(&CORPUS));
+        assert_eq!(extended.n, built.n);
+        assert_eq!(extended.total_length, built.total_length);
+        assert_eq!(extended.avgdl, built.avgdl);
+        assert_eq!(extended.df, built.df);
+        for (term, value) in built.idf.iter() {
+            assert_eq!(extended.idf[term], *value);
+        }
+        for query in ["alpha beta", "gamma delta", "epsilon", "beta gamma zeta"] {
+            let left = bm25_ranks(query, &extended, 0);
+            let right = bm25_ranks(query, &built, 0);
+            assert_eq!(left.len(), right.len());
+            for (l, r) in left.iter().zip(right.iter()) {
+                assert_eq!(l.key, r.key);
+                assert_eq!(l.score, r.score);
+            }
+        }
+        let mut from_empty = build_index(&[]);
+        from_empty.extend(&refs(&CORPUS));
+        assert_eq!(from_empty.n, built.n);
+        assert_eq!(from_empty.total_length, built.total_length);
+        assert_eq!(bm25_ranks("alpha beta", &from_empty, 0)[0].key, "a");
     }
 
     #[test]

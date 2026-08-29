@@ -48,12 +48,7 @@ fn drain(
             };
             let store = warm.store().clone();
             let compactions = match ingest::ingest_paths(&store, &roots, &paths, warm.keys()) {
-                Ok(report) => {
-                    if report.appended > 0 {
-                        warm.invalidate_layers();
-                    }
-                    report.compactions
-                }
+                Ok(report) => report.compactions,
                 Err(error) => {
                     eprintln!("qol-memory: transcript ingest failed: {error:#}");
                     qol_runtime::probe!("QOL_MEMORY_WATCH", "event=ingest_failed error={error}");
@@ -71,7 +66,7 @@ fn drain(
                     Ok(guard) => guard,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                warm.invalidate_layers();
+                warm.invalidate_notes_index();
             }
             Ok(_) => {}
             Err(error) if crate::distill::is_busy(&error) => {}
