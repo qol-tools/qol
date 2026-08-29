@@ -19,6 +19,7 @@ qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-watch.workspace = true
+workspace-hack.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

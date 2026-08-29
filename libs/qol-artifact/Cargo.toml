@@ -9,6 +9,7 @@ description = "Inspection and verification of deployable QoL artifact identity"
 object.workspace = true
 qol-conventions.workspace = true
 target-lexicon.workspace = true
+workspace-hack.workspace = true
 
 [dev-dependencies]
 object = { workspace = true, features = ["write"] }

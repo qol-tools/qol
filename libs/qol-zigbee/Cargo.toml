@@ -11,6 +11,7 @@ crossbeam-channel = "0.5"
 log = "0.4"
 serde.workspace = true
 serialport = { version = "4", default-features = false }
+workspace-hack.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

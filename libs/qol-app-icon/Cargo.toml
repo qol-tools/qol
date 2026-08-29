@@ -6,6 +6,7 @@ license.workspace = true
 description = "Read OS app icon bytes (RGBA) by bundle id or pid"
 
 [dependencies]
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }

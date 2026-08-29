@@ -48,6 +48,7 @@ ratatui = { version = "0.30", default-features = false, features = [
   "underline-color",
 ] }
 ansi-to-tui = "8.0"
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Git sync (libgit2 bindings; vendored so the host needs no system git)

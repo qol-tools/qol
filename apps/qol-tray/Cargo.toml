@@ -125,6 +125,7 @@ qol-migrations.workspace = true
 qol-plugin-api.workspace = true
 qol-profile-sync.workspace = true
 qol-theme.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

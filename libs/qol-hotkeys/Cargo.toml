@@ -6,3 +6,4 @@ license.workspace = true
 description = "Shared hotkey grammar and keycode adapters for qol-tools"
 
 [dependencies]
+workspace-hack.workspace = true

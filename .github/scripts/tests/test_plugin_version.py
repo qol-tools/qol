@@ -247,6 +247,30 @@ class ApplyHostPlanTests(unittest.TestCase):
         self.assertFalse((crate / "plugin.toml").exists(), "host release must not create a plugin.toml")
 
 
+class LoadPackagesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_workspace_hack_dependency_is_skipped(self):
+        (self.root / "Cargo.toml").write_text('[workspace]\nmembers = ["libs/*", "plugins/*"]\n')
+        (self.root / "libs/workspace-hack").mkdir(parents=True)
+        (self.root / "libs/workspace-hack/Cargo.toml").write_text(
+            '[package]\nname = "workspace-hack"\nversion = "0.1.0"\n'
+        )
+        (self.root / "plugins/fixture").mkdir(parents=True)
+        (self.root / "plugins/fixture/Cargo.toml").write_text(
+            '[package]\nname = "fixture-package"\nversion = "1.2.3"\n\n'
+            '[dependencies]\nworkspace-hack.workspace = true\n'
+        )
+        packages = pv.load_packages(self.root)
+        self.assertIn("workspace-hack", packages)
+        self.assertNotIn(pv.WORKSPACE_HACK_PACKAGE, packages["fixture-package"].deps)
+
+
 class VersionBumpCommitTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

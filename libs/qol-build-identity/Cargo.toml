@@ -10,3 +10,4 @@ qol-conventions.workspace = true
 serde_json.workspace = true
 tempfile = "3.8"
 toml.workspace = true
+workspace-hack.workspace = true

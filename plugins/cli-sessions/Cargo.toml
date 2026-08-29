@@ -25,6 +25,7 @@ qol-runtime.workspace = true
 qol-terminal-sessions.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true
+workspace-hack.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

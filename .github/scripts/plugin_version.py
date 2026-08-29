@@ -20,6 +20,7 @@ RELEASABLE_SUBJECT_RE = re.compile(r"^(feat|fix|perf)(\([^)]+\))?!?:", re.IGNORE
 RELEASE_SUBJECT_RE = re.compile(r"^chore\(release\):", re.IGNORECASE)
 
 DEPENDENCY_TABLES = {"dependencies", "build-dependencies"}
+WORKSPACE_HACK_PACKAGE = "workspace-hack"
 PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ROOT_MANIFEST = "Cargo.toml"
 ROOT_LOCKFILE = "Cargo.lock"
@@ -295,6 +296,8 @@ def load_packages(root: Path) -> dict[str, Package]:
         data = toml_at(package.manifest)
         for deps in dependency_tables(data):
             for dep_key, spec in deps.items():
+                if dep_key == WORKSPACE_HACK_PACKAGE:
+                    continue
                 dep_name = dep_key
                 if isinstance(spec, dict):
                     if "path" in spec:

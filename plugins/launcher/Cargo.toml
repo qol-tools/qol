@@ -28,6 +28,7 @@ qol-process.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 toml.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

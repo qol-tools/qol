@@ -11,6 +11,7 @@ qol-plugin-daemon.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-apps.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13"

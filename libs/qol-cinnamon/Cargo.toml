@@ -7,3 +7,6 @@ description = "Cinnamon shell Eval session over D-Bus for qol-tools"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5.16.0", features = ["blocking-api"] }
+
+[dependencies]
+workspace-hack.workspace = true

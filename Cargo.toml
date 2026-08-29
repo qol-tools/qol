@@ -46,6 +46,7 @@ qol-profile-sync = { path = "libs/qol-profile-sync" }
 qol-workspace = { path = "libs/qol-workspace" }
 qol-windowing = { path = "libs/qol-windowing" }
 qol-zigbee = { path = "libs/qol-zigbee" }
+workspace-hack = { path = "libs/workspace-hack" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)
 base64 = "0.22"

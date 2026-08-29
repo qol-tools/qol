@@ -9,3 +9,4 @@ license = "PolyForm-Noncommercial-1.0.0"
 indexmap = { version = "2.12", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
+workspace-hack.workspace = true

@@ -15,6 +15,7 @@ qol-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Git sync (libgit2 bindings; vendored so the host needs no system git)

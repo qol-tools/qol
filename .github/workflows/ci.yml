@@ -108,6 +108,22 @@ jobs:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
 
+      - name: Install cargo-hakari
+        if: runner.os == 'Linux' && matrix.skip != 'true'
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        with:
+          tool: cargo-hakari
+
+      # The workspace-hack crate pins every third-party dependency to the
+      # workspace-wide feature union so package-scoped builds share artifacts
+      # with workspace builds. Both checks exit non-zero when a manifest
+      # changed without regenerating it.
+      - name: Workspace-hack is current
+        if: runner.os == 'Linux' && matrix.skip != 'true'
+        run: |
+          cargo hakari generate --diff
+          cargo hakari manage-deps --dry-run
+
       # A manifest can declare a dependency Cargo.lock does not record. Cargo
       # then rewrites the lockfile on every build, which dirties the tree
       # mid-build and fails the --locked release pipeline after merge.

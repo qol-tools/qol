@@ -10,6 +10,7 @@ anyhow = "1"
 qol-color.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true
+workspace-hack.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

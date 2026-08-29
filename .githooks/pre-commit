@@ -63,6 +63,14 @@ if [ "$staged_manifest" = 1 ]; then
     reject "Cargo.lock does not match the workspace manifests" \
       "cargo metadata >/dev/null && git add Cargo.lock"
   fi
+
+  if command -v cargo-hakari >/dev/null 2>&1; then
+    if ! hakari_error="$(cargo hakari generate --diff 2>&1 >/dev/null)"; then
+      printf '\n%s\n' "$hakari_error" >&2
+      reject "libs/workspace-hack/Cargo.toml does not match the workspace manifests" \
+        "cargo hakari generate && cargo hakari manage-deps --yes && git add libs/workspace-hack/Cargo.toml"
+    fi
+  fi
 fi
 
 exit 0

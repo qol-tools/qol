@@ -24,6 +24,7 @@ qol-gpui.workspace = true
 qol-hotkeys.workspace = true
 qol-platform.workspace = true
 smallvec = "1.13"
+workspace-hack.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

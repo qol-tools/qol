@@ -21,6 +21,7 @@ qol-runtime.workspace = true
 qol-theme.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+workspace-hack.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"

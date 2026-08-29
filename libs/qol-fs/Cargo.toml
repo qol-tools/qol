@@ -7,6 +7,7 @@ description = "Atomic file persistence primitives for qol-tools"
 
 [dependencies]
 tempfile = "3.27"
+workspace-hack.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -15,6 +15,7 @@ qol-runtime.workspace = true
 qol-windowing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+workspace-hack.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

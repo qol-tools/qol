@@ -16,6 +16,7 @@ qol-fs.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
 getrandom.workspace = true
+workspace-hack.workspace = true
 
 [features]
 sandbox = []

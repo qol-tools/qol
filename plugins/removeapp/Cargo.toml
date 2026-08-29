@@ -23,6 +23,7 @@ qol-apps.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 qol-hotkeys.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dirs = "6"

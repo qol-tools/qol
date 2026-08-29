@@ -13,6 +13,7 @@ qol-runtime.workspace = true
 qol-watch.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+workspace-hack.workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"

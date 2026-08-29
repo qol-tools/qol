@@ -6,3 +6,4 @@ description = "Color parsing utilities for qol-tools"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+workspace-hack.workspace = true

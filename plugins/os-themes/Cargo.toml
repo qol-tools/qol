@@ -15,6 +15,7 @@ qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-host-session.workspace = true
 serde.workspace = true
+workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
