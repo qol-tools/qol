@@ -46,6 +46,7 @@ pub struct FlowSession {
     pub rows: Vec<FlowRow>,
     pub generation: u64,
     pub pending: bool,
+    pub in_flight: bool,
 }
 
 pub struct LauncherState {
@@ -93,6 +94,7 @@ impl LauncherState {
             rows: Vec::new(),
             generation: 0,
             pending: false,
+            in_flight: false,
         });
         self.query.clear();
         self.cursor = 0;

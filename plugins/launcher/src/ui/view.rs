@@ -17,6 +17,7 @@ pub fn palette() -> LauncherPalette {
     current_palette()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_bar(
     query: &str,
     launch_error: Option<&str>,
@@ -24,6 +25,7 @@ pub fn search_bar(
     selection: Option<(usize, usize)>,
     selected: usize,
     result_count: usize,
+    pending: bool,
     placeholder: &str,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
@@ -84,14 +86,19 @@ pub fn search_bar(
                     )
                 }),
         )
-        .child(
+        .child(if pending {
+            qol_gpui::Spinner::new("flow-pending", rgb(kit.palette.accent_ink))
+                .size(px(TEXT_BODY))
+                .into_any_element()
+        } else {
             div()
                 .flex_none()
                 .text_color(rgb(kit.palette.text_muted))
                 .text_size(px(TEXT_NANO))
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .child(counter),
-        )
+                .child(counter)
+                .into_any_element()
+        })
 }
 
 const SEARCH_VISIBLE_CHARS: usize = 25;

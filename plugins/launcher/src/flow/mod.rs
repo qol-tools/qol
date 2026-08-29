@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 pub use qol_plugin_api::launcher_flows::FlowEntry;
 
 pub const MAX_ROWS: usize = 8;
+
+const FETCH_IO_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlowRow {
@@ -38,8 +42,17 @@ pub fn parse_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
 pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<Vec<FlowRow>, String> {
     let body = serde_json::json!({ "query": text }).to_string();
     let route = qol_conventions::api_routes::plugin_query(&entry.plugin_id, &entry.query);
-    let (status, response) = qol_plugin_api::host_exec::post_to_daemon(&route, &body)
-        .map_err(|error| error.to_string())?;
+    let (status, response) =
+        qol_plugin_api::host_exec::post_to_daemon_with_timeout(&route, &body, FETCH_IO_TIMEOUT)
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                    format!(
+                        "host did not answer within {} s",
+                        FETCH_IO_TIMEOUT.as_secs()
+                    )
+                }
+                _ => error.to_string(),
+            })?;
     if !(200..300).contains(&status) {
         return Err(format!("host {status}: {response}"));
     }

@@ -200,6 +200,11 @@ impl Render for LauncherView {
             .flow
             .as_ref()
             .map(|session| session.entry.clone());
+        let flow_pending = self
+            .state
+            .flow
+            .as_ref()
+            .is_some_and(|session| session.pending);
         let wheel_row_height = if flow_active {
             FLOW_ROW_HEIGHT
         } else {
@@ -237,6 +242,7 @@ impl Render for LauncherView {
                 self.state.selected_range(),
                 self.state.scroll_list.selected,
                 result_count,
+                flow_pending,
                 flow_prompt.as_deref().unwrap_or("Type to search\u{2026}"),
             ))
             .when(result_count > 0, |root| {

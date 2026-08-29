@@ -6,7 +6,7 @@ use super::input::InputEffect;
 use super::trace;
 use super::LauncherView;
 
-const FLOW_DEBOUNCE: Duration = Duration::from_millis(80);
+const FLOW_DEBOUNCE: Duration = Duration::from_millis(200);
 
 enum ClipboardShortcut {
     Copy,
@@ -73,6 +73,7 @@ impl LauncherView {
                 self.state.clear_launch_error();
                 self.state.reset_results_position();
                 self.schedule_flow_query(cx);
+                cx.notify();
             }
             InputEffect::BoostUp | InputEffect::BoostDown => {
                 let delta = if matches!(effect, InputEffect::BoostUp) {
@@ -228,9 +229,7 @@ impl LauncherView {
         flow.generation += 1;
         flow.pending = true;
         let generation = flow.generation;
-        let entry = flow.entry.clone();
-        let text = self.state.query.clone();
-        if text.trim().is_empty() {
+        if self.state.query.trim().is_empty() {
             flow.rows.clear();
             flow.pending = false;
             cx.notify();
@@ -240,22 +239,35 @@ impl LauncherView {
             let mut async_cx = cx.clone();
             async move {
                 async_cx.background_executor().timer(FLOW_DEBOUNCE).await;
-                let should_fetch = this
-                    .update(&mut async_cx, |view, _cx| {
-                        let current = view
-                            .state
-                            .flow
-                            .as_ref()
-                            .is_some_and(|session| session.generation == generation);
-                        if current {
-                            trace::flow(view, "queried");
-                        }
-                        current
-                    })
-                    .unwrap_or(false);
-                if !should_fetch {
-                    return;
-                }
+                this.update(&mut async_cx, |view, cx| {
+                    let current = view.state.flow.as_ref().is_some_and(|session| {
+                        session.generation == generation && !session.in_flight
+                    });
+                    if current {
+                        view.start_flow_fetch(cx);
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn start_flow_fetch(&mut self, cx: &mut Context<Self>) {
+        let Some(flow) = self.state.flow.as_mut() else {
+            return;
+        };
+        let text = self.state.query.clone();
+        if text.trim().is_empty() {
+            return;
+        }
+        let generation = flow.generation;
+        let entry = flow.entry.clone();
+        flow.in_flight = true;
+        trace::flow(self, "queried");
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
                 let outcome = async_cx
                     .background_spawn(async move { crate::flow::fetch_rows(&entry, &text) })
                     .await;
@@ -263,7 +275,9 @@ impl LauncherView {
                     let Some(session) = view.state.flow.as_mut() else {
                         return;
                     };
+                    session.in_flight = false;
                     if session.generation != generation {
+                        view.start_flow_fetch(cx);
                         return;
                     }
                     let (rows, failure) = match outcome {

@@ -39,21 +39,26 @@ pub fn read_auth_token() -> io::Result<String> {
 }
 
 pub fn get_from_daemon(path: &str) -> io::Result<(u16, String)> {
-    let response = daemon_client()?.request(Method::Get, path, None)?;
+    let response = daemon_client(DAEMON_IO_TIMEOUT)?.request(Method::Get, path, None)?;
     Ok((response.status, response.body))
 }
 
 pub fn post_to_daemon(path: &str, body: &str) -> io::Result<(u16, String)> {
+    post_to_daemon_with_timeout(path, body, DAEMON_IO_TIMEOUT)
+}
+
+pub fn post_to_daemon_with_timeout(
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> io::Result<(u16, String)> {
     let body = if body.is_empty() { "{}" } else { body };
-    let response = daemon_client()?.request(Method::Post, path, Some(body))?;
+    let response = daemon_client(timeout)?.request(Method::Post, path, Some(body))?;
     Ok((response.status, response.body))
 }
 
-fn daemon_client() -> io::Result<Client> {
-    Ok(
-        Client::new(qol_conventions::DEFAULT_PORT, read_auth_token()?)
-            .with_io_timeout(DAEMON_IO_TIMEOUT),
-    )
+fn daemon_client(timeout: Duration) -> io::Result<Client> {
+    Ok(Client::new(qol_conventions::DEFAULT_PORT, read_auth_token()?).with_io_timeout(timeout))
 }
 
 pub fn run_exec(target: &str, action: &str) -> i32 {
