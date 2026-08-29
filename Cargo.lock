@@ -89,6 +89,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tempfile",
+ "workspace-hack",
  "x11rb",
  "zbus",
 ]
@@ -4247,6 +4248,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4333,6 +4335,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5809,6 +5812,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5835,6 +5839,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5851,6 +5856,7 @@ dependencies = [
  "qol-plugin-daemon",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5875,6 +5881,7 @@ dependencies = [
  "serialport",
  "tempfile",
  "tungstenite 0.26.2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5900,6 +5907,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tempfile",
+ "workspace-hack",
  "x11rb",
 ]
 
@@ -5921,6 +5929,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "workspace-hack",
  "x11",
 ]
 
@@ -5947,6 +5956,7 @@ dependencies = [
  "tempfile",
  "trash",
  "wait-timeout",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5959,6 +5969,7 @@ dependencies = [
  "qol-headless",
  "qol-plugin-api",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6017,6 +6028,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows 0.52.0",
+ "workspace-hack",
  "x11",
  "x25519-dalek",
 ]
@@ -6317,6 +6329,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6328,6 +6341,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6338,6 +6352,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6353,6 +6368,7 @@ dependencies = [
  "serde",
  "shell-words",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6363,6 +6379,7 @@ dependencies = [
  "qol-conventions",
  "serde_json",
  "target-lexicon",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6373,18 +6390,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "qol-cinnamon"
 version = "1.0.0"
 dependencies = [
+ "workspace-hack",
  "zbus",
 ]
 
 [[package]]
 name = "qol-color"
 version = "0.2.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "qol-config"
@@ -6400,6 +6422,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6409,6 +6432,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6430,6 +6454,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6447,6 +6472,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6456,6 +6482,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6469,6 +6496,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6480,6 +6508,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6488,6 +6517,7 @@ version = "1.0.0"
 dependencies = [
  "libc",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6515,6 +6545,7 @@ dependencies = [
  "smallvec",
  "taffy",
  "tungstenite 0.26.2",
+ "workspace-hack",
  "x11rb",
 ]
 
@@ -6527,6 +6558,7 @@ dependencies = [
  "qol-headless",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6537,6 +6569,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6556,6 +6589,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6566,11 +6600,15 @@ dependencies = [
  "qol-fs",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "qol-hotkeys"
 version = "1.0.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "qol-log"
@@ -6580,6 +6618,7 @@ dependencies = [
  "qol-config",
  "tempfile",
  "tracing-appender",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6589,6 +6628,7 @@ dependencies = [
  "indexmap",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6611,6 +6651,7 @@ dependencies = [
  "serde_json",
  "sha1 0.10.6",
  "sha2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6631,6 +6672,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6639,6 +6681,7 @@ version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
  "libc",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6655,6 +6698,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6666,6 +6710,7 @@ dependencies = [
  "qol-runtime",
  "qol-theme",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6675,6 +6720,7 @@ dependencies = [
  "libc",
  "tempfile",
  "windows-sys 0.59.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6692,6 +6738,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6705,6 +6752,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6712,6 +6760,7 @@ name = "qol-search"
 version = "0.2.1"
 dependencies = [
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6743,6 +6792,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "workspace-hack",
  "x11rb",
 ]
 
@@ -6758,6 +6808,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6770,6 +6821,7 @@ dependencies = [
  "qol-headless",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6844,6 +6896,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "walkdir",
+ "workspace-hack",
  "x11rb",
 ]
 
@@ -6873,6 +6926,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tokio-tungstenite",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6881,6 +6935,7 @@ version = "1.0.0"
 dependencies = [
  "notify",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6893,6 +6948,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6906,6 +6962,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6918,6 +6975,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -8655,6 +8713,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -10140,6 +10199,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -10738,6 +10798,140 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "arrayvec",
+ "bit-set 0.8.0",
+ "bit-vec 0.8.0",
+ "bitflags 2.13.0",
+ "block2",
+ "bytemuck",
+ "cc",
+ "cipher",
+ "codespan-reporting",
+ "compact_str",
+ "core-foundation-sys 0.8.7",
+ "crc32fast",
+ "crossbeam-utils",
+ "crypto-common 0.1.7",
+ "digest 0.10.7",
+ "displaydoc",
+ "either",
+ "errno",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "half",
+ "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "indexmap",
+ "inout",
+ "itertools 0.14.0",
+ "lazy_static",
+ "libc",
+ "linux-raw-sys 0.12.1",
+ "log",
+ "memchr",
+ "memmap2",
+ "miniz_oxide",
+ "mio",
+ "naga",
+ "nix 0.29.0",
+ "num-complex",
+ "num-traits",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-quartz-core",
+ "object 0.39.1",
+ "once_cell",
+ "percent-encoding",
+ "ppv-lite86",
+ "proc-macro2",
+ "quote",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "rand_core 0.6.4",
+ "rand_distr",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest",
+ "rust-embed",
+ "rust-embed-impl",
+ "rust-embed-utils",
+ "rustix 1.1.4",
+ "rustls",
+ "scopeguard",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "slab",
+ "smallvec",
+ "spin",
+ "stable_deref_trait",
+ "strum 0.26.3",
+ "subtle",
+ "syn 2.0.118",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_edit 0.25.12+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "typenum",
+ "ureq",
+ "url",
+ "uuid",
+ "winapi",
+ "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "winnow 0.7.15",
+ "winnow 1.0.3",
+ "x11",
+ "x11rb",
+ "x11rb-protocol",
+ "yoke",
+ "zbus",
+ "zbus_macros",
+ "zerocopy",
+ "zerofrom",
+ "zeroize",
+ "zvariant",
+ "zvariant_derive",
+ "zvariant_utils",
+]
 
 [[package]]
 name = "writeable"
