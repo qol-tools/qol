@@ -18,6 +18,8 @@ static LAST_RENDER_US: AtomicU64 = AtomicU64::new(0);
 #[cfg(debug_assertions)]
 static RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
 
+static REGISTER_NATIVE_DISPLAY: std::sync::Once = std::sync::Once::new();
+
 impl Focusable for LauncherView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -26,6 +28,10 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        REGISTER_NATIVE_DISPLAY.call_once(|| {
+            qol_gpui::popup_window::register_native_display(window);
+        });
+
         if self.dismiss_requested {
             let from = self.dismiss_requested_from;
             self.dismiss_requested = false;
@@ -34,12 +40,13 @@ impl Render for LauncherView {
         }
 
         if self.dismiss_sub.is_none() {
-            self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss(
+            self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss_held(
                 "launcher",
                 &self.focus_handle,
                 window,
                 |this: &Self| this.blur_guard_until,
                 |this: &Self| this.is_showing,
+                |_| qol_gpui::popup_window::input_held(),
                 cx,
                 |this, window, _cx| {
                     this.hide_to_ghost("blur", window);
@@ -253,6 +260,7 @@ impl Render for LauncherView {
                 result_count,
                 flow_pending,
                 flow_prompt.as_deref().unwrap_or("Type to search\u{2026}"),
+                window,
             ))
             .when(result_count > 0, |root| {
                 if flow_active {

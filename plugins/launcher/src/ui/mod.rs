@@ -95,6 +95,7 @@ impl LauncherView {
     pub(crate) fn hide_to_ghost(&mut self, _from: &'static str, _window: &mut Window) {
         trace::dismiss(self, _from);
         self.set_showing(false);
+        qol_gpui::popup_window::release_input(&self.window_title);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
         qol_gpui::popup_window::restore_composite(&self.window_title);
     }

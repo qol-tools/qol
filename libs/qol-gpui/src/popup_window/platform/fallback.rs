@@ -171,3 +171,15 @@ pub fn dump_ghost_windows(_context: &str) {}
 pub fn window_holds_input_focus(_title: &str) -> Option<bool> {
     None
 }
+
+pub fn register_native_display(_window: &gpui::Window) {}
+
+pub fn hold_input(_title: &str) -> bool {
+    false
+}
+
+pub fn release_input(_title: &str) {}
+
+pub fn input_held() -> bool {
+    false
+}

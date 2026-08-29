@@ -6,6 +6,7 @@ use x11rb::protocol::Event;
 use x11rb::wrapper::ConnectionExt as _;
 
 use std::collections::BTreeMap;
+use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -963,6 +964,185 @@ pub fn release_focus_by_title(title: &str) {
         return;
     };
     release_input_focus(&conn, root, wid);
+}
+
+static INPUT_HELD: AtomicBool = AtomicBool::new(false);
+static INPUT_HOLD: Mutex<Option<InputHold>> = Mutex::new(None);
+const INPUT_HOLD_STOP: &[u8] = b"q";
+
+struct InputHold {
+    stop_write: i32,
+    alive: Arc<AtomicBool>,
+}
+
+pub fn register_native_display(_window: &gpui::Window) {}
+
+pub fn hold_input(title: &str) -> bool {
+    stop_input_hold_thread();
+    INPUT_HELD.store(false, Ordering::Relaxed);
+    let Some((conn, wid, fd)) = arm_input_hold(title) else {
+        qol_runtime::probe!("INPUT_HOLD", "title={title} armed=false");
+        return false;
+    };
+    let mut stop_fds = [0 as libc::c_int; 2];
+    if unsafe { libc::pipe(stop_fds.as_mut_ptr()) } != 0 {
+        qol_runtime::probe!(
+            "INPUT_HOLD",
+            "title={title} wid={wid} armed=false pipe=false"
+        );
+        return false;
+    }
+    let [stop_read, stop_write] = stop_fds;
+    let alive = Arc::new(AtomicBool::new(true));
+    let stored = INPUT_HOLD
+        .lock()
+        .map(|mut slot| {
+            *slot = Some(InputHold {
+                stop_write,
+                alive: Arc::clone(&alive),
+            });
+        })
+        .is_ok();
+    if !stored {
+        unsafe {
+            libc::close(stop_write);
+            libc::close(stop_read);
+        }
+        return false;
+    }
+    INPUT_HELD.store(true, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name("qol-input-hold".to_string())
+        .spawn(move || input_hold_loop(conn, wid, fd, stop_read, alive))
+        .is_ok();
+    if !spawned {
+        stop_input_hold_thread();
+        INPUT_HELD.store(false, Ordering::Relaxed);
+        return false;
+    }
+    qol_runtime::probe!("INPUT_HOLD", "title={title} wid={wid} armed=true");
+    true
+}
+
+pub fn release_input(title: &str) {
+    stop_input_hold_thread();
+    INPUT_HELD.store(false, Ordering::Relaxed);
+    qol_runtime::probe!("INPUT_RELEASE", "title={title}");
+}
+
+pub fn input_held() -> bool {
+    INPUT_HELD.load(Ordering::Relaxed)
+}
+
+fn stop_input_hold_thread() {
+    let hold = INPUT_HOLD.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(hold) = hold {
+        hold.alive.store(false, Ordering::Relaxed);
+        unsafe {
+            libc::write(hold.stop_write, INPUT_HOLD_STOP.as_ptr().cast(), 1);
+            libc::close(hold.stop_write);
+        }
+    }
+}
+
+fn arm_input_hold(title: &str) -> Option<(x11rb::rust_connection::RustConnection, u32, i32)> {
+    let (conn, screen_num) = x11rb::rust_connection::RustConnection::connect(None).ok()?;
+    let root = conn.setup().roots.get(screen_num)?.root;
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST")?;
+    let name_atom = intern(&conn, b"_NET_WM_NAME")?;
+    let utf8_atom = intern(&conn, b"UTF8_STRING")?;
+    let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    if !window_is_visible(&conn, wid) {
+        return None;
+    }
+    let selected = conn
+        .change_window_attributes(
+            wid,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE),
+        )
+        .ok()?
+        .check()
+        .is_ok();
+    if !selected {
+        return None;
+    }
+    conn.flush().ok()?;
+    let fd = conn.stream().as_raw_fd();
+    Some((conn, wid, fd))
+}
+
+fn input_hold_loop(
+    conn: x11rb::rust_connection::RustConnection,
+    wid: u32,
+    fd: i32,
+    stop_read: i32,
+    alive: Arc<AtomicBool>,
+) {
+    let mut refocus_times: Vec<Instant> = Vec::new();
+    'outer: loop {
+        let mut fds = [
+            libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop_read,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if ready < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            break;
+        }
+        if ready == 0 {
+            continue;
+        }
+        if fds[1].revents != 0 {
+            break;
+        }
+        if fds[0].revents & libc::POLLIN == 0 {
+            break;
+        }
+        while let Ok(Some(event)) = conn.poll_for_event() {
+            let Event::FocusOut(focus) = event else {
+                continue;
+            };
+            if focus.event != wid || focus.mode != NotifyMode::NORMAL {
+                continue;
+            }
+            if !alive.load(Ordering::Relaxed) {
+                break 'outer;
+            }
+            if !window_is_visible(&conn, wid) {
+                break 'outer;
+            }
+            let now = Instant::now();
+            refocus_times.retain(|at| now.duration_since(*at) <= Duration::from_millis(500));
+            refocus_times.push(now);
+            if refocus_times.len() > 12 {
+                INPUT_HELD.store(false, Ordering::Relaxed);
+                qol_runtime::probe!(
+                    "INPUT_HOLD_GIVEUP",
+                    "wid={wid} refocuses={}",
+                    refocus_times.len()
+                );
+                break 'outer;
+            }
+            let refocused = conn
+                .set_input_focus(InputFocus::PARENT, wid, x11rb::CURRENT_TIME)
+                .is_ok()
+                && conn.flush().is_ok();
+            qol_runtime::probe!("INPUT_HOLD_REFOCUS", "wid={wid} refocused={refocused}");
+        }
+    }
+    unsafe {
+        libc::close(stop_read);
+    }
 }
 
 fn focus_return_target(

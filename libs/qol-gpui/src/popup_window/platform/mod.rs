@@ -60,6 +60,13 @@ pub use macos::{
     window_holds_input_focus, window_position_by_title, WindowGeometrySession,
 };
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub use fallback::{hold_input, input_held, register_native_display, release_input};
+#[cfg(target_os = "linux")]
+pub use linux::{hold_input, input_held, register_native_display, release_input};
+#[cfg(target_os = "macos")]
+pub use macos::{hold_input, input_held, register_native_display, release_input};
+
 pub fn present_topmost(title: &str) {
     <ActivePlatform as PopupPresentation>::present_topmost(title);
 }

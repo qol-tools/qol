@@ -29,6 +29,7 @@ pub fn search_bar(
     result_count: usize,
     pending: bool,
     placeholder: &str,
+    window: &mut gpui::Window,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
     let counter = if result_count == 0 {
@@ -36,6 +37,19 @@ pub fn search_bar(
     } else {
         format!("{} / {result_count}", selected.min(result_count - 1) + 1)
     };
+    let chevron_font = window.text_style().font().bold();
+    let mono_font = font(qol_gpui::theme::font_mono());
+    let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
+    let trailing = if pending {
+        px(TEXT_BODY).into()
+    } else {
+        shaped_width(window, &counter, mono_font, TEXT_NANO)
+    };
+    let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
+    let visible = visible_char_count(
+        WINDOW_WIDTH - 2.0 * qol_gpui::theme::SPACE_PAD - chevron_width - 2.0 * 10.0 - trailing,
+        mono_advance,
+    );
     div()
         .h(px(HEADER_HEIGHT))
         .w_full()
@@ -75,7 +89,13 @@ pub fn search_bar(
                         .text_size(px(TEXT_BODY))
                         .flex()
                         .items_center()
-                        .child(search_bar_content(query, cursor, selection, placeholder)),
+                        .child(search_bar_content(
+                            query,
+                            cursor,
+                            selection,
+                            placeholder,
+                            visible,
+                        )),
                 )
                 .when_some(launch_error, |field, error| {
                     field.child(
@@ -103,13 +123,12 @@ pub fn search_bar(
         })
 }
 
-const SEARCH_VISIBLE_CHARS: usize = 25;
-
 fn search_bar_content(
     query: &str,
     cursor: usize,
     selection: Option<(usize, usize)>,
     placeholder: &str,
+    visible: usize,
 ) -> AnyElement {
     if query.is_empty() {
         return div()
@@ -119,15 +138,7 @@ fn search_bar_content(
     }
 
     let char_count = query.chars().count();
-
-    let view_start = if char_count <= SEARCH_VISIBLE_CHARS {
-        0
-    } else {
-        cursor
-            .saturating_sub(SEARCH_VISIBLE_CHARS.saturating_sub(2))
-            .min(char_count.saturating_sub(SEARCH_VISIBLE_CHARS))
-    };
-    let view_end = (view_start + SEARCH_VISIBLE_CHARS).min(char_count);
+    let (view_start, view_end) = search_window(char_count, cursor, visible);
 
     let start_byte = char_to_byte(query, view_start);
     let end_byte = char_to_byte(query, view_end);
@@ -181,6 +192,47 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .nth(char_idx)
         .map(|(i, _)| i)
         .unwrap_or(s.len())
+}
+
+fn shaped_width(window: &mut gpui::Window, text: &str, run_font: Font, font_size: f32) -> f32 {
+    window
+        .text_system()
+        .shape_line(
+            SharedString::from(text.to_owned()),
+            px(font_size),
+            &[TextRun {
+                len: text.len(),
+                font: run_font,
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        )
+        .width
+        .into()
+}
+
+fn visible_char_count(available_px: f32, advance_px: f32) -> usize {
+    let fits = if advance_px > 0.0 {
+        (available_px / advance_px).floor() as usize
+    } else {
+        0
+    };
+    fits.max(8)
+}
+
+fn search_window(char_count: usize, cursor: usize, visible: usize) -> (usize, usize) {
+    let view_start = if char_count <= visible {
+        0
+    } else {
+        cursor
+            .saturating_sub(visible.saturating_sub(2))
+            .min(char_count.saturating_sub(visible))
+    };
+    let view_end = (view_start + visible).min(char_count);
+    (view_start, view_end)
 }
 
 pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) -> Div {
@@ -370,4 +422,39 @@ pub fn hint_bar(mode: SearchMode) -> Div {
 
 pub fn bg_color() -> gpui::Rgba {
     rgb(current_palette().bg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{search_window, visible_char_count};
+
+    #[test]
+    fn visible_char_count_floors_the_advance() {
+        assert_eq!(visible_char_count(300.0, 10.0), 30);
+        assert_eq!(visible_char_count(309.0, 10.0), 30);
+    }
+
+    #[test]
+    fn visible_char_count_never_below_eight() {
+        assert_eq!(visible_char_count(79.0, 10.0), 8);
+        assert_eq!(visible_char_count(0.0, 10.0), 8);
+    }
+
+    #[test]
+    fn visible_char_count_zero_advance_holds_eight() {
+        assert_eq!(visible_char_count(300.0, 0.0), 8);
+    }
+
+    #[test]
+    fn search_window_shows_short_query_whole() {
+        assert_eq!(search_window(10, 3, 25), (0, 10));
+        assert_eq!(search_window(25, 25, 25), (0, 25));
+    }
+
+    #[test]
+    fn search_window_follows_the_cursor() {
+        assert_eq!(search_window(60, 5, 25), (0, 25));
+        assert_eq!(search_window(60, 30, 25), (7, 32));
+        assert_eq!(search_window(60, 60, 25), (35, 60));
+    }
 }

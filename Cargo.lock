@@ -4314,6 +4314,7 @@ dependencies = [
  "anyhow",
  "block2",
  "gpui",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -4336,6 +4337,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "workspace-hack",
+ "x11rb",
 ]
 
 [[package]]
@@ -6528,6 +6530,7 @@ dependencies = [
  "futures",
  "gpui",
  "image",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

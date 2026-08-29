@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 use std::sync::{Mutex, Once, PoisonError};
 
 use objc2::rc::Retained;
+use objc2::runtime::NSObject;
+use objc2::AnyThread;
 use objc2_app_kit::{
-    NSApplication, NSColor, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen, NSView,
-    NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationDidResignActiveNotification, NSColor, NSFloatingWindowLevel,
+    NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowDidResignKeyNotification,
+    NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::PopupPresentation;
@@ -150,7 +156,7 @@ fn force_app_frontmost() {
 }
 
 #[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 #[cfg(debug_assertions)]
 const GHOST_COLOR_UNSET: u32 = u32::MAX;
@@ -637,6 +643,153 @@ pub fn reassert_focus_on_main(title: &str) {
     qol_runtime::probe!(
         "FOCUS_REASSERT",
         "title={title} step=reassert-on-main key_window={}",
+        window.isKeyWindow()
+    );
+}
+
+pub fn register_native_display(_window: &gpui::Window) {}
+
+static INPUT_HELD: AtomicBool = AtomicBool::new(false);
+static HOLD_REASSERTS: AtomicU8 = AtomicU8::new(0);
+static HELD_TITLE: Mutex<Option<String>> = Mutex::new(None);
+static HOLD_OBSERVER: AtomicPtr<objc2::runtime::AnyObject> = AtomicPtr::new(std::ptr::null_mut());
+
+const HOLD_REASSERT_LIMIT: u8 = 3;
+
+objc2::define_class!(
+    #[unsafe(super(NSObject))]
+    struct HoldInputObserver;
+
+    impl HoldInputObserver {
+        #[unsafe(method(holdWindowDidResignKey:))]
+        unsafe fn __hold_window_did_resign_key(&self, _notification: &NSNotification) {
+            reassert_held_input("resign_key");
+        }
+
+        #[unsafe(method(holdApplicationDidResignActive:))]
+        unsafe fn __hold_application_did_resign_active(&self, _notification: &NSNotification) {
+            reassert_held_input("resign_active");
+        }
+    }
+);
+
+fn hold_input_observer() -> Retained<HoldInputObserver> {
+    unsafe { objc2::msg_send![HoldInputObserver::alloc(), init] }
+}
+
+fn hold_observer() -> *mut objc2::runtime::AnyObject {
+    static CREATE: Once = Once::new();
+    CREATE.call_once(|| {
+        let observer = hold_input_observer();
+        HOLD_OBSERVER.store(
+            Retained::into_raw(observer) as *mut objc2::runtime::AnyObject,
+            Ordering::Release,
+        );
+    });
+    HOLD_OBSERVER.load(Ordering::Acquire)
+}
+
+unsafe fn as_any_object<T>(value: &T) -> &objc2::runtime::AnyObject {
+    &*(std::ptr::from_ref(value).cast::<objc2::runtime::AnyObject>())
+}
+
+pub fn hold_input(title: &str) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    window.setLevel(NSFloatingWindowLevel);
+    window.setHidesOnDeactivate(false);
+    window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+    let observer = hold_observer();
+    let center = NSNotificationCenter::defaultCenter();
+    unsafe {
+        center.removeObserver(&*observer);
+        center.addObserver_selector_name_object(
+            &*observer,
+            objc2::sel!(holdWindowDidResignKey:),
+            Some(NSWindowDidResignKeyNotification),
+            Some(as_any_object(&*window)),
+        );
+        center.addObserver_selector_name_object(
+            &*observer,
+            objc2::sel!(holdApplicationDidResignActive:),
+            Some(NSApplicationDidResignActiveNotification),
+            None,
+        );
+    }
+    HELD_TITLE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(title.to_owned());
+    HOLD_REASSERTS.store(0, Ordering::Relaxed);
+    INPUT_HELD.store(true, Ordering::Release);
+    qol_runtime::probe!(
+        "HOLD_IN",
+        "title={title} level=floating key_window={} reason={}",
+        window.isKeyWindow(),
+        crate::popup_window::change_reason()
+    );
+    true
+}
+
+pub fn release_input(title: &str) {
+    INPUT_HELD.store(false, Ordering::Release);
+    HOLD_REASSERTS.store(0, Ordering::Relaxed);
+    HELD_TITLE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    let observer = HOLD_OBSERVER.load(Ordering::Acquire);
+    if !observer.is_null() {
+        let center = NSNotificationCenter::defaultCenter();
+        unsafe {
+            center.removeObserver(&*observer);
+        }
+    }
+    qol_runtime::probe!(
+        "HOLD_RELEASE",
+        "title={title} reason={}",
+        crate::popup_window::change_reason()
+    );
+}
+
+pub fn input_held() -> bool {
+    INPUT_HELD.load(Ordering::Acquire)
+}
+
+fn reassert_held_input(reason: &str) {
+    if !INPUT_HELD.load(Ordering::Acquire) {
+        return;
+    }
+    if HOLD_REASSERTS.load(Ordering::Acquire) >= HOLD_REASSERT_LIMIT {
+        return;
+    }
+    let attempt = HOLD_REASSERTS.fetch_add(1, Ordering::AcqRel) + 1;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(title) = HELD_TITLE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .cloned()
+    else {
+        return;
+    };
+    let Some(window) = find_window_by_title(mtm, &title) else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    window.makeKeyAndOrderFront(None);
+    force_app_frontmost();
+    qol_runtime::probe!(
+        "HOLD_REASSERT",
+        "title={title} attempt={attempt} reason={reason} key_window={}",
         window.isKeyWindow()
     );
 }

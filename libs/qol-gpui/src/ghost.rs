@@ -224,8 +224,12 @@ fn debounce_verdict(
     showing: bool,
     gpui_active: bool,
     platform_focus: Option<bool>,
+    held: bool,
 ) -> DebounceVerdict {
     if !showing {
+        return DebounceVerdict::Recover;
+    }
+    if held {
         return DebounceVerdict::Recover;
     }
     if guarded {
@@ -246,6 +250,7 @@ fn schedule_debounced_dismiss<V: 'static>(
     get_blur_guard: std::rc::Rc<impl Fn(&V) -> std::time::Instant + 'static>,
     is_showing: std::rc::Rc<impl Fn(&V) -> bool + 'static>,
     platform_focus: std::rc::Rc<impl Fn(&V) -> Option<bool> + 'static>,
+    input_held: std::rc::Rc<impl Fn(&V) -> bool + 'static>,
     on_dismiss: std::rc::Rc<
         std::cell::RefCell<impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static>,
     >,
@@ -257,6 +262,7 @@ fn schedule_debounced_dismiss<V: 'static>(
             let get_blur_guard = get_blur_guard.clone();
             let is_showing = is_showing.clone();
             let platform_focus = platform_focus.clone();
+            let input_held = input_held.clone();
             let on_dismiss = on_dismiss.clone();
             async move {
                 loop {
@@ -267,6 +273,7 @@ fn schedule_debounced_dismiss<V: 'static>(
                     let get_blur_guard = get_blur_guard.clone();
                     let is_showing = is_showing.clone();
                     let platform_focus = platform_focus.clone();
+                    let input_held = input_held.clone();
                     let on_dismiss = on_dismiss.clone();
                     let outcome = cx.update_window(window_handle, move |_, window, cx| {
                         let Some(handle) = view_handle.upgrade() else {
@@ -276,7 +283,9 @@ fn schedule_debounced_dismiss<V: 'static>(
                         let guarded = std::time::Instant::now() < get_blur_guard(handle.read(cx));
                         let gpui_active = window.is_window_active();
                         let focus_truth = platform_focus(handle.read(cx));
-                        let verdict = debounce_verdict(guarded, showing, gpui_active, focus_truth);
+                        let held = input_held(handle.read(cx));
+                        let verdict =
+                            debounce_verdict(guarded, showing, gpui_active, focus_truth, held);
                         match verdict {
                             DebounceVerdict::Wait => {
                                 trace_dismiss_decision(
@@ -365,10 +374,68 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
     gpui::Subscription,
     Option<gpui::Task<()>>,
 ) {
+    track_dismiss_confirmed_with_held(
+        label,
+        focus_handle,
+        window,
+        get_blur_guard,
+        is_showing,
+        platform_focus,
+        |_| false,
+        cx,
+        on_dismiss,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn track_dismiss_held<V: gpui::Focusable + 'static>(
+    label: &'static str,
+    focus_handle: &gpui::FocusHandle,
+    window: &mut gpui::Window,
+    get_blur_guard: impl Fn(&V) -> std::time::Instant + 'static,
+    is_showing: impl Fn(&V) -> bool + 'static,
+    input_held: impl Fn(&V) -> bool + 'static,
+    cx: &mut gpui::Context<V>,
+    on_dismiss: impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+) -> (
+    gpui::Subscription,
+    gpui::Subscription,
+    Option<gpui::Task<()>>,
+) {
+    track_dismiss_confirmed_with_held(
+        label,
+        focus_handle,
+        window,
+        get_blur_guard,
+        is_showing,
+        |_| None,
+        input_held,
+        cx,
+        on_dismiss,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn track_dismiss_confirmed_with_held<V: gpui::Focusable + 'static>(
+    label: &'static str,
+    focus_handle: &gpui::FocusHandle,
+    window: &mut gpui::Window,
+    get_blur_guard: impl Fn(&V) -> std::time::Instant + 'static,
+    is_showing: impl Fn(&V) -> bool + 'static,
+    platform_focus: impl Fn(&V) -> Option<bool> + 'static,
+    input_held: impl Fn(&V) -> bool + 'static,
+    cx: &mut gpui::Context<V>,
+    on_dismiss: impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+) -> (
+    gpui::Subscription,
+    gpui::Subscription,
+    Option<gpui::Task<()>>,
+) {
     let on_dismiss_cell = std::rc::Rc::new(std::cell::RefCell::new(on_dismiss));
     let get_blur_guard = std::rc::Rc::new(get_blur_guard);
     let is_showing = std::rc::Rc::new(is_showing);
     let platform_focus = std::rc::Rc::new(platform_focus);
+    let input_held = std::rc::Rc::new(input_held);
     let has_been_active = std::rc::Rc::new(std::cell::Cell::new(false));
     let armed_for = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let window_handle = window.to_async(cx).window_handle();
@@ -376,6 +443,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
     let get_blur_guard_1 = get_blur_guard.clone();
     let is_showing_1 = is_showing.clone();
     let platform_focus_1 = platform_focus.clone();
+    let input_held_1 = input_held.clone();
     let on_dismiss_1 = on_dismiss_cell.clone();
     let has_been_active_1 = has_been_active.clone();
     let armed_for_1 = armed_for.clone();
@@ -385,6 +453,10 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
         rearm_on_new_show(&armed_for_1, &has_been_active_1, guard);
         if !showing {
             trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_hidden");
+            return;
+        }
+        if input_held_1(view) {
+            trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_held");
             return;
         }
         if !has_been_active_1.get() {
@@ -403,6 +475,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
             get_blur_guard_1.clone(),
             is_showing_1.clone(),
             platform_focus_1.clone(),
+            input_held_1.clone(),
             on_dismiss_1.clone(),
             cx,
         );
@@ -411,6 +484,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
     let get_blur_guard_2 = get_blur_guard.clone();
     let is_showing_2 = is_showing.clone();
     let platform_focus_2 = platform_focus.clone();
+    let input_held_2 = input_held.clone();
     let on_dismiss_2 = on_dismiss_cell.clone();
     let has_been_active_2 = has_been_active.clone();
     let armed_for_2 = armed_for.clone();
@@ -422,6 +496,10 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
         if !showing {
             let active = if active { "true" } else { "false" };
             trace_dismiss_decision(label, "activation", showing, active, guard, "skip_hidden");
+            return;
+        }
+        if input_held_2(view) {
+            trace_dismiss_decision(label, "activation", showing, "na", guard, "skip_held");
             return;
         }
         if active {
@@ -455,6 +533,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
             get_blur_guard_2.clone(),
             is_showing_2.clone(),
             platform_focus_2.clone(),
+            input_held_2.clone(),
             on_dismiss_2.clone(),
             cx,
         );
@@ -465,12 +544,14 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
         let on_dismiss_3 = on_dismiss_cell.clone();
         let get_blur_guard_3 = get_blur_guard.clone();
         let is_showing_3 = is_showing.clone();
+        let input_held_3 = input_held.clone();
         poll_task = Some(
             cx.spawn(move |view_handle: WeakEntity<V>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 let on_dismiss_3 = on_dismiss_3.clone();
                 let get_blur_guard_3 = get_blur_guard_3.clone();
                 let is_showing_3 = is_showing_3.clone();
+                let input_held_3 = input_held_3.clone();
                 async move {
                     loop {
                         cx.background_executor()
@@ -495,6 +576,18 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
                             })
                             .unwrap_or(false);
                         if guarded {
+                            continue;
+                        }
+                        let held = cx
+                            .update(|cx| {
+                                view_handle
+                                    .upgrade()
+                                    .map(|view_handle| input_held_3(view_handle.read(cx)))
+                            })
+                            .ok()
+                            .flatten()
+                            .unwrap_or(false);
+                        if held {
                             continue;
                         }
                         let has_focus = cx
@@ -611,7 +704,52 @@ mod tests {
         ];
         for (case, guarded, showing, gpui_active, platform_focus, expected) in cases {
             assert_eq!(
-                debounce_verdict(guarded, showing, gpui_active, platform_focus),
+                debounce_verdict(guarded, showing, gpui_active, platform_focus, false),
+                expected,
+                "case: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn debounce_verdict_recovers_while_input_is_held() {
+        let cases = [
+            (
+                "held while showing, gpui inactive, no platform truth: recovered",
+                false,
+                true,
+                false,
+                None,
+                DebounceVerdict::Recover,
+            ),
+            (
+                "held while showing, platform lost focus: recovered",
+                false,
+                true,
+                true,
+                Some(false),
+                DebounceVerdict::Recover,
+            ),
+            (
+                "held while guarded: recovered",
+                true,
+                true,
+                false,
+                None,
+                DebounceVerdict::Recover,
+            ),
+            (
+                "held while no longer showing: recovered",
+                false,
+                false,
+                false,
+                Some(false),
+                DebounceVerdict::Recover,
+            ),
+        ];
+        for (case, guarded, showing, gpui_active, platform_focus, expected) in cases {
+            assert_eq!(
+                debounce_verdict(guarded, showing, gpui_active, platform_focus, true),
                 expected,
                 "case: {case}"
             );
