@@ -594,10 +594,21 @@ pub fn run_with_layers(
             unit_cov >= gates.unit_cov
                 && top.score >= gates.unit_score
                 && !is_boilerplate_unit_user(top)
-                && raw_unit_margin >= gates.unit_margin
+                && (top.kind == crate::ingest::CAPTURE_KIND || raw_unit_margin >= gates.unit_margin)
         });
+        let capture_outranks_note = unit_winner
+            && unit_top
+                .as_ref()
+                .is_some_and(|top| top.kind == crate::ingest::CAPTURE_KIND)
+            && unit_cov
+                > phrased_coverage(
+                    &qtokens,
+                    note_resolved
+                        .as_ref()
+                        .map(|resolved| resolved.text.as_str()),
+                );
 
-        if note_winner {
+        if note_winner && !capture_outranks_note {
             let resolved = note_resolved
                 .as_ref()
                 .expect("winner keeps a resolved note");
@@ -1820,6 +1831,201 @@ mod tests {
             answer.key,
             capture["key"].as_str().expect("capture key string")
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_answers_from_a_capture_shadowed_by_its_source_transcript() {
+        let root = temp_root("capture-shadow");
+        let capture = crate::ingest::capture_unit(
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "/tmp/proj",
+            "2026-08-01T09:00:00.000Z",
+        );
+        let shadow = json!({
+            "key": "u-source",
+            "kind": "user",
+            "ts": "2026-08-01T08:30:00.000Z",
+            "text": "the ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz crystals were catalogued during the last survey"
+        });
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![capture.to_string(), shadow.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        assert_eq!(out.confidence, "medium");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.source_kind, "capture");
+        assert_eq!(
+            answer.key,
+            capture["key"].as_str().expect("capture key string")
+        );
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(margin < Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_keeps_the_margin_gate_for_user_units() {
+        let root = temp_root("user-margin");
+        let top_user = json!({
+            "key": "u-a",
+            "kind": "user",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+        });
+        let shadow_user = json!({
+            "key": "u-b",
+            "kind": "user",
+            "ts": "2026-08-01T08:00:00.000Z",
+            "text": "the ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz crystals were catalogued during the last survey"
+        });
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![top_user.to_string(), shadow_user.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "candidates");
+        assert_eq!(out.answer, None);
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(margin < Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_prefers_a_full_coverage_capture_over_a_half_coverage_note() {
+        let root = temp_root("capture-half-note");
+        let capture = crate::ingest::capture_unit(
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "/tmp/proj",
+            "2026-08-01T09:00:00.000Z",
+        );
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![capture.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let extra = json!({
+            "key": "n-half",
+            "cls": "decision",
+            "source_kind": "decision",
+            "source_ts": "2026-08-04T09:00:00.000Z",
+            "text": "Decision: ember quartz flint cobalt onyx basalt garnet were catalogued in the survey ledger"
+        });
+        write_newest_run_notes(&root, &format!("{}\n{}", fixture_notes(), extra));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.source_kind, "capture");
+        assert_eq!(answer.key, capture["key"].as_str().unwrap());
+        assert_eq!(
+            out.reason,
+            "units layer answer (agent capture), confidence capped medium"
+        );
+        assert_eq!(out.signals.note_token_coverage, 0.5);
+        assert!(out.signals.top_note_score.expect("note score") >= Gates::DEFAULTS.note_score);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_keeps_a_full_coverage_note_ahead_of_a_capture() {
+        let root = temp_root("note-full-capture");
+        let capture = crate::ingest::capture_unit(
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "/tmp/proj",
+            "2026-08-01T09:00:00.000Z",
+        );
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![capture.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let extra = json!({
+            "key": "n-full",
+            "cls": "decision",
+            "source_kind": "decision",
+            "source_ts": "2026-08-04T09:00:00.000Z",
+            "text": "Decision: ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz are catalogued"
+        });
+        write_newest_run_notes(&root, &format!("{}\n{}", fixture_notes(), extra));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("note answer");
+        assert_eq!(answer.layer, "note");
+        assert_eq!(answer.key, "n-full");
         fs::remove_dir_all(&root).ok();
     }
 }

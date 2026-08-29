@@ -48,6 +48,24 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         used.insert(answer.key.clone());
     }
 
+    if let Some(units_out) = &output.units {
+        for unit in units_out {
+            if rows.len() >= MAX_ROWS {
+                break;
+            }
+            if unit.kind == crate::ingest::CAPTURE_KIND && !used.contains(&unit.key) {
+                rows.push(FlowRow {
+                    title: title_of(&unit.text),
+                    subtitle: Some(format!("{} {}", unit.kind, date_of(unit.ts.as_deref()))),
+                    copy: unit.text.clone(),
+                    key: unit.key.clone(),
+                    kind: unit.kind.clone(),
+                });
+                used.insert(unit.key.clone());
+            }
+        }
+    }
+
     for recall in &output.recalled {
         if rows.len() >= MAX_ROWS {
             break;
@@ -147,7 +165,7 @@ mod tests {
         }
     }
 
-    fn output_fixture(recalled: Vec<Value>) -> AskOutput {
+    fn output_fixture(answer_key: &str, recalled: Vec<Value>, units: Value) -> AskOutput {
         serde_json::from_value(json!({
             "query": "how does the flow render",
             "verdict": "answered",
@@ -167,7 +185,7 @@ mod tests {
             "answer": {
                 "text": "the   clipboard ring survives tray restarts",
                 "layer": "note",
-                "key": "n-ans",
+                "key": answer_key,
                 "cls": "decision",
                 "source_kind": "decision",
                 "source_ts": "2026-08-04T08:00:00.000Z",
@@ -203,9 +221,62 @@ mod tests {
                     }
                 ]
             },
+            "units": units,
             "notes": []
         }))
         .expect("fixture parses into AskOutput")
+    }
+
+    #[test]
+    fn from_output_surfaces_capture_units_after_the_answer() {
+        let capture_unit_json = json!({
+            "key": "c-1",
+            "score": 12.0,
+            "kind": "capture",
+            "text": "captured fact text",
+            "ts": "2026-08-02T12:00:00.000Z",
+            "snippet": "captured fact text"
+        });
+        let output = output_fixture(
+            "n-ans",
+            vec![],
+            json!([
+                capture_unit_json,
+                {
+                    "key": "u-9",
+                    "score": 11.0,
+                    "kind": "user",
+                    "text": "user unit text",
+                    "snippet": "user unit text"
+                }
+            ]),
+        );
+        let empty_units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![],
+        };
+        let empty_notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &empty_units, &empty_notes);
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].kind, "answer");
+        assert_eq!(rows[1].kind, "capture");
+        assert_eq!(rows[1].key, "c-1");
+        assert_eq!(rows[1].subtitle.as_deref(), Some("capture 2026-08-02"));
+        assert_eq!(rows[1].copy, "captured fact text");
+        assert_eq!(rows[2].kind, "skill");
+
+        let duplicate_output = output_fixture("c-1", vec![], json!([capture_unit_json]));
+        let duplicate_rows = from_output(&duplicate_output, &empty_units, &empty_notes);
+        assert_eq!(duplicate_rows.len(), 2);
+        assert_eq!(duplicate_rows[0].kind, "answer");
+        assert_eq!(duplicate_rows[0].key, "c-1");
+        assert_eq!(duplicate_rows[1].kind, "skill");
     }
 
     #[test]
@@ -233,7 +304,7 @@ mod tests {
                 "score": 2.0
             }));
         }
-        let output = output_fixture(recalled);
+        let output = output_fixture("n-ans", recalled, Value::Null);
         let units = UnitsLayer {
             run: "live".to_string(),
             path: PathBuf::from("units.jsonl"),
