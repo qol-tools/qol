@@ -622,4 +622,46 @@ mod tests {
         assert!(rows.iter().all(|row| row.key != "gone"));
         assert!(rows.iter().all(|row| row.kind != "skill"));
     }
+
+    #[test]
+    fn recalled_assistant_unit_resolves_to_an_assistant_row() {
+        let output = output_fixture(
+            "n-ans",
+            vec![json!({
+                "key": "a-1",
+                "cls": "assistant",
+                "score": 6.0,
+                "source_ts": "2026-08-02T12:00:00.000Z",
+                "layer": "unit"
+            })],
+            json!([
+                {
+                    "key": "a-1",
+                    "score": 6.0,
+                    "kind": "assistant",
+                    "text": "assistant reply body",
+                    "ts": "2026-08-02T12:00:00.000Z",
+                    "snippet": "assistant reply body"
+                }
+            ]),
+        );
+        let units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![unit("a-1", "assistant", "assistant reply body")],
+        };
+        let notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].kind, "answer");
+        assert_eq!(rows[1].kind, "assistant");
+        assert_eq!(rows[1].key, "a-1");
+        assert_eq!(rows[1].subtitle.as_deref(), Some("assistant 2026-08-02"));
+        assert_eq!(rows[1].copy, "assistant reply body");
+        assert_eq!(rows[1].trail[0].tag, "assistant");
+    }
 }

@@ -168,18 +168,18 @@ pub struct UnitsLayer {
     pub items: Vec<Unit>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Note {
     pub key: String,
     #[serde(default)]
     pub cls: String,
     #[serde(default)]
     pub text: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_ts: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
 }
 
@@ -195,10 +195,26 @@ pub const BOILERPLATE_MARKERS: [&str; 4] = [
     "Review this change for security vulnerabilities",
 ];
 
-pub const ANSWER_POOL_KINDS: [&str; 2] = ["user", "capture"];
+pub const CLAUDE_COMPACTION_MARKER: &str =
+    "This session is being continued from a previous conversation";
+pub const ANSWER_POOL_KINDS: [&str; 3] = ["user", "capture", "assistant"];
+pub const CLAIM_UNIT_KINDS: [&str; 2] = ["capture", "assistant"];
+pub const CLAIM_NOTE_CLS: &str = "decision";
 
 pub fn in_answer_pool(kind: &str) -> bool {
     ANSWER_POOL_KINDS.contains(&kind)
+}
+
+pub fn is_claim_unit_kind(kind: &str) -> bool {
+    CLAIM_UNIT_KINDS.contains(&kind)
+}
+
+pub fn is_claim_note(note: &Note) -> bool {
+    note.cls == CLAIM_NOTE_CLS
+}
+
+pub fn is_compaction_unit(unit: &Unit) -> bool {
+    unit.kind == "compaction" || unit.text.starts_with(CLAUDE_COMPACTION_MARKER)
 }
 
 pub fn dedupe_user_units(units: &[Unit]) -> Vec<Unit> {
@@ -365,12 +381,68 @@ mod tests {
     }
 
     #[test]
-    fn answer_pool_accepts_user_and_capture_only() {
+    fn answer_pool_accepts_user_capture_and_assistant_only() {
         assert!(in_answer_pool("user"));
         assert!(in_answer_pool("capture"));
+        assert!(in_answer_pool("assistant"));
         assert!(!in_answer_pool("compaction"));
         assert!(!in_answer_pool("observation"));
         assert!(!in_answer_pool(""));
+    }
+
+    #[test]
+    fn claim_and_compaction_predicates_follow_the_shared_contract() {
+        assert!(is_claim_unit_kind("capture"));
+        assert!(is_claim_unit_kind("assistant"));
+        assert!(!is_claim_unit_kind("user"));
+        assert!(!is_claim_unit_kind("compaction"));
+        assert!(!is_claim_unit_kind(""));
+
+        let mut compaction = unit("c-1", Some("2026-08-01T09:00:00.000Z"), "compaction body");
+        compaction.kind = "compaction".to_string();
+        assert!(is_compaction_unit(&compaction));
+        assert!(is_compaction_unit(&unit(
+            "c-2",
+            Some("2026-08-01T09:00:00.000Z"),
+            "This session is being continued from a previous conversation that ran out of context"
+        )));
+        assert!(!is_compaction_unit(&unit("c-3", None, "plain user unit")));
+
+        let decision = Note {
+            key: "n-1".to_string(),
+            cls: "decision".to_string(),
+            text: "pick rust".to_string(),
+            source_key: None,
+            source_ts: None,
+            source_kind: None,
+        };
+        let path = Note {
+            key: "n-2".to_string(),
+            cls: "path".to_string(),
+            text: "src/lib.rs".to_string(),
+            source_key: None,
+            source_ts: None,
+            source_kind: None,
+        };
+        assert!(is_claim_note(&decision));
+        assert!(!is_claim_note(&path));
+    }
+
+    #[test]
+    fn note_serialization_omits_absent_optional_fields() {
+        let decision = Note {
+            key: "n-1".to_string(),
+            cls: "decision".to_string(),
+            text: "pick rust".to_string(),
+            source_key: None,
+            source_ts: None,
+            source_kind: None,
+        };
+        let value = serde_json::to_value(&decision).expect("note serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({"key": "n-1", "cls": "decision", "text": "pick rust"})
+        );
     }
 
     #[test]

@@ -53,6 +53,31 @@ pub fn run_daemon() -> Result<()> {
                     }
                 }
             }
+            let store = {
+                let warm = match ingest_state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                warm.store().clone()
+            };
+            match crate::distill::run(&store) {
+                Ok(report) if !report.unchanged => {
+                    let mut warm = match ingest_state.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    warm.invalidate_layers();
+                }
+                Ok(_) => {}
+                Err(error) if crate::distill::is_busy(&error) => {}
+                Err(error) => {
+                    eprintln!("qol-memory: initial distill failed: {error:#}");
+                    qol_runtime::probe!(
+                        "QOL_MEMORY_DAEMON",
+                        "event=initial_distill_failed error={error}"
+                    );
+                }
+            }
         })
         .context("failed to start the qol-memory initial ingest thread")?;
     let listen_result =

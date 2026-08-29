@@ -22,6 +22,10 @@ pub mod rows;
 const SNIPPET_WINDOW: usize = 240;
 const SKILL_CAP: usize = 2048;
 const TOP_NOTE_LIMIT: usize = 5;
+const NOTE_FETCH_LIMIT: usize = 40;
+const RELATED_LIMIT: usize = 5;
+const RECALLED_UNIT_LIMIT: usize = 5;
+const RECALLED_LIMIT: usize = 8;
 
 #[derive(Debug)]
 pub struct AskRequest {
@@ -406,26 +410,34 @@ pub fn run_with_layers(
         ))
     };
     let notes_query = qtokens.join(" ");
-    let top_notes: Vec<NoteHit> = match &notes_idx {
-        Some(idx) => bm25_ranks(&notes_query, idx, TOP_NOTE_LIMIT)
+    let ranked_note_hits: Vec<(&crate::store::Note, f64)> = match &notes_idx {
+        Some(idx) => bm25_ranks(&notes_query, idx, NOTE_FETCH_LIMIT)
             .into_iter()
             .filter_map(|ranked| {
                 notes
                     .iter()
                     .find(|note| note.key == ranked.key)
-                    .map(|note| NoteHit {
-                        key: note.key.clone(),
-                        cls: note.cls.clone(),
-                        text: note.text.clone(),
-                        source_key: note.source_key.clone(),
-                        source_ts: note.source_ts.clone(),
-                        source_kind: note.source_kind.clone(),
-                        score: ranked.score,
-                    })
+                    .map(|note| (note, ranked.score))
             })
             .collect(),
         None => Vec::new(),
     };
+    let top_notes: Vec<NoteHit> = ranked_note_hits
+        .iter()
+        .filter(|(note, _)| crate::store::is_claim_note(note))
+        .take(TOP_NOTE_LIMIT)
+        .map(|(note, score)| note_hit(note, *score))
+        .collect();
+    let related: Vec<Related> = ranked_note_hits
+        .iter()
+        .filter(|(note, _)| !crate::store::is_claim_note(note))
+        .take(RELATED_LIMIT)
+        .map(|(note, _)| Related {
+            text: note.text.clone(),
+            cls: note.cls.clone(),
+            source_ts: note.source_ts.clone(),
+        })
+        .collect();
 
     let skills_out = build_skills_out(store, &req.query, req.brief)?;
 
@@ -566,7 +578,6 @@ pub fn run_with_layers(
     let mut verdict = "no-memory".to_string();
     let mut confidence = "none".to_string();
     let mut answer: Option<Answer> = None;
-    let mut related: Vec<Related> = Vec::new();
 
     let below_floor = |score: Option<f64>| score.unwrap_or(0.0) < gates.floor;
 
@@ -651,20 +662,6 @@ pub fn run_with_layers(
                     ""
                 }
             );
-            if has_multi_intent {
-                let second = top_notes.iter().find(|hit| {
-                    hit.key != resolved.key
-                        && hit.family_key() != resolved.family_key()
-                        && distinct_score(&qtokens, &hit.text).0 >= 2
-                });
-                if let Some(hit) = second {
-                    related.push(Related {
-                        text: hit.text.clone(),
-                        cls: hit.cls.clone(),
-                        source_ts: hit.source_ts.clone(),
-                    });
-                }
-            }
         } else if unit_winner {
             let top = unit_top.as_ref().expect("unit winner keeps a top unit");
             answer = Some(Answer {
@@ -681,10 +678,12 @@ pub fn run_with_layers(
             });
             verdict = "answered".to_string();
             confidence = "medium".to_string();
-            reason = if top.kind == "capture" {
+            reason = if top.kind == crate::ingest::CAPTURE_KIND {
                 "units layer answer (agent capture), confidence capped medium".to_string()
+            } else if top.kind == crate::ingest::ASSISTANT_KIND {
+                "units layer answer (assistant reply), confidence capped medium".to_string()
             } else {
-                "units layer answer (user's own words), confidence capped medium".to_string()
+                "units layer answer (user transcript), confidence capped medium".to_string()
             };
         } else {
             verdict = "candidates".to_string();
@@ -705,7 +704,7 @@ pub fn run_with_layers(
             .map(|notes_run| text::run_dir_millis(notes_run) < text::run_dir_millis(&units.run))
             .unwrap_or(false);
 
-    let recalled: Vec<Recalled> = top_notes
+    let mut recalled: Vec<Recalled> = top_notes
         .iter()
         .map(|note| Recalled {
             key: note.key.clone(),
@@ -713,8 +712,30 @@ pub fn run_with_layers(
             score: text::to_fixed2(note.score),
             source_kind: note.source_kind.clone(),
             source_ts: note.source_ts.clone(),
+            layer: Some("note".to_string()),
         })
         .collect();
+    recalled.extend(
+        ranked_all
+            .iter()
+            .filter(|hit| crate::store::is_claim_unit_kind(&hit.kind))
+            .take(RECALLED_UNIT_LIMIT)
+            .map(|hit| Recalled {
+                key: hit.key.clone(),
+                cls: hit.kind.clone(),
+                score: text::to_fixed2(hit.score),
+                source_kind: Some(hit.kind.clone()),
+                source_ts: hit.ts.clone(),
+                layer: Some("unit".to_string()),
+            }),
+    );
+    recalled.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    recalled.truncate(RECALLED_LIMIT);
 
     let out_notes: Vec<NoteOut> = top_notes
         .iter()
@@ -777,6 +798,7 @@ pub fn run_with_layers(
             live_units,
             stale_layer,
             recency_resolved: note_superseded.as_ref().map(|list| !list.is_empty()),
+            has_multi_intent,
         },
         counts: Counts {
             units: user_units.len(),
@@ -834,6 +856,18 @@ pub(crate) fn notes_refs(items: &[crate::store::Note]) -> Vec<DocRef<'_>> {
             text: item.text.as_str(),
         })
         .collect()
+}
+
+fn note_hit(note: &crate::store::Note, score: f64) -> NoteHit {
+    NoteHit {
+        key: note.key.clone(),
+        cls: note.cls.clone(),
+        text: note.text.clone(),
+        source_key: note.source_key.clone(),
+        source_ts: note.source_ts.clone(),
+        source_kind: note.source_kind.clone(),
+        score,
+    }
 }
 
 fn build_skills_out(store: &Store, query: &str, brief: bool) -> Result<SkillsOut> {
@@ -1257,6 +1291,8 @@ pub struct Recalled {
     pub source_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq)]
@@ -1280,6 +1316,8 @@ pub struct Signals {
     pub live_units: bool,
     pub stale_layer: bool,
     pub recency_resolved: Option<bool>,
+    #[serde(default)]
+    pub has_multi_intent: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -1387,8 +1425,8 @@ mod tests {
 
     fn fixture_notes() -> String {
         let mut rows: Vec<String> = Vec::new();
-        rows.push("{\"key\":\"n-count-new\",\"cls\":\"count\",\"source_kind\":\"decision-deter\",\"source_ts\":\"2026-08-06T08:00:00.000Z\",\"text\":\"count 4101 user units in the corpus\"}".to_string());
-        rows.push("{\"key\":\"n-count-old\",\"cls\":\"count\",\"source_kind\":\"decision-deter\",\"source_ts\":\"2026-08-02T08:00:00.000Z\",\"text\":\"count 3922 user units in the corpus\"}".to_string());
+        rows.push("{\"key\":\"n-count-new\",\"cls\":\"decision\",\"source_kind\":\"decision-deter\",\"source_ts\":\"2026-08-06T08:00:00.000Z\",\"text\":\"count 4101 user units in the corpus\"}".to_string());
+        rows.push("{\"key\":\"n-count-old\",\"cls\":\"decision\",\"source_kind\":\"decision-deter\",\"source_ts\":\"2026-08-02T08:00:00.000Z\",\"text\":\"count 3922 user units in the corpus\"}".to_string());
         rows.push("{\"key\":\"n-decision\",\"cls\":\"decision\",\"source_kind\":\"decision\",\"source_ts\":\"2026-08-04T08:00:00.000Z\",\"text\":\"Decision: the plugin clipboard history ring now persists across tray restarts and survives the sandbox teardown\"}".to_string());
         for i in 0..26usize {
             rows.push(format!(
@@ -1711,7 +1749,7 @@ mod tests {
         );
         assert_eq!(
             out.reason,
-            "notes layer count answer, margin 2.74x, recency-resolved (superseded a stale fact)"
+            "notes layer decision answer, margin 2.74x, recency-resolved (superseded a stale fact)"
         );
         let superseded = answer
             .superseded
@@ -2026,6 +2064,245 @@ mod tests {
         let answer = out.answer.as_ref().expect("note answer");
         assert_eq!(answer.layer, "note");
         assert_eq!(answer.key, "n-full");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn path_notes_stay_out_of_recalled_and_answer_and_surface_as_related() {
+        let root = temp_root("path-related");
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines: Vec<String> = Vec::new();
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let decision = json!({
+            "key": "n-ledger",
+            "cls": "decision",
+            "source_kind": "decision",
+            "source_ts": "2026-08-04T09:00:00.000Z",
+            "text": "Decision: ember quartz flint cobalt onyx basalt garnet are catalogued in the survey ledger"
+        });
+        let path_one = json!({
+            "key": "n-path-1",
+            "cls": "path",
+            "source_kind": "count",
+            "source_ts": "2026-08-03T09:00:00.000Z",
+            "text": "path src/harvest.rs ember ember quartz quartz flint flint cobalt cobalt onyx onyx basalt basalt garnet garnet pyrite pyrite mentions"
+        });
+        let path_two = json!({
+            "key": "n-path-2",
+            "cls": "path",
+            "source_kind": "count",
+            "source_ts": "2026-08-03T10:00:00.000Z",
+            "text": "path src/render.rs ember ember quartz quartz flint flint cobalt cobalt onyx onyx basalt basalt garnet garnet pyrite pyrite mentions"
+        });
+        write_newest_run_notes(
+            &root,
+            &format!(
+                "{}\n{}\n{}\n{}",
+                fixture_notes(),
+                decision,
+                path_one,
+                path_two
+            ),
+        );
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("note answer");
+        assert_eq!(answer.layer, "note");
+        assert_eq!(answer.key, "n-ledger");
+        assert!(!out
+            .recalled
+            .iter()
+            .any(|recall| recall.cls == "path" || recall.key.starts_with("n-path")));
+        assert!(out
+            .related
+            .iter()
+            .any(|rel| rel.cls == "path" && rel.text.contains("src/harvest.rs")));
+        assert_eq!(out.related.len(), RELATED_LIMIT);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_answers_from_an_assistant_unit_and_recalls_it_as_a_claim() {
+        let root = temp_root("assistant-unit");
+        let reply = json!({
+            "key": "a-1",
+            "kind": "assistant",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+        });
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![reply.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.source_kind, "assistant");
+        assert_eq!(
+            out.reason,
+            "units layer answer (assistant reply), confidence capped medium"
+        );
+        let recalled = out
+            .recalled
+            .iter()
+            .find(|recall| recall.key == "a-1")
+            .expect("assistant unit recalled");
+        assert_eq!(recalled.layer.as_deref(), Some("unit"));
+        assert_eq!(recalled.cls, "assistant");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_keeps_the_margin_gate_for_assistant_units() {
+        let root = temp_root("assistant-margin");
+        let top_reply = json!({
+            "key": "a-1",
+            "kind": "assistant",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+        });
+        let shadow_reply = json!({
+            "key": "a-2",
+            "kind": "assistant",
+            "ts": "2026-08-01T08:00:00.000Z",
+            "text": "the ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz crystals were catalogued during the last survey"
+        });
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines = vec![top_reply.to_string(), shadow_reply.to_string()];
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "candidates");
+        assert_eq!(out.answer, None);
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(margin < Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn recalled_merges_claim_notes_and_units_score_ordered_and_caps_at_eight() {
+        let root = temp_root("recalled-merge");
+        let mut lines: Vec<String> = Vec::new();
+        for index in 0..6usize {
+            lines.push(
+                json!({
+                    "key": format!("a-{index:02}"),
+                    "kind": "assistant",
+                    "ts": "2026-08-01T09:00:00.000Z",
+                    "text": format!(
+                        "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz reply {index:02}"
+                    )
+                })
+                .to_string(),
+            );
+        }
+        lines.push(
+            json!({
+                "key": "a-off",
+                "kind": "assistant",
+                "ts": "2026-08-01T09:00:00.000Z",
+                "text": "nothing remotely relevant lives here"
+            })
+            .to_string(),
+        );
+        write_units(&root, &lines.join("\n"));
+        let mut rows: Vec<String> = Vec::new();
+        for index in 0..6usize {
+            rows.push(
+                json!({
+                    "key": format!("n-d-{index}"),
+                    "cls": "decision",
+                    "source_kind": "decision",
+                    "source_ts": "2026-08-04T09:00:00.000Z",
+                    "text": format!(
+                        "Decision: ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz ledger {index}"
+                    )
+                })
+                .to_string(),
+            );
+        }
+        write_newest_run_notes(&root, &rows.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.recalled.len(), RECALLED_LIMIT);
+        let mut previous = f64::INFINITY;
+        for recall in &out.recalled {
+            assert!(recall.score <= previous);
+            previous = recall.score;
+            assert!(matches!(
+                recall.layer.as_deref(),
+                Some("note") | Some("unit")
+            ));
+        }
+        assert!(out
+            .recalled
+            .iter()
+            .any(|recall| recall.layer.as_deref() == Some("note")));
+        assert!(out
+            .recalled
+            .iter()
+            .any(|recall| recall.layer.as_deref() == Some("unit")));
+        assert!(!out.recalled.iter().any(|recall| recall.key == "a-off"));
         fs::remove_dir_all(&root).ok();
     }
 }

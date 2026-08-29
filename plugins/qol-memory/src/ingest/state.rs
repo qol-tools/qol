@@ -17,6 +17,8 @@ pub struct FileState {
     pub head: String,
     pub session: Option<String>,
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub parser: u32,
 }
 
 #[derive(Debug, Default)]

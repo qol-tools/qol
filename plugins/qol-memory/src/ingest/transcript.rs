@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::ingest::redact::redact;
-use crate::ingest::unit_key;
+use crate::ingest::{unit_key, ASSISTANT_KIND, COMPACTION_KIND};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParseCursor {
@@ -16,6 +16,12 @@ pub struct ParseCursor {
 pub struct Parsed {
     pub units: Vec<Value>,
     pub cursor: ParseCursor,
+}
+
+struct Origin<'a> {
+    source: &'a str,
+    agent_home: &'a str,
+    file: &'a str,
 }
 
 pub fn parse_file(
@@ -36,6 +42,11 @@ pub fn parse_file(
             .map_or(0, |position| position + 1);
     }
     let file_name = base_name(path);
+    let origin = Origin {
+        source,
+        agent_home,
+        file: &file_name,
+    };
     let mut session = cursor.session;
     let mut cwd = cursor.cwd;
     let mut units = Vec::new();
@@ -46,15 +57,7 @@ pub fn parse_file(
         let Ok(event) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
-        handle_event(
-            &event,
-            source,
-            agent_home,
-            &file_name,
-            &mut session,
-            &mut cwd,
-            &mut units,
-        );
+        handle_event(&event, &origin, &mut session, &mut cwd, &mut units);
     }
     Ok(Parsed {
         units,
@@ -68,9 +71,7 @@ pub fn parse_file(
 
 fn handle_event(
     event: &Value,
-    source: &str,
-    agent_home: &str,
-    file: &str,
+    origin: &Origin,
     session: &mut Option<String>,
     cwd: &mut Option<String>,
     units: &mut Vec<Value>,
@@ -84,11 +85,26 @@ fn handle_event(
             let message = event.get("message").unwrap_or(&Value::Null);
             let content = message.get("content").unwrap_or(&Value::Null);
             let ts = to_iso(message.get("timestamp"));
-            if message.get("role").and_then(Value::as_str) == Some("user") {
-                let text = redact(&text_of(content));
-                units.push(user_unit(
-                    source, agent_home, file, &ts, &text, session, cwd,
-                ));
+            match message.get("role").and_then(Value::as_str) {
+                Some("user") => {
+                    let text = redact(&text_of(content));
+                    units.push(transcript_unit("user", origin, &ts, &text, session, cwd));
+                }
+                Some("assistant") => {
+                    let text = redact(&text_of(content));
+                    if text.trim().is_empty() {
+                        return;
+                    }
+                    units.push(transcript_unit(
+                        ASSISTANT_KIND,
+                        origin,
+                        &ts,
+                        &text,
+                        session,
+                        cwd,
+                    ));
+                }
+                _ => {}
             }
         }
         Some("compaction") => {
@@ -96,10 +112,10 @@ fn handle_event(
             let ts = to_iso(event.get("timestamp"));
             let details = event.get("details").unwrap_or(&Value::Null);
             units.push(json!({
-                "key": unit_key(source, file, ts.as_str(), &text),
-                "source": source,
-                "agent_home": agent_home,
-                "file": file,
+                "key": unit_key(origin.source, origin.file, ts.as_str(), &text),
+                "source": origin.source,
+                "agent_home": origin.agent_home,
+                "file": origin.file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
                 "kind": "compaction",
@@ -121,10 +137,10 @@ fn handle_event(
             let text = redact(event.get("summary").and_then(Value::as_str).unwrap_or(""));
             let ts = to_iso(event.get("timestamp"));
             units.push(json!({
-                "key": unit_key(source, file, ts.as_str(), &text),
-                "source": source,
-                "agent_home": agent_home,
-                "file": file,
+                "key": unit_key(origin.source, origin.file, ts.as_str(), &text),
+                "source": origin.source,
+                "agent_home": origin.agent_home,
+                "file": origin.file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
                 "kind": "branch",
@@ -146,23 +162,31 @@ fn handle_event(
             if text.trim().is_empty() {
                 return;
             }
-            if let Some(id) = event
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-            {
-                *session = Some(id.to_owned());
-            }
-            if let Some(dir) = event
-                .get("cwd")
-                .and_then(Value::as_str)
-                .filter(|dir| !dir.is_empty())
-            {
-                *cwd = Some(dir.to_owned());
-            }
+            update_context(event, session, cwd);
             let ts = to_iso(event.get("timestamp"));
-            units.push(user_unit(
-                source, agent_home, file, &ts, &text, session, cwd,
+            let kind = if event.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
+                COMPACTION_KIND
+            } else {
+                "user"
+            };
+            units.push(transcript_unit(kind, origin, &ts, &text, session, cwd));
+        }
+        Some("assistant") => {
+            let message = event.get("message").unwrap_or(&Value::Null);
+            let content = message.get("content").unwrap_or(&Value::Null);
+            let text = redact(&text_of(content));
+            if text.trim().is_empty() {
+                return;
+            }
+            update_context(event, session, cwd);
+            let ts = to_iso(event.get("timestamp"));
+            units.push(transcript_unit(
+                ASSISTANT_KIND,
+                origin,
+                &ts,
+                &text,
+                session,
+                cwd,
             ));
         }
         Some("summary") => {
@@ -172,10 +196,10 @@ fn handle_event(
             }
             let ts = to_iso(event.get("timestamp"));
             units.push(json!({
-                "key": unit_key(source, file, ts.as_str(), &text),
-                "source": source,
-                "agent_home": agent_home,
-                "file": file,
+                "key": unit_key(origin.source, origin.file, ts.as_str(), &text),
+                "source": origin.source,
+                "agent_home": origin.agent_home,
+                "file": origin.file,
                 "session": session.clone(),
                 "cwd": cwd.clone(),
                 "kind": "compaction",
@@ -187,26 +211,42 @@ fn handle_event(
     }
 }
 
-fn user_unit(
-    source: &str,
-    agent_home: &str,
-    file: &str,
+fn transcript_unit(
+    kind: &str,
+    origin: &Origin,
     ts: &Value,
     text: &str,
     session: &Option<String>,
     cwd: &Option<String>,
 ) -> Value {
     json!({
-        "key": unit_key(source, file, ts.as_str(), text),
-        "source": source,
-        "agent_home": agent_home,
-        "file": file,
+        "key": unit_key(origin.source, origin.file, ts.as_str(), text),
+        "source": origin.source,
+        "agent_home": origin.agent_home,
+        "file": origin.file,
         "session": session.clone(),
         "cwd": cwd.clone(),
-        "kind": "user",
+        "kind": kind,
         "ts": ts,
         "text": text
     })
+}
+
+fn update_context(event: &Value, session: &mut Option<String>, cwd: &mut Option<String>) {
+    if let Some(id) = event
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        *session = Some(id.to_owned());
+    }
+    if let Some(dir) = event
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|dir| !dir.is_empty())
+    {
+        *cwd = Some(dir.to_owned());
+    }
 }
 
 fn text_of(content: &Value) -> String {
@@ -412,7 +452,7 @@ mod tests {
             ParseCursor::default(),
         )
         .unwrap();
-        assert_eq!(parsed.units.len(), 2);
+        assert_eq!(parsed.units.len(), 3);
         let user = &parsed.units[0];
         assert_eq!(user.get("kind").and_then(Value::as_str), Some("user"));
         assert_eq!(
@@ -421,7 +461,17 @@ mod tests {
         );
         assert_eq!(user.get("session").and_then(Value::as_str), Some("s9"));
         assert_eq!(user.get("cwd").and_then(Value::as_str), Some("/work"));
-        let summary = &parsed.units[1];
+        let assistant = &parsed.units[1];
+        assert_eq!(
+            assistant.get("kind").and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert_eq!(
+            assistant.get("text").and_then(Value::as_str),
+            Some("assistant reply")
+        );
+        assert_eq!(assistant.get("session").and_then(Value::as_str), Some("s9"));
+        let summary = &parsed.units[2];
         assert_eq!(
             summary.get("kind").and_then(Value::as_str),
             Some("compaction")
@@ -431,5 +481,119 @@ mod tests {
             Some("kept summary text")
         );
         assert!(summary.get("filesRead").is_none());
+    }
+
+    #[test]
+    fn claude_assistant_text_becomes_assistant_unit() {
+        let dir = TempDir::new("claude-assistant");
+        let path = dir.0.join("session.jsonl");
+        let body = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hidden reasoning"},{"type":"text","text":"the launcher fix landed"},{"type":"tool_use","name":"Bash","input":{}}]},"sessionId":"sa","cwd":"/wa","timestamp":"2026-01-01T03:00:00.000Z"}"#,
+            "\n"
+        );
+        std::fs::write(&path, body).unwrap();
+        let parsed = parse_file(
+            &path,
+            "claude",
+            "/test-home/.claude",
+            ParseCursor::default(),
+        )
+        .unwrap();
+        assert_eq!(parsed.units.len(), 1);
+        let unit = &parsed.units[0];
+        assert_eq!(unit.get("kind").and_then(Value::as_str), Some("assistant"));
+        assert_eq!(
+            unit.get("text").and_then(Value::as_str),
+            Some("the launcher fix landed")
+        );
+        assert_eq!(unit.get("session").and_then(Value::as_str), Some("sa"));
+        assert_eq!(unit.get("cwd").and_then(Value::as_str), Some("/wa"));
+        assert_eq!(
+            unit.get("ts").and_then(Value::as_str),
+            Some("2026-01-01T03:00:00.000Z")
+        );
+        let key = unit_key(
+            "claude",
+            "session.jsonl",
+            Some("2026-01-01T03:00:00.000Z"),
+            "the launcher fix landed",
+        );
+        assert_eq!(unit.get("key").and_then(Value::as_str), Some(key.as_str()));
+    }
+
+    #[test]
+    fn claude_assistant_without_text_blocks_yields_no_unit() {
+        let dir = TempDir::new("claude-tooluse");
+        let path = dir.0.join("session.jsonl");
+        let body = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]},"sessionId":"sa","cwd":"/wa","timestamp":"2026-01-01T03:00:00.000Z"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[]},"timestamp":"2026-01-01T03:00:01.000Z"}"#,
+            "\n"
+        );
+        std::fs::write(&path, body).unwrap();
+        let parsed = parse_file(
+            &path,
+            "claude",
+            "/test-home/.claude",
+            ParseCursor::default(),
+        )
+        .unwrap();
+        assert!(parsed.units.is_empty());
+    }
+
+    #[test]
+    fn pi_assistant_text_becomes_assistant_unit() {
+        let dir = TempDir::new("pi-assistant");
+        let path = dir.0.join("session.jsonl");
+        let body = concat!(
+            r#"{"type":"session","id":"sess-2","cwd":"/tmp/proj"}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"compilation is green now"}],"timestamp":1787819945600}}"#,
+            "\n"
+        );
+        std::fs::write(&path, body).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
+        assert_eq!(parsed.units.len(), 1);
+        let unit = &parsed.units[0];
+        assert_eq!(unit.get("kind").and_then(Value::as_str), Some("assistant"));
+        assert_eq!(
+            unit.get("text").and_then(Value::as_str),
+            Some("compilation is green now")
+        );
+        assert_eq!(unit.get("session").and_then(Value::as_str), Some("sess-2"));
+        assert_eq!(unit.get("cwd").and_then(Value::as_str), Some("/tmp/proj"));
+        assert_eq!(
+            unit.get("ts").and_then(Value::as_str),
+            Some("2026-08-27T08:39:05.600Z")
+        );
+    }
+
+    #[test]
+    fn claude_compact_summary_becomes_compaction_unit() {
+        let dir = TempDir::new("claude-compact");
+        let path = dir.0.join("session.jsonl");
+        let body = concat!(
+            r#"{"type":"user","isCompactSummary":true,"message":{"content":[{"type":"text","text":"This session is being continued from a previous conversation"}]},"sessionId":"sc","cwd":"/wc","timestamp":"2026-01-01T04:00:00.000Z"}"#,
+            "\n"
+        );
+        std::fs::write(&path, body).unwrap();
+        let parsed = parse_file(
+            &path,
+            "claude",
+            "/test-home/.claude",
+            ParseCursor::default(),
+        )
+        .unwrap();
+        assert_eq!(parsed.units.len(), 1);
+        let unit = &parsed.units[0];
+        assert_eq!(unit.get("kind").and_then(Value::as_str), Some("compaction"));
+        assert_eq!(
+            unit.get("text").and_then(Value::as_str),
+            Some("This session is being continued from a previous conversation")
+        );
+        assert_eq!(unit.get("session").and_then(Value::as_str), Some("sc"));
+        assert_eq!(unit.get("cwd").and_then(Value::as_str), Some("/wc"));
     }
 }

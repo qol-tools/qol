@@ -41,17 +41,43 @@ fn drain(
         if paths.is_empty() {
             continue;
         }
-        let mut warm = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
+        let (store, compactions) = {
+            let mut warm = match state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let store = warm.store().clone();
+            let compactions = match ingest::ingest_paths(&store, &roots, &paths, warm.keys()) {
+                Ok(report) => {
+                    if report.appended > 0 {
+                        warm.invalidate_layers();
+                    }
+                    report.compactions
+                }
+                Err(error) => {
+                    eprintln!("qol-memory: transcript ingest failed: {error:#}");
+                    qol_runtime::probe!("QOL_MEMORY_WATCH", "event=ingest_failed error={error}");
+                    0
+                }
+            };
+            (store, compactions)
         };
-        let store = warm.store().clone();
-        match ingest::ingest_paths(&store, &roots, &paths, warm.keys()) {
-            Ok(report) if report.appended > 0 => warm.invalidate_layers(),
+        if compactions == 0 {
+            continue;
+        }
+        match crate::distill::run(&store) {
+            Ok(report) if !report.unchanged => {
+                let mut warm = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                warm.invalidate_layers();
+            }
             Ok(_) => {}
+            Err(error) if crate::distill::is_busy(&error) => {}
             Err(error) => {
-                eprintln!("qol-memory: transcript ingest failed: {error:#}");
-                qol_runtime::probe!("QOL_MEMORY_WATCH", "event=ingest_failed error={error}");
+                eprintln!("qol-memory: watch distill failed: {error:#}");
+                qol_runtime::probe!("QOL_MEMORY_WATCH", "event=distill_failed error={error}");
             }
         }
     }

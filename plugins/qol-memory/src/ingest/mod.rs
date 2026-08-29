@@ -133,12 +133,17 @@ fn units_fingerprint(store: &Store) -> (u64, u64) {
     }
 }
 
+pub const ASSISTANT_KIND: &str = "assistant";
+pub const COMPACTION_KIND: &str = "compaction";
+pub const PARSER_VERSION: u32 = 2;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct IngestReport {
     pub files: usize,
     pub appended: usize,
     pub duplicates: usize,
     pub reparsed: usize,
+    pub compactions: usize,
 }
 
 pub fn unit_key(source: &str, file: &str, ts: Option<&str>, text: &str) -> String {
@@ -242,6 +247,14 @@ pub fn append_units(
     units: &[serde_json::Value],
     keys: &mut KeySet,
 ) -> anyhow::Result<usize> {
+    append_units_inner(store, units, keys).map(|(appended, _)| appended)
+}
+
+fn append_units_inner(
+    store: &Store,
+    units: &[serde_json::Value],
+    keys: &mut KeySet,
+) -> anyhow::Result<(usize, usize)> {
     let candidates: Vec<&serde_json::Value> = units
         .iter()
         .filter(|unit| {
@@ -253,7 +266,7 @@ pub fn append_units(
         })
         .collect();
     if candidates.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let _lock = DistillLock::acquire_wait(store, "append", Duration::from_secs(2))?;
     if units_fingerprint(store) != keys.fingerprint {
@@ -272,7 +285,7 @@ pub fn append_units(
         pending.push(*unit);
     }
     if pending.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -286,7 +299,13 @@ pub fn append_units(
         keys.keys.insert((*key).to_string());
     }
     keys.fingerprint = units_fingerprint(store);
-    Ok(pending.len())
+    let compactions = pending
+        .iter()
+        .filter(|unit| {
+            unit.get("kind").and_then(serde_json::Value::as_str) == Some(COMPACTION_KIND)
+        })
+        .count();
+    Ok((pending.len(), compactions))
 }
 
 pub fn ingest_paths(
@@ -315,7 +334,8 @@ pub fn ingest_paths(
         let head = state::head_of(path);
         let cursor = match persisted.get(path) {
             Some(previous)
-                if size >= previous.offset
+                if previous.parser == PARSER_VERSION
+                    && size >= previous.offset
                     && inode == previous.inode
                     && head.starts_with(&previous.head) =>
             {
@@ -332,9 +352,10 @@ pub fn ingest_paths(
             None => transcript::ParseCursor::default(),
         };
         let parsed = transcript::parse_file(path, source, agent_home, cursor)?;
-        let appended = append_units(store, &parsed.units, keys)?;
+        let (appended, compactions) = append_units_inner(store, &parsed.units, keys)?;
         report.files += 1;
         report.appended += appended;
+        report.compactions += compactions;
         report.duplicates += parsed.units.len().saturating_sub(appended);
         persisted.set(
             path,
@@ -346,6 +367,7 @@ pub fn ingest_paths(
                 head,
                 session: parsed.cursor.session,
                 cwd: parsed.cursor.cwd,
+                parser: PARSER_VERSION,
             },
         );
     }
@@ -721,6 +743,57 @@ mod tests {
         let third = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
         assert_eq!(third.reparsed, 1);
         assert_eq!(third.appended, 4);
+    }
+
+    #[test]
+    fn older_parser_state_reparses_from_zero() {
+        let dir = TempDir::new("parser-version");
+        let store = store_in(&dir);
+        let roots = roots_in(&dir);
+        let path = root_dir(&roots, "claude").join("a.jsonl");
+        let line = |text: &str| {
+            format!("{{\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}},\"sessionId\":\"sp\",\"cwd\":\"/wp\",\"timestamp\":\"2026-03-01T00:00:00.000Z\"}}\n")
+        };
+        std::fs::write(&path, line("alpha parser note")).unwrap();
+        let mut keys = KeySet::load(&store).unwrap();
+        let first = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
+        assert_eq!(first.appended, 1);
+        assert_eq!(first.reparsed, 0);
+        let state_path = store.ingest_state_path();
+        let state_text = std::fs::read_to_string(&state_path).unwrap();
+        assert!(state_text.contains(&format!("\"parser\": {PARSER_VERSION}")));
+        std::fs::write(
+            &state_path,
+            state_text.replace(&format!("\"parser\": {PARSER_VERSION}"), "\"parser\": 1"),
+        )
+        .unwrap();
+        let second = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
+        assert_eq!(second.reparsed, 1);
+        assert_eq!(second.appended, 0);
+        assert_eq!(second.duplicates, 1);
+        let saved = std::fs::read_to_string(&state_path).unwrap();
+        assert!(saved.contains(&format!("\"parser\": {PARSER_VERSION}")));
+    }
+
+    #[test]
+    fn compactions_counts_appended_compaction_units() {
+        let dir = TempDir::new("compactions-count");
+        let store = store_in(&dir);
+        let roots = roots_in(&dir);
+        let path = root_dir(&roots, "claude").join("a.jsonl");
+        let compact = r#"{"type":"user","isCompactSummary":true,"message":{"content":[{"type":"text","text":"This session is being continued from a previous conversation"}]},"timestamp":"2026-04-01T00:00:00.000Z"}"#;
+        let user = r#"{"type":"user","message":{"content":[{"type":"text","text":"a plain question"}]},"timestamp":"2026-04-01T00:00:01.000Z"}"#;
+        std::fs::write(&path, format!("{compact}\n{user}\n")).unwrap();
+        let mut keys = KeySet::load(&store).unwrap();
+        let first = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
+        assert_eq!(first.appended, 2);
+        assert_eq!(first.compactions, 1);
+        std::fs::write(&path, format!("{compact}\n")).unwrap();
+        let shrunk = ingest_paths(&store, &roots, std::slice::from_ref(&path), &mut keys).unwrap();
+        assert_eq!(shrunk.reparsed, 1);
+        assert_eq!(shrunk.appended, 0);
+        assert_eq!(shrunk.duplicates, 1);
+        assert_eq!(shrunk.compactions, 0);
     }
 
     #[test]

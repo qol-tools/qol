@@ -24,6 +24,7 @@ const USAGE_CAPTURE: &str =
 const USAGE_CONTINUE: &str =
     "usage: qol-memory continue --cwd PATH --session ID [--store PATH] [--agent-home DIR]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
+const USAGE_DISTILL: &str = "usage: qol-memory distill [--store PATH]";
 const USAGE_ROWS: &str = "usage: qol-memory rows \"<query>\" [--store PATH] [--agent-home DIR]";
 
 type PlainHandler = Box<dyn Fn(&CommandContext) -> Result<Execution> + Send + Sync>;
@@ -41,6 +42,8 @@ struct Handlers {
     continue_json: JsonHandler,
     reindex_plain: PlainHandler,
     reindex_json: JsonHandler,
+    distill_plain: PlainHandler,
+    distill_json: JsonHandler,
     rows_plain: PlainHandler,
     rows_json: JsonHandler,
 }
@@ -59,6 +62,8 @@ impl Handlers {
             continue_json: Box::new(run_continue_json),
             reindex_plain: Box::new(run_reindex_plain),
             reindex_json: Box::new(run_reindex_json),
+            distill_plain: Box::new(run_distill_plain),
+            distill_json: Box::new(run_distill_json),
             rows_plain: Box::new(run_rows_plain),
             rows_json: Box::new(run_rows_json),
         }
@@ -91,6 +96,10 @@ fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
         .command(reindex_command(
             handlers.reindex_plain,
             handlers.reindex_json,
+        ))
+        .command(distill_command(
+            handlers.distill_plain,
+            handlers.distill_json,
         ))
         .command(rows_command(handlers.rows_plain, handlers.rows_json))
         .doctor_checks(crate::doctor::checks())
@@ -179,6 +188,16 @@ fn reindex_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .about("Drop the persisted BM25 indexes and rebuild them.")
         .usage(USAGE_REINDEX)
         .output("The `reindexed: <layers>` line in plain text; the layer list with --json.")
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn distill_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("distill")
+        .about("Rewrite the notes layer from compaction units, carrying decision notes forward.")
+        .usage(USAGE_DISTILL)
+        .output("The `distill: ...` result line in plain text; the report object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))
         .run_json(move |context| json(context))
@@ -545,6 +564,38 @@ fn parse_reindex_invocation(args: &[String]) -> std::result::Result<ReindexInvoc
     Ok(ReindexInvocation { store })
 }
 
+struct DistillInvocation {
+    store: Option<PathBuf>,
+}
+
+fn parse_distill_invocation(args: &[String]) -> std::result::Result<DistillInvocation, String> {
+    let mut store: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args,
+                    index,
+                    "--store",
+                    USAGE_DISTILL,
+                )?));
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_distill_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                return Err(usage_distill_error(&format!(
+                    "unexpected argument `{positional}`"
+                )));
+            }
+        }
+    }
+    Ok(DistillInvocation { store })
+}
+
 fn value_flag<'a>(
     args: &'a [String],
     index: usize,
@@ -587,6 +638,10 @@ fn usage_continue_error(detail: &str) -> String {
 
 fn usage_reindex_error(detail: &str) -> String {
     format!("{detail}\n{USAGE_REINDEX}")
+}
+
+fn usage_distill_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_DISTILL}")
 }
 
 fn usage_rows_error(detail: &str) -> String {
@@ -927,6 +982,41 @@ fn reindex_layers(invocation: &ReindexInvocation) -> Result<Vec<String>> {
     crate::app::warm::reindex(&store)
 }
 
+fn run_distill_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_distill_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let report = distill_report(&invocation)?;
+    let line = if report.unchanged {
+        format!(
+            "distill: unchanged ({})",
+            report.run.as_deref().unwrap_or_default()
+        )
+    } else {
+        format!(
+            "distill: run {} added {} carried {} dropped {}",
+            report.run.as_deref().unwrap_or_default(),
+            report.added,
+            report.carried,
+            report.dropped
+        )
+    };
+    Ok(Execution::success(newline_terminated(line)))
+}
+
+fn run_distill_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_distill_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    let report = distill_report(&invocation)?;
+    serde_json::to_value(&report).context("failed to serialize the distill report")
+}
+
+fn distill_report(invocation: &DistillInvocation) -> Result<crate::distill::DistillReport> {
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    crate::distill::run(&store)
+}
+
 fn flatten_status(value: &Value) -> String {
     let mut lines = Vec::new();
     push_status_lines("", value, &mut lines);
@@ -984,6 +1074,7 @@ mod tests {
         capture: AtomicUsize,
         continue_cmd: AtomicUsize,
         reindex: AtomicUsize,
+        distill: AtomicUsize,
         rows: AtomicUsize,
     }
 
@@ -995,6 +1086,7 @@ mod tests {
                 && self.capture.load(Ordering::SeqCst) == 0
                 && self.continue_cmd.load(Ordering::SeqCst) == 0
                 && self.reindex.load(Ordering::SeqCst) == 0
+                && self.distill.load(Ordering::SeqCst) == 0
                 && self.rows.load(Ordering::SeqCst) == 0
         }
     }
@@ -1011,6 +1103,8 @@ mod tests {
         let continue_json_calls = Arc::clone(calls);
         let reindex_calls = Arc::clone(calls);
         let reindex_json_calls = Arc::clone(calls);
+        let distill_calls = Arc::clone(calls);
+        let distill_json_calls = Arc::clone(calls);
         let rows_calls = Arc::clone(calls);
         let rows_json_calls = Arc::clone(calls);
         Handlers {
@@ -1059,6 +1153,14 @@ mod tests {
             reindex_json: Box::new(move |_: &CommandContext| {
                 reindex_json_calls.reindex.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "sentinel": "reindex" }))
+            }),
+            distill_plain: Box::new(move |_| {
+                distill_calls.distill.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel distill"))
+            }),
+            distill_json: Box::new(move |_: &CommandContext| {
+                distill_json_calls.distill.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "distill" }))
             }),
             rows_plain: Box::new(move |_| {
                 rows_calls.rows.fetch_add(1, Ordering::SeqCst);
@@ -1309,6 +1411,7 @@ mod tests {
             vec!["help", "capture"],
             vec!["help", "continue"],
             vec!["help", "reindex"],
+            vec!["help", "distill"],
             vec!["help", "rows"],
             vec!["rows", "help"],
         ];
@@ -1336,6 +1439,28 @@ mod tests {
             execution.stdout
         );
         assert!(calls.all_zero());
+    }
+
+    #[test]
+    fn distill_usage_errors_and_store_flag_parse() {
+        let with_store: Vec<String> = ["--store", "/tmp/s"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let parsed = parse_distill_invocation(&with_store).expect("distill parses");
+        assert_eq!(parsed.store, Some(PathBuf::from("/tmp/s")));
+
+        let empty: Vec<String> = Vec::new();
+        let bare = parse_distill_invocation(&empty).expect("bare distill parses");
+        assert_eq!(bare.store, None);
+
+        let unknown_flag = app().execute(["distill".to_string(), "--wat".to_string()]);
+        assert_eq!(unknown_flag.exit_code, EXIT_USAGE);
+        assert!(unknown_flag.stderr.contains(USAGE_DISTILL));
+
+        let positional = app().execute(["distill".to_string(), "now".to_string()]);
+        assert_eq!(positional.exit_code, EXIT_USAGE);
+        assert!(positional.stderr.contains(USAGE_DISTILL));
     }
 
     #[test]
