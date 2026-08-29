@@ -7,6 +7,19 @@ use qol_agent_homes::{Harness, Registry};
 #[cfg(test)]
 use super::metadata::id_from_path;
 
+pub fn session_file_for_external_id(cwd: &str, external_id: &str) -> Option<PathBuf> {
+    if external_id.is_empty() {
+        return None;
+    }
+    let directory = session_dir(cwd)?;
+    let suffix = format!("_{external_id}");
+    session_files(&directory).into_iter().find(|path| {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.ends_with(&suffix))
+    })
+}
+
 pub fn session_file_containing_marker(
     cwd: &str,
     marker: &str,
@@ -50,6 +63,7 @@ fn modified_unix_secs(path: &Path) -> Option<i64> {
 }
 
 const START_MATCH_TOLERANCE_SECS: i64 = 60;
+const RECENT_SESSION_FILES_LIMIT: usize = 8;
 
 pub(super) trait PiEnvironment: Send + Sync {
     fn session_file(&self, pid: i32, cwd: &str) -> Option<PathBuf>;
@@ -76,7 +90,8 @@ impl PiEnvironment for SystemPiEnvironment {
             return Some(path);
         }
         match process_start_unix_secs(pid) {
-            Some(started_at) => session_file_started_at(&directory, started_at),
+            Some(started_at) => session_file_started_at(&directory, started_at)
+                .or_else(|| newest_session_file(&directory)),
             None => newest_session_file(&directory),
         }
     }
@@ -89,7 +104,14 @@ impl PiEnvironment for SystemPiEnvironment {
             return vec![path];
         }
         match process_start_unix_secs(pid) {
-            Some(started_at) => session_files_started_at(&directory, started_at),
+            Some(started_at) => {
+                let started = session_files_started_at(&directory, started_at);
+                if started.is_empty() {
+                    recent_session_files(&directory, RECENT_SESSION_FILES_LIMIT)
+                } else {
+                    started
+                }
+            }
             None => newest_session_file(&directory).into_iter().collect(),
         }
     }
@@ -211,6 +233,19 @@ fn session_files_started_at(directory: &Path, started_at: i64) -> Vec<PathBuf> {
     candidates.into_iter().map(|(_, path)| path).collect()
 }
 
+fn recent_session_files(directory: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut candidates: Vec<(i64, PathBuf)> = session_files(directory)
+        .into_iter()
+        .filter_map(|path| Some((modified_unix_secs(&path)?, path)))
+        .collect();
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    candidates
+        .into_iter()
+        .take(limit)
+        .map(|(_, path)| path)
+        .collect()
+}
+
 fn newest_session_file(directory: &Path) -> Option<PathBuf> {
     session_files(directory).into_iter().max_by_key(|path| {
         path.metadata()
@@ -283,6 +318,7 @@ mod tests {
         let directory = root.path();
         for name in [
             "2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl",
+            "2026-08-21T10-49-27-500Z_01a023f0-b3c4-5d6e-8f90-a1b2c3d4e5f6.jsonl",
             "2026-08-21T10-49-27-998Z_01a023f0-a2be-76d4-ba2a-ec473035d7db.jsonl",
         ] {
             std::fs::write(directory.join(name), b"{}\n").unwrap();
@@ -303,8 +339,9 @@ mod tests {
             vec![
                 "01a023f0-9edc-7376-a318-d88ca8968107".to_owned(),
                 "01a023f0-a2be-76d4-ba2a-ec473035d7db".to_owned(),
+                "01a023f0-b3c4-5d6e-8f90-a1b2c3d4e5f6".to_owned(),
             ],
-            "two lanes started in the same second must both stay candidates"
+            "siblings started in the same second must all stay candidates"
         );
     }
 
@@ -599,5 +636,70 @@ mod tests {
             None,
             "a session file outside the expected directory must not be claimed"
         );
+    }
+
+    #[test]
+    fn a_start_time_far_outside_the_window_still_yields_recent_candidates() {
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = root.path();
+        let name = "2026-08-21T10-49-27-004Z_01a023f0-9edc-7376-a318-d88ca8968107.jsonl";
+        std::fs::write(directory.join(name), b"{}\n").unwrap();
+        let stamp = created_at_unix_secs(&directory.join(name)).unwrap();
+        assert!(session_files_started_at(directory, stamp + 3_600).is_empty());
+        assert_eq!(
+            recent_session_files(directory, 8),
+            vec![directory.join(name)],
+            "the empty-window degrade must return the transcript a resumed lane appends to"
+        );
+    }
+
+    #[test]
+    fn session_file_for_external_id_picks_the_exact_transcript_among_same_second_siblings() {
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = root.path().join("--work-proj--");
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = "01a04d33-624a-732a-aff8-4ec4b90ffd45";
+        for id in [
+            "01a023f0-9edc-7376-a318-d88ca8968107",
+            target,
+            "01a023f0-a2be-76d4-ba2a-ec473035d7db",
+        ] {
+            std::fs::write(
+                directory.join(format!("2026-08-29T11-06-48-266Z_{id}.jsonl")),
+                b"{}\n",
+            )
+            .unwrap();
+        }
+        with_session_dir_override(root.path(), || {
+            assert_eq!(
+                session_file_for_external_id("/work/proj", target),
+                Some(directory.join(format!("2026-08-29T11-06-48-266Z_{target}.jsonl"))),
+                "the external id must pick its own transcript, not a same-second sibling"
+            );
+        });
+    }
+
+    #[test]
+    fn session_file_for_external_id_rejects_unknown_and_empty_ids() {
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = root.path().join("--work-proj--");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl"),
+            b"{}\n",
+        )
+        .unwrap();
+        with_session_dir_override(root.path(), || {
+            assert_eq!(
+                session_file_for_external_id("/work/proj", "ffffffff-ffff-ffff-ffff-ffffffffffff"),
+                None,
+                "an id with no transcript must resolve to nothing"
+            );
+            assert_eq!(
+                session_file_for_external_id("/work/proj", ""),
+                None,
+                "an empty id must resolve to nothing"
+            );
+        });
     }
 }

@@ -81,6 +81,16 @@ impl CliSessionInterpreter {
             .transcript_completion(session, marker)
     }
 
+    pub fn transcript_completion_at(
+        &self,
+        session: &SessionFacts,
+        paths: &[std::path::PathBuf],
+        marker: &str,
+    ) -> Option<bool> {
+        self.strategy_for(session)
+            .transcript_completion_at(paths, marker)
+    }
+
     pub fn transcript_supported(&self, session: &SessionFacts) -> bool {
         self.strategy_for(session).transcript_supported()
     }

@@ -381,15 +381,39 @@ fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
         .get("stopReason")
         .and_then(Value::as_str)
         .is_some_and(|reason| reason != "toolUse");
-    let text_contains = message
+    let text = message
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
-        .any(|text| crate::marker::marker_close_tolerant(text, marker));
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text_contains = crate::marker::marker_close_tolerant(&strip_fenced_regions(&text), marker);
     Some(terminal && text_contains)
+}
+
+fn strip_fenced_regions(text: &str) -> String {
+    let fence_lines = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("```"))
+        .count();
+    if fence_lines % 2 == 1 {
+        return text.to_owned();
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if !fenced {
+            kept.push(line);
+        }
+    }
+    kept.join("\n")
 }
 
 struct TerminalAssistant {
@@ -837,6 +861,116 @@ mod tests {
         assert_eq!(
             marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_abc123"),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn a_marker_split_across_adjacent_text_blocks_of_one_message_completes() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[
+                ("text", "round complete QOL_BRIDGE_DONE_"),
+                ("text", "abc123"),
+            ],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_abc123"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn an_unbalanced_opening_fence_does_not_swallow_the_marker() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[("text", "here\n```\nreport QOL_BRIDGE_DONE_x")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_x"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_marker_inside_a_fenced_code_block_does_not_complete() {
+        let (_root, path) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[("text", "here\n```\nQOL_BRIDGE_DONE_x\n```\ndone")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_x"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_line_wrapped_and_a_punctuation_mangled_marker_still_complete() {
+        let (_root, wrapped) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[("text", "done QOL_BRIDGE_DONE_ab\nc123")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&wrapped, "QOL_BRIDGE_DONE_abc123"),
+            Some(true)
+        );
+        let (_root, mangled) = write(&[message(
+            "assistant",
+            Some("end_turn"),
+            &[("text", "done QOL_BRIDGE_DONE_abc.123")],
+        )]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&mangled, "QOL_BRIDGE_DONE_abc123"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_marker_in_an_earlier_message_with_a_later_tool_call_in_flight_does_not_complete() {
+        let (_root, path) = write(&[
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[("text", "starting QOL_BRIDGE_DONE_x")],
+            ),
+            message(
+                "assistant",
+                Some("toolUse"),
+                &[("text", "running the check")],
+            ),
+        ]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_x"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_resumed_transcript_completes_only_on_the_newest_rounds_marker() {
+        let (_root, path) = write(&[
+            message("user", None, &[("text", "round one QOL_BRIDGE_DONE_old")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[("text", "first report QOL_BRIDGE_DONE_old")],
+            ),
+            message("user", None, &[("text", "round two QOL_BRIDGE_DONE_new")]),
+            message(
+                "assistant",
+                Some("end_turn"),
+                &[("text", "second report QOL_BRIDGE_DONE_new")],
+            ),
+        ]);
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_new"),
+            Some(true)
+        );
+        assert_eq!(
+            marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_old"),
+            Some(false)
         );
     }
 

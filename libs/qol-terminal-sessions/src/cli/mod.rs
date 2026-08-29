@@ -13,8 +13,9 @@ use crate::SessionFacts;
 
 pub use builtins::{
     claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, session_file_containing_marker,
-    CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT, CODEX_TOOL_ID, GENERIC_TOOL_ACCENT,
-    GENERIC_TOOL_ID, KIMI_TOOL_ACCENT, KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
+    session_file_for_external_id, CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT,
+    CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID, KIMI_TOOL_ACCENT, KIMI_TOOL_ID,
+    PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use evidence::{
     CliActivityEvidence, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
@@ -39,6 +40,14 @@ pub trait CliSessionStrategy: Send + Sync {
     fn describe(&self, session: &SessionFacts) -> CliSessionDescriptor;
 
     fn transcript_completion(&self, _session: &SessionFacts, _marker: &str) -> Option<bool> {
+        None
+    }
+
+    fn transcript_completion_at(
+        &self,
+        _paths: &[std::path::PathBuf],
+        _marker: &str,
+    ) -> Option<bool> {
         None
     }
 

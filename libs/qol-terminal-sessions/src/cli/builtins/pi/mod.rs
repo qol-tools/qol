@@ -1,5 +1,5 @@
 mod environment;
-pub use self::environment::session_file_containing_marker;
+pub use self::environment::{session_file_containing_marker, session_file_for_external_id};
 mod metadata;
 
 #[cfg(test)]
@@ -73,7 +73,11 @@ impl CliSessionStrategy for PiStrategy {
 
     fn transcript_completion(&self, session: &SessionFacts, marker: &str) -> Option<bool> {
         let paths = self.metadata.subscription_paths(session);
-        for path in &paths {
+        self.transcript_completion_at(&paths, marker)
+    }
+
+    fn transcript_completion_at(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<bool> {
+        for path in paths {
             match metadata::marker_in_terminal_assistant_text(path, marker) {
                 Some(true) => return Some(true),
                 Some(false) if paths.len() == 1 => return Some(false),

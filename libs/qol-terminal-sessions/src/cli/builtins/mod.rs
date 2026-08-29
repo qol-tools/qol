@@ -3,7 +3,7 @@ mod codex;
 mod generic;
 mod kimi;
 mod pi;
-pub use pi::session_file_containing_marker;
+pub use pi::{session_file_containing_marker, session_file_for_external_id};
 
 use std::sync::Arc;
 

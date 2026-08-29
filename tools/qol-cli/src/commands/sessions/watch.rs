@@ -77,6 +77,7 @@ struct WatchedRound {
     label: Option<String>,
     started_at: Option<SystemTime>,
     transcript_paths: Vec<std::path::PathBuf>,
+    transcript_pinned: bool,
 }
 
 impl WatchedRound {
@@ -85,6 +86,7 @@ impl WatchedRound {
             .session
             .parse()
             .map_err(|_| anyhow!("pending checkpoint carries an invalid session token"))?;
+        let transcript_pinned = !round.transcript_paths.is_empty();
         Ok(Self {
             session: round.session,
             binding,
@@ -105,6 +107,7 @@ impl WatchedRound {
             label: round.label,
             started_at: round.started_at,
             transcript_paths: round.transcript_paths,
+            transcript_pinned,
         })
     }
 
@@ -251,10 +254,15 @@ fn finish_lane(
     if !round.autoclose {
         return Ok(());
     }
-    close_lane_terminal(terminals, &round.binding);
     if !wake_delivered {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=autoclose_deferred session={} reason=wake_undelivered",
+            round.session
+        );
         return Ok(());
     }
+    close_lane_terminal(terminals, &round.binding);
     pending.close_checkpoints_for_session(&round.session)?;
     qol_runtime::probe!(
         "CLI_SESSION_WATCH",
@@ -711,14 +719,33 @@ fn poll_round(
             .into_iter()
             .find(|facts| facts.id == *round.binding.session_id())
     });
-    let paths = facts
-        .as_ref()
-        .map(|facts| interpreter.transcript_paths(facts))
-        .unwrap_or_default();
-    if !paths.is_empty() {
-        round.transcript_paths = paths.clone();
+    if !round.transcript_pinned || round.transcript_paths.is_empty() {
+        if let Some(fresh) = facts
+            .as_ref()
+            .map(|facts| interpreter.transcript_paths(facts))
+            .filter(|fresh| !fresh.is_empty())
+        {
+            round.transcript_paths = fresh;
+        }
+        if let Some(session) = facts.as_ref() {
+            if let Some(path) = qol_terminal_sessions::cli::session_file_containing_marker(
+                &session.cwd,
+                &round.marker,
+                round.started_at.unwrap_or(std::time::UNIX_EPOCH),
+            ) {
+                round.transcript_paths = vec![path.clone()];
+                round.transcript_pinned = true;
+                pending.record_transcript_paths(&round.binding, &round.transcript_paths)?;
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=transcript_pinned session={} path={}",
+                    round.session,
+                    path.display()
+                );
+            }
+        }
     }
-    if let Some(report) = interpreter.marked_report(&paths, &round.marker) {
+    if let Some(report) = interpreter.marked_report(&round.transcript_paths, &round.marker) {
         match pending.pending_round(&round.binding)? {
             None => {
                 return Ok(RoundPoll::of(false, false));
@@ -762,9 +789,15 @@ fn poll_round(
     let transcript_tool = facts
         .as_ref()
         .is_some_and(|facts| interpreter.transcript_supported(facts));
-    let agreement = facts
-        .as_ref()
-        .and_then(|facts| interpreter.transcript_completion(facts, &round.marker));
+    let agreement = if round.transcript_paths.is_empty() {
+        facts
+            .as_ref()
+            .and_then(|facts| interpreter.transcript_completion(facts, &round.marker))
+    } else {
+        facts.as_ref().and_then(|facts| {
+            interpreter.transcript_completion_at(facts, &round.transcript_paths, &round.marker)
+        })
+    };
     let marker_visible = if transcript_tool {
         super::marker_present(&screen, &round.marker) && agreement == Some(true)
     } else {
@@ -789,7 +822,7 @@ fn poll_round(
             Some(_) => {
                 if round.marker_seen {
                     let report = capture_report(
-                        &paths,
+                        &round.transcript_paths,
                         interpreter,
                         round.started_at,
                         &round.marker,
@@ -917,6 +950,7 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.session
                     );
                 } else {
+                    let checkpoint_has_paths = !current.transcript_paths.is_empty();
                     if current.completion_marker != round.marker {
                         round.marker = current.completion_marker;
                         round.reads = 0;
@@ -928,6 +962,10 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.ready_polls = 0;
                         round.started_at = current.started_at;
                         round.transcript_paths = current.transcript_paths;
+                        round.transcript_pinned = false;
+                    }
+                    if checkpoint_has_paths {
+                        round.transcript_pinned = true;
                     }
                     remaining.push(round);
                 }
@@ -2372,6 +2410,20 @@ mod tests {
             .collect()
     }
 
+    static SESSION_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_session_dir_override<T>(directory: &std::path::Path, body: impl FnOnce() -> T) -> T {
+        let _env_guard = SESSION_DIR_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
+        std::env::set_var("PI_CODING_AGENT_SESSION_DIR", directory);
+        let result = body();
+        match previous {
+            Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
+            None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
+        }
+        result
+    }
+
     #[test]
     fn completed_event_fires_and_the_checkpoint_completes() {
         let root = tempfile::TempDir::new().unwrap();
@@ -2794,6 +2846,7 @@ mod tests {
             "",
         )
         .unwrap();
+        let _env_guard = SESSION_DIR_ENV_LOCK.lock().unwrap();
         let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
         std::env::set_var("PI_CODING_AGENT_SESSION_DIR", session_dir.path());
         let mut out = Vec::new();
@@ -3321,7 +3374,7 @@ mod tests {
     }
 
     #[test]
-    fn autoclose_still_closes_the_lane_when_the_wake_cannot_be_delivered_and_a_trace_is_left() {
+    fn autoclose_defers_the_lane_close_when_the_wake_cannot_be_delivered_and_a_trace_is_left() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -3364,8 +3417,8 @@ mod tests {
         );
         assert_eq!(
             backend.closed.lock().unwrap().len(),
-            1,
-            "a terminal state always closes the lane terminal"
+            0,
+            "an undelivered wake must not close the lane terminal"
         );
         let round = pending.pending_round(&binding).unwrap().unwrap();
         assert!(
@@ -4846,6 +4899,89 @@ mod tests {
         }
     }
 
+    struct PinProbeTool {
+        tool: CliTool,
+        resolver_calls: AtomicU64,
+        report: Mutex<Option<String>>,
+    }
+
+    impl PinProbeTool {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                tool: CliTool::new(
+                    CliToolId::new("pin-probe").unwrap(),
+                    "PinProbe",
+                    qol_terminal_sessions::cli::CliToolColor::new(4, 5, 6),
+                ),
+                resolver_calls: AtomicU64::new(0),
+                report: Mutex::new(None),
+            })
+        }
+
+        fn set_report(&self, text: &str) {
+            *self.report.lock().unwrap() = Some(text.to_owned());
+        }
+    }
+
+    impl qol_terminal_sessions::cli::CliSessionStrategy for PinProbeTool {
+        fn tool(&self) -> &CliTool {
+            &self.tool
+        }
+
+        fn priority(&self) -> i32 {
+            1_000
+        }
+
+        fn matches(&self, _session: &SessionFacts) -> bool {
+            true
+        }
+
+        fn describe(
+            &self,
+            _session: &SessionFacts,
+        ) -> qol_terminal_sessions::cli::CliSessionDescriptor {
+            qol_terminal_sessions::cli::CliSessionDescriptor {
+                tool: self.tool.clone(),
+                display_name: None,
+                external_id: None,
+                external_id_authoritative: false,
+                has_activity: None,
+                evidence: qol_terminal_sessions::cli::CliSessionEvidence::default(),
+            }
+        }
+
+        fn transcript_supported(&self) -> bool {
+            true
+        }
+
+        fn transcript_paths(&self, _session: &SessionFacts) -> Vec<std::path::PathBuf> {
+            self.resolver_calls.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        }
+
+        fn transcript_completion(&self, _session: &SessionFacts, _marker: &str) -> Option<bool> {
+            None
+        }
+
+        fn transcript_completion_at(
+            &self,
+            paths: &[std::path::PathBuf],
+            marker: &str,
+        ) -> Option<bool> {
+            paths
+                .first()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .map(|body| body.contains(marker))
+        }
+
+        fn marked_report(&self, paths: &[std::path::PathBuf], _marker: &str) -> Option<String> {
+            if paths.is_empty() {
+                return None;
+            }
+            self.report.lock().unwrap().clone()
+        }
+    }
+
     struct SessionSim {
         root: tempfile::TempDir,
         pending: PendingBridgeStore,
@@ -6003,7 +6139,7 @@ mod tests {
     }
 
     #[test]
-    fn sim_a_grouped_lane_closes_and_keeps_its_checkpoint_when_the_combined_wake_fails() {
+    fn sim_a_grouped_lane_keeps_its_checkpoint_when_the_combined_wake_fails() {
         let sim = SessionSim::new();
         let group = "undeliverable-set";
         let mut lane_a = sim.lane(
@@ -6038,8 +6174,8 @@ mod tests {
         assert_eq!(events[0]["delivered"], false);
         assert_eq!(
             lane_b.closed(),
-            1,
-            "a terminal state always closes the lane terminal"
+            0,
+            "an undelivered combined wake must not close the lane terminal"
         );
         assert!(
             lane_b.open_round(&sim).is_some(),
@@ -6100,6 +6236,472 @@ mod tests {
         assert_eq!(
             round.external_id_attempts, EXTERNAL_ID_MAX_ATTEMPTS,
             "capture retries must stop after the attempt budget even though the round keeps polling"
+        );
+    }
+
+    #[test]
+    fn an_empty_heuristic_transcript_list_completes_from_the_marker_pinned_transcript() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_a",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let transcript =
+            encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
+        std::fs::write(
+            &transcript,
+            "the pinned transcript body\nQOL_BRIDGE_DONE_pin_a",
+        )
+        .unwrap();
+        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        transcript_file.set_modified(SystemTime::now()).unwrap();
+        let tool = PinProbeTool::new();
+        tool.set_report("the pinned transcript body");
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]);
+        let (terminals, _) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        with_session_dir_override(session_dir.path(), || {
+            let mut attempts = 0;
+            loop {
+                let result = poll_round(
+                    &terminals,
+                    &interpreter,
+                    &pending,
+                    &ledger,
+                    &locks,
+                    &mut round,
+                    &mut out,
+                    root.path(),
+                    fast_config(Duration::from_secs(3600)),
+                    &mut |_| {},
+                )
+                .unwrap();
+                attempts += 1;
+                if !result.keep {
+                    break;
+                }
+                assert!(
+                    attempts < 10,
+                    "round did not complete within the poll budget"
+                );
+            }
+        });
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["screen"], "the pinned transcript body");
+        assert!(round.transcript_pinned);
+        let stored = pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(stored.transcript_paths, vec![transcript]);
+    }
+
+    #[test]
+    fn a_checkpointed_transcript_pin_survives_a_watcher_restart_without_rederiving() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_b",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let recorded = std::path::PathBuf::from("recorded-transcript.jsonl");
+        pending
+            .record_transcript_paths(&binding, std::slice::from_ref(&recorded))
+            .unwrap();
+        let tool = PinProbeTool::new();
+        tool.set_report("the recorded path report");
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["idle".to_owned()]);
+        let (terminals, _) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        assert!(
+            round.transcript_pinned,
+            "a restarted watcher must inherit the pin from the checkpoint"
+        );
+        assert_eq!(round.transcript_paths, vec![recorded.clone()]);
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        let mut attempts = 0;
+        loop {
+            let result = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            attempts += 1;
+            if !result.keep {
+                break;
+            }
+            assert!(
+                attempts < 10,
+                "round did not complete within the poll budget"
+            );
+        }
+
+        assert_eq!(
+            tool.resolver_calls.load(Ordering::SeqCst),
+            0,
+            "a pinned round must never call the heuristic resolver"
+        );
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["screen"], "the recorded path report");
+        let stored = pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(stored.transcript_paths, vec![recorded]);
+    }
+
+    #[test]
+    fn a_resumed_lane_transcript_outside_the_start_window_still_completes() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_c",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let transcript =
+            encoded_dir.join("2020-01-01T00-00-00-000Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
+        std::fs::write(
+            &transcript,
+            "the resumed lane's report\nQOL_BRIDGE_DONE_pin_c",
+        )
+        .unwrap();
+        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        transcript_file.set_modified(SystemTime::now()).unwrap();
+        let tool = PinProbeTool::new();
+        tool.set_report("the resumed lane's report");
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["working".to_owned(); 3]);
+        let (terminals, _) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        with_session_dir_override(session_dir.path(), || {
+            let mut attempts = 0;
+            loop {
+                let result = poll_round(
+                    &terminals,
+                    &interpreter,
+                    &pending,
+                    &ledger,
+                    &locks,
+                    &mut round,
+                    &mut out,
+                    root.path(),
+                    fast_config(Duration::from_secs(3600)),
+                    &mut |_| {},
+                )
+                .unwrap();
+                attempts += 1;
+                if !result.keep {
+                    break;
+                }
+                assert!(
+                    attempts < 10,
+                    "round did not complete within the poll budget"
+                );
+            }
+        });
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["screen"], "the resumed lane's report");
+        let stored = pending.pending_round(&binding).unwrap().unwrap();
+        assert_eq!(stored.transcript_paths, vec![transcript]);
+    }
+
+    #[test]
+    fn a_screen_marker_does_not_complete_until_the_transcript_carries_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_d",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let transcript =
+            encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
+        std::fs::write(&transcript, "the transcript is still running\n").unwrap();
+        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        transcript_file.set_modified(SystemTime::now()).unwrap();
+        let tool = PinProbeTool::new();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_pin_d".to_owned(); 3],
+        );
+        let (terminals, _) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        with_session_dir_override(session_dir.path(), || {
+            let first = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(first.keep);
+            assert!(
+                out.is_empty(),
+                "a screen marker without a transcript carrying it must not complete: {out:?}"
+            );
+            assert!(!round.transcript_pinned);
+            std::fs::write(
+                &transcript,
+                "the transcript is still running\nQOL_BRIDGE_DONE_pin_d",
+            )
+            .unwrap();
+            let transcript_file = std::fs::File::open(&transcript).unwrap();
+            transcript_file.set_modified(SystemTime::now()).unwrap();
+            let second = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(second.keep);
+            assert!(
+                out.is_empty(),
+                "the first transcript sighting only arms the confirmation"
+            );
+            let third = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(!third.keep);
+        });
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        let stored = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(stored.completed);
+        assert_eq!(stored.transcript_paths, vec![transcript]);
+    }
+
+    #[test]
+    fn a_lane_that_exits_after_its_marker_is_rescued_from_the_pinned_transcript() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_e",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let transcript =
+            encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
+        std::fs::write(&transcript, "the exit rescue report\nQOL_BRIDGE_DONE_pin_e").unwrap();
+        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        transcript_file.set_modified(SystemTime::now()).unwrap();
+        let tool = PinProbeTool::new();
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["working".to_owned(); 4]);
+        let (terminals, backend) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        with_session_dir_override(session_dir.path(), || {
+            let first = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(first.keep);
+            tool.set_report("the exit rescue report");
+            backend.mark_gone();
+            let second = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(!second.keep);
+        });
+
+        let events = lines(&out);
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(
+            events[0]["event"], "completed",
+            "a pinned transcript must rescue an exited lane instead of reporting it gone"
+        );
+        let stored = pending.pending_round(&binding).unwrap().unwrap();
+        assert!(stored.completed);
+        assert_eq!(
+            stored.screen.as_deref().map(str::trim_end),
+            Some("the exit rescue report")
+        );
+        assert_eq!(stored.transcript_paths, vec![transcript]);
+    }
+
+    #[test]
+    fn sim_a_grouped_set_with_one_completion_and_one_gone_delivers_one_combined_wake() {
+        let sim = SessionSim::new();
+        let group = "mixed-outcome-set";
+        let mut done = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_done",
+            true,
+            Some(group),
+            Some("done-lane"),
+            Transcript::Finished,
+            vec!["report done\nQOL_BRIDGE_DONE_done".to_owned(); 4],
+        );
+        done.set_report(Some("report done\nQOL_BRIDGE_DONE_done".to_owned()), true);
+        let mut dead = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_dead",
+            true,
+            Some(group),
+            Some("dead-lane"),
+            Transcript::Unsupported,
+            vec!["still working".to_owned(); 2],
+        );
+
+        done.run(&sim);
+        assert!(done.events().is_empty());
+        assert!(done.wakes().is_empty());
+        dead.poll(&sim);
+        dead.backend.mark_gone();
+        dead.run(&sim);
+
+        let events = dead.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        let wakes = dead.wakes();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("- v1:fake:7:100 (completed)"),
+            "the completed member must keep its outcome: {:?}",
+            wakes[0]
+        );
+        assert!(
+            wakes[0].contains("- v1:fake:8:200 (did not complete)"),
+            "the gone member must be named as unfinished: {:?}",
+            wakes[0]
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        assert!(combined.contains("report done"));
+        assert!(
+            combined.contains("exited before it reported a completion marker"),
+            "the gone member leaves a receipt in the combined report: {combined}"
         );
     }
 }
