@@ -5,11 +5,11 @@ edition = "2021"
 
 [dependencies]
 qol-apps.workspace = true
+qol-cinnamon.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
-qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-windowing.workspace = true

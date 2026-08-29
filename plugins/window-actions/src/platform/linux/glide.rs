@@ -8,14 +8,14 @@ use super::scripts::EXCLUDED_WINDOW_TYPE_EXPRESSION;
 const WATCHDOG_MS: u64 = 1000;
 
 pub(crate) struct GlideController {
-    session: qol_platform::cinnamon::Session,
+    session: qol_cinnamon::Session,
     active: HashSet<Direction>,
     expires_at: Option<Instant>,
 }
 
 impl GlideController {
     pub(crate) fn connect() -> Result<Self, String> {
-        qol_platform::cinnamon::Session::connect().map(|session| Self {
+        qol_cinnamon::Session::connect().map(|session| Self {
             session,
             active: HashSet::new(),
             expires_at: None,

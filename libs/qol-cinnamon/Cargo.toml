@@ -1,0 +1,9 @@
+[package]
+name = "qol-cinnamon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cinnamon shell Eval session over D-Bus for qol-tools"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.16.0", features = ["blocking-api"] }

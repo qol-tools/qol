@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-pub mod cinnamon;
 mod platform;
 
 use platform::PlatformApi;

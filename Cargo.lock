@@ -6376,6 +6376,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-cinnamon"
+version = "1.0.0"
+dependencies = [
+ "zbus",
+]
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 
@@ -6632,7 +6639,6 @@ version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
  "libc",
- "zbus",
 ]
 
 [[package]]
@@ -6721,6 +6727,7 @@ dependencies = [
  "libc",
  "objc2",
  "qol-apps",
+ "qol-cinnamon",
  "qol-color",
  "qol-config",
  "qol-conventions",
@@ -10120,11 +10127,11 @@ version = "2.30.0"
 dependencies = [
  "proptest",
  "qol-apps",
+ "qol-cinnamon",
  "qol-config",
  "qol-conventions",
  "qol-fs",
  "qol-headless",
- "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",

@@ -158,7 +158,7 @@ fn wait_for_window_activation(
 }
 
 pub(crate) fn run_cinnamon_eval(script: &str) -> Result<String, String> {
-    let result = qol_platform::cinnamon::Session::connect()?.eval(script);
+    let result = qol_cinnamon::Session::connect()?.eval(script);
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "WINACT_EVAL",

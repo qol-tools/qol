@@ -223,7 +223,7 @@ fn run_cinnamon_capture_helper(request_json: &str) -> Result<()> {
             None
         }
     };
-    let session = qol_platform::cinnamon::Session::connect().map_err(anyhow::Error::msg)?;
+    let session = qol_cinnamon::Session::connect().map_err(anyhow::Error::msg)?;
     session
         .eval(&cinnamon_start_script(&request, cursor_guard.is_some())?)
         .map_err(anyhow::Error::msg)?;
