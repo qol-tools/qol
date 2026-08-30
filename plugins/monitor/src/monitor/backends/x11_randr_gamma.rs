@@ -393,7 +393,12 @@ fn peak_percent(current: &GammaTable, original: &GammaTable) -> u8 {
 }
 
 pub fn connector_output_suffix(connector: &str) -> Option<&str> {
-    connector.split_once('-').map(|(_, name)| name)
+    let (head, name) = connector.split_once('-')?;
+    if head.starts_with("card") && head[4..].parse::<u32>().is_ok() {
+        Some(name)
+    } else {
+        Some(connector)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -916,8 +921,11 @@ mod tests {
     #[test]
     fn connector_output_suffix_strips_the_card_prefix() {
         assert_eq!(connector_output_suffix("card0-DP-1"), Some("DP-1"));
+        assert_eq!(connector_output_suffix("card1-DP-1"), Some("DP-1"));
         assert_eq!(connector_output_suffix("card1-HDMI-A-1"), Some("HDMI-A-1"));
         assert_eq!(connector_output_suffix("card0-eDP-1"), Some("eDP-1"));
+        assert_eq!(connector_output_suffix("DP-0"), Some("DP-0"));
+        assert_eq!(connector_output_suffix("HDMI-0"), Some("HDMI-0"));
         assert_eq!(connector_output_suffix("card0"), None);
     }
 }

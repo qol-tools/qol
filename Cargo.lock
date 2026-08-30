@@ -6953,6 +6953,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "workspace-hack",
+ "x11rb",
 ]
 
 [[package]]

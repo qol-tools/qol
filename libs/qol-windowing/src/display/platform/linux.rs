@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
+use x11rb::connection::Connection as _;
+use x11rb::protocol::randr;
+use x11rb::protocol::xproto;
 
 use super::DisplayEnumerator;
 use crate::display::{DisplayError, DisplayHandle};
@@ -11,7 +14,10 @@ pub struct Platform;
 
 impl DisplayEnumerator for Platform {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, DisplayError> {
-        enumerate_from(Path::new("/sys/class/drm"))
+        match enumerate_randr() {
+            Ok(handles) if !handles.is_empty() => Ok(handles),
+            _ => enumerate_from(Path::new("/sys/class/drm")),
+        }
     }
 }
 
@@ -29,22 +35,10 @@ fn enumerate_from(root: &Path) -> Result<Vec<DisplayHandle>, DisplayError> {
         if !connected {
             continue;
         }
-        let (id, edid_sha256, identity_unstable) = match std::fs::read(entry.path().join("edid")) {
-            Ok(edid) => {
-                let base = &edid[..edid.len().min(BASE_EDID_BYTES)];
-                let digest: [u8; 32] = Sha256::digest(base).into();
-                let mut hasher = Sha256::new();
-                hasher.update(connector.as_bytes());
-                hasher.update(base);
-                let bound: [u8; 32] = hasher.finalize().into();
-                (hex(&bound), Some(digest), false)
-            }
-            Err(_) => (
-                hex(&Sha256::digest(connector.as_bytes()).into()),
-                None,
-                true,
-            ),
-        };
+        let (id, edid_sha256, identity_unstable) = identity_from(
+            connector.as_str(),
+            std::fs::read(entry.path().join("edid")).ok().as_deref(),
+        );
         handles.push(DisplayHandle::new(
             id,
             connector,
@@ -54,6 +48,83 @@ fn enumerate_from(root: &Path) -> Result<Vec<DisplayHandle>, DisplayError> {
     }
     handles.sort_by(|a, b| a.connector().cmp(b.connector()));
     Ok(handles)
+}
+
+fn identity_from(connector: &str, edid: Option<&[u8]>) -> (String, Option<[u8; 32]>, bool) {
+    match edid {
+        Some(base) => {
+            let base = &base[..base.len().min(BASE_EDID_BYTES)];
+            let digest: [u8; 32] = Sha256::digest(base).into();
+            let mut hasher = Sha256::new();
+            hasher.update(connector.as_bytes());
+            hasher.update(base);
+            let bound: [u8; 32] = hasher.finalize().into();
+            (hex(&bound), Some(digest), false)
+        }
+        None => (
+            hex(&Sha256::digest(connector.as_bytes()).into()),
+            None,
+            true,
+        ),
+    }
+}
+
+fn enumerate_randr() -> Result<Vec<DisplayHandle>, DisplayError> {
+    let (conn, screen) = x11rb::connect(None).map_err(randr_failed)?;
+    let root = conn
+        .setup()
+        .roots
+        .get(screen)
+        .map(|root| root.root)
+        .ok_or(DisplayError::UnsupportedPlatform)?;
+    let resources = randr::get_screen_resources_current(&conn, root)
+        .map_err(randr_failed)?
+        .reply()
+        .map_err(randr_failed)?;
+    let edid_atom = xproto::intern_atom(&conn, false, b"EDID")
+        .map_err(randr_failed)?
+        .reply()
+        .map_err(randr_failed)?
+        .atom;
+    let mut handles = Vec::new();
+    for output in resources.outputs {
+        let output_info = randr::get_output_info(&conn, output, resources.config_timestamp)
+            .map_err(randr_failed)?
+            .reply()
+            .map_err(randr_failed)?;
+        if output_info.connection != randr::Connection::CONNECTED || output_info.crtc == 0 {
+            continue;
+        }
+        let connector = String::from_utf8_lossy(&output_info.name).into_owned();
+        let property = randr::get_output_property(
+            &conn,
+            output,
+            edid_atom,
+            xproto::AtomEnum::ANY,
+            0,
+            32,
+            false,
+            false,
+        )
+        .map_err(randr_failed)?
+        .reply()
+        .map_err(randr_failed)?;
+        let edid = property.data;
+        let base = (!edid.is_empty()).then_some(edid.as_slice());
+        let (id, edid_sha256, identity_unstable) = identity_from(&connector, base);
+        handles.push(DisplayHandle::new(
+            id,
+            connector,
+            edid_sha256,
+            identity_unstable,
+        ));
+    }
+    handles.sort_by(|a, b| a.connector().cmp(b.connector()));
+    Ok(handles)
+}
+
+fn randr_failed(error: impl std::fmt::Display) -> DisplayError {
+    DisplayError::Io(std::io::Error::other(error.to_string()))
 }
 
 fn connector_from_sys_name(name: &str) -> Option<String> {
@@ -73,6 +144,39 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn identity_helper_matches_enumerate_from_construction() {
+        let dir = tempdir().unwrap();
+        let connector_dir = dir.path().join("card0-DP-1");
+        fs::create_dir(&connector_dir).unwrap();
+        fs::write(connector_dir.join("status"), "connected\n").unwrap();
+        let edid = vec![0x7eu8; 200];
+        fs::write(connector_dir.join("edid"), &edid).unwrap();
+
+        let handles = enumerate_from(dir.path()).unwrap();
+        let (id, edid_sha256, identity_unstable) = identity_from("card0-DP-1", Some(&edid));
+        assert_eq!(handles[0].id(), id);
+        assert_eq!(handles[0].edid_sha256(), edid_sha256);
+        assert_eq!(handles[0].identity_unstable(), identity_unstable);
+        assert!(!identity_unstable);
+    }
+
+    #[test]
+    fn identity_helper_matches_enumerate_from_without_edid() {
+        let dir = tempdir().unwrap();
+        let connector_dir = dir.path().join("card0-DP-1");
+        fs::create_dir(&connector_dir).unwrap();
+        fs::write(connector_dir.join("status"), "connected\n").unwrap();
+
+        let handles = enumerate_from(dir.path()).unwrap();
+        let (id, edid_sha256, identity_unstable) = identity_from("card0-DP-1", None);
+        assert_eq!(handles[0].id(), id);
+        assert_eq!(handles[0].edid_sha256(), edid_sha256);
+        assert_eq!(handles[0].identity_unstable(), identity_unstable);
+        assert!(identity_unstable);
+        assert_eq!(edid_sha256, None);
+    }
 
     #[test]
     fn connector_from_sys_name_keeps_card_prefix() {

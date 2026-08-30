@@ -122,7 +122,7 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
     }
 
     fn resolve_i2c_dev(&self, connector: &str) -> Result<PathBuf, I2cError> {
-        let connector_dir = self.sysfs_drm.join(connector);
+        let connector_dir = self.resolve_connector_dir(connector)?;
         let mut links = Vec::new();
         for entry in fs::read_dir(&connector_dir).map_err(|error| match error.kind() {
             io::ErrorKind::NotFound => I2cError::NoDevice {
@@ -154,6 +154,24 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
             .find(|(_, path)| self.adapter_is_ddc(path))
             .unwrap_or(&links[0]);
         Ok(PathBuf::from("/dev").join(&selected.0))
+    }
+
+    fn resolve_connector_dir(&self, connector: &str) -> Result<PathBuf, I2cError> {
+        for entry in fs::read_dir(&self.sysfs_drm).map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => I2cError::NoDevice {
+                node: self.sysfs_drm.join(connector).display().to_string(),
+            },
+            _ => I2cError::Io(error),
+        })? {
+            let entry = entry.map_err(I2cError::Io)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == connector || name.ends_with(&format!("-{connector}")) {
+                return Ok(entry.path());
+            }
+        }
+        Err(I2cError::NoDevice {
+            node: self.sysfs_drm.join(connector).display().to_string(),
+        })
     }
 
     fn adapter_is_ddc(&self, link: &Path) -> bool {
@@ -698,9 +716,9 @@ mod tests {
         DisplayHandle::new("id-1".into(), "card0-DP-1".into(), None, false)
     }
 
-    fn sysfs_with_links(links: &[(&str, &str)]) -> tempfile::TempDir {
+    fn sysfs_with_links(connector: &str, links: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let connector_dir = dir.path().join("card0-DP-1");
+        let connector_dir = dir.path().join(connector);
         fs::create_dir_all(&connector_dir).unwrap();
         let adapters = dir.path().join("adapters");
         fs::create_dir_all(&adapters).unwrap();
@@ -834,7 +852,7 @@ mod tests {
 
     #[test]
     fn get_reads_brightness_over_the_resolved_i2c_bus() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         let state = backend.get_brightness(&handle()).unwrap();
         assert_eq!(state.value, 20);
@@ -843,7 +861,7 @@ mod tests {
 
     #[test]
     fn set_writes_the_raw_value_and_verifies_by_read_back() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         backend.set_brightness(&handle(), 50).unwrap();
         let state = backend.get_brightness(&handle()).unwrap();
@@ -868,7 +886,7 @@ mod tests {
 
     #[test]
     fn probe_reports_ddc_when_a_brightness_read_succeeds() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         let caps = backend.probe(&handle()).unwrap();
         assert_eq!(
@@ -882,7 +900,7 @@ mod tests {
 
     #[test]
     fn dropped_writes_downgrade_the_source_and_disable_the_capability() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let monitor = FakeMonitor {
             drop_writes: true,
             ..FakeMonitor::new(200, 1000)
@@ -914,7 +932,7 @@ mod tests {
 
     #[test]
     fn eio_write_maps_to_typed_unsupported() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let monitor = FakeMonitor {
             write_failure: Some(FakeFailure::Unsupported),
             ..FakeMonitor::new(200, 1000)
@@ -932,7 +950,7 @@ mod tests {
 
     #[test]
     fn persistent_eio_reads_map_to_typed_unsupported() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let monitor = FakeMonitor {
             read_failure: Some(FakeFailure::Eio),
             ..FakeMonitor::new(200, 1000)
@@ -950,7 +968,7 @@ mod tests {
 
     #[test]
     fn connector_without_an_i2c_link_is_unsupported() {
-        let sysfs = sysfs_with_links(&[]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[]);
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         let caps = backend.probe(&handle()).unwrap();
         assert!(!caps.brightness_ddc);
@@ -971,7 +989,7 @@ mod tests {
             (FakeFailure::NoDevice, "i2c-dev"),
             (FakeFailure::Busy, "ddcci"),
         ] {
-            let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+            let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
             let mut transport = FakeTransport::new(FakeMonitor::new(200, 1000));
             transport.open_failure = Some(failure);
             let backend = I2cDdcBackend::with_timing(
@@ -993,7 +1011,7 @@ mod tests {
 
     #[test]
     fn probe_surfaces_open_tiers_as_errors() {
-        let sysfs = sysfs_with_links(&[("i2c-7", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-7", "i915 gmbus dp ddc")]);
         let mut transport = FakeTransport::new(FakeMonitor::new(200, 1000));
         transport.open_failure = Some(FakeFailure::Permission);
         let backend = I2cDdcBackend::with_timing(
@@ -1010,9 +1028,35 @@ mod tests {
     }
 
     #[test]
+    fn resolution_accepts_randr_output_names_without_the_card_prefix() {
+        let sysfs = sysfs_with_links("card1-DP-1", &[("i2c-5", "i915 gmbus dp ddc")]);
+        let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
+        let full = DisplayHandle::new("id-1".into(), "card1-DP-1".into(), None, false);
+        backend.get_brightness(&full).unwrap();
+        let suffix = DisplayHandle::new("id-2".into(), "DP-1".into(), None, false);
+        backend.get_brightness(&suffix).unwrap();
+        let monitor = backend.transport.monitor.lock().unwrap();
+        assert_eq!(
+            monitor.opens,
+            vec!["/dev/i2c-5".to_string(), "/dev/i2c-5".to_string()]
+        );
+        drop(monitor);
+        let unmatched = DisplayHandle::new("id-3".into(), "card9-HDMI-A-1".into(), None, false);
+        let error = backend.get_brightness(&unmatched).unwrap_err();
+        match error {
+            MonitorError::I2c(I2cError::NoDevice { node }) => {
+                assert!(node.contains("card9-HDMI-A-1"), "{node}");
+            }
+            other => panic!("expected I2c NoDevice, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn resolution_prefers_the_ddc_named_adapter() {
-        let sysfs =
-            sysfs_with_links(&[("i2c-3", "i915 gmbus aux"), ("i2c-9", "i915 gmbus dp ddc")]);
+        let sysfs = sysfs_with_links(
+            "card0-DP-1",
+            &[("i2c-3", "i915 gmbus aux"), ("i2c-9", "i915 gmbus dp ddc")],
+        );
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         backend.get_brightness(&handle()).unwrap();
         let monitor = backend.transport.monitor.lock().unwrap();
@@ -1021,7 +1065,7 @@ mod tests {
 
     #[test]
     fn resolution_falls_back_to_the_lowest_adapter_number() {
-        let sysfs = sysfs_with_links(&[("i2c-9", "aux"), ("i2c-3", "aux")]);
+        let sysfs = sysfs_with_links("card0-DP-1", &[("i2c-9", "aux"), ("i2c-3", "aux")]);
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         backend.get_brightness(&handle()).unwrap();
         let monitor = backend.transport.monitor.lock().unwrap();
@@ -1030,7 +1074,10 @@ mod tests {
 
     #[test]
     fn resolution_falls_back_to_the_lowest_numeric_adapter_number() {
-        let sysfs = sysfs_with_links(&[("i2c-9", "aux"), ("i2c-10", "aux"), ("i2c-3", "aux")]);
+        let sysfs = sysfs_with_links(
+            "card0-DP-1",
+            &[("i2c-9", "aux"), ("i2c-10", "aux"), ("i2c-3", "aux")],
+        );
         let backend = backend(FakeMonitor::new(200, 1000), sysfs.path().to_path_buf());
         backend.get_brightness(&handle()).unwrap();
         let monitor = backend.transport.monitor.lock().unwrap();
