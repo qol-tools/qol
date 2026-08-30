@@ -6640,6 +6640,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "gethostname",
  "qol-agent-homes",
  "qol-config",
  "qol-conventions",

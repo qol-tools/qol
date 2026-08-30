@@ -163,6 +163,9 @@ fn new_note(unit: &Unit, text: &str) -> Value {
     note.insert("source_key".to_string(), json!(unit.key));
     note.insert("source_ts".to_string(), json!(unit.ts));
     note.insert("source_kind".to_string(), json!(DECISION_SOURCE_KIND));
+    if let Some(host) = &unit.host {
+        note.insert("source_host".to_string(), json!(host));
+    }
     if let Some(session) = &unit.session {
         note.insert("session".to_string(), json!(session));
     }

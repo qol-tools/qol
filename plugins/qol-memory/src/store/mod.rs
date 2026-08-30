@@ -148,6 +148,8 @@ pub struct Unit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_home: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
@@ -181,6 +183,8 @@ pub struct Note {
     pub source_ts: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_host: Option<String>,
 }
 
 pub struct NotesLayer {
@@ -278,6 +282,7 @@ mod tests {
             key: key.to_string(),
             source: None,
             agent_home: None,
+            host: None,
             file: None,
             session: None,
             cwd: None,
@@ -415,6 +420,7 @@ mod tests {
             source_key: None,
             source_ts: None,
             source_kind: None,
+            source_host: None,
         };
         let path = Note {
             key: "n-2".to_string(),
@@ -423,6 +429,7 @@ mod tests {
             source_key: None,
             source_ts: None,
             source_kind: None,
+            source_host: None,
         };
         assert!(is_claim_note(&decision));
         assert!(!is_claim_note(&path));
@@ -437,6 +444,7 @@ mod tests {
             source_key: None,
             source_ts: None,
             source_kind: None,
+            source_host: None,
         };
         let value = serde_json::to_value(&decision).expect("note serializes");
         assert_eq!(

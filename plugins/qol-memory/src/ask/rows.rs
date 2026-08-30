@@ -242,6 +242,7 @@ mod tests {
             key: key.to_string(),
             source: None,
             agent_home: None,
+            host: None,
             file: None,
             session: None,
             cwd: None,
@@ -259,6 +260,7 @@ mod tests {
             source_key: None,
             source_ts: None,
             source_kind: None,
+            source_host: None,
         }
     }
 

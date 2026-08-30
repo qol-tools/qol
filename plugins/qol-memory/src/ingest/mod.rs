@@ -164,6 +164,7 @@ pub fn capture_unit(text: &str, cwd: &str, ts: &str) -> serde_json::Value {
     serde_json::json!({
         "key": unit_key(CAPTURE_SOURCE, cwd, None, text),
         "source": CAPTURE_SOURCE,
+        "host": crate::host::current(),
         "cwd": cwd,
         "kind": CAPTURE_KIND,
         "ts": ts,

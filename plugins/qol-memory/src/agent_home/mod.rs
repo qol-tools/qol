@@ -38,6 +38,7 @@ mod tests {
             key: "k".to_string(),
             source: source.map(str::to_owned),
             agent_home: agent_home.map(str::to_owned),
+            host: None,
             file: None,
             session: None,
             cwd: None,

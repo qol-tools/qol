@@ -6,6 +6,7 @@ pub mod cli;
 pub mod continue_recall;
 pub mod distill;
 pub mod doctor;
+pub mod host;
 pub mod ingest;
 pub mod platform;
 pub mod retrieval;

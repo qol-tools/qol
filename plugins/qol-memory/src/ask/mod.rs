@@ -180,6 +180,7 @@ struct UnitHit {
     session: Option<String>,
     cwd: Option<String>,
     ts: Option<String>,
+    host: Option<String>,
     text: String,
 }
 
@@ -191,6 +192,7 @@ struct NoteHit {
     source_key: Option<String>,
     source_ts: Option<String>,
     source_kind: Option<String>,
+    source_host: Option<String>,
     score: f64,
 }
 
@@ -451,6 +453,7 @@ fn run_with_warm(
                 session: unit.session.clone(),
                 cwd: unit.cwd.clone(),
                 ts: unit.ts.clone(),
+                host: unit.host.clone(),
                 text: unit.text.clone(),
             })
         })
@@ -490,6 +493,7 @@ fn run_with_warm(
                 session: unit.session.clone(),
                 cwd: unit.cwd.clone(),
                 ts: unit.ts.clone(),
+                host: unit.host.clone(),
                 text: unit.text.clone(),
             })
         })
@@ -505,6 +509,7 @@ fn run_with_warm(
             session: hit.session.clone(),
             cwd: hit.cwd.clone(),
             ts: hit.ts.clone(),
+            host: hit.host.clone(),
             snippet: snippet(&hit.text, &qtokens, SNIPPET_WINDOW),
         })
         .collect();
@@ -766,6 +771,7 @@ fn run_with_warm(
                 source_kind: resolved.source_kind.clone().unwrap_or_default(),
                 source_ts: resolved.source_ts.clone(),
                 session: None,
+                host: resolved.source_host.clone(),
                 score: text::to_fixed2(resolved.score),
                 margin: Some(rounded_margin),
                 superseded: Some(superseded_for_output.map(|list| {
@@ -799,6 +805,7 @@ fn run_with_warm(
                 source_kind: top.kind.clone(),
                 source_ts: top.ts.clone(),
                 session: top.session.clone(),
+                host: top.host.clone(),
                 score: text::to_fixed2(top.score),
                 margin: None,
                 superseded: None,
@@ -839,6 +846,7 @@ fn run_with_warm(
             score: text::to_fixed2(note.score),
             source_kind: note.source_kind.clone(),
             source_ts: note.source_ts.clone(),
+            host: note.source_host.clone(),
             layer: Some("note".to_string()),
         })
         .collect();
@@ -853,6 +861,7 @@ fn run_with_warm(
                 score: text::to_fixed2(hit.score),
                 source_kind: Some(hit.kind.clone()),
                 source_ts: hit.ts.clone(),
+                host: hit.host.clone(),
                 layer: Some("unit".to_string()),
             }),
     );
@@ -879,6 +888,7 @@ fn run_with_warm(
                     source_key: None,
                     source_ts: None,
                     source_kind: None,
+                    host: note.source_host.clone(),
                     score: text::to_fixed2(note.score),
                 }
             } else {
@@ -889,6 +899,7 @@ fn run_with_warm(
                     source_key: note.source_key.clone(),
                     source_ts: note.source_ts.clone(),
                     source_kind: note.source_kind.clone(),
+                    host: note.source_host.clone(),
                     score: note.score,
                 }
             }
@@ -898,6 +909,7 @@ fn run_with_warm(
     Ok(AskOutput {
         query: req.query.clone(),
         agent_home: caller,
+        host: crate::host::current().to_string(),
         verdict,
         confidence,
         reason,
@@ -993,6 +1005,7 @@ fn note_hit(note: &crate::store::Note, score: f64) -> NoteHit {
         source_key: note.source_key.clone(),
         source_ts: note.source_ts.clone(),
         source_kind: note.source_kind.clone(),
+        source_host: note.source_host.clone(),
         score,
     }
 }
@@ -1193,6 +1206,7 @@ pub fn run_and_log_with_layers(
             session: exclude_session.clone(),
             cwd: log.cwd.clone(),
             agent_home: out.agent_home.clone(),
+            host: crate::host::current().to_string(),
             query: out.query.clone(),
             verdict: out.verdict.clone(),
             confidence: out.confidence.clone(),
@@ -1225,6 +1239,10 @@ pub fn run_and_log_with_layers(
 }
 
 pub fn render_text(out: &AskOutput) -> String {
+    let host_suffix = |host: &Option<String>| match host {
+        Some(h) if h != crate::host::current() => format!(" [from {h}]"),
+        _ => String::new(),
+    };
     let mut lines = Vec::new();
     lines.push(format!("verdict: {} ({})", out.verdict, out.confidence));
     lines.push(format!("reason: {}", out.reason));
@@ -1235,16 +1253,22 @@ pub fn render_text(out: &AskOutput) -> String {
                 None => "-".to_string(),
             };
             lines.push(format!(
-                "answer [{}/{}]: {}",
-                answer.layer, cls, answer.text
+                "answer [{}/{}]: {}{}",
+                answer.layer,
+                cls,
+                answer.text,
+                host_suffix(&answer.host)
             ));
         }
     }
     lines.push("recalled:".to_string());
     for recall in &out.recalled {
         lines.push(format!(
-            "  {}  {}  {}",
-            recall.key, recall.cls, recall.score
+            "  {}  {}  {}{}",
+            recall.key,
+            recall.cls,
+            recall.score,
+            host_suffix(&recall.host)
         ));
     }
     if !out.skills.hits.is_empty() {
@@ -1370,6 +1394,8 @@ pub struct AskOutput {
     pub query: String,
     #[serde(default)]
     pub agent_home: String,
+    #[serde(default)]
+    pub host: String,
     pub verdict: String,
     pub confidence: String,
     pub reason: String,
@@ -1397,6 +1423,8 @@ pub struct Answer {
     pub source_ts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub score: f64,
     pub margin: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1419,6 +1447,8 @@ pub struct Recalled {
     pub source_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
 }
@@ -1497,6 +1527,8 @@ pub struct UnitOut {
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub snippet: String,
 }
 
@@ -1512,6 +1544,8 @@ pub struct NoteOut {
     pub source_ts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub score: f64,
 }
 
@@ -1598,6 +1632,7 @@ mod tests {
             source_key: None,
             source_ts: None,
             source_kind: None,
+            source_host: None,
             score: 0.0,
         };
         assert_eq!(
@@ -2700,5 +2735,86 @@ mod tests {
             .any(|recall| recall.layer.as_deref() == Some("unit")));
         assert!(!out.recalled.iter().any(|recall| recall.key == "a-off"));
         fs::remove_dir_all(&root).ok();
+    }
+
+    fn render_fixture(answer_host: Value, recalled_host: Value) -> AskOutput {
+        serde_json::from_value(json!({
+            "query": "does the clipboard ring survive restarts",
+            "verdict": "answered",
+            "confidence": "high",
+            "reason": "notes layer decision answer, margin 9x",
+            "gates": {
+                "NO_MEMORY_COV": 0.5,
+                "FLOOR": 6.0,
+                "NOTE_COV": 0.5,
+                "NOTE_SCORE": 6.0,
+                "UNIT_COV": 1.0,
+                "UNIT_SCORE": 8.0,
+                "UNIT_MARGIN": 1.5,
+                "HIGH_MARGIN": 1.8
+            },
+            "non_default_gates": false,
+            "answer": {
+                "text": "the clipboard ring survives tray restarts",
+                "layer": "note",
+                "key": "n-1",
+                "cls": "decision",
+                "source_kind": "decision",
+                "source_ts": "2026-08-04T08:00:00.000Z",
+                "score": 14.0,
+                "margin": 9.0,
+                "host": answer_host
+            },
+            "recalled": [
+                {
+                    "key": "n-1",
+                    "cls": "decision",
+                    "score": 14.0,
+                    "host": recalled_host
+                }
+            ],
+            "related": [],
+            "signals": {
+                "top_note_score": 14.0,
+                "top_unit_score": null,
+                "unit_margin": null,
+                "note_token_coverage": 0.8,
+                "unit_token_coverage": 0.0,
+                "max_token_coverage": 0.8,
+                "notes_run_ts": "2026-08-05T10-00-00-000Z",
+                "snapshot_run_ts": "live",
+                "live_units": true,
+                "stale_layer": false,
+                "recency_resolved": null
+            },
+            "counts": { "units": 1, "notes": 1 },
+            "skills": { "status": "served", "hits": [] },
+            "notes": []
+        }))
+        .expect("render fixture parses into AskOutput")
+    }
+
+    #[test]
+    fn render_text_labels_an_answer_from_a_foreign_host() {
+        let foreign = "remote-box/macos".to_string();
+        let out = render_fixture(json!(foreign), json!(foreign));
+        let text = render_text(&out);
+        let expected = format!(" [from {foreign}]");
+        assert!(text.contains(&format!(
+            "answer [note/decision]: the clipboard ring survives tray restarts{expected}"
+        )));
+        assert!(text.contains(&format!("  n-1  decision  14{expected}")));
+    }
+
+    #[test]
+    fn render_text_omits_the_suffix_when_the_host_is_local_or_absent() {
+        let local = crate::host::current().to_string();
+        let out = render_fixture(json!(local), Value::Null);
+        let text = render_text(&out);
+        assert!(!text.contains(" [from "));
+        assert!(
+            text.contains("answer [note/decision]: the clipboard ring survives tray restarts\n")
+        );
+        assert!(text.ends_with("  n-1  decision  14"));
     }
 }

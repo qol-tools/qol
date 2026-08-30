@@ -95,6 +95,7 @@ fn pair(question: &Value, answer: &Value) -> Option<Value> {
     Some(serde_json::json!({
         "key": unit_key(QA_SOURCE, cwd, None, &text),
         "source": QA_SOURCE,
+        "host": crate::host::current(),
         "cwd": cwd,
         "kind": CAPTURE_KIND,
         "ts": ts,
