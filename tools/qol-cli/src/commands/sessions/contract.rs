@@ -163,6 +163,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "boolean",
                         "description": "Force a resume of the harness's persisted session for this key when a new terminal is launched. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); resume: false opts out. The spawn outcome reports resume and resume_detail",
                     },
+                    "silent_wake": {
+                        "type": "boolean",
+                        "description": "skip the parent wake message; the lane report and a receipt json are still written and the lane terminal still closes",
+                    },
                 },
                 "required": ["tool", "cwd"],
             }),
@@ -443,6 +447,39 @@ mod tests {
         assert!(description.contains("same tool and cwd"), "{description}");
         assert!(description.contains("resume: false"), "{description}");
         assert!(description.contains("resume_detail"), "{description}");
+    }
+
+    #[test]
+    fn session_spawn_schema_declares_silent_wake_as_an_optional_boolean() {
+        let specs = tool_specs();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .unwrap();
+        assert_eq!(
+            spec.input_schema["properties"]["silent_wake"]["type"],
+            "boolean"
+        );
+        assert!(
+            !spec.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "silent_wake"),
+            "silent_wake must stay optional"
+        );
+        let description = spec.input_schema["properties"]["silent_wake"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            description.contains("skip the parent wake message"),
+            "{description}"
+        );
+        assert!(description.contains("receipt json"), "{description}");
+        assert!(
+            description.contains("lane terminal still closes"),
+            "{description}"
+        );
     }
 
     #[test]

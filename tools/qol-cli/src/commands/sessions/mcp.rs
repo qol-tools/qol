@@ -284,6 +284,15 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
             })
             .transpose()?;
+        let silent_wake = arguments
+            .get("silent_wake")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_spawn `silent_wake` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         let model = super::spawn::resolve_allowed_model_with(
             model_flag.as_deref(),
             self.spawn_model.clone(),
@@ -305,6 +314,7 @@ impl McpSessionServer {
             &self.ledger,
             true,
             true,
+            silent_wake,
             resume,
             Some(task),
             group.as_deref(),

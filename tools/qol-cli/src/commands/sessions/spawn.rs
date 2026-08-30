@@ -64,6 +64,8 @@ pub(super) struct LaneSpec {
     pub(super) task: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) silent_wake: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -773,7 +775,7 @@ fn run_lanes_with(
     locks: &SpawnLocks,
     cap: Option<SpawnCapConfig>,
 ) -> Result<LaneSetOutcome> {
-    spawn_lanes(
+    let outcome = spawn_lanes(
         terminals,
         &CliSessionInterpreter::system(),
         &parsed.tool,
@@ -790,7 +792,13 @@ fn run_lanes_with(
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         None,
-    )
+    )?;
+    for (lane, spawned) in parsed.lanes.iter().zip(&outcome.lanes) {
+        if lane.silent_wake.unwrap_or(false) {
+            spawn_silent_wake_watcher(&spawned.session)?;
+        }
+    }
+    Ok(outcome)
 }
 
 fn run_with(
@@ -801,7 +809,7 @@ fn run_with(
     locks: &SpawnLocks,
     cap: Option<SpawnCapConfig>,
 ) -> Result<SpawnOutcome> {
-    spawn_or_reuse(
+    let outcome = spawn_or_reuse(
         terminals,
         &CliSessionInterpreter::system(),
         &parsed.tool,
@@ -816,13 +824,31 @@ fn run_with(
         &SpawnLedger::system()?,
         parsed.background,
         true,
+        parsed.silent_wake,
         parsed.resume,
         parsed.task.as_deref(),
         parsed.group.as_deref(),
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         None,
-    )
+    )?;
+    if parsed.silent_wake {
+        spawn_silent_wake_watcher(&outcome.session)?;
+    }
+    Ok(outcome)
+}
+
+fn spawn_silent_wake_watcher(session: &str) -> Result<()> {
+    let executable = std::env::current_exe()
+        .context("cannot resolve the current executable for the silent-wake watcher")?;
+    process::Command::new(executable)
+        .args(["sessions", "watch", session])
+        .stdin(process::Stdio::null())
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .spawn()
+        .context("failed to launch the detached silent-wake watcher")?;
+    Ok(())
 }
 
 pub(super) fn deliver_task(
@@ -906,13 +932,14 @@ struct SpawnArgs {
     title: Option<String>,
     task: Option<String>,
     background: bool,
+    silent_wake: bool,
     resume: Option<bool>,
     group: Option<String>,
     lanes: Vec<LaneSpec>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --lanes takes a JSON array of {key, task, title?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --lanes takes a JSON array of {key, task, title?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -921,6 +948,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut title = None;
     let mut task = None;
     let mut background = false;
+    let mut silent_wake = false;
     let mut resume = None;
     let mut group = None;
     let mut lanes = Vec::new();
@@ -962,6 +990,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 background = true;
                 index += 1;
             }
+            "--silent-wake" => {
+                silent_wake = true;
+                index += 1;
+            }
             "--resume" => {
                 resume = Some(true);
                 index += 1;
@@ -989,6 +1021,9 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     if !lanes.is_empty() && (key.is_some() || task.is_some() || title.is_some()) {
         bail!("--lanes carries every lane's key, task and title, so --key, --task and --title cannot be combined with it\nusage: {usage}");
     }
+    if silent_wake && !background {
+        bail!("--silent-wake requires --background\nusage: {usage}");
+    }
     Ok(SpawnArgs {
         tool,
         cwd,
@@ -998,6 +1033,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         title,
         task,
         background,
+        silent_wake,
         resume,
         group,
         lanes,
@@ -1115,6 +1151,7 @@ pub(super) fn spawn_lanes(
             ledger,
             true,
             true,
+            lane.silent_wake.unwrap_or(false),
             resume,
             Some(lane.task.as_str()),
             group.as_deref(),
@@ -1183,6 +1220,7 @@ pub(super) fn spawn_or_reuse(
     ledger: &SpawnLedger,
     background: bool,
     autoclose: bool,
+    silent_wake: bool,
     resume: Option<bool>,
     task: Option<&str>,
     group: Option<&str>,
@@ -1285,6 +1323,7 @@ pub(super) fn spawn_or_reuse(
                         model,
                         &prepared.title,
                         autoclose,
+                        silent_wake,
                         group,
                         trace_dir,
                         cancel,
@@ -1589,6 +1628,7 @@ fn launch_background(
     model: Option<&str>,
     title: &str,
     autoclose: bool,
+    silent_wake: bool,
     group: Option<&str>,
     trace_dir: &std::path::Path,
     cancel: Option<&AtomicBool>,
@@ -1633,6 +1673,7 @@ fn launch_background(
         autoclose,
         group,
         Some(identity.key.as_str()),
+        silent_wake,
     )?;
     pending.record_transcript_paths(&binding, &interpreter.transcript_paths(&facts))?;
     if let Some(group) = group {
@@ -2233,6 +2274,7 @@ mod tests {
             ledger,
             background,
             autoclose,
+            false,
             resume,
             task,
             None,
@@ -2342,6 +2384,7 @@ mod tests {
             key: key.to_owned(),
             task: "work".to_owned(),
             title: None,
+            silent_wake: None,
         };
         let set = [lane("a"), lane("b")];
         assert_eq!(generated_group(&set), generated_group(&set));
@@ -2720,6 +2763,7 @@ mod tests {
                 false,
                 None,
                 Some("lane-foreign"),
+                false,
             )
             .unwrap();
         let live = [foreign.token(), own.token()]
@@ -2737,6 +2781,7 @@ mod tests {
                 false,
                 None,
                 Some("lane-own"),
+                false,
             )
             .unwrap();
         let error = refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live)

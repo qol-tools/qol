@@ -73,6 +73,7 @@ struct WatchedRound {
     external_id_captured: bool,
     external_id_attempts: u32,
     autoclose: bool,
+    silent_wake: bool,
     group: Option<String>,
     label: Option<String>,
     started_at: Option<SystemTime>,
@@ -103,6 +104,7 @@ impl WatchedRound {
             external_id_captured: false,
             external_id_attempts: 0,
             autoclose: round.autoclose,
+            silent_wake: round.silent_wake,
             group: round.group,
             label: round.label,
             started_at: round.started_at,
@@ -316,9 +318,15 @@ fn complete_seen_round(
             group,
             &round.session,
             &round.driver,
+            round.silent_wake,
             sleep,
         )? {
-            finish_lane(terminals, pending, round, delivery.delivered)?;
+            finish_lane(
+                terminals,
+                pending,
+                round,
+                delivery.delivered || round.silent_wake,
+            )?;
             qol_runtime::probe!(
                 "CLI_SESSION_WATCH",
                 "event={}_group session={} group={} reads={} delivered={} autoclose={}",
@@ -363,16 +371,42 @@ fn complete_seen_round(
             released: true,
         });
     }
-    let delivery = deliver_wake(
+    let delivery = if round.silent_wake {
+        let cleaned = if markerless {
+            clean_screen(tail)
+        } else {
+            clean_screen(screen)
+        };
+        let report_path =
+            write_lane_report(trace_dir, &round.session, &cleaned, round.label.as_deref())?;
+        write_lane_receipt(
+            trace_dir,
+            &round.session,
+            round.label.as_deref(),
+            markerless,
+            &report_path,
+        )?;
+        WakeDelivery {
+            delivered: false,
+            error: None,
+        }
+    } else {
+        deliver_wake(
+            terminals,
+            trace_dir,
+            &round.session,
+            &round.driver,
+            "completed",
+            wake_msg,
+            sleep,
+        )?
+    };
+    finish_lane(
         terminals,
-        trace_dir,
-        &round.session,
-        &round.driver,
-        "completed",
-        wake_msg,
-        sleep,
+        pending,
+        round,
+        delivery.delivered || round.silent_wake,
     )?;
-    finish_lane(terminals, pending, round, delivery.delivered)?;
     pending.observe(&round.binding, &round.marker, true)?;
     pending.store_screen(&round.binding, &round.marker, tail)?;
     qol_runtime::probe!(
@@ -525,6 +559,7 @@ fn poll_round(
                             group,
                             &round.session,
                             &round.driver,
+                            round.silent_wake,
                             sleep,
                         )? {
                             qol_runtime::probe!(
@@ -567,23 +602,43 @@ fn poll_round(
                             released: true,
                         });
                     }
-                    let delivery = deliver_wake(
-                        terminals,
-                        trace_dir,
-                        &round.session,
-                        &round.driver,
-                        "completed",
-                        &wake_message(
+                    let delivery = if round.silent_wake {
+                        let report_path = write_lane_report(
                             trace_dir,
                             &round.session,
-                            "completed",
-                            full_screen,
-                            &round.marker,
-                            round.autoclose,
+                            &clean_screen(full_screen),
                             round.label.as_deref(),
-                        ),
-                        sleep,
-                    )?;
+                        )?;
+                        write_lane_receipt(
+                            trace_dir,
+                            &round.session,
+                            round.label.as_deref(),
+                            markerless,
+                            &report_path,
+                        )?;
+                        WakeDelivery {
+                            delivered: false,
+                            error: None,
+                        }
+                    } else {
+                        deliver_wake(
+                            terminals,
+                            trace_dir,
+                            &round.session,
+                            &round.driver,
+                            "completed",
+                            &wake_message(
+                                trace_dir,
+                                &round.session,
+                                "completed",
+                                full_screen,
+                                &round.marker,
+                                round.autoclose,
+                                round.label.as_deref(),
+                            ),
+                            sleep,
+                        )?
+                    };
                     pending.observe(&round.binding, &round.marker, true)?;
                     pending.store_screen(&round.binding, &round.marker, tail)?;
                     qol_runtime::probe!(
@@ -636,6 +691,7 @@ fn poll_round(
                         group,
                         &round.session,
                         &round.driver,
+                        round.silent_wake,
                         sleep,
                     )?;
                     pending.discard(&round.binding)?;
@@ -760,15 +816,19 @@ fn poll_round(
             }
             Some(_) => {
                 let report = cap_report(strip_trailing_marker(report, &round.marker));
-                let wake_msg = wake_message(
-                    trace_dir,
-                    &round.session,
-                    "completed",
-                    &report,
-                    &round.marker,
-                    round.autoclose,
-                    round.label.as_deref(),
-                );
+                let wake_msg = if round.silent_wake {
+                    String::new()
+                } else {
+                    wake_message(
+                        trace_dir,
+                        &round.session,
+                        "completed",
+                        &report,
+                        &round.marker,
+                        round.autoclose,
+                        round.label.as_deref(),
+                    )
+                };
                 return complete_seen_round(
                     terminals,
                     interpreter,
@@ -828,15 +888,19 @@ fn poll_round(
                         &round.marker,
                         &screen,
                     );
-                    let wake_msg = wake_message(
-                        trace_dir,
-                        &round.session,
-                        "completed",
-                        &report,
-                        &round.marker,
-                        round.autoclose,
-                        round.label.as_deref(),
-                    );
+                    let wake_msg = if round.silent_wake {
+                        String::new()
+                    } else {
+                        wake_message(
+                            trace_dir,
+                            &round.session,
+                            "completed",
+                            &report,
+                            &round.marker,
+                            round.autoclose,
+                            round.label.as_deref(),
+                        )
+                    };
                     return complete_seen_round(
                         terminals,
                         interpreter,
@@ -902,13 +966,17 @@ fn poll_round(
             &round.marker,
             &screen,
         );
-        let idle_msg = markerless_wake_message(
-            markerless_reason(finished_turn, fault.as_deref()),
-            trace_dir,
-            &round.session,
-            &clean_screen(screen_tail(&report)),
-            round.label.as_deref(),
-        );
+        let idle_msg = if round.silent_wake {
+            String::new()
+        } else {
+            markerless_wake_message(
+                markerless_reason(finished_turn, fault.as_deref()),
+                trace_dir,
+                &round.session,
+                &clean_screen(screen_tail(&report)),
+                round.label.as_deref(),
+            )
+        };
         return complete_seen_round(
             terminals,
             interpreter,
@@ -1362,6 +1430,7 @@ fn claim_group_delivery(dir: &std::path::Path) -> Result<bool> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn maybe_deliver_group_combined(
     pending: &PendingBridgeStore,
     terminals: &TerminalSessionService,
@@ -1369,6 +1438,7 @@ pub(super) fn maybe_deliver_group_combined(
     group: &str,
     session: &str,
     driver: &str,
+    silent_wake: bool,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<Option<(String, WakeDelivery)>> {
     let dir = settling_round_dir(trace_dir, group);
@@ -1406,15 +1476,22 @@ pub(super) fn maybe_deliver_group_combined(
         })
         .collect();
     let message = grouped_message(group, &lane_lines, &combined_path);
-    let delivery = deliver_wake(
-        terminals,
-        trace_dir,
-        session,
-        driver,
-        "completed",
-        &message,
-        sleep,
-    )?;
+    let delivery = if silent_wake {
+        WakeDelivery {
+            delivered: false,
+            error: None,
+        }
+    } else {
+        deliver_wake(
+            terminals,
+            trace_dir,
+            session,
+            driver,
+            "completed",
+            &message,
+            sleep,
+        )?
+    };
     Ok(Some((combined, delivery)))
 }
 
@@ -1705,6 +1782,31 @@ fn write_lane_report(
     fs::create_dir_all(dir).context("failed to create lane report directory")?;
     fs::write(&path, cleaned).context("failed to write lane report")?;
     Ok(path)
+}
+
+fn write_lane_receipt(
+    trace_dir: &std::path::Path,
+    session: &str,
+    label: Option<&str>,
+    markerless: bool,
+    report_path: &std::path::Path,
+) -> Result<()> {
+    let path = lane_report_path(trace_dir, session, label).with_extension("receipt.json");
+    let receipt = serde_json::json!({
+        "label": label,
+        "session": session,
+        "completed_at": chrono::Utc::now().to_rfc3339(),
+        "markerless": markerless,
+        "report": report_path.display().to_string(),
+    });
+    let dir = path
+        .parent()
+        .expect("lane receipt path always has a parent");
+    fs::create_dir_all(dir).context("failed to create lane report directory")?;
+    let temporary = path.with_extension("tmp");
+    let encoded = serde_json::to_string(&receipt)?;
+    fs::write(&temporary, encoded).context("failed to write lane receipt")?;
+    fs::rename(&temporary, &path).context("failed to publish lane receipt")
 }
 
 fn clean_screen(text: &str) -> String {
@@ -5025,7 +5127,15 @@ mod tests {
                 .parse()
                 .unwrap();
             self.pending
-                .start_with_label(&binding, marker, &driver.token(), autoclose, group, label)
+                .start_with_label(
+                    &binding,
+                    marker,
+                    &driver.token(),
+                    autoclose,
+                    group,
+                    label,
+                    false,
+                )
                 .unwrap();
             if let Some(group) = group {
                 super::register_group_member(self.trace_dir(), group, &binding.token(), label)

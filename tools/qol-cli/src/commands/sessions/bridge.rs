@@ -83,6 +83,7 @@ pub(super) struct PendingRound {
     pub(super) woken: bool,
     pub(super) screen: Option<String>,
     pub(super) autoclose: bool,
+    pub(super) silent_wake: bool,
     pub(super) group: Option<String>,
     pub(super) label: Option<String>,
     pub(super) started_at: Option<SystemTime>,
@@ -124,6 +125,8 @@ struct StoredCheckpoint {
     #[serde(default)]
     autoclose: bool,
     #[serde(default)]
+    silent_wake: bool,
+    #[serde(default)]
     wake_event: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group: Option<String>,
@@ -157,6 +160,7 @@ impl From<StoredCheckpoint> for PendingRound {
             woken: stored.wake_event.is_some(),
             screen: stored.screen,
             autoclose: stored.autoclose,
+            silent_wake: stored.silent_wake,
             group: stored.group,
             label: stored.label,
             started_at: stored.started_at_ms.map(system_time_from_millis),
@@ -225,9 +229,10 @@ impl PendingBridgeStore {
         autoclose: bool,
         group: Option<&str>,
     ) -> Result<SystemTime> {
-        self.start_with_label(binding, marker, driver, autoclose, group, None)
+        self.start_with_label(binding, marker, driver, autoclose, group, None, false)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start_with_label(
         &self,
         binding: &SessionBinding,
@@ -236,6 +241,7 @@ impl PendingBridgeStore {
         autoclose: bool,
         group: Option<&str>,
         label: Option<&str>,
+        silent_wake: bool,
     ) -> Result<SystemTime> {
         let _lock = self.lock(binding)?;
         if self
@@ -258,6 +264,7 @@ impl PendingBridgeStore {
             &[],
             false,
             Some(system_time_millis(started_at)),
+            silent_wake,
         )?;
         Ok(started_at)
     }
@@ -288,6 +295,7 @@ impl PendingBridgeStore {
             &checkpoint.transcript_paths,
             false,
             checkpoint.started_at_ms,
+            checkpoint.silent_wake,
         )
     }
 
@@ -317,6 +325,7 @@ impl PendingBridgeStore {
             &checkpoint.transcript_paths,
             false,
             checkpoint.started_at_ms,
+            checkpoint.silent_wake,
         )
     }
 
@@ -341,6 +350,7 @@ impl PendingBridgeStore {
             &checkpoint.transcript_paths,
             false,
             checkpoint.started_at_ms,
+            checkpoint.silent_wake,
         )
     }
 
@@ -370,6 +380,7 @@ impl PendingBridgeStore {
             &checkpoint.transcript_paths,
             false,
             checkpoint.started_at_ms,
+            checkpoint.silent_wake,
         )?;
         Ok(true)
     }
@@ -399,6 +410,7 @@ impl PendingBridgeStore {
             paths,
             false,
             checkpoint.started_at_ms,
+            checkpoint.silent_wake,
         )
     }
 
@@ -417,6 +429,7 @@ impl PendingBridgeStore {
         paths: &[PathBuf],
         closed: bool,
         started_at_ms: Option<i64>,
+        silent_wake: bool,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -429,6 +442,7 @@ impl PendingBridgeStore {
             closed,
             screen: screen.map(str::to_owned),
             autoclose,
+            silent_wake,
             wake_event: wake_event.map(str::to_owned),
             group: group.map(str::to_owned),
             label: label.map(str::to_owned),
@@ -495,6 +509,7 @@ impl PendingBridgeStore {
                 &current.transcript_paths,
                 true,
                 current.started_at_ms,
+                current.silent_wake,
             )?;
         }
         Ok(())
@@ -512,6 +527,7 @@ impl PendingBridgeStore {
                 woken: checkpoint.wake_event.is_some(),
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
+                silent_wake: checkpoint.silent_wake,
                 group: checkpoint.group,
                 label: checkpoint.label,
                 started_at: checkpoint.started_at_ms.map(system_time_from_millis),
@@ -568,6 +584,7 @@ impl PendingBridgeStore {
                 woken: checkpoint.wake_event.is_some(),
                 screen: checkpoint.screen,
                 autoclose: checkpoint.autoclose,
+                silent_wake: checkpoint.silent_wake,
                 group: checkpoint.group,
                 label: checkpoint.label,
                 started_at: checkpoint.started_at_ms.map(system_time_from_millis),
@@ -1378,6 +1395,7 @@ fn settle_and_deliver_group(
         group,
         &session,
         &round.driver,
+        round.silent_wake,
         &mut |duration| std::thread::sleep(duration),
     )?;
     Ok(())
@@ -2529,6 +2547,7 @@ mod tests {
                 false,
                 Some(group),
                 Some(label),
+                false,
             )
             .unwrap();
         let backend = FakeBackend::new(
