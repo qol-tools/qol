@@ -453,6 +453,14 @@ mod tests {
         ) -> crate::session::LutRestoreOutcome {
             crate::session::LutRestoreOutcome::Unavailable
         }
+
+        fn adopt_baseline(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &crate::monitor::GammaTable,
+            _last_value: u8,
+        ) {
+        }
     }
 
     fn policy(ddc: FakeDdc, gamma: FakeGamma) -> PolicyControl<FakeDdc, FakeGamma> {

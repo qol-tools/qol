@@ -295,6 +295,16 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
             Ok(RestoreOutcome::NothingToRestore) | Err(_) => LutRestoreOutcome::Unavailable,
         }
     }
+
+    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+        let mut session = self.session();
+        let entry = session.entry(handle.id().to_string()).or_default();
+        if entry.original.is_none() {
+            entry.original = Some(original.clone());
+            entry.written_value = Some(last_value);
+            entry.written_checksum = Some(original.dimmed(last_value).checksum());
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

@@ -104,6 +104,7 @@ pub trait LutProvider: Send + Sync {
         original: &GammaTable,
         last_value: u8,
     ) -> LutRestoreOutcome;
+    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8);
 }
 
 pub struct NoLutProvider;
@@ -121,6 +122,8 @@ impl LutProvider for NoLutProvider {
     ) -> LutRestoreOutcome {
         LutRestoreOutcome::Unavailable
     }
+
+    fn adopt_baseline(&self, _handle: &DisplayHandle, _original: &GammaTable, _last_value: u8) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,8 +314,29 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .insert(display_id.to_string());
     }
 
+    fn adopt_persisted(&self, handle: &DisplayHandle) -> bool {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return false;
+        };
+        if snapshot.clean {
+            return false;
+        }
+        if snapshot.source_kind() != Some(BrightnessSource::Gamma) {
+            return false;
+        }
+        let Some(lut) = &snapshot.lut else {
+            return false;
+        };
+        self.lut.adopt_baseline(handle, lut, snapshot.last_value);
+        self.mark_snapshotted(handle.id());
+        true
+    }
+
     fn ensure_snapshot(&self, handle: &DisplayHandle) -> Result<(), MonitorError> {
         if self.is_snapshotted(handle.id()) {
+            return Ok(());
+        }
+        if self.adopt_persisted(handle) {
             return Ok(());
         }
         let state = self
@@ -348,7 +372,9 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     pub fn adopt(&self, handle: &DisplayHandle) {
-        self.mark_snapshotted(handle.id());
+        if !self.adopt_persisted(handle) {
+            self.mark_snapshotted(handle.id());
+        }
     }
 
     pub fn mark_handoff_all(&self, successor: Option<&str>) {
@@ -541,6 +567,7 @@ mod tests {
     struct RecordingControl {
         displays: Vec<DisplayHandle>,
         current: StdMutex<u8>,
+        source: BrightnessSource,
         sets: AtomicUsize,
         calls: StdMutex<Vec<(String, u8)>>,
     }
@@ -550,9 +577,15 @@ mod tests {
             Self {
                 displays,
                 current: StdMutex::new(current),
+                source: BrightnessSource::Ddc,
                 sets: AtomicUsize::new(0),
                 calls: StdMutex::new(Vec::new()),
             }
+        }
+
+        fn with_source(mut self, source: BrightnessSource) -> Self {
+            self.source = source;
+            self
         }
 
         fn calls(&self) -> Vec<(String, u8)> {
@@ -572,7 +605,7 @@ mod tests {
         fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
             Ok(BrightnessState {
                 value: *self.current.lock().unwrap(),
-                source: BrightnessSource::Ddc,
+                source: self.source,
             })
         }
 
@@ -955,11 +988,33 @@ mod tests {
 
     struct FakeLut {
         current: Arc<StdMutex<GammaTable>>,
+        adoptions: StdMutex<Vec<(String, GammaTable, u8)>>,
+    }
+
+    impl FakeLut {
+        fn new(current: Arc<StdMutex<GammaTable>>) -> Self {
+            Self {
+                current,
+                adoptions: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn adoptions(&self) -> Vec<(String, GammaTable, u8)> {
+            self.adoptions.lock().unwrap().clone()
+        }
     }
 
     impl LutProvider for FakeLut {
         fn capture(&self, _connector: &str) -> Option<GammaTable> {
             Some(self.current.lock().unwrap().clone())
+        }
+
+        fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+            self.adoptions.lock().unwrap().push((
+                handle.id().to_string(),
+                original.clone(),
+                last_value,
+            ));
         }
 
         fn write_guarded(
@@ -992,9 +1047,7 @@ mod tests {
         let display = handle("id-1", "card0-DP-1");
         let original = gamma_table(1000);
         let current = Arc::new(StdMutex::new(original.dimmed(60)));
-        let lut = FakeLut {
-            current: Arc::clone(&current),
-        };
+        let lut = FakeLut::new(Arc::clone(&current));
         store
             .write_snapshot(&Snapshot {
                 source: "gamma".into(),
@@ -1022,9 +1075,7 @@ mod tests {
         let mut foreign = original.dimmed(60);
         foreign.red[0] += 1;
         let current = Arc::new(StdMutex::new(foreign.clone()));
-        let lut = FakeLut {
-            current: Arc::clone(&current),
-        };
+        let lut = FakeLut::new(Arc::clone(&current));
         store
             .write_snapshot(&Snapshot {
                 source: "gamma".into(),
@@ -1314,5 +1365,123 @@ mod tests {
         );
         assert!(store.dir().join("id-3.json").exists());
         assert!(store.load_snapshot("id-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_second_session_adopts_the_persisted_baseline_instead_of_recapturing() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(baseline.clone()));
+        let lut1 = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control1 = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session1 = Session::new(control1.clone(), store.clone(), lut1.clone());
+        session1.mutate(&display, 80).unwrap();
+        let persisted = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(persisted.lut.as_ref(), Some(&baseline));
+
+        drop(session1);
+        drop(control1);
+        let lut2 = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control2 = Arc::new(
+            RecordingControl::new(vec![display.clone()], 80).with_source(BrightnessSource::Gamma),
+        );
+        let session2 = Session::new(control2.clone(), store.clone(), lut2.clone());
+        session2.mutate(&display, 80).unwrap();
+
+        let reloaded = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            reloaded.lut, persisted.lut,
+            "the persisted baseline is adopted, never recaptured from the dimmed CRTC"
+        );
+        assert_eq!(
+            reloaded.mutations, 2,
+            "the mutation counter advances across the restart instead of resetting"
+        );
+        let adoptions = lut2.adoptions();
+        assert_eq!(adoptions.len(), 1, "adopt_baseline runs exactly once");
+        assert_eq!(adoptions[0].0, "id-1");
+        assert_eq!(adoptions[0].1, baseline);
+        assert_eq!(adoptions[0].2, 80, "the persisted last_value is adopted");
+    }
+
+    #[test]
+    fn a_clean_snapshot_is_not_adopted_and_is_recaptured() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let current = Arc::new(StdMutex::new(gamma_table(1000)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_table(1000)),
+                clean: true,
+                ..snapshot("id-1", "card0-DP-1", 90, 60, 3, true, false)
+            })
+            .unwrap();
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        session.mutate(&display, 80).unwrap();
+        assert!(
+            lut.adoptions().is_empty(),
+            "a clean snapshot must not seed the baseline"
+        );
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            snap.value, 100,
+            "the capture path overwrote the clean snapshot with the live state"
+        );
+        assert!(!snap.clean);
+        assert_eq!(snap.mutations, 1);
+    }
+
+    #[test]
+    fn a_display_with_no_snapshot_on_disk_still_captures_and_writes_one() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let current = Arc::new(StdMutex::new(gamma_table(1000)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control.clone(), store.clone(), lut);
+        session.mutate(&display, 80).unwrap();
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snap.value, 100);
+        assert_eq!(
+            snap.lut.map(|t| t.checksum()),
+            Some(gamma_table(1000).checksum()),
+            "the untouched ramp is captured into the fresh snapshot"
+        );
+        assert_eq!(snap.mutations, 1);
+    }
+
+    #[test]
+    fn a_ddc_snapshot_without_a_lut_is_not_adopted_and_is_recaptured() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let current = Arc::new(StdMutex::new(gamma_table(1000)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        store
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 90, 60, 3, false, false))
+            .unwrap();
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 100));
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        session.mutate(&display, 80).unwrap();
+        assert!(
+            lut.adoptions().is_empty(),
+            "a DDC snapshot must not seed a gamma baseline"
+        );
+        let snap = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            snap.value, 100,
+            "the capture path re-baselines to the live DDC value"
+        );
+        assert_eq!(snap.last_value, 80);
+        assert_eq!(snap.mutations, 1);
     }
 }

@@ -382,6 +382,16 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
             Ok(RestoreOutcome::NothingToRestore) | Err(_) => LutRestoreOutcome::Unavailable,
         }
     }
+
+    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+        let mut session = self.session();
+        let entry = session.entry(handle.id().to_string()).or_default();
+        if entry.original.is_none() {
+            entry.original = Some(original.clone());
+            entry.written_value = Some(last_value);
+            entry.written_checksum = Some(original.dimmed(last_value).checksum());
+        }
+    }
 }
 
 fn peak_percent(current: &GammaTable, original: &GammaTable) -> u8 {
@@ -510,6 +520,7 @@ mod x11 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::{Session, SessionStore};
     use std::sync::Arc;
 
     struct FakeGammaBus {
@@ -927,5 +938,75 @@ mod tests {
         assert_eq!(connector_output_suffix("DP-0"), Some("DP-0"));
         assert_eq!(connector_output_suffix("HDMI-0"), Some("HDMI-0"));
         assert_eq!(connector_output_suffix("card0"), None);
+    }
+
+    #[test]
+    fn adopt_then_set_dims_against_the_adopted_baseline_not_the_live_crtc() {
+        let baseline = identity(4, 100);
+        let backend = backend(bus(&baseline.dimmed(80), 1));
+        backend.adopt_baseline(&handle(), &baseline, 80);
+        backend.set_brightness(&handle(), 80).unwrap();
+        let bus = backend.transport.bus.lock().unwrap();
+        assert_eq!(bus.tables[&1], baseline.dimmed(80));
+        assert_ne!(bus.tables[&1], baseline.dimmed(64));
+    }
+
+    #[test]
+    fn adopt_baseline_leaves_a_captured_original_alone() {
+        let backend = backend(bus(&identity(4, 100), 1));
+        backend.set_brightness(&handle(), 50).unwrap();
+        let persisted = identity(4, 900);
+        backend.adopt_baseline(&handle(), &persisted, 70);
+        let session = backend.sessions.lock().unwrap();
+        let entry = session.get("id-1").unwrap();
+        assert_eq!(entry.original.as_ref().unwrap(), &identity(4, 100));
+        assert_eq!(entry.written_value, Some(50));
+        assert_eq!(
+            entry.written_checksum,
+            Some(identity(4, 100).dimmed(50).checksum())
+        );
+    }
+
+    #[test]
+    fn get_brightness_after_adopt_reports_the_persisted_value() {
+        let baseline = identity(4, 100);
+        let backend = backend(bus(&baseline.dimmed(80), 1));
+        backend.adopt_baseline(&handle(), &baseline, 80);
+        let state = backend.get_brightness(&handle()).unwrap();
+        assert_eq!(state.value, 80);
+        assert_eq!(state.source, BrightnessSource::Gamma);
+    }
+
+    #[test]
+    fn a_restart_against_a_dimmed_crtc_dims_once_not_twice() {
+        let baseline = identity(4, 100);
+        let shared = Arc::new(Mutex::new(bus(&baseline, 1)));
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("session"));
+        let display = handle();
+
+        let backend1 = Arc::new(GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        }));
+        let session1 = Session::new(backend1.clone(), store.clone(), backend1.clone());
+        session1.mutate(&display, 80).unwrap();
+        assert_eq!(shared.lock().unwrap().tables[&1], baseline.dimmed(80));
+        let persisted = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(persisted.lut.as_ref().unwrap(), &baseline);
+
+        drop(session1);
+        drop(backend1);
+
+        let backend2 = Arc::new(GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        }));
+        let session2 = Session::new(backend2.clone(), store.clone(), backend2.clone());
+        session2.mutate(&display, 80).unwrap();
+        let current = shared.lock().unwrap().tables[&1].clone();
+        assert_eq!(current, baseline.dimmed(80));
+        assert_ne!(current, baseline.dimmed(64));
+        let after = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(after.lut.as_ref().unwrap(), &baseline);
+        assert_eq!(after.mutations, 2);
     }
 }
