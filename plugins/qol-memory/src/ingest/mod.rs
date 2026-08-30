@@ -1,3 +1,4 @@
+pub mod qa;
 pub mod redact;
 pub mod state;
 pub mod transcript;
@@ -353,8 +354,18 @@ pub fn ingest_paths(
         };
         let parsed = transcript::parse_file(path, source, agent_home, cursor)?;
         let (appended, compactions) = append_units_inner(store, &parsed.units, keys)?;
+        let qa = qa::qa_units(&parsed.units);
+        let qa_appended = if qa.is_empty() {
+            0
+        } else {
+            let (appended, _) = append_units_inner(store, &qa, keys)?;
+            appended
+        };
+        if qa_appended > 0 {
+            qol_runtime::probe!("QOL_MEMORY_INGEST", "event=qa_pairs appended={qa_appended}");
+        }
         report.files += 1;
-        report.appended += appended;
+        report.appended += appended + qa_appended;
         report.compactions += compactions;
         report.duplicates += parsed.units.len().saturating_sub(appended);
         persisted.set(
