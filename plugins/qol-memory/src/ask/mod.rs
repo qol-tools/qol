@@ -226,11 +226,12 @@ fn phrased_coverage(qt: &[String], note_text: Option<&str>) -> f64 {
 }
 
 fn weighted_note_cov(qt: &[String], note_text: &str, idf: &HashMap<String, f64>) -> f64 {
+    let floor = idf.values().copied().fold(0.0, f64::max);
     let lower = note_text.to_lowercase();
     let mut num = 0.0;
     let mut den = 0.0;
     for t in qt {
-        let w = idf.get(t).copied().unwrap_or(0.0);
+        let w = idf.get(t).copied().unwrap_or(floor);
         den += w;
         if lower.contains(t.as_str()) {
             num += w;
@@ -241,6 +242,47 @@ fn weighted_note_cov(qt: &[String], note_text: &str, idf: &HashMap<String, f64>)
     } else {
         num / den
     }
+}
+
+fn must_match_tokens(qt: &[String], idf: &HashMap<String, f64>) -> Vec<String> {
+    let floor = idf.values().copied().fold(0.0, f64::max);
+    let max_w = qt
+        .iter()
+        .map(|token| idf.get(token).copied().unwrap_or(floor))
+        .fold(0.0, f64::max);
+    qt.iter()
+        .filter(|token| match idf.get(token.as_str()) {
+            Some(weight) => *weight >= 0.6 * max_w,
+            None => false,
+        })
+        .cloned()
+        .collect()
+}
+
+fn note_covers_must_match(
+    resolved: &NoteHit,
+    superseded: Option<&Vec<NoteHit>>,
+    must_match: &[String],
+) -> bool {
+    let lower = resolved.text.to_lowercase();
+    let missing: Vec<&String> = must_match
+        .iter()
+        .filter(|token| !lower.contains(token.as_str()))
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    let Some(superseded) = superseded else {
+        return false;
+    };
+    if superseded.is_empty() {
+        return false;
+    }
+    missing.iter().all(|token| {
+        superseded
+            .iter()
+            .all(|hit| !hit.text.to_lowercase().contains(token.as_str()))
+    })
 }
 
 fn fixed2_string(value: f64) -> String {
@@ -674,12 +716,17 @@ fn run_with_warm(
             gates.floor
         );
     } else {
+        let must_match = match &notes_idx {
+            Some(idx) => must_match_tokens(&qtokens, &idx.idf),
+            None => Vec::new(),
+        };
         let note_winner = note_resolved.as_ref().is_some_and(|resolved| {
             note_decisive
                 && curated_kinds().contains(resolved.source_kind.as_deref().unwrap_or(""))
                 && (note_cov_r >= gates.note_cov
                     || (fam_relevant && note_superseded.as_ref().is_some_and(|s| !s.is_empty())))
                 && resolved.score >= gates.note_score
+                && note_covers_must_match(resolved, note_superseded.as_ref(), &must_match)
         });
         let unit_winner = unit_top.as_ref().is_some_and(|top| {
             unit_cov >= gates.unit_cov
@@ -1587,7 +1634,7 @@ mod tests {
     }
 
     #[test]
-    fn weighted_note_cov_uses_idf_weights_and_skips_unknown_terms() {
+    fn weighted_note_cov_uses_idf_weights_and_zero_coverage_without_matches() {
         let idf = HashMap::from([
             ("common".to_string(), 0.1),
             ("rare".to_string(), 5.0),
@@ -1605,6 +1652,43 @@ mod tests {
             weighted_note_cov(&["missing".to_string()], "anything", &idf),
             0.0
         );
+    }
+
+    #[test]
+    fn weighted_note_cov_charges_terms_absent_from_the_idf_map_the_max_idf_floor() {
+        let idf = HashMap::from([
+            ("common".to_string(), 0.5),
+            ("rare".to_string(), 4.0),
+            ("lorem".to_string(), 2.0),
+        ]);
+        let qt = vec![
+            "common".to_string(),
+            "rare".to_string(),
+            "offvocab".to_string(),
+        ];
+        let cov = weighted_note_cov(&qt, "has Common tokens and the RARE one", &idf);
+        assert!(cov < 1.0);
+        assert!((cov - (0.5 + 4.0) / (0.5 + 4.0 + 4.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn must_match_tokens_keeps_informative_terms_present_in_the_idf_map() {
+        let idf = HashMap::from([
+            ("common".to_string(), 0.5),
+            ("rare".to_string(), 4.0),
+            ("mid".to_string(), 2.6),
+        ]);
+        let qt = vec![
+            "common".to_string(),
+            "rare".to_string(),
+            "mid".to_string(),
+            "offvocab".to_string(),
+        ];
+        assert_eq!(
+            must_match_tokens(&qt, &idf),
+            vec!["rare".to_string(), "mid".to_string()]
+        );
+        assert_eq!(must_match_tokens(&[], &idf), Vec::<String>::new());
     }
 
     #[test]
@@ -1969,6 +2053,118 @@ mod tests {
     }
 
     #[test]
+    fn ask_charges_unknown_terms_so_a_partial_claim_no_longer_answers() {
+        let root = temp_root("vague-claim");
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(
+            json!({
+                "key": "u-qol",
+                "kind": "user",
+                "ts": "2026-08-01T09:00:00.000Z",
+                "text": "worked inside the qol monorepo worktree all morning"
+            })
+            .to_string(),
+        );
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let claim = json!({
+            "key": "n-qol-path",
+            "cls": "decision",
+            "source_kind": "decision",
+            "source_ts": "2026-08-04T09:00:00.000Z",
+            "text": "qol monorepo lives at /Users/kaho/repos/private/qol-monorepo"
+        });
+        let mut digests: Vec<String> = Vec::new();
+        for i in 0..10usize {
+            digests.push(
+                json!({
+                    "key": format!("n-qolfill-{i:02}"),
+                    "cls": "observation",
+                    "source_kind": "count",
+                    "source_ts": format!("2026-08-03T08:{i:02}:00.000Z"),
+                    "text": format!("qol monorepo weekly digest {i:02} qqfill{i:02}")
+                })
+                .to_string(),
+            );
+        }
+        write_newest_run_notes(
+            &root,
+            &format!("{}\n{}\n{}", fixture_notes(), claim, digests.join("\n")),
+        );
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(&store, "what language is the qol monorepo", false);
+        assert_eq!(out.verdict, "no-memory");
+        assert_eq!(out.answer, None);
+        let claim_recalled = out
+            .recalled
+            .iter()
+            .find(|recall| recall.key == "n-qol-path")
+            .expect("claim still recalled");
+        assert_eq!(claim_recalled.cls, "decision");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_rejects_a_claim_missing_an_informative_term_from_the_notes_vocabulary() {
+        let root = temp_root("must-match");
+        let fillers = [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+        ];
+        let mut lines: Vec<String> = Vec::new();
+        for (index, text) in fillers.iter().enumerate() {
+            let filler = json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": text
+            });
+            lines.push(filler.to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let claim = json!({
+            "key": "n-claim",
+            "cls": "decision",
+            "source_kind": "decision",
+            "source_ts": "2026-08-04T09:00:00.000Z",
+            "text": "Decision: ember quartz flint are tracked in the ledger"
+        });
+        let unrelated = json!({
+            "key": "n-unrelated",
+            "cls": "observation",
+            "source_kind": "count",
+            "source_ts": "2026-08-03T09:00:00.000Z",
+            "text": "zephyr aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise"
+        });
+        write_newest_run_notes(
+            &root,
+            &format!("{}\n{}\n{}", fixture_notes(), claim, unrelated),
+        );
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(&store, "ember quartz flint zephyr", false);
+        assert_eq!(out.verdict, "candidates");
+        assert_eq!(out.answer, None);
+        assert!(out.recalled.iter().any(|recall| recall.key == "n-claim"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn end_to_end_empty_notes_dir_does_not_crash_and_yields_non_note_verdict() {
         let root = temp_root("empty-notes");
         write_units(&root, &fixture_units());
@@ -2321,7 +2517,7 @@ mod tests {
         let store = Store::resolve(Some(&root)).expect("store resolves");
         let out = run_ask(
             &store,
-            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            "ember quartz flint cobalt onyx basalt garnet",
             false,
         );
         assert_eq!(out.verdict, "answered");

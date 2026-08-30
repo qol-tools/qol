@@ -53,6 +53,37 @@ fn row_date_key(row: &FlowRow) -> (bool, std::cmp::Reverse<&str>) {
     (at.is_empty(), std::cmp::Reverse(at))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FlowVerdict {
+    Answered,
+    Vague,
+    NoMemory,
+}
+
+pub struct FlowFetch {
+    pub rows: Vec<FlowRow>,
+    pub verdict: FlowVerdict,
+}
+
+pub fn parse_verdict(payload: &serde_json::Value) -> FlowVerdict {
+    match payload.get("verdict").and_then(|value| value.as_str()) {
+        Some("candidates") => FlowVerdict::Vague,
+        Some("no-memory") => {
+            let rows = payload
+                .get("rows")
+                .and_then(|rows| rows.as_array())
+                .map(|rows| rows.len())
+                .unwrap_or(0);
+            if rows > 0 {
+                FlowVerdict::Vague
+            } else {
+                FlowVerdict::NoMemory
+            }
+        }
+        _ => FlowVerdict::Answered,
+    }
+}
+
 pub struct TrailNode {
     pub at: String,
     pub tag: String,
@@ -130,7 +161,7 @@ pub fn detail_of(raw: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<Vec<FlowRow>, String> {
+pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<FlowFetch, String> {
     let body = serde_json::json!({ "query": text }).to_string();
     let route = qol_conventions::api_routes::plugin_query(&entry.plugin_id, &entry.query);
     let (status, response) =
@@ -149,7 +180,11 @@ pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<Vec<FlowRow>, String>
     }
     let payload: serde_json::Value =
         serde_json::from_str(&response).map_err(|error| error.to_string())?;
-    parse_rows(&payload)
+    let rows = parse_rows(&payload)?;
+    Ok(FlowFetch {
+        rows,
+        verdict: parse_verdict(&payload),
+    })
 }
 
 pub fn render_action_input(
@@ -249,6 +284,49 @@ mod tests {
         assert_eq!(
             parse_rows(&serde_json::json!({ "rows": [1, 2] })),
             Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn parse_verdict_maps_the_wire_values() {
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": "answered", "rows": [] })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": "candidates", "rows": [] })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "verdict": "candidates",
+                "rows": [{ "title": "nearby" }]
+            })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "verdict": "no-memory",
+                "rows": [{ "title": "nearby" }]
+            })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": "no-memory", "rows": [] })),
+            FlowVerdict::NoMemory
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": "no-memory" })),
+            FlowVerdict::NoMemory
+        );
+        assert_eq!(parse_verdict(&serde_json::json!({})), FlowVerdict::Answered);
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "rows": [] })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": 7 })),
+            FlowVerdict::Answered
         );
     }
 

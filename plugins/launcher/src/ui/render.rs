@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 
+use crate::flow::FlowVerdict;
+
 use super::layout::{
     window_height_for, window_height_for_detail, window_height_for_rows, window_height_for_trail,
     FLOW_ROW_HEIGHT, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH,
@@ -152,11 +154,14 @@ impl Render for LauncherView {
                 && self.state.flow.as_ref().is_some_and(|session| {
                     session.rows.get(self.state.scroll_list.selected).is_some()
                 });
+        let flow_verdict = self.state.flow_verdict();
         let target_height = if detail_ready {
             window_height_for_detail()
         } else if flow_active {
             if result_count > 0 {
-                window_height_for_trail()
+                window_height_for_trail(flow_verdict == FlowVerdict::Vague)
+            } else if flow_verdict == FlowVerdict::NoMemory {
+                window_height_for(1, FLOW_ROW_HEIGHT)
             } else {
                 window_height_for(0, FLOW_ROW_HEIGHT)
             }
@@ -314,7 +319,12 @@ impl Render for LauncherView {
                                             cx.notify();
                                         },
                                     ))
-                                    .child(view::trail_body(&kit, &session.rows, focus)),
+                                    .child(view::trail_body(
+                                        &kit,
+                                        &session.rows,
+                                        focus,
+                                        flow_verdict,
+                                    )),
                             ),
                             None => root,
                         }
@@ -346,6 +356,20 @@ impl Render for LauncherView {
                     )
                 }
             })
+            .when(
+                flow_active && result_count == 0 && flow_verdict == FlowVerdict::NoMemory,
+                |root| {
+                    root.child(
+                        div()
+                            .id("launcher-results")
+                            .h(px(results_height))
+                            .w_full()
+                            .overflow_hidden()
+                            .bg(view::bg_color())
+                            .child(view::flow_empty_state(&kit)),
+                    )
+                },
+            )
             .child(if detail_ready {
                 view::hint_bar_detail()
             } else {

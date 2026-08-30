@@ -26,8 +26,11 @@ pub fn full_window_height() -> f32 {
     window_height_for_rows(MAX_VISIBLE)
 }
 
-pub fn window_height_for_trail() -> f32 {
-    HEADER_HEIGHT + qol_gpui::trail::motion::viewport_height() + qol_gpui::theme::HEIGHT_HINT_BAR
+pub fn window_height_for_trail(fence: bool) -> f32 {
+    HEADER_HEIGHT
+        + qol_gpui::trail::motion::viewport_height()
+        + if fence { FLOW_ROW_HEIGHT } else { 0.0 }
+        + qol_gpui::theme::HEIGHT_HINT_BAR
 }
 
 pub fn window_height_for_detail() -> f32 {

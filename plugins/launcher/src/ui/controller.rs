@@ -237,6 +237,7 @@ impl LauncherView {
         let generation = flow.generation;
         if self.state.query.trim().is_empty() {
             flow.rows.clear();
+            flow.verdict = crate::flow::FlowVerdict::Answered;
             flow.pending = false;
             cx.notify();
             return;
@@ -286,11 +287,16 @@ impl LauncherView {
                         view.start_flow_fetch(cx);
                         return;
                     }
-                    let (rows, failure) = match outcome {
-                        Ok(rows) => (rows, None),
-                        Err(message) => (Vec::new(), Some(message)),
+                    let (rows, verdict, failure) = match outcome {
+                        Ok(fetch) => (fetch.rows, fetch.verdict, None),
+                        Err(message) => (
+                            Vec::new(),
+                            crate::flow::FlowVerdict::Answered,
+                            Some(message),
+                        ),
                     };
                     session.rows = rows;
+                    session.verdict = verdict;
                     session.pending = false;
                     if let Some(message) = failure {
                         view.state.set_launch_error(message);

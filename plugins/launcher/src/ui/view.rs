@@ -6,10 +6,10 @@ use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescripto
 use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_MICRO, TEXT_NANO};
 use qol_gpui::trail::{Trail, TrailItem};
 
-use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
+use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT, WINDOW_WIDTH};
 use super::state::TrailFocus;
 use crate::discovery::search::{ResultSource, Scored, SearchMode};
-use crate::flow::{FlowEntry, FlowRow};
+use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
 
 fn current_palette() -> LauncherPalette {
     launcher_runtime()
@@ -280,19 +280,74 @@ pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) 
     kit.row_selected(row, selected)
 }
 
-pub fn trail_body(kit: &qol_gpui::kit::Kit, rows: &[FlowRow], focus: TrailFocus) -> Trail {
+pub fn trail_body(
+    kit: &qol_gpui::kit::Kit,
+    rows: &[FlowRow],
+    focus: TrailFocus,
+    verdict: FlowVerdict,
+) -> AnyElement {
+    let vague = verdict == FlowVerdict::Vague;
     let items = rows
         .iter()
         .map(|row| {
             let node = &crate::flow::trail_of(&row.raw)[0];
-            TrailItem::new(node.at.clone(), node.tag.clone(), node.text.clone()).struck(node.struck)
+            let tag = if vague {
+                String::new()
+            } else {
+                node.tag.clone()
+            };
+            TrailItem::new(node.at.clone(), tag, node.text.clone()).struck(node.struck)
         })
         .collect();
-    Trail::new("flow-trail", items)
+    let mut palette = kit.palette;
+    if vague {
+        palette.text_primary = palette.text_secondary;
+    }
+    let trail = Trail::new("flow-trail", items)
         .focus(focus.from, focus.from_index, focus.to)
         .seq(focus.seq)
         .settled(focus.settled)
-        .palette(kit.palette)
+        .palette(palette);
+    if vague {
+        div()
+            .flex()
+            .flex_col()
+            .child(vague_fence(kit))
+            .child(trail)
+            .into_any_element()
+    } else {
+        trail.into_any_element()
+    }
+}
+
+fn vague_fence(kit: &qol_gpui::kit::Kit) -> Div {
+    div()
+        .flex_none()
+        .h(px(FLOW_ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(qol_gpui::theme::SPACE_PAD))
+        .child(
+            div()
+                .flex_none()
+                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text_color(rgb(kit.palette.text_secondary))
+                .text_size(px(TEXT_NANO))
+                .child("nothing answers this - nearby memories".to_uppercase()),
+        )
+        .child(div().flex_1().h(px(1.0)).bg(rgb(kit.palette.border_subtle)))
+}
+
+pub fn flow_empty_state(kit: &qol_gpui::kit::Kit) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(kit.palette.text_muted))
+        .text_size(px(TEXT_MICRO))
+        .child("no memory covers this")
 }
 
 pub fn detail_body(

@@ -1,6 +1,6 @@
 use super::layout::MAX_VISIBLE;
 use crate::discovery::search::{Fuzziness, SearchMode};
-use crate::flow::{FlowEntry, FlowRow};
+use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
 use std::time::{Duration, Instant};
 
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
@@ -53,6 +53,7 @@ pub struct TrailFocus {
 pub struct FlowSession {
     pub entry: FlowEntry,
     pub rows: Vec<FlowRow>,
+    pub verdict: FlowVerdict,
     pub generation: u64,
     pub pending: bool,
     pub in_flight: bool,
@@ -107,6 +108,7 @@ impl LauncherState {
         self.flow = Some(FlowSession {
             entry,
             rows: Vec::new(),
+            verdict: FlowVerdict::Answered,
             generation: 0,
             pending: false,
             in_flight: false,
@@ -188,6 +190,13 @@ impl LauncherState {
             .as_ref()
             .map(|session| session.rows.len())
             .unwrap_or(0)
+    }
+
+    pub fn flow_verdict(&self) -> FlowVerdict {
+        self.flow
+            .as_ref()
+            .map(|session| session.verdict)
+            .unwrap_or(FlowVerdict::Answered)
     }
 
     pub fn query_len(&self) -> usize {
