@@ -278,7 +278,12 @@ impl Render for LauncherView {
                                     .w_full()
                                     .overflow_hidden()
                                     .bg(view::bg_color())
-                                    .child(view::detail_body(&kit, row, results_height)),
+                                    .child(view::detail_body(
+                                        &kit,
+                                        row,
+                                        results_height,
+                                        &self.detail_scroll,
+                                    )),
                             ),
                             None => root,
                         }

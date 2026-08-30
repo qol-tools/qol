@@ -337,6 +337,7 @@ fn node(
         .relative()
         .w_full()
         .h(px(motion::ROW_H))
+        .overflow_hidden()
         .children(children)
         .id(id)
         .into_any_element()

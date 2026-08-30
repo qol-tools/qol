@@ -295,7 +295,12 @@ pub fn trail_body(kit: &qol_gpui::kit::Kit, rows: &[FlowRow], focus: TrailFocus)
         .palette(kit.palette)
 }
 
-pub fn detail_body(kit: &qol_gpui::kit::Kit, row: &FlowRow, height: f32) -> Div {
+pub fn detail_body(
+    kit: &qol_gpui::kit::Kit,
+    row: &FlowRow,
+    height: f32,
+    scroll: &ScrollHandle,
+) -> Div {
     let text = row.copy.clone().unwrap_or_else(|| row.title.clone());
     let detail = crate::flow::detail_of(&row.raw);
     let mut fields = div().flex().flex_col().gap(px(5.0));
@@ -324,23 +329,35 @@ pub fn detail_body(kit: &qol_gpui::kit::Kit, row: &FlowRow, height: f32) -> Div 
         );
     }
     div()
-        .flex()
-        .flex_col()
+        .relative()
         .h(px(height))
         .w_full()
         .overflow_hidden()
-        .p(px(14.0))
-        .pt(px(16.0))
-        .gap(px(14.0))
         .child(
             div()
-                .text_color(rgb(kit.palette.text_primary))
-                .text_size(px(TEXT_MICRO))
-                .line_height(px(18.0))
-                .line_clamp(12)
-                .child(text),
+                .id("flow-detail-scroll")
+                .track_scroll(scroll)
+                .overflow_y_scroll()
+                .size_full()
+                .flex()
+                .flex_col()
+                .p(px(14.0))
+                .pt(px(16.0))
+                .gap(px(14.0))
+                .child(
+                    div()
+                        .text_color(rgb(kit.palette.text_primary))
+                        .text_size(px(TEXT_MICRO))
+                        .line_height(px(18.0))
+                        .child(text),
+                )
+                .when(!detail.is_empty(), |body| body.child(fields)),
         )
-        .when(!detail.is_empty(), |body| body.child(fields))
+        .child(qol_gpui::scrollbar::seam_track(
+            scroll.clone(),
+            qol_gpui::kit::alpha(kit.palette.border_subtle, 0x48),
+            qol_gpui::kit::alpha(kit.palette.text_secondary, 0x8c),
+        ))
 }
 
 pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
@@ -363,7 +380,7 @@ pub fn hint_bar_detail() -> Div {
     let kit = qol_gpui::kit::kit();
     kit.hint_bar()
         .child(kit.hint("\u{23CE}", "copy"))
-        .child(kit.hint("\u{2191}\u{2193}", "move"))
+        .child(kit.hint("\u{2191}\u{2193}", "scroll"))
         .child(kit.hint("esc", "back"))
         .child(div().flex_1())
 }

@@ -8,6 +8,7 @@ use super::trace;
 use super::LauncherView;
 
 const FLOW_DEBOUNCE: Duration = Duration::from_millis(200);
+const DETAIL_SCROLL_STEP: f32 = 54.0;
 
 enum ClipboardShortcut {
     Copy,
@@ -102,6 +103,8 @@ impl LauncherView {
             InputEffect::FlowActivate => self.activate_flow_row(window, cx),
             InputEffect::FlowDetail => self.open_flow_detail(window, cx),
             InputEffect::FlowDetailClose => self.close_flow_detail(window, cx),
+            InputEffect::FlowDetailScrollUp => self.scroll_flow_detail(-DETAIL_SCROLL_STEP, cx),
+            InputEffect::FlowDetailScrollDown => self.scroll_flow_detail(DETAIL_SCROLL_STEP, cx),
         }
     }
 
@@ -327,8 +330,18 @@ impl LauncherView {
         if !self.state.open_flow_detail() {
             return;
         }
+        self.detail_scroll.set_offset(gpui::Point::default());
         window.resize(size(px(WINDOW_WIDTH), px(window_height_for_detail())));
         trace::flow(self, "detail_open");
+        cx.notify();
+    }
+
+    fn scroll_flow_detail(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let max = self.detail_scroll.max_offset().height;
+        let y = (self.detail_scroll.offset().y - px(delta))
+            .max(-max)
+            .min(px(0.0));
+        self.detail_scroll.set_offset(gpui::point(px(0.0), y));
         cx.notify();
     }
 

@@ -13,6 +13,8 @@ pub enum InputEffect {
     FlowActivate,
     FlowDetail,
     FlowDetailClose,
+    FlowDetailScrollUp,
+    FlowDetailScrollDown,
     FlowExit,
 }
 
@@ -137,14 +139,8 @@ impl LauncherState {
             return match key {
                 "escape" | "esc" => InputEffect::FlowDetailClose,
                 "enter" => InputEffect::FlowActivate,
-                "up" => {
-                    self.move_up();
-                    InputEffect::Navigate
-                }
-                "down" => {
-                    self.move_down(result_count);
-                    InputEffect::Navigate
-                }
+                "up" => InputEffect::FlowDetailScrollUp,
+                "down" => InputEffect::FlowDetailScrollDown,
                 _ => InputEffect::Ignore,
             };
         }
@@ -572,15 +568,16 @@ mod tests {
 
         assert_eq!(
             state.apply_key("down", false, false, false, false, 3),
-            InputEffect::Navigate
+            InputEffect::FlowDetailScrollDown
         );
-        assert_eq!(state.scroll_list.selected, 1);
-
         assert_eq!(
             state.apply_key("up", false, false, false, false, 3),
-            InputEffect::Navigate
+            InputEffect::FlowDetailScrollUp
         );
-        assert_eq!(state.scroll_list.selected, 0);
+        assert_eq!(
+            state.scroll_list.selected, 0,
+            "arrows scroll the open memory, never move between memories"
+        );
     }
 
     #[test]
