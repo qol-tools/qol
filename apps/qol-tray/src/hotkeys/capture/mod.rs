@@ -1,5 +1,5 @@
 mod binding;
-mod platform;
+pub(crate) mod platform;
 
 pub(crate) use binding::{parse_combo, Binding, CaptureEvent, Combo, Phase};
 #[cfg(target_os = "macos")]

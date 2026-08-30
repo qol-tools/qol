@@ -16,10 +16,9 @@ impl DoctorCheck for HotkeyCaptureBackendCheck {
     }
 
     fn run(&self, _ctx: &DoctorContext) -> CheckReport {
-        match native_capture_status() {
-            NativeCapture::Available => {
-                CheckReport::ok("native evdev hotkey capture is available")
-            }
+        let probe = platform::capture_probe();
+        match classify(&probe) {
+            NativeCapture::Available => available_report(&probe.skipped),
             NativeCapture::NotCompiled => warning(
                 "native evdev capture is not compiled in; hotkeys rely on X11 grabs, which the desktop can silently shadow",
                 "install or rebuild qol-tray with the linux_evdev feature to enable native keyboard capture",
@@ -38,6 +37,17 @@ impl DoctorCheck for HotkeyCaptureBackendCheck {
             ),
         }
     }
+}
+
+fn available_report(skipped: &[(String, String)]) -> CheckReport {
+    let mut summary = "native evdev hotkey capture is available".to_string();
+    for (name, reason) in skipped {
+        summary.push_str(&format!(
+            "\nskipped {name}: {reason}; that device cannot trigger hotkeys \
+             because grabbing it would drop its pointer or axis events"
+        ));
+    }
+    CheckReport::ok(summary)
 }
 
 fn warning(summary: &str, fix_advice: &str) -> CheckReport {
@@ -62,19 +72,16 @@ enum NativeCapture {
     NoUinput,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CaptureProbe {
     compiled: bool,
     device_node_count: usize,
     keyboard_count: usize,
     uinput_writable: bool,
+    skipped: Vec<(String, String)>,
 }
 
-fn native_capture_status() -> NativeCapture {
-    classify(platform::capture_probe())
-}
-
-fn classify(probe: CaptureProbe) -> NativeCapture {
+fn classify(probe: &CaptureProbe) -> NativeCapture {
     if !probe.compiled {
         return NativeCapture::NotCompiled;
     }
@@ -103,6 +110,7 @@ mod tests {
                     device_node_count: 0,
                     keyboard_count: 0,
                     uinput_writable: false,
+                    skipped: Vec::new(),
                 },
                 NativeCapture::NotCompiled,
             ),
@@ -112,6 +120,7 @@ mod tests {
                     device_node_count: 0,
                     keyboard_count: 0,
                     uinput_writable: false,
+                    skipped: Vec::new(),
                 },
                 NativeCapture::NoKeyboardDevices,
             ),
@@ -121,6 +130,7 @@ mod tests {
                     device_node_count: 4,
                     keyboard_count: 0,
                     uinput_writable: false,
+                    skipped: Vec::new(),
                 },
                 NativeCapture::NoReadableKeyboards,
             ),
@@ -130,6 +140,7 @@ mod tests {
                     device_node_count: 4,
                     keyboard_count: 2,
                     uinput_writable: false,
+                    skipped: Vec::new(),
                 },
                 NativeCapture::NoUinput,
             ),
@@ -139,14 +150,34 @@ mod tests {
                     device_node_count: 4,
                     keyboard_count: 2,
                     uinput_writable: true,
+                    skipped: Vec::new(),
                 },
                 NativeCapture::Available,
             ),
         ];
 
         for (probe, expected) in cases {
-            assert_eq!(classify(probe), expected, "probe: {probe:?}");
+            assert_eq!(classify(&probe), expected, "probe: {probe:?}");
         }
+    }
+
+    #[test]
+    fn available_report_lists_skipped_devices() {
+        let probe = CaptureProbe {
+            compiled: true,
+            device_node_count: 4,
+            keyboard_count: 2,
+            uinput_writable: true,
+            skipped: vec![("Logitech G305".to_string(), "pointer axes".to_string())],
+        };
+
+        assert_eq!(classify(&probe), NativeCapture::Available);
+        let report = available_report(&probe.skipped);
+        assert!(report
+            .summary
+            .contains("skipped Logitech G305: pointer axes"));
+        assert!(report.advice.is_empty());
+        assert!(report.fixes.is_empty());
     }
 
     #[test]
