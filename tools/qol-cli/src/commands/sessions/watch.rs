@@ -87,7 +87,6 @@ impl WatchedRound {
             .session
             .parse()
             .map_err(|_| anyhow!("pending checkpoint carries an invalid session token"))?;
-        let transcript_pinned = !round.transcript_paths.is_empty();
         Ok(Self {
             session: round.session,
             binding,
@@ -109,7 +108,7 @@ impl WatchedRound {
             label: round.label,
             started_at: round.started_at,
             transcript_paths: round.transcript_paths,
-            transcript_pinned,
+            transcript_pinned: false,
         })
     }
 
@@ -849,14 +848,14 @@ fn poll_round(
     let transcript_tool = facts
         .as_ref()
         .is_some_and(|facts| interpreter.transcript_supported(facts));
-    let agreement = if round.transcript_paths.is_empty() {
-        facts
-            .as_ref()
-            .and_then(|facts| interpreter.transcript_completion(facts, &round.marker))
-    } else {
+    let agreement = if round.transcript_pinned && !round.transcript_paths.is_empty() {
         facts.as_ref().and_then(|facts| {
             interpreter.transcript_completion_at(facts, &round.transcript_paths, &round.marker)
         })
+    } else {
+        facts
+            .as_ref()
+            .and_then(|facts| interpreter.transcript_completion(facts, &round.marker))
     };
     let marker_visible = if transcript_tool {
         super::marker_present(&screen, &round.marker) && agreement == Some(true)
@@ -928,7 +927,11 @@ fn poll_round(
         terminals,
         interpreter,
         &round.binding,
-        &round.transcript_paths,
+        if round.transcript_pinned {
+            &round.transcript_paths
+        } else {
+            &[]
+        },
         &round.marker,
     );
     match state {
@@ -1018,7 +1021,6 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.session
                     );
                 } else {
-                    let checkpoint_has_paths = !current.transcript_paths.is_empty();
                     if current.completion_marker != round.marker {
                         round.marker = current.completion_marker;
                         round.reads = 0;
@@ -1031,9 +1033,6 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.started_at = current.started_at;
                         round.transcript_paths = current.transcript_paths;
                         round.transcript_pinned = false;
-                    }
-                    if checkpoint_has_paths {
-                        round.transcript_pinned = true;
                     }
                     remaining.push(round);
                 }
@@ -6453,8 +6452,8 @@ mod tests {
         let mut round =
             WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
         assert!(
-            round.transcript_pinned,
-            "a restarted watcher must inherit the pin from the checkpoint"
+            !round.transcript_pinned,
+            "recorded paths are a hint list, never a pin"
         );
         assert_eq!(round.transcript_paths, vec![recorded.clone()]);
         let mut out = Vec::new();
@@ -6487,8 +6486,8 @@ mod tests {
 
         assert_eq!(
             tool.resolver_calls.load(Ordering::SeqCst),
-            0,
-            "a pinned round must never call the heuristic resolver"
+            1,
+            "an unpinned restart calls the heuristic resolver once before completing"
         );
         let events = lines(&out);
         assert_eq!(events.len(), 1, "events: {events:?}");
