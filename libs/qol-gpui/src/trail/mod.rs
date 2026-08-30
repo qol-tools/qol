@@ -29,6 +29,9 @@ const META_BODY_GAP: f32 = 2.0;
 pub struct Trail {
     id: ElementId,
     items: Vec<TrailItem>,
+    head: Option<Box<dyn Fn() -> AnyElement>>,
+    head_h: f32,
+    head_dot: f32,
     from: f32,
     from_index: usize,
     to: usize,
@@ -42,6 +45,9 @@ impl Trail {
         Self {
             id: id.into(),
             items,
+            head: None,
+            head_h: motion::ROW_H,
+            head_dot: motion::DOT_OFFSET,
             from: 0.0,
             from_index: 0,
             to: 0,
@@ -68,6 +74,18 @@ impl Trail {
         self
     }
 
+    pub fn head(
+        mut self,
+        body: impl Fn() -> AnyElement + 'static,
+        height: f32,
+        dot_center: f32,
+    ) -> Self {
+        self.head = Some(Box::new(body));
+        self.head_h = height;
+        self.head_dot = dot_center;
+        self
+    }
+
     pub fn palette(mut self, palette: SystemPalette) -> Self {
         self.palette = palette;
         self
@@ -78,13 +96,16 @@ impl RenderOnce for Trail {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         if self.items.is_empty() {
             return div()
-                .h(px(motion::viewport_height()))
+                .h(px(motion::viewport_height(self.head_h)))
                 .overflow_hidden()
                 .into_any_element();
         }
 
         let len = self.items.len();
         let items = self.items;
+        let head = self.head;
+        let head_h = self.head_h;
+        let head_dot = self.head_dot;
         let node_ids: Vec<ElementId> = (0..len)
             .map(|index| (self.id.clone(), index.to_string()).into())
             .collect();
@@ -92,7 +113,11 @@ impl RenderOnce for Trail {
         let from_index = self.from_index;
         let to = self.to;
         let palette = self.palette;
-        let viewport = || div().h(px(motion::viewport_height())).overflow_hidden();
+        let viewport = || {
+            div()
+                .h(px(motion::viewport_height(head_h)))
+                .overflow_hidden()
+        };
         let inner = || {
             div()
                 .absolute()
@@ -110,12 +135,15 @@ impl RenderOnce for Trail {
                     Frame {
                         items: &items,
                         node_ids: &node_ids,
+                        head: head.as_deref(),
                         from,
                         from_index,
                         to,
                         len,
                         phase: motion::Phase::Drain,
                         delta: 1.0,
+                        head_h,
+                        head_dot,
                         palette,
                     },
                 ))
@@ -143,12 +171,15 @@ impl RenderOnce for Trail {
                         Frame {
                             items: &items,
                             node_ids: &node_ids,
+                            head: head.as_deref(),
                             from,
                             from_index,
                             to,
                             len,
                             phase,
                             delta,
+                            head_h,
+                            head_dot,
                             palette,
                         },
                     )
@@ -161,12 +192,15 @@ impl RenderOnce for Trail {
 struct Frame<'a> {
     items: &'a [TrailItem],
     node_ids: &'a [ElementId],
+    head: Option<&'a dyn Fn() -> AnyElement>,
     from: f32,
     from_index: usize,
     to: usize,
     len: usize,
     phase: motion::Phase,
     delta: f32,
+    head_h: f32,
+    head_dot: f32,
     palette: SystemPalette,
 }
 
@@ -174,21 +208,24 @@ fn track(track: Div, frame: Frame<'_>) -> Div {
     let Frame {
         items,
         node_ids,
+        head,
         from,
         from_index,
         to,
         len,
         phase,
         delta,
+        head_h,
+        head_dot,
         palette,
     } = frame;
-    let (segment_top, segment_height) = motion::segment(from, to, phase, delta);
+    let (segment_top, segment_height) = motion::segment(from, to, phase, delta, head_h, head_dot);
     let lit = motion::lit(to, phase);
     let here = motion::here(from_index, to, phase);
     let fill = motion::fill(phase, delta);
     let mut track = track
-        .top(px(motion::slide(from, to, len, phase, delta)))
-        .child(spine(palette, len))
+        .top(px(motion::slide(from, to, len, phase, delta, head_h)))
+        .child(spine(palette, len, head_h, head_dot))
         .child(
             div()
                 .absolute()
@@ -198,7 +235,7 @@ fn track(track: Div, frame: Frame<'_>) -> Div {
                 .h(px(segment_height))
                 .bg(rgb(palette.accent)),
         );
-    if let Some(center) = motion::head_center(from, to, phase, delta) {
+    if let Some(center) = motion::head_center(from, to, phase, delta, head_h, head_dot) {
         track = track.child(
             div()
                 .absolute()
@@ -209,30 +246,120 @@ fn track(track: Div, frame: Frame<'_>) -> Div {
                 .bg(rgb(palette.accent)),
         );
     }
-    track.children(
-        node_ids
-            .iter()
-            .zip(items.iter())
-            .enumerate()
-            .map(|(index, (node_id, item))| {
-                node(node_id.clone(), item, index, lit, here, fill, palette)
-            }),
-    )
+    let mut rows = Vec::with_capacity(len);
+    for (index, (node_id, item)) in node_ids.iter().zip(items.iter()).enumerate() {
+        let dot_y = motion::dot_center(index as f32, head_h, head_dot)
+            - motion::row_top(index as f32, head_h)
+            - motion::PAD_TOP;
+        if index == 0 {
+            if let Some(build) = head {
+                rows.push(head_node(
+                    node_id.clone(),
+                    build(),
+                    head_h,
+                    lit,
+                    fill,
+                    dot_y,
+                    palette,
+                ));
+                continue;
+            }
+        }
+        rows.push(node(
+            node_id.clone(),
+            item,
+            index,
+            lit,
+            here,
+            fill,
+            dot_y,
+            palette,
+        ));
+    }
+    track.children(rows)
 }
 
-fn spine(palette: SystemPalette, len: usize) -> AnyElement {
+fn spine(palette: SystemPalette, len: usize, head_h: f32, head_dot: f32) -> AnyElement {
+    let first = motion::dot_center(0.0, head_h, head_dot);
+    let last = motion::dot_center(len as f32 - 1.0, head_h, head_dot);
     div()
         .absolute()
         .left(px(LINE_CX - LINE_WIDTH / 2.0))
         .w(px(LINE_WIDTH))
-        .top(px(motion::dot_center(0.0)))
-        .h(px(
-            motion::dot_center(len as f32 - 1.0) - motion::dot_center(0.0)
-        ))
+        .top(px(first))
+        .h(px(last - first))
         .bg(rgb(palette.border_subtle))
         .into_any_element()
 }
 
+fn gutter_children(lit: bool, fill: f32, dot_y: f32, palette: SystemPalette) -> Vec<AnyElement> {
+    if lit {
+        let size = DOT_SIZE + (DOT_LIT_SIZE - DOT_SIZE) * fill;
+        let glow_size = size + 2.0 * GLOW_PAD;
+        let glow: Hsla = rgb(palette.accent).into();
+        vec![
+            div()
+                .absolute()
+                .left(px(LINE_CX - glow_size / 2.0))
+                .top(px(dot_y - glow_size / 2.0))
+                .size(px(glow_size))
+                .rounded_full()
+                .bg(glow.opacity(0.22 * fill))
+                .into_any_element(),
+            div()
+                .absolute()
+                .left(px(LINE_CX - size / 2.0))
+                .top(px(dot_y - size / 2.0))
+                .size(px(size))
+                .rounded_full()
+                .bg(rgb(palette.accent))
+                .into_any_element(),
+        ]
+    } else {
+        vec![div()
+            .absolute()
+            .left(px(LINE_CX - DOT_SIZE / 2.0))
+            .top(px(dot_y - DOT_SIZE / 2.0))
+            .size(px(DOT_SIZE))
+            .rounded_full()
+            .bg(rgb(palette.surface_elevated))
+            .border(px(1.5))
+            .border_color(rgb(palette.border_subtle))
+            .into_any_element()]
+    }
+}
+
+fn head_node(
+    id: ElementId,
+    body: AnyElement,
+    head_h: f32,
+    lit: Option<usize>,
+    fill: f32,
+    dot_y: f32,
+    palette: SystemPalette,
+) -> AnyElement {
+    let mut children = gutter_children(lit == Some(0), fill, dot_y, palette);
+    children.push(
+        div()
+            .absolute()
+            .left(px(TEXT_LEFT))
+            .right(px(PAD_X))
+            .top_0()
+            .bottom_0()
+            .child(body)
+            .into_any_element(),
+    );
+    div()
+        .relative()
+        .w_full()
+        .h(px(head_h))
+        .overflow_hidden()
+        .children(children)
+        .id(id)
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn node(
     id: ElementId,
     item: &TrailItem,
@@ -240,6 +367,7 @@ fn node(
     lit: Option<usize>,
     here: usize,
     fill: f32,
+    dot_y: f32,
     palette: SystemPalette,
 ) -> AnyElement {
     let is_here = index == here;
@@ -269,45 +397,7 @@ fn node(
     } else {
         (palette.text_muted, palette.text_muted)
     };
-    let mut children = Vec::new();
-    if lit == Some(index) {
-        let size = DOT_SIZE + (DOT_LIT_SIZE - DOT_SIZE) * fill;
-        let glow_size = size + 2.0 * GLOW_PAD;
-        let glow: Hsla = rgb(palette.accent).into();
-        children.push(
-            div()
-                .absolute()
-                .left(px(LINE_CX - glow_size / 2.0))
-                .top(px(11.5 - glow_size / 2.0))
-                .size(px(glow_size))
-                .rounded_full()
-                .bg(glow.opacity(0.22 * fill))
-                .into_any_element(),
-        );
-        children.push(
-            div()
-                .absolute()
-                .left(px(LINE_CX - size / 2.0))
-                .top(px(11.5 - size / 2.0))
-                .size(px(size))
-                .rounded_full()
-                .bg(rgb(palette.accent))
-                .into_any_element(),
-        );
-    } else {
-        children.push(
-            div()
-                .absolute()
-                .left(px(LINE_CX - DOT_SIZE / 2.0))
-                .top(px(11.5 - DOT_SIZE / 2.0))
-                .size(px(DOT_SIZE))
-                .rounded_full()
-                .bg(rgb(palette.surface_elevated))
-                .border(px(1.5))
-                .border_color(rgb(palette.border_subtle))
-                .into_any_element(),
-        );
-    }
+    let mut children = gutter_children(lit == Some(index), fill, dot_y, palette);
     children.push(
         div()
             .absolute()

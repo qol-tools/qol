@@ -192,11 +192,12 @@ pub struct NotesLayer {
     pub items: Vec<Note>,
 }
 
-pub const BOILERPLATE_MARKERS: [&str; 4] = [
+pub const BOILERPLATE_MARKERS: [&str; 5] = [
     "[qol session bridge]",
     "Base directory for this skill:",
     "continued from a previous conversation",
     "Review this change for security vulnerabilities",
+    "qolmem:",
 ];
 
 pub const CLAUDE_COMPACTION_MARKER: &str =
@@ -459,6 +460,11 @@ mod tests {
             "b",
             None,
             "note [qol session bridge] start"
+        )));
+        assert!(is_boilerplate_unit(&unit(
+            "r",
+            None,
+            "qolmem: launcher receipt body"
         )));
         assert!(!is_boilerplate_unit(&unit("c", None, "real user fact")));
     }

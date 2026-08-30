@@ -7,6 +7,10 @@ use crate::store::{NotesLayer, UnitsLayer};
 
 pub const MAX_ROWS: usize = 8;
 pub const TITLE_CHARS: usize = 140;
+const LEAD_CHARS: usize = 48;
+const FOLD_JACCARD: f64 = 0.5;
+const RECALL_FLOOR_RATIO: f64 = 0.3;
+const LEAD_PREFER_RATIO: f64 = 0.9;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowRow {
@@ -16,6 +20,14 @@ pub struct FlowRow {
     pub copy: String,
     pub key: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lead: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "sources_below_two")]
+    pub sources: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nearby: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trail: Vec<TrailEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -50,12 +62,22 @@ pub fn title_of(text: &str) -> String {
 pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -> Vec<FlowRow> {
     let mut rows: Vec<FlowRow> = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
+    let has_answer = output.answer.is_some();
 
+    let restated = output
+        .answer
+        .as_ref()
+        .and_then(|answer| restated_by(answer, output));
     if let Some(answer) = &output.answer {
+        let shown = restated.as_ref();
+        let text = shown.map_or(answer.text.as_str(), |unit| unit.text.as_str());
+        let key = shown.map_or(answer.key.as_str(), |unit| unit.key.as_str());
+        let host = shown.map_or(answer.host.as_deref(), |unit| unit.host.as_deref());
+        let at = shown.map_or(answer.source_ts.as_deref(), |unit| unit.ts.as_deref());
         let mut trail = vec![TrailEntry {
-            at: date_of(answer.source_ts.as_deref()),
+            at: date_of(at),
             tag: "true now".to_string(),
-            text: answer.text.clone(),
+            text: text.to_string(),
             struck: false,
         }];
         if let Some(Some(superseded)) = &answer.superseded {
@@ -83,28 +105,40 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         detail.extend(detail_field("session", answer.session.clone()));
         detail.extend(detail_field("key", Some(answer.key.clone())));
         rows.push(FlowRow {
-            title: title_of(&answer.text),
+            title: title_of(text),
             subtitle: Some(format!(
                 "{} {} {}",
                 output.verdict,
                 answer.source_kind,
-                date_of(answer.source_ts.as_deref())
+                date_of(at)
             )),
-            copy: answer.text.clone(),
-            key: answer.key.clone(),
+            copy: text.to_string(),
+            key: key.to_string(),
             kind: "answer".to_string(),
+            lead: lead_of(text),
+            host: host.map(str::to_string),
+            sources: Some(if shown.is_some() { 2 } else { 1 }),
+            nearby: false,
             trail,
             detail,
         });
         used.insert(answer.key.clone());
+        used.insert(key.to_string());
     }
 
+    let answer_text = output.answer.as_ref().map(|answer| answer.text.as_str());
+    let mut folded = 0usize;
     if let Some(units_out) = &output.units {
         for unit in units_out {
             if rows.len() >= MAX_ROWS {
                 break;
             }
             if unit.kind == crate::ingest::CAPTURE_KIND && !used.contains(&unit.key) {
+                if answer_text.is_some_and(|text| jaccard(&unit.text, text) >= FOLD_JACCARD) {
+                    used.insert(unit.key.clone());
+                    folded += 1;
+                    continue;
+                }
                 let mut detail = Vec::new();
                 detail.extend(detail_field("kind", Some(unit.kind.clone())));
                 detail.extend(detail_field("when", unit.ts.clone()));
@@ -118,9 +152,17 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
                     copy: unit.text.clone(),
                     key: unit.key.clone(),
                     kind: unit.kind.clone(),
+                    lead: None,
+                    host: None,
+                    sources: None,
+                    nearby: has_answer,
                     trail: vec![TrailEntry {
                         at: date_of(unit.ts.as_deref()),
-                        tag: unit.kind.clone(),
+                        tag: if has_answer {
+                            "nearby".to_string()
+                        } else {
+                            unit.kind.clone()
+                        },
                         text: unit.text.clone(),
                         struck: false,
                     }],
@@ -130,12 +172,23 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
             }
         }
     }
+    if folded > 0 {
+        rows[0].sources = Some(1 + folded);
+    }
 
+    let floor = match &output.answer {
+        Some(answer) => RECALL_FLOOR_RATIO * answer.score,
+        None => output
+            .recalled
+            .iter()
+            .map(|recall| recall.score)
+            .fold(f64::NEG_INFINITY, f64::max),
+    };
     for recall in &output.recalled {
         if rows.len() >= MAX_ROWS {
             break;
         }
-        if used.contains(&recall.key) {
+        if used.contains(&recall.key) || recall.score < floor {
             continue;
         }
         let hit = units
@@ -164,9 +217,17 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
             copy: text.clone(),
             key: recall.key.clone(),
             kind: kind.clone(),
+            lead: None,
+            host: None,
+            sources: None,
+            nearby: has_answer,
             trail: vec![TrailEntry {
                 at: date_of(recall.source_ts.as_deref()),
-                tag: kind.clone(),
+                tag: if has_answer {
+                    "nearby".to_string()
+                } else {
+                    kind.clone()
+                },
                 text: text.clone(),
                 struck: false,
             }],
@@ -196,12 +257,69 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
             copy: hit.content.clone().flatten().unwrap_or_default(),
             key: hit.id.clone(),
             kind: "skill".to_string(),
+            lead: None,
+            host: None,
+            sources: None,
+            nearby: has_answer,
             trail: Vec::new(),
             detail,
         });
     }
 
     rows
+}
+
+fn sources_below_two(sources: &Option<usize>) -> bool {
+    !matches!(sources, Some(count) if *count >= 2)
+}
+
+/// A legacy answer that opens by restating the question carries no lead, so the
+/// launcher has nothing to bold. When an equally-ranked capture states the same
+/// fact lead-first, show that wording instead.
+fn restated_by<'a>(
+    answer: &super::Answer,
+    output: &'a AskOutput,
+) -> Option<&'a crate::ask::UnitOut> {
+    if lead_of(&answer.text).is_some() {
+        return None;
+    }
+    let floor = LEAD_PREFER_RATIO * answer.score;
+    let haystack = crate::text::collapse_ws_lower(&answer.text);
+    output.units.as_ref()?.iter().find(|unit| {
+        unit.key != answer.key
+            && unit.kind == crate::ingest::CAPTURE_KIND
+            && unit.score >= floor
+            && lead_of(&unit.text).is_some_and(|lead| {
+                haystack
+                    .contains(crate::text::collapse_ws_lower(lead.trim_end_matches('.')).as_str())
+            })
+    })
+}
+
+fn lead_of(text: &str) -> Option<String> {
+    let idx = text.find(". ")?;
+    let lead = &text[..idx];
+    if lead.is_empty() || text[idx + 2..].is_empty() || lead.chars().count() > LEAD_CHARS {
+        return None;
+    }
+    Some(lead.to_string())
+}
+
+fn token_set(text: &str) -> HashSet<String> {
+    crate::text::collapse_ws_lower(text)
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn jaccard(a: &str, b: &str) -> f64 {
+    let (left, right) = (token_set(a), token_set(b));
+    let union = left.union(&right).count();
+    if union == 0 {
+        return 0.0;
+    }
+    left.intersection(&right).count() as f64 / union as f64
 }
 
 fn detail_field(label: &str, value: Option<String>) -> Option<DetailField> {
@@ -341,6 +459,49 @@ mod tests {
     }
 
     #[test]
+    fn a_leadless_answer_borrows_the_wording_of_an_agreeing_leaded_capture() {
+        let leaded = json!({
+            "key": "c-lead",
+            "score": 11.5,
+            "kind": "capture",
+            "text": "Rust. The qol monorepo is written in Rust, a Cargo workspace.",
+            "ts": "2026-08-30T20:40:00.000Z",
+            "snippet": "Rust."
+        });
+        let leadless = "Which language is qol composed of: Rust is the language of the qol project, verified in Cargo.toml.";
+
+        let mut output = output_fixture("n-1", vec![], json!([leaded.clone()]));
+        let answer = output.answer.as_mut().expect("fixture carries an answer");
+        answer.text = leadless.to_string();
+        answer.score = 12.5;
+        let (units, notes) = empty_layers();
+        let rows = from_output(&output, &units, &notes);
+        assert_eq!(rows[0].lead.as_deref(), Some("Rust"));
+        assert_eq!(rows[0].key, "c-lead");
+        assert_eq!(rows[0].sources, Some(2));
+        assert!(rows[1..].iter().all(|row| row.key != "c-lead"));
+
+        let mut faint = leaded.clone();
+        faint["score"] = json!(10.0);
+        let mut output = output_fixture("n-1", vec![], json!([faint]));
+        let answer = output.answer.as_mut().expect("fixture carries an answer");
+        answer.text = leadless.to_string();
+        answer.score = 12.5;
+        let rows = from_output(&output, &units, &notes);
+        assert_eq!(rows[0].lead, None);
+        assert_eq!(rows[0].key, "n-1");
+
+        let mut disagreeing = leaded;
+        disagreeing["text"] = json!("Zig. The qol monorepo is written in Zig.");
+        let mut output = output_fixture("n-1", vec![], json!([disagreeing]));
+        let answer = output.answer.as_mut().expect("fixture carries an answer");
+        answer.text = leadless.to_string();
+        answer.score = 12.5;
+        let rows = from_output(&output, &units, &notes);
+        assert_eq!(rows[0].key, "n-1");
+    }
+
+    #[test]
     fn from_output_surfaces_capture_units_after_the_answer() {
         let capture_unit_json = json!({
             "key": "c-1",
@@ -453,6 +614,10 @@ mod tests {
             copy: "row copy".to_string(),
             key: "k-1".to_string(),
             kind: "answer".to_string(),
+            lead: None,
+            host: None,
+            sources: None,
+            nearby: false,
             trail: vec![],
             detail: vec![],
         };
@@ -472,6 +637,10 @@ mod tests {
             copy: "row copy".to_string(),
             key: "k-1".to_string(),
             kind: "answer".to_string(),
+            lead: None,
+            host: None,
+            sources: None,
+            nearby: false,
             trail: vec![],
             detail: vec![],
         };
@@ -570,7 +739,7 @@ mod tests {
             json!({
                 "key": "n-2",
                 "cls": "flag",
-                "score": 4.1,
+                "score": 4.6,
                 "source_ts": "2026-08-03T08:00:00.000Z"
             }),
             json!({ "key": "gone", "cls": "observation", "score": 3.0 }),
@@ -579,7 +748,7 @@ mod tests {
             recalled.push(json!({
                 "key": format!("u-{index}"),
                 "cls": "observation",
-                "score": 2.0
+                "score": 5.0
             }));
         }
         let output = output_fixture("n-ans", recalled, Value::Null);
@@ -664,6 +833,234 @@ mod tests {
         assert_eq!(rows[1].key, "a-1");
         assert_eq!(rows[1].subtitle.as_deref(), Some("assistant 2026-08-02"));
         assert_eq!(rows[1].copy, "assistant reply body");
-        assert_eq!(rows[1].trail[0].tag, "assistant");
+        assert!(rows[1].nearby);
+        assert_eq!(rows[1].trail[0].tag, "nearby");
+    }
+
+    #[test]
+    fn answer_row_splits_lead_at_the_first_sentence_and_carries_host() {
+        let mut output = output_fixture("n-ans", vec![], Value::Null);
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.text = "Pick rust for the core. Java was rejected over GC pauses.".to_string();
+        answer.host = Some("pc-alpha".to_string());
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].lead.as_deref(), Some("Pick rust for the core"));
+        assert_eq!(rows[0].host.as_deref(), Some("pc-alpha"));
+        assert_eq!(
+            rows[0].copy,
+            "Pick rust for the core. Java was rejected over GC pauses."
+        );
+    }
+
+    #[test]
+    fn answer_row_has_no_lead_for_a_single_sentence_answer() {
+        let output = output_fixture("n-ans", vec![], Value::Null);
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].lead, None);
+        assert_eq!(rows[0].host, None);
+        assert_eq!(rows[0].sources, Some(1));
+        assert!(!rows[0].nearby);
+    }
+
+    #[test]
+    fn answer_row_has_no_lead_when_the_first_sentence_exceeds_the_cap() {
+        let mut output = output_fixture("n-ans", vec![], Value::Null);
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.text = "This first sentence keeps running well past the forty eight character limit. Then a second one arrives.".to_string();
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].lead, None);
+    }
+
+    #[test]
+    fn near_duplicate_capture_folds_into_answer_sources_and_drops_the_row() {
+        let output = output_fixture(
+            "n-ans",
+            vec![],
+            json!([
+                {
+                    "key": "c-fold",
+                    "score": 12.0,
+                    "kind": "capture",
+                    "text": "the clipboard ring survives tray restarts. extra context here about persistence behavior",
+                    "ts": "2026-08-02T12:00:00.000Z",
+                    "snippet": "the clipboard ring survives tray restarts"
+                },
+                {
+                    "key": "c-keep",
+                    "score": 11.0,
+                    "kind": "capture",
+                    "text": "captured fact text",
+                    "ts": "2026-08-02T13:00:00.000Z",
+                    "snippet": "captured fact text"
+                }
+            ]),
+        );
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.key != "c-fold"));
+        assert_eq!(rows[1].key, "c-keep");
+        assert_eq!(rows[0].sources, Some(2));
+        let value = serde_json::to_value(&rows[0]).expect("answer row serialises");
+        assert_eq!(value["sources"], 2);
+    }
+
+    #[test]
+    fn recall_floor_drops_entries_below_thirty_percent_of_the_answer_score() {
+        let recalled = vec![
+            json!({
+                "key": "u-strong",
+                "cls": "observation",
+                "score": 10.0,
+                "source_ts": "2026-08-02T12:00:00.000Z"
+            }),
+            json!({
+                "key": "u-weak",
+                "cls": "observation",
+                "score": 4.0,
+                "source_ts": "2026-08-02T12:00:00.000Z"
+            }),
+        ];
+        let output = output_fixture("n-ans", recalled, Value::Null);
+        let units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![
+                unit("u-strong", "user", "strong unit text"),
+                unit("u-weak", "user", "weak unit text"),
+            ],
+        };
+        let notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert!(rows.iter().any(|row| row.key == "u-strong"));
+        assert!(rows.iter().all(|row| row.key != "u-weak"));
+    }
+
+    #[test]
+    fn recall_floor_uses_the_highest_recall_score_without_an_answer() {
+        let recalled = vec![
+            json!({
+                "key": "u-strong",
+                "cls": "observation",
+                "score": 10.0,
+                "source_ts": "2026-08-02T12:00:00.000Z"
+            }),
+            json!({
+                "key": "u-weak",
+                "cls": "observation",
+                "score": 2.0,
+                "source_ts": "2026-08-02T12:00:00.000Z"
+            }),
+        ];
+        let mut output = output_fixture("n-ans", recalled, Value::Null);
+        output.answer = None;
+        let units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![
+                unit("u-strong", "user", "strong unit text"),
+                unit("u-weak", "user", "weak unit text"),
+            ],
+        };
+        let notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].key, "u-strong");
+        assert!(rows.iter().all(|row| row.key != "u-weak"));
+        assert!(rows.iter().all(|row| !row.nearby));
+        assert_eq!(rows[0].trail[0].tag, "user");
+    }
+
+    #[test]
+    fn non_answer_rows_are_tagged_nearby_while_an_answer_is_present() {
+        let recalled = vec![json!({
+            "key": "u-1",
+            "cls": "observation",
+            "score": 5.2,
+            "source_ts": "2026-08-02T12:00:00.000Z"
+        })];
+        let output = output_fixture(
+            "n-ans",
+            recalled,
+            json!([
+                {
+                    "key": "c-1",
+                    "score": 12.0,
+                    "kind": "capture",
+                    "text": "captured fact text",
+                    "ts": "2026-08-02T12:00:00.000Z",
+                    "snippet": "captured fact text"
+                }
+            ]),
+        );
+        let units = UnitsLayer {
+            run: "live".to_string(),
+            path: PathBuf::from("units.jsonl"),
+            items: vec![unit("u-1", "capture", "unit one text")],
+        };
+        let notes = NotesLayer {
+            run: None,
+            items: vec![],
+        };
+
+        let rows = from_output(&output, &units, &notes);
+
+        let capture_row = rows
+            .iter()
+            .find(|row| row.key == "c-1")
+            .expect("capture row");
+        assert!(capture_row.nearby);
+        assert_eq!(capture_row.kind, "capture");
+        assert_eq!(capture_row.trail[0].tag, "nearby");
+        assert_eq!(capture_row.subtitle.as_deref(), Some("capture 2026-08-02"));
+        let recall_row = rows
+            .iter()
+            .find(|row| row.key == "u-1")
+            .expect("recall row");
+        assert!(recall_row.nearby);
+        assert_eq!(recall_row.trail[0].tag, "nearby");
+        assert_eq!(recall_row.subtitle.as_deref(), Some("capture 2026-08-02"));
+        let skill_row = rows
+            .iter()
+            .find(|row| row.kind == "skill")
+            .expect("skill row");
+        assert!(skill_row.nearby);
+        assert!(skill_row.trail.is_empty());
+        assert!(!rows[0].nearby);
+    }
+
+    #[test]
+    fn answer_row_json_omits_lead_host_sources_and_nearby_when_unset() {
+        let output = output_fixture("n-ans", vec![], Value::Null);
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        let value = serde_json::to_value(&rows[0]).expect("answer row serialises");
+        assert!(value.get("lead").is_none());
+        assert!(value.get("host").is_none());
+        assert!(value.get("sources").is_none());
+        assert!(value.get("nearby").is_none());
     }
 }

@@ -28,6 +28,7 @@ const NOTE_FETCH_LIMIT: usize = 40;
 const RELATED_LIMIT: usize = 5;
 const RECALLED_UNIT_LIMIT: usize = 5;
 const RECALLED_LIMIT: usize = 8;
+const AGREE_JACCARD: f64 = 0.5;
 
 #[derive(Debug)]
 pub struct AskRequest {
@@ -570,11 +571,18 @@ fn run_with_warm(
 
     let note_top: Option<&NoteHit> = top_notes.first();
     let unit_top: Option<UnitHit> = answer_ranked.first().cloned();
-    let unit_major: Option<&UnitHit> = answer_ranked.get(1);
-    let raw_unit_margin = match (&unit_top, unit_major) {
-        (Some(top), Some(major)) => top.score / major.score,
-        (Some(_), None) => f64::INFINITY,
-        _ => 0.0,
+    let raw_unit_margin = match &unit_top {
+        Some(top) => {
+            let competitor = answer_ranked
+                .iter()
+                .skip(1)
+                .find(|hit| text::token_jaccard(&top.text, &hit.text) < AGREE_JACCARD);
+            match competitor {
+                Some(major) => top.score / major.score,
+                None => f64::INFINITY,
+            }
+        }
+        None => 0.0,
     };
 
     let has_multi_intent = top_notes.len() >= 2
@@ -755,9 +763,11 @@ fn run_with_warm(
             let resolved = note_resolved
                 .as_ref()
                 .expect("winner keeps a resolved note");
-            let next_family = top_notes
-                .iter()
-                .find(|hit| hit.key != resolved.key && hit.family_key() != resolved.family_key());
+            let next_family = top_notes.iter().find(|hit| {
+                hit.key != resolved.key
+                    && hit.family_key() != resolved.family_key()
+                    && text::token_jaccard(&resolved.text, &hit.text) < AGREE_JACCARD
+            });
             let margin = next_family.map_or(f64::INFINITY, |hit| resolved.score / hit.score);
             let high = margin >= gates.high_margin
                 && !note_superseded.as_ref().is_some_and(|s| !s.is_empty());
@@ -1569,6 +1579,35 @@ mod tests {
         fs::write(root.join("units.jsonl"), body).expect("write units.jsonl");
     }
 
+    fn margin_fillers() -> Vec<String> {
+        [
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
+            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
+            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
+            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
+            "piano violin cello flute clarinet trumpet saxophone banjo ukulele harmony rhythm tempo octave",
+            "summit valley glacier tundra prairie savanna wetland estuary delta basin plateau canyon ridge",
+            "cedar birch maple willow aspen spruce fir hickory walnut chestnut sycamore mangrove bamboo",
+            "sonnet haiku ballad elegy ode lyric verse stanza rhythm meter couplet refrain epic prose",
+            "harbor jetty quay wharf pier dock berth marina lighthouse breakwater anchor mooring tugboat",
+            "saffron paprika cumin turmeric ginger cinnamon nutmeg clove anise fennel thyme sage basil",
+            "nova quasar pulsar nebula galaxy comet asteroid meteor planet dwarf orbit eclipse zenith",
+            "tundra pampa llanos outback bushveld pampas steppe veld taiga chaparral maquis caatinga",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, filler)| {
+            json!({
+                "key": format!("filler-{index:02}"),
+                "kind": "user",
+                "ts": "2026-08-01T08:00:00.000Z",
+                "text": filler
+            })
+            .to_string()
+        })
+        .collect()
+    }
+
     fn write_newest_run_notes(root: &Path, body: &str) {
         let run_dir = root.join("notes").join("2026-08-05T10-00-00-000Z");
         fs::create_dir_all(&run_dir).expect("create notes run dir");
@@ -2350,7 +2389,13 @@ mod tests {
             capture["key"].as_str().expect("capture key string")
         );
         let margin = out.signals.unit_margin.expect("unit margin signal");
-        assert!(margin < Gates::DEFAULTS.unit_margin);
+        assert!(
+            text::token_jaccard(
+                capture["text"].as_str().expect("capture text"),
+                shadow["text"].as_str().expect("shadow text"),
+            ) >= AGREE_JACCARD
+        );
+        assert!(margin >= Gates::DEFAULTS.unit_margin);
         fs::remove_dir_all(&root).ok();
     }
 
@@ -2361,30 +2406,22 @@ mod tests {
             "key": "u-a",
             "kind": "user",
             "ts": "2026-08-01T09:00:00.000Z",
-            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz were catalogued during the spring mineralogy survey"
         });
-        let shadow_user = json!({
+        let rival_user = json!({
             "key": "u-b",
             "kind": "user",
             "ts": "2026-08-01T08:00:00.000Z",
-            "text": "the ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz crystals were catalogued during the last survey"
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz got auctioned at our autumn gemstone exchange yesterday"
         });
-        let fillers = [
-            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
-            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
-            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
-            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
-        ];
-        let mut lines = vec![top_user.to_string(), shadow_user.to_string()];
-        for (index, text) in fillers.iter().enumerate() {
-            let filler = json!({
-                "key": format!("filler-{index:02}"),
-                "kind": "user",
-                "ts": "2026-08-01T08:00:00.000Z",
-                "text": text
-            });
-            lines.push(filler.to_string());
-        }
+        assert!(
+            text::token_jaccard(
+                top_user["text"].as_str().expect("top text"),
+                rival_user["text"].as_str().expect("rival text")
+            ) < AGREE_JACCARD
+        );
+        let mut lines = vec![top_user.to_string(), rival_user.to_string()];
+        lines.extend(margin_fillers());
         write_units(&root, &lines.join("\n"));
         let store = Store::resolve(Some(&root)).expect("store resolves");
         let out = run_ask(
@@ -2628,30 +2665,22 @@ mod tests {
             "key": "a-1",
             "kind": "assistant",
             "ts": "2026-08-01T09:00:00.000Z",
-            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz"
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz were catalogued during the spring mineralogy survey"
         });
-        let shadow_reply = json!({
+        let rival_reply = json!({
             "key": "a-2",
             "kind": "assistant",
             "ts": "2026-08-01T08:00:00.000Z",
-            "text": "the ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz crystals were catalogued during the last survey"
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz got auctioned at our autumn gemstone exchange yesterday"
         });
-        let fillers = [
-            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november",
-            "anchor beacon current estuary fathom gulf harbor inlet jetty keel lagoon mooring narrows",
-            "binder canvas dowel easel fillet gauge hinge jamb knob latch miter notch overlay paste",
-            "aurora basin canyon dell escarpment fen gorge hollow karst ledge mesa outcrop plateau rise",
-        ];
-        let mut lines = vec![top_reply.to_string(), shadow_reply.to_string()];
-        for (index, text) in fillers.iter().enumerate() {
-            let filler = json!({
-                "key": format!("filler-{index:02}"),
-                "kind": "user",
-                "ts": "2026-08-01T08:00:00.000Z",
-                "text": text
-            });
-            lines.push(filler.to_string());
-        }
+        assert!(
+            text::token_jaccard(
+                top_reply["text"].as_str().expect("top text"),
+                rival_reply["text"].as_str().expect("rival text")
+            ) < AGREE_JACCARD
+        );
+        let mut lines = vec![top_reply.to_string(), rival_reply.to_string()];
+        lines.extend(margin_fillers());
         write_units(&root, &lines.join("\n"));
         let store = Store::resolve(Some(&root)).expect("store resolves");
         let out = run_ask(
@@ -2663,6 +2692,98 @@ mod tests {
         assert_eq!(out.answer, None);
         let margin = out.signals.unit_margin.expect("unit margin signal");
         assert!(margin < Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_answers_three_agreeing_paraphrase_captures_with_one_clear_top() {
+        let root = temp_root("paraphrase-trio");
+        let top_text =
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
+        let second_text = format!("the {top_text} crystals were catalogued");
+        let third_text = format!("{top_text} got catalogued today");
+        assert!(text::token_jaccard(top_text, &second_text) >= AGREE_JACCARD);
+        assert!(text::token_jaccard(top_text, &third_text) >= AGREE_JACCARD);
+        assert!(text::token_jaccard(&second_text, &third_text) >= AGREE_JACCARD);
+        let top = json!({
+            "key": "u-top",
+            "kind": "user",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": top_text
+        });
+        let second = json!({
+            "key": "u-p1",
+            "kind": "user",
+            "ts": "2026-08-01T08:30:00.000Z",
+            "text": second_text
+        });
+        let third = json!({
+            "key": "u-p2",
+            "kind": "user",
+            "ts": "2026-08-01T08:00:00.000Z",
+            "text": third_text
+        });
+        let mut lines = vec![top.to_string(), second.to_string(), third.to_string()];
+        lines.extend(margin_fillers());
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.key, "u-top");
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(margin >= Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_answers_when_a_weak_unrelated_unit_is_the_only_competitor() {
+        let root = temp_root("agree-weak");
+        let top_text =
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
+        let agree_text = format!("the {top_text} crystals were catalogued");
+        let weak_text = "ember lantern drift cobalt";
+        assert!(text::token_jaccard(top_text, &agree_text) >= AGREE_JACCARD);
+        assert!(text::token_jaccard(top_text, weak_text) < AGREE_JACCARD);
+        let top = json!({
+            "key": "u-top",
+            "kind": "user",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": top_text
+        });
+        let agree = json!({
+            "key": "u-agree",
+            "kind": "user",
+            "ts": "2026-08-01T08:30:00.000Z",
+            "text": agree_text
+        });
+        let weak = json!({
+            "key": "u-weak",
+            "kind": "user",
+            "ts": "2026-08-01T08:00:00.000Z",
+            "text": weak_text
+        });
+        let mut lines = vec![top.to_string(), agree.to_string(), weak.to_string()];
+        lines.extend(margin_fillers());
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(
+            &store,
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz",
+            false,
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.as_ref().expect("unit answer");
+        assert_eq!(answer.layer, "unit");
+        assert_eq!(answer.key, "u-top");
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(margin.is_finite());
+        assert!(margin >= Gates::DEFAULTS.unit_margin);
         fs::remove_dir_all(&root).ok();
     }
 

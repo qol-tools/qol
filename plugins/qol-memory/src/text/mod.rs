@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -122,6 +123,22 @@ pub(crate) fn collapse_ws(text: &str) -> String {
 
 pub fn collapse_ws_lower(text: &str) -> String {
     collapse_ws(&text.to_lowercase())
+}
+
+pub fn token_jaccard(a: &str, b: &str) -> f64 {
+    let token_set = |text: &str| -> HashSet<String> {
+        collapse_ws_lower(text)
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let (left, right) = (token_set(a), token_set(b));
+    let union = left.union(&right).count();
+    if union == 0 {
+        return 0.0;
+    }
+    left.intersection(&right).count() as f64 / union as f64
 }
 
 pub fn to_fixed2(value: f64) -> f64 {

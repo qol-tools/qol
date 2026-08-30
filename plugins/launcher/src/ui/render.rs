@@ -159,7 +159,16 @@ impl Render for LauncherView {
             window_height_for_detail()
         } else if flow_active {
             if result_count > 0 {
-                window_height_for_trail(flow_verdict == FlowVerdict::Vague)
+                window_height_for_trail(
+                    flow_verdict == FlowVerdict::Vague,
+                    self.state
+                        .flow
+                        .as_ref()
+                        .and_then(|session| {
+                            view::answer_lead(flow_verdict == FlowVerdict::Vague, &session.rows)
+                        })
+                        .map_or(qol_gpui::trail::motion::ROW_H, |_| view::CARD_HEIGHT),
+                )
             } else if flow_verdict == FlowVerdict::NoMemory {
                 window_height_for(1, FLOW_ROW_HEIGHT)
             } else {

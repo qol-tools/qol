@@ -3,13 +3,22 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
-use qol_gpui::theme::{launcher_runtime, LauncherPalette, TEXT_BODY, TEXT_MICRO, TEXT_NANO};
+use qol_gpui::theme::{
+    launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO, TEXT_NANO,
+    TEXT_TITLE,
+};
 use qol_gpui::trail::{Trail, TrailItem};
 
 use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT, WINDOW_WIDTH};
 use super::state::TrailFocus;
 use crate::discovery::search::{ResultSource, Scored, SearchMode};
-use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
+use crate::flow::{host_of, lead_of, sources_of, FlowEntry, FlowRow, FlowVerdict};
+
+pub const CARD_HEIGHT: f32 = 116.0;
+// The card is a filled box in a trail slot whose rows start one PAD_TOP down,
+// so it has to end one PAD_TOP short of the next slot to keep that rhythm.
+const CARD_GAP: f32 = qol_gpui::trail::motion::PAD_TOP;
+const CARD_DOT_CY: f32 = 36.0;
 
 fn current_palette() -> LauncherPalette {
     launcher_runtime()
@@ -287,6 +296,9 @@ pub fn trail_body(
     verdict: FlowVerdict,
 ) -> AnyElement {
     let vague = verdict == FlowVerdict::Vague;
+    if let Some(row) = answer_lead(vague, rows) {
+        return answer_trail(kit, row, rows, focus);
+    }
     let items = rows
         .iter()
         .map(|row| {
@@ -318,6 +330,147 @@ pub fn trail_body(
     } else {
         trail.into_any_element()
     }
+}
+
+pub fn answer_lead(vague: bool, rows: &[FlowRow]) -> Option<&FlowRow> {
+    (!vague)
+        .then(|| rows.first())
+        .flatten()
+        .filter(|row| row.raw.get("kind").and_then(|value| value.as_str()) == Some("answer"))
+}
+
+fn answer_trail(
+    kit: &qol_gpui::kit::Kit,
+    lead_row: &FlowRow,
+    rows: &[FlowRow],
+    focus: TrailFocus,
+) -> AnyElement {
+    let nodes = crate::flow::trail_of(&lead_row.raw);
+    let items = rows
+        .iter()
+        .map(|row| {
+            let node = &crate::flow::trail_of(&row.raw)[0];
+            TrailItem::new(node.at.clone(), node.tag.clone(), node.text.clone()).struck(node.struck)
+        })
+        .collect();
+    let kit = *kit;
+    let card_row = lead_row.clone();
+    Trail::new("flow-trail", items)
+        .head(
+            move || {
+                answer_card(&kit, &card_row, &nodes)
+                    .h(px(CARD_HEIGHT - CARD_GAP))
+                    .into_any_element()
+            },
+            CARD_HEIGHT,
+            CARD_DOT_CY,
+        )
+        .focus(focus.from, focus.from_index, focus.to)
+        .seq(focus.seq)
+        .settled(focus.settled)
+        .palette(kit.palette)
+        .into_any_element()
+}
+
+fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::TrailNode]) -> Div {
+    let lead = lead_of(&row.raw);
+    let mut card = div()
+        .rounded(px(RADIUS_CARD))
+        .border(px(1.0))
+        .border_color(rgba(kit.washes.hairline.packed()))
+        .bg(rgb(kit.palette.surface_raised))
+        .py(px(10.0))
+        .px(px(12.0))
+        .flex()
+        .flex_col()
+        .gap(px(4.0));
+    if let Some(lead) = &lead {
+        let mut head = div().flex().items_start().gap(px(8.0)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(kit.palette.text_primary))
+                .text_size(px(TEXT_TITLE))
+                .line_height(px(24.0))
+                .font_weight(FontWeight::BOLD)
+                .child(lead.clone()),
+        );
+        if let Some(host) = host_of(&row.raw) {
+            head = head.child(host_tag(kit, &host).flex_shrink_0());
+        }
+        card = card.child(head);
+        if let Some(explanation) = row
+            .copy
+            .as_deref()
+            .and_then(|copy| explanation_of(copy, lead))
+        {
+            card = card.child(
+                div()
+                    .text_color(rgb(kit.palette.text_secondary))
+                    .text_size(px(TEXT_MICRO))
+                    .line_height(px(18.0))
+                    .line_clamp(3)
+                    .child(explanation),
+            );
+        }
+    } else if let Some(copy) = row.copy.clone().or_else(|| Some(row.title.clone())) {
+        card = card.child(
+            div()
+                .text_color(rgb(kit.palette.text_primary))
+                .text_size(px(TEXT_MICRO))
+                .line_height(px(18.0))
+                .line_clamp(3)
+                .child(copy),
+        );
+    }
+    let mut meta = div().mt(px(4.0)).flex().items_center().gap(px(8.0));
+    meta = meta.child(
+        kit.chip("TRUE NOW", kit.palette.accent)
+            .text_size(px(TEXT_NANO)),
+    );
+    if let Some(sources) = sources_of(&row.raw).filter(|count| *count >= 2) {
+        meta = meta.child(
+            div()
+                .text_color(rgb(kit.palette.text_muted))
+                .text_size(px(TEXT_NANO))
+                .child(format!("{sources} sources agree")),
+        );
+    }
+    let at = nodes.first().map(|node| node.at.as_str()).unwrap_or("");
+    if !at.is_empty() {
+        meta = meta.child(
+            div()
+                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text_color(rgb(kit.palette.text_muted))
+                .text_size(px(TEXT_NANO))
+                .child(at.to_string()),
+        );
+    }
+    if lead.is_none() {
+        if let Some(host) = host_of(&row.raw) {
+            meta = meta.child(div().flex_1()).child(host_tag(kit, &host));
+        }
+    }
+    card = card.child(meta);
+    card
+}
+
+fn host_tag(kit: &qol_gpui::kit::Kit, host: &str) -> Div {
+    div()
+        .px(px(5.0))
+        .rounded(px(RADIUS_TIGHT))
+        .border(px(1.0))
+        .border_color(rgba(kit.washes.hairline_strong.packed()))
+        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+        .text_color(rgb(kit.palette.text_muted))
+        .text_size(px(TEXT_NANO))
+        .child(host.to_string())
+}
+
+fn explanation_of(copy: &str, lead: &str) -> Option<String> {
+    let rest = copy.strip_prefix(lead).unwrap_or(copy);
+    let rest = rest.trim_start_matches([' ', '.']);
+    (!rest.is_empty()).then(|| rest.to_string())
 }
 
 fn vague_fence(kit: &qol_gpui::kit::Kit) -> Div {
@@ -498,7 +651,26 @@ pub fn bg_color() -> gpui::Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::{search_window, visible_char_count};
+    use super::{answer_lead, search_window, visible_char_count};
+    use crate::flow::FlowRow;
+
+    fn flow_row(kind: &str) -> FlowRow {
+        FlowRow {
+            title: String::new(),
+            subtitle: None,
+            copy: None,
+            raw: serde_json::json!({ "kind": kind }),
+        }
+    }
+
+    #[test]
+    fn trail_routes_on_a_non_vague_answer_lead_row() {
+        let answer_first = [flow_row("answer"), flow_row("note")];
+        assert!(answer_lead(false, &answer_first).is_some());
+        assert!(answer_lead(false, &[flow_row("note"), flow_row("answer")]).is_none());
+        assert!(answer_lead(true, &[flow_row("answer")]).is_none());
+        assert!(answer_lead(false, &[]).is_none());
+    }
 
     #[test]
     fn visible_char_count_floors_the_advance() {

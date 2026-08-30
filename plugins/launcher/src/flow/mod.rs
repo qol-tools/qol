@@ -37,8 +37,14 @@ pub fn parse_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
         })
         .take(MAX_ROWS)
         .collect();
-    rows.sort_by(|a, b| row_date_key(a).cmp(&row_date_key(b)));
+    rows.sort_by(|a, b| row_sort_key(a).cmp(&row_sort_key(b)));
     Ok(rows)
+}
+
+fn row_sort_key(row: &FlowRow) -> (bool, bool, std::cmp::Reverse<&str>) {
+    let answer = row.raw.get("kind").and_then(|value| value.as_str()) == Some("answer");
+    let (undated, at) = row_date_key(row);
+    (!answer, undated, at)
 }
 
 fn row_date_key(row: &FlowRow) -> (bool, std::cmp::Reverse<&str>) {
@@ -142,6 +148,34 @@ fn fallback_node(raw: &serde_json::Value) -> TrailNode {
             .to_string(),
         struck: false,
     }
+}
+
+pub fn lead_of(raw: &serde_json::Value) -> Option<String> {
+    answer_string(raw, "lead")
+}
+
+pub fn host_of(raw: &serde_json::Value) -> Option<String> {
+    answer_string(raw, "host")
+}
+
+pub fn sources_of(raw: &serde_json::Value) -> Option<usize> {
+    raw.get("sources")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value >= 2)
+}
+
+pub fn nearby_of(raw: &serde_json::Value) -> bool {
+    raw.get("nearby")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn answer_string(raw: &serde_json::Value, key: &str) -> Option<String> {
+    raw.get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 pub fn detail_of(raw: &serde_json::Value) -> Vec<(String, String)> {
@@ -346,6 +380,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_rows_keeps_the_answer_first_even_when_a_newer_row_exists() {
+        let payload = serde_json::json!({
+            "rows": [
+                { "title": "answer", "kind": "answer", "trail": [{ "at": "2026-08-30", "text": "x" }] },
+                { "title": "newer", "kind": "decision", "trail": [{ "at": "2026-08-31", "text": "x" }] },
+                { "title": "older", "kind": "decision", "trail": [{ "at": "2026-08-29", "text": "x" }] }
+            ]
+        });
+        let rows = parse_rows(&payload).unwrap();
+        let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+        assert_eq!(titles, ["answer", "newer", "older"]);
+    }
+
+    #[test]
     fn trail_of_parses_a_well_formed_trail_in_order() {
         let row = serde_json::json!({
             "title": "t",
@@ -441,6 +489,31 @@ mod tests {
             detail_of(&row),
             vec![("kind".to_string(), "capture".to_string())]
         );
+    }
+
+    #[test]
+    fn answer_card_fields_parse_defensively_from_raw() {
+        let row = serde_json::json!({
+            "lead": "Buffers survive restarts",
+            "host": "pc-alpha",
+            "sources": 3,
+            "nearby": true
+        });
+        assert_eq!(lead_of(&row).as_deref(), Some("Buffers survive restarts"));
+        assert_eq!(host_of(&row).as_deref(), Some("pc-alpha"));
+        assert_eq!(sources_of(&row), Some(3));
+        assert!(nearby_of(&row));
+
+        for row in [
+            serde_json::json!({}),
+            serde_json::json!({ "lead": "", "host": "", "sources": 0, "nearby": false }),
+            serde_json::json!({ "lead": 7, "host": true, "sources": "many", "nearby": "yes" }),
+        ] {
+            assert_eq!(lead_of(&row), None);
+            assert_eq!(host_of(&row), None);
+            assert_eq!(sources_of(&row), None);
+            assert!(!nearby_of(&row));
+        }
     }
 
     #[test]
