@@ -523,10 +523,73 @@ fn on_demand_readiness_cannot_bypass_shutdown_reconciliation() {
         "plugin-shutdown",
         "action",
         std::path::Path::new("/tmp/qol-test-daemon.sock"),
-        |_| true,
+        |_| DaemonReadiness::Unknown,
     )
     .expect_err("readiness must not bypass the lifecycle cancellation gate");
     assert!(error.to_string().contains("shutting down"));
+}
+
+#[test]
+fn not_ready_daemon_defers_promptly_with_its_phase_instead_of_waiting() {
+    let dir = TempDir::new().unwrap();
+    let plugin = make_plugin(&dir, "open", None, None);
+    let mut manager = PluginManager::new();
+    manager.insert_plugin_for_test(plugin);
+    let plugin_manager = Arc::new(Mutex::new(manager));
+    let started = Instant::now();
+
+    let error = ensure_daemon_ready(
+        &plugin_manager,
+        "plugin-test",
+        "query",
+        std::path::Path::new("/tmp/qol-test-warming.sock"),
+        |_| DaemonReadiness::NotReady {
+            phase: ReadinessPhase::Warming,
+            detail: Some("ingesting transcripts 320/900".to_string()),
+        },
+    )
+    .expect_err("a NotReady answer must defer instead of waiting out the timeout");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the defer must be prompt instead of eating the readiness timeout"
+    );
+    assert_eq!(
+        error.to_string(),
+        "daemon is not ready (warming: ingesting transcripts 320/900)"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_for_daemon_socket_defers_promptly_when_the_daemon_answers_not_ready() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let dir = TempDir::new().unwrap();
+    let socket = dir.path().join("warming.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        let _ = BufReader::new(&stream).read_line(&mut line);
+        let _ = stream
+            .write_all(br#"{"status":"not_ready","phase":"warming","detail":"building index"}"#);
+    });
+    let started = Instant::now();
+
+    let error = wait_for_daemon_socket(&socket, daemon_socket_ready, "plugin-test", "open")
+        .expect_err("a NotReady answer during the wait must defer");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the defer must surface the phase instead of eating DAEMON_READY_TIMEOUT"
+    );
+    assert!(matches!(error, ActionExecutionError::DaemonNotReady { .. }));
+    assert_eq!(
+        error.to_string(),
+        "daemon is not ready (warming: building index)"
+    );
 }
 
 #[test]
@@ -593,7 +656,7 @@ fn repeated_daemon_action_readiness_does_not_read_profile_state() {
             "plugin-test",
             "open",
             resolved.daemon_socket.as_deref().unwrap(),
-            |_| true,
+            |_| DaemonReadiness::Serving,
         )
         .unwrap();
     }

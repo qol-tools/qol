@@ -16,6 +16,10 @@ export async function loadPushStatuses() {
     return await apiJson('/api/push-status');
 }
 
+export async function loadReadiness() {
+    return await apiJson('/api/readiness');
+}
+
 export function readInstalledCache() {
     try {
         const raw = localStorage.getItem(INSTALLED_CACHE_KEY);

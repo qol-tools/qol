@@ -513,6 +513,7 @@ pub fn settings_query(query: &str) -> std::result::Result<serde_json::Value, Str
         Ok(DaemonResponse::Handled { data: None }) => Ok(serde_json::Value::Null),
         Ok(DaemonResponse::Error { message }) => Err(message),
         Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the query".into()),
+        Ok(DaemonResponse::NotReady { .. }) => Err("Bluetooth daemon is still starting".into()),
         Err(error) => Err(format!("Bluetooth daemon query failed: {error}")),
     }
 }
@@ -522,6 +523,7 @@ pub fn settings_action(action: &str, input: serde_json::Value) -> std::result::R
         Ok(DaemonResponse::Handled { .. }) => Ok(()),
         Ok(DaemonResponse::Error { message }) => Err(message),
         Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the action".into()),
+        Ok(DaemonResponse::NotReady { .. }) => Err("Bluetooth daemon is still starting".into()),
         Err(error) => Err(format!("Bluetooth daemon action failed: {error}")),
     }
 }

@@ -1,10 +1,8 @@
 use crate::plugins::resolver::PluginSource;
 use crate::plugins::Plugin;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 pub(super) const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
-const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) fn start_plugin_daemons<'a, I>(
     plugins: I,
@@ -122,29 +120,6 @@ fn start_daemon(
             None
         }
     }
-}
-
-pub(super) fn wait_for_autostart_daemons_ready<'a, I>(plugins: I, timeout: Duration) -> Vec<String>
-where
-    I: IntoIterator<Item = &'a Plugin>,
-{
-    let mut pending: Vec<&Plugin> = plugins
-        .into_iter()
-        .filter(|plugin| daemon_auto_managed(plugin))
-        .collect();
-    let deadline = Instant::now() + timeout;
-    while !pending.is_empty() && Instant::now() < deadline {
-        pending
-            .retain(|plugin| !super::super::daemon_lifecycle::existing_daemon_socket_ready(plugin));
-        if pending.is_empty() {
-            break;
-        }
-        std::thread::sleep(DAEMON_READY_INTERVAL);
-    }
-    pending
-        .into_iter()
-        .map(|plugin| plugin.id.as_str().to_string())
-        .collect()
 }
 
 pub(super) fn daemon_expectation(

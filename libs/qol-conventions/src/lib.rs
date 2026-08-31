@@ -234,6 +234,14 @@ pub mod doctor_wire {
 pub mod dev_health {
     use serde::{Deserialize, Serialize};
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ReadinessPhase {
+        Starting,
+        Warming,
+        Failed,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(tag = "state", rename_all = "snake_case")]
     pub enum PluginRuntimeStatus {
@@ -249,6 +257,12 @@ pub mod dev_health {
         Probation {
             pid: u32,
             consecutive_failures: u32,
+        },
+        Starting {
+            pid: u32,
+            phase: ReadinessPhase,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            detail: Option<String>,
         },
         Stable {
             pid: u32,
@@ -388,7 +402,7 @@ mod tests {
 
     #[test]
     fn health_status_serde_round_trips_every_variant() {
-        use dev_health::PluginRuntimeStatus;
+        use dev_health::{PluginRuntimeStatus, ReadinessPhase};
 
         let cases = [
             (
@@ -416,6 +430,14 @@ mod tests {
                     consecutive_failures: 1,
                 },
                 r#"{"state":"probation","pid":12,"consecutive_failures":1}"#,
+            ),
+            (
+                PluginRuntimeStatus::Starting {
+                    pid: 12,
+                    phase: ReadinessPhase::Warming,
+                    detail: None,
+                },
+                r#"{"state":"starting","pid":12,"phase":"warming"}"#,
             ),
             (
                 PluginRuntimeStatus::Stable { pid: 12 },

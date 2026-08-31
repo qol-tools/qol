@@ -36,6 +36,7 @@ pub(super) fn routes() -> Router<AppState> {
             get(query_plugin_handler).post(query_plugin_with_input_handler),
         )
         .route("/push-status", get(get_push_status))
+        .route("/readiness", get(get_readiness))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
@@ -308,6 +309,16 @@ pub(super) async fn list_installed(
 pub(super) async fn get_push_status() -> Json<std::collections::HashMap<String, serde_json::Value>>
 {
     Json(crate::runtime::PluginStatusRegistry::shared().snapshot())
+}
+
+pub(super) async fn get_readiness(
+) -> Json<IndexMap<String, crate::plugins::daemon_health::PluginRuntimeStatus>> {
+    Json(
+        crate::plugins::daemon_health::ReadinessRegistry::shared()
+            .snapshot()
+            .into_iter()
+            .collect(),
+    )
 }
 
 pub(super) async fn get_plugin_permissions(

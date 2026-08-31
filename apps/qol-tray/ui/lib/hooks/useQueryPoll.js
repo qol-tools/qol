@@ -2,6 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 
 const MAX_BACKOFF_MULTIPLIER = 8;
 
+function notReadyMessage(text) {
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed?.status !== 'not_ready') return null;
+        return parsed.detail || 'Plugin is warming up';
+    } catch {
+        return null;
+    }
+}
+
 export function useQueryPoll(pluginId, queryName, intervalMs) {
     const [state, setState] = useState({ data: null, error: null, loading: true });
     const mountedRef = useRef(true);
@@ -34,10 +44,11 @@ export function useQueryPoll(pluginId, queryName, intervalMs) {
             try {
                 const response = await fetch(
                     `/api/plugins/${encodeURIComponent(pluginId)}/queries/${encodeURIComponent(queryName)}`,
+                    { qolSuppressErrorToast: true },
                 );
                 if (!response.ok) {
                     const text = await response.text();
-                    throw new Error(text || `HTTP ${response.status}`);
+                    throw new Error(notReadyMessage(text) || text || `HTTP ${response.status}`);
                 }
                 const data = await response.json();
                 if (!cancelled && mountedRef.current) {

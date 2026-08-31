@@ -8,9 +8,10 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 use qol_runtime::local_ipc;
-use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
 const ACK_TIMEOUT_MS: u64 = 80;
 const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -42,6 +43,55 @@ pub enum ReadResult<C> {
     Fallback,
     Error(String),
     Ignore,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PingState {
+    Ready,
+    NotReady {
+        phase: ReadinessPhase,
+        detail: Option<String>,
+    },
+}
+
+type NotReadyState = Option<(ReadinessPhase, Option<String>)>;
+
+#[derive(Clone)]
+pub struct ReadinessGate {
+    not_ready: Arc<Mutex<NotReadyState>>,
+}
+
+impl ReadinessGate {
+    pub fn starting() -> Self {
+        Self {
+            not_ready: Arc::new(Mutex::new(Some((ReadinessPhase::Starting, None)))),
+        }
+    }
+
+    pub fn set_phase(&self, phase: ReadinessPhase, detail: Option<String>) {
+        let mut not_ready = self
+            .not_ready
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if not_ready.is_some() {
+            *not_ready = Some((phase, detail));
+        }
+    }
+
+    pub fn mark_ready(&self) {
+        let mut not_ready = self
+            .not_ready
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *not_ready = None;
+    }
+
+    fn snapshot(&self) -> NotReadyState {
+        self.not_ready
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
 }
 
 pub fn socket_path(config: &DaemonConfig) -> Option<PathBuf> {
@@ -160,7 +210,27 @@ pub fn send_kill(config: &DaemonConfig) -> bool {
 }
 
 pub fn send_ping(config: &DaemonConfig) -> bool {
-    send_action(config, "ping", true)
+    matches!(
+        send_ping_state(config),
+        Ok(PingState::Ready) | Ok(PingState::NotReady { .. })
+    )
+}
+
+pub fn send_ping_state(config: &DaemonConfig) -> io::Result<PingState> {
+    match send_request(
+        config,
+        "ping",
+        serde_json::Value::Null,
+        std::time::Duration::from_millis(ACK_TIMEOUT_MS),
+    ) {
+        Ok(DaemonResponse::Handled { .. }) => Ok(PingState::Ready),
+        Ok(DaemonResponse::NotReady { phase, detail }) => Ok(PingState::NotReady { phase, detail }),
+        Ok(_) => Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "unexpected response to ping",
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn cleanup(config: &DaemonConfig) {
@@ -303,6 +373,30 @@ where
 
 pub fn run_stateful_request_listener<S, F>(
     config: &DaemonConfig,
+    state: S,
+    handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
+{
+    run_stateful_request_listener_inner(config, None, state, handler)
+}
+
+pub fn run_stateful_request_listener_with_readiness<S, F>(
+    config: &DaemonConfig,
+    readiness: &ReadinessGate,
+    state: S,
+    handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
+{
+    run_stateful_request_listener_inner(config, Some(readiness), state, handler)
+}
+
+fn run_stateful_request_listener_inner<S, F>(
+    config: &DaemonConfig,
+    readiness: Option<&ReadinessGate>,
     mut state: S,
     mut handler: F,
 ) -> io::Result<()>
@@ -320,13 +414,23 @@ where
                 if local_ipc::authorize_peer(&s).is_err() {
                     continue;
                 }
+                let mut not_ready: NotReadyState = None;
                 let result = read_request_and_parse(&mut s, |request| {
                     if request.action == "kill" {
                         kill_requested = true;
+                        return handler(&mut state, request);
+                    }
+                    if let Some(state) = readiness.and_then(ReadinessGate::snapshot) {
+                        not_ready = Some(state);
+                        return ReadResult::Ignore;
                     }
                     handler(&mut state, request)
                 });
-                handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
+                if let Some((phase, detail)) = not_ready {
+                    write_response(&mut s, &DaemonResponse::NotReady { phase, detail });
+                } else {
+                    handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
+                }
                 if kill_requested {
                     break;
                 }
@@ -1110,6 +1214,88 @@ mod tests {
                 let _ = done_tx.send(result);
             },
         );
+    }
+
+    #[test]
+    fn readiness_gated_listener_answers_not_ready_until_ready() {
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("readiness-gate");
+        let config = fallback_config(socket_name);
+        let listener_config = fallback_config(socket_name);
+        let path = socket_path(&config).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let readiness = ReadinessGate::starting();
+        let gate = readiness.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let listener_thread = std::thread::spawn(move || {
+            let result = run_stateful_request_listener_with_readiness(
+                &listener_config,
+                &gate,
+                (),
+                |_state: &mut (), request: &DaemonRequest| match request.action.as_str() {
+                    "ping" | "kill" => ReadResult::Handled,
+                    _ => ReadResult::Fallback,
+                },
+            );
+            let _ = done_tx.send(result);
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(path.exists(), "gated listener must bind its socket");
+
+        match send_ping_state(&config).unwrap() {
+            PingState::NotReady { phase, detail } => {
+                assert_eq!(phase, ReadinessPhase::Starting);
+                assert_eq!(detail, None);
+            }
+            other => panic!("expected not_ready while starting, got {other:?}"),
+        }
+        assert!(send_ping(&config), "a starting daemon is alive, not dead");
+
+        readiness.set_phase(
+            ReadinessPhase::Warming,
+            Some("ingesting transcripts 320/900".to_string()),
+        );
+        match send_ping_state(&config).unwrap() {
+            PingState::NotReady { phase, detail } => {
+                assert_eq!(phase, ReadinessPhase::Warming);
+                assert_eq!(detail.as_deref(), Some("ingesting transcripts 320/900"));
+            }
+            other => panic!("expected not_ready while warming, got {other:?}"),
+        }
+
+        readiness.mark_ready();
+        assert!(matches!(
+            send_ping_state(&config).unwrap(),
+            PingState::Ready
+        ));
+
+        let mut client = UnixStream::connect(&path).unwrap();
+        write_request(&mut client, "kill", serde_json::Value::Null).unwrap();
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let response: DaemonResponse = serde_json::from_str(line.trim()).unwrap();
+        assert!(
+            matches!(response, DaemonResponse::Handled { .. }),
+            "kill must still reach the handler through an open gate"
+        );
+
+        match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => result.expect("gated listener must exit cleanly after a kill request"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("gated listener did not terminate after a kill request")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("gated listener thread panicked before reporting its result")
+            }
+        }
+        listener_thread.join().unwrap();
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

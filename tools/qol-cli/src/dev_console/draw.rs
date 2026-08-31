@@ -4,6 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
+use qol_conventions::dev_health::ReadinessPhase;
+
 use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
 
 use super::activity::draw_activity;
@@ -680,6 +682,11 @@ pub(super) fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<
             consecutive_failures: _,
             suppressed: false,
         } => Some(" · dead".fg(Color::Red)),
+        PluginDaemonStatus::Starting {
+            phase: ReadinessPhase::Failed,
+            ..
+        } => Some(" · start failed".fg(Color::Red)),
+        PluginDaemonStatus::Starting { .. } => Some(" · warming".fg(Color::Yellow)),
     }
 }
 

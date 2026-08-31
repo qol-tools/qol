@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
+import { isWarmingRuntimeStatus } from './use-list.js';
 import { Card, CardGrid } from '../../lib/components/Card.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { useModifierState } from '../../lib/hooks/use-modifier-state.js';
@@ -37,9 +38,26 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, lo
     `;
 }
 
+const WARMING_GRACE_MS = 300;
+
+function useWarmingShown(plugin) {
+    const warming = isWarmingRuntimeStatus(plugin.runtime_status);
+    const [shown, setShown] = useState(false);
+    useEffect(() => {
+        if (!warming) {
+            setShown(false);
+            return undefined;
+        }
+        const timer = setTimeout(() => setShown(true), WARMING_GRACE_MS);
+        return () => clearTimeout(timer);
+    }, [warming]);
+    return warming && shown;
+}
+
 function PluginCard({ plugin, index, selected, updating, pushStatuses, onCardClick, onSelect, onToggleMenu }) {
-    const cls = cardClassName(plugin);
-    const chip = pluginStatusChip(plugin);
+    const showWarming = useWarmingShown(plugin);
+    const cls = cardClassName(plugin, showWarming);
+    const chip = pluginStatusChip(plugin, showWarming);
     const pushStatus = pluginPushStatus(plugin, pushStatuses);
     const { shiftHeld } = useModifierState();
     const [, markBroken] = useState(0);
@@ -82,12 +100,19 @@ function pluginPushStatus(plugin, pushStatuses) {
     return { label, tooltip: `Status: ${label}` };
 }
 
-function pluginStatusChip(plugin) {
+function pluginStatusChip(plugin, showWarming) {
     if (plugin.unavailable) {
         return {
             label: 'Broken',
             className: 'chip-unavailable',
             tooltip: plugin.load_error || 'Plugin could not be resolved from registry.'
+        };
+    }
+    if (showWarming) {
+        return {
+            label: 'Warming',
+            className: 'chip-warming',
+            tooltip: plugin.runtime_status.detail || 'Plugin daemon is starting and is not serving requests yet.'
         };
     }
     if (plugin.resolved_from === 'fallback') {
@@ -132,12 +157,13 @@ function PluginCogButton({ onClick }) {
     `;
 }
 
-function cardClassName(plugin) {
+function cardClassName(plugin, showWarming) {
     const classes = ['plugin-card'];
     if (!plugin.has_config) classes.push('no-ui');
     if (plugin.update_available) classes.push('has-update');
     if (plugin.loaded === false) classes.push('not-loaded');
     if (plugin.unavailable) classes.push('unavailable');
+    if (showWarming) classes.push('warming');
     if (plugin.resolved_from === 'fallback') classes.push('resolved-fallback');
     return classes.join(' ');
 }

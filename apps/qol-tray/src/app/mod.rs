@@ -18,8 +18,6 @@ use tokio::sync::broadcast;
 
 use qol_conventions::DEFAULT_PORT;
 
-const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
-
 pub(crate) fn run() -> Result<()> {
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
@@ -454,7 +452,6 @@ async fn async_init_inner(
     if !shadow_generation && !rolling_restart {
         run_startup_doctor();
     }
-    let generation_restart = shadow_generation || rolling_restart;
     let launch_pull_factory = if !shadow_generation && !rolling_restart {
         let sync_for_pull = Arc::clone(&sync_service);
         let config_dir = qol_tray::paths::shared_config_dir().ok();
@@ -481,9 +478,8 @@ async fn async_init_inner(
     } else {
         None
     };
-    let (missing_generation_daemons, post_pull_task) = start_local_daemons_before_launch_pull(
+    let post_pull_task = start_local_daemons_before_launch_pull(
         plugin_manager.clone(),
-        generation_restart,
         launch_pull_factory,
         shutdown_tx.subscribe(),
     )
@@ -502,14 +498,6 @@ async fn async_init_inner(
             qol_tray::plugins::daemon_health::default_file_path(),
         ),
     );
-    if !missing_generation_daemons.is_empty() {
-        let missing = missing_generation_daemons.join(", ");
-        if shadow_generation {
-            log::warn!("shadow generation daemon(s) not ready before handoff: {missing}");
-        } else {
-            log::warn!("rolling restart daemon(s) not ready before handoff: {missing}");
-        }
-    }
     {
         let plugin_manager = plugin_manager.clone();
         tokio::task::spawn_blocking(move || sync_launcher_apps(plugin_manager));
@@ -543,17 +531,15 @@ async fn finished_update_available(update_check: Option<tokio::task::JoinHandle<
 
 async fn start_local_daemons_before_launch_pull<F>(
     plugin_manager: Arc<Mutex<PluginManager>>,
-    generation_restart: bool,
     launch_pull_factory: Option<F>,
     mut shutdown_rx: broadcast::Receiver<()>,
-) -> Result<(Vec<String>, Option<tokio::task::JoinHandle<()>>)>
+) -> Result<Option<tokio::task::JoinHandle<()>>>
 where
     F: FnOnce(Arc<qol_process::CancellationToken>) -> tokio::task::JoinHandle<anyhow::Result<bool>>,
 {
-    let missing_generation_daemons =
-        autostart_plugin_daemons(Arc::clone(&plugin_manager), generation_restart).await;
+    autostart_plugin_daemons(Arc::clone(&plugin_manager)).await;
     let Some(launch_pull_factory) = launch_pull_factory else {
-        return Ok((missing_generation_daemons, None));
+        return Ok(None);
     };
     let lifecycle_cancellation = plugin_manager
         .lock()
@@ -564,7 +550,7 @@ where
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ) {
         lifecycle_cancellation.cancel();
-        return Ok((missing_generation_daemons, None));
+        return Ok(None);
     }
     let launch_pull = launch_pull_factory(Arc::clone(&lifecycle_cancellation));
     let post_pull_task = tokio::spawn(reconcile_after_launch_pull(
@@ -573,7 +559,7 @@ where
         shutdown_rx,
         lifecycle_cancellation,
     ));
-    Ok((missing_generation_daemons, Some(post_pull_task)))
+    Ok(Some(post_pull_task))
 }
 
 async fn reconcile_after_launch_pull(
@@ -696,33 +682,21 @@ fn trace_post_auth_migration(event: &str, outcome: &str, duration_ms: u64, reaso
     let _ = (event, outcome, duration_ms, reason);
 }
 
-async fn autostart_plugin_daemons(
-    plugin_manager: Arc<Mutex<PluginManager>>,
-    generation_restart: bool,
-) -> Vec<String> {
-    match tokio::task::spawn_blocking(move || {
+async fn autostart_plugin_daemons(plugin_manager: Arc<Mutex<PluginManager>>) {
+    if let Err(error) = tokio::task::spawn_blocking(move || {
         if qol_tray::dev_generation::daemon_autostart_held() {
             log::info!("Shadow dev generation: deferring plugin daemon autostart until promotion");
-            return Vec::new();
+            return;
         }
         if let Ok(mut manager) = plugin_manager.lock() {
             manager.reconcile_and_autostart_daemons();
-            if generation_restart {
-                return manager
-                    .wait_for_autostart_daemons_ready(DEV_GENERATION_DAEMON_READY_TIMEOUT);
-            }
         } else {
             log::error!("plugin manager lock poisoned during daemon autostart");
         }
-        Vec::new()
     })
     .await
     {
-        Ok(missing) => missing,
-        Err(error) => {
-            log::error!("daemon autostart task failed: {}", error);
-            Vec::new()
-        }
+        log::error!("daemon autostart task failed: {}", error);
     }
 }
 
@@ -917,9 +891,8 @@ mod tests {
     async fn local_daemons_start_before_a_pending_launch_pull() {
         let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
         let (release_tx, release_rx) = oneshot::channel();
-        let (missing, post_pull_task) = start_local_daemons_before_launch_pull(
+        let post_pull_task = start_local_daemons_before_launch_pull(
             manager,
-            false,
             Some(|_| {
                 tokio::spawn(async move {
                     release_rx.await.unwrap();
@@ -929,9 +902,8 @@ mod tests {
             tokio::sync::broadcast::channel(1).1,
         )
         .await
-        .unwrap();
-        assert!(missing.is_empty());
-        let post_pull_task = post_pull_task.expect("launch pull reconciliation is tracked");
+        .unwrap()
+        .expect("launch pull reconciliation is tracked");
         assert!(!post_pull_task.is_finished());
         release_tx.send(()).unwrap();
         timeout(Duration::from_secs(1), post_pull_task)
@@ -971,9 +943,8 @@ mod tests {
         let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
         let (observed_tx, observed_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        let (_, post_pull_task) = start_local_daemons_before_launch_pull(
+        let post_pull_task = start_local_daemons_before_launch_pull(
             manager,
-            false,
             Some(move |cancellation: Arc<qol_process::CancellationToken>| {
                 tokio::spawn(async move {
                     tokio::task::spawn_blocking(move || {
@@ -989,8 +960,8 @@ mod tests {
             shutdown_rx,
         )
         .await
+        .unwrap()
         .unwrap();
-        let post_pull_task = post_pull_task.unwrap();
 
         shutdown_tx.send(()).unwrap();
         timeout(Duration::from_secs(1), post_pull_task)

@@ -521,6 +521,17 @@
     border-color: rgba(var(--danger-rgb), 0.5);
 }
 
+.plugin-status-chip.chip-warming {
+    color: var(--state-info-text);
+    background: var(--state-info-bg-soft);
+    border-color: var(--state-info-border-soft);
+}
+
+.plugin-grid-media .plugin-card.warming,
+.plugin-grid .plugin-card.warming {
+    border-color: var(--state-info-border-soft);
+}
+
 .plugin-grid-media .plugin-card.resolved-fallback,
 .plugin-grid .plugin-card.resolved-fallback {
     border-color: rgba(var(--warning-rgb), 0.55);

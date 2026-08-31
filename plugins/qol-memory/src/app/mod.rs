@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, SocketSource};
-use qol_runtime::protocol::DaemonResponse;
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadinessGate, SocketSource};
+use qol_runtime::protocol::{DaemonResponse, ReadinessPhase};
 
 use crate::app::warm::WarmState;
 use crate::ingest::{self, IngestRoots};
@@ -29,59 +29,95 @@ pub fn run_daemon() -> Result<()> {
             None
         }
     };
-    let ingest_state = Arc::clone(&state);
-    let ingest_roots = IngestRoots::resolve();
-    let ingest_thread = std::thread::Builder::new()
-        .name("qol-memory-initial-ingest".to_owned())
+    let readiness = ReadinessGate::starting();
+    let warm_state = Arc::clone(&state);
+    let warm_readiness = readiness.clone();
+    std::thread::Builder::new()
+        .name("qol-memory-initial-warm".to_owned())
         .spawn(move || {
-            let paths = ingest::walk_roots(&ingest_roots);
-            for chunk in paths.chunks(16) {
-                let mut warm = match ingest_state.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                let store = warm.store().clone();
-                match ingest::ingest_paths(&store, &ingest_roots, chunk, warm.keys()) {
-                    Ok(_) => {}
-                    Err(error) => {
-                        eprintln!("qol-memory: initial ingest failed: {error:#}");
-                        qol_runtime::probe!(
-                            "QOL_MEMORY_DAEMON",
-                            "event=initial_ingest_failed error={error}"
-                        );
-                    }
-                }
+            let progress = warm_readiness.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                run_initial_warm(warm_state, progress);
+            }));
+            if result.is_err() {
+                eprintln!("qol-memory: initial warm thread panicked");
             }
-            let store = {
-                let warm = match ingest_state.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                warm.store().clone()
-            };
-            match crate::distill::run(&store) {
-                Ok(report) if !report.unchanged => {
-                    let mut warm = match ingest_state.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    warm.invalidate_notes_index();
-                }
-                Ok(_) => {}
-                Err(error) if crate::distill::is_busy(&error) => {}
-                Err(error) => {
-                    eprintln!("qol-memory: initial distill failed: {error:#}");
-                    qol_runtime::probe!(
-                        "QOL_MEMORY_DAEMON",
-                        "event=initial_distill_failed error={error}"
-                    );
-                }
-            }
+            warm_readiness.mark_ready();
         })
-        .context("failed to start the qol-memory initial ingest thread")?;
-    if ingest_thread.join().is_err() {
-        eprintln!("qol-memory: initial ingest thread panicked");
+        .context("failed to start the qol-memory initial warm thread")?;
+    let listener_state = Arc::clone(&state);
+    let listen_result = core_daemon::run_stateful_request_listener_with_readiness(
+        &DAEMON_CONFIG,
+        &readiness,
+        listener_state,
+        request::handle,
+    )
+    .context("qol-memory daemon listener failed");
+    drop(watch_handle);
+    listen_result
+}
+
+fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate) {
+    let roots = IngestRoots::resolve();
+    let paths = ingest::walk_roots(&roots);
+    let total = paths.len();
+    let mut ingested = 0usize;
+    warming.set_phase(
+        ReadinessPhase::Warming,
+        Some(format!("ingesting transcripts 0/{total}")),
+    );
+    for chunk in paths.chunks(16) {
+        let mut warm = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let store = warm.store().clone();
+        match ingest::ingest_paths(&store, &roots, chunk, warm.keys()) {
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("qol-memory: initial ingest failed: {error:#}");
+                qol_runtime::probe!(
+                    "QOL_MEMORY_DAEMON",
+                    "event=initial_ingest_failed error={error}"
+                );
+            }
+        }
+        ingested += chunk.len();
+        warming.set_phase(
+            ReadinessPhase::Warming,
+            Some(format!("ingesting transcripts {ingested}/{total}")),
+        );
     }
+    warming.set_phase(ReadinessPhase::Warming, Some("distilling notes".to_owned()));
+    let store = {
+        let warm = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        warm.store().clone()
+    };
+    match crate::distill::run(&store) {
+        Ok(report) if !report.unchanged => {
+            let mut warm = match state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            warm.invalidate_notes_index();
+        }
+        Ok(_) => {}
+        Err(error) if crate::distill::is_busy(&error) => {}
+        Err(error) => {
+            eprintln!("qol-memory: initial distill failed: {error:#}");
+            qol_runtime::probe!(
+                "QOL_MEMORY_DAEMON",
+                "event=initial_distill_failed error={error}"
+            );
+        }
+    }
+    warming.set_phase(
+        ReadinessPhase::Warming,
+        Some("building warm index".to_owned()),
+    );
     {
         let mut warm = match state.lock() {
             Ok(guard) => guard,
@@ -95,11 +131,6 @@ pub fn run_daemon() -> Result<()> {
             );
         }
     }
-    let listen_result =
-        core_daemon::run_stateful_request_listener(&DAEMON_CONFIG, state, request::handle)
-            .context("qol-memory daemon listener failed");
-    drop(watch_handle);
-    listen_result
 }
 
 pub fn send_request(action: &str, input: serde_json::Value) -> Result<Option<serde_json::Value>> {
@@ -109,6 +140,10 @@ pub fn send_request(action: &str, input: serde_json::Value) -> Result<Option<ser
         DaemonResponse::Handled { data } => Ok(data),
         DaemonResponse::Fallback => bail!("qol-memory daemon declined action `{action}`"),
         DaemonResponse::Error { message } => bail!(message),
+        DaemonResponse::NotReady { phase, detail } => {
+            let detail = detail.map(|text| format!(": {text}")).unwrap_or_default();
+            bail!("qol-memory daemon is not ready ({phase:?}{detail})")
+        }
     }
 }
 

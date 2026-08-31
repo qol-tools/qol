@@ -46,6 +46,10 @@ pub fn send_request(action: &str, input: serde_json::Value) -> Result<Option<ser
         DaemonResponse::Handled { data } => Ok(data),
         DaemonResponse::Fallback => anyhow::bail!("qol-voice daemon declined action `{action}`"),
         DaemonResponse::Error { message } => anyhow::bail!(message),
+        DaemonResponse::NotReady { phase, detail } => {
+            let detail = detail.map(|text| format!(": {text}")).unwrap_or_default();
+            anyhow::bail!("qol-voice daemon is not ready ({phase:?}{detail})")
+        }
     }
 }
 

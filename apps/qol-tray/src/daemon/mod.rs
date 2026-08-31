@@ -51,6 +51,10 @@ pub enum DaemonEvent {
         plugin_id: String,
         status: serde_json::Value,
     },
+    ReadinessChanged {
+        plugin_id: String,
+        runtime_status: Option<crate::plugins::daemon_health::PluginRuntimeStatus>,
+    },
     PluginManifestInvalid {
         plugin_id: String,
         path: std::path::PathBuf,

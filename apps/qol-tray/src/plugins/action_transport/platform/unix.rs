@@ -84,6 +84,7 @@ fn parse_response(line: &str) -> DaemonActionDispatch {
             DaemonResponse::Handled { data } => DaemonActionDispatch::Handled { payload: data },
             DaemonResponse::Fallback => DaemonActionDispatch::Fallback,
             DaemonResponse::Error { message } => DaemonActionDispatch::Error(message),
+            DaemonResponse::NotReady { .. } => DaemonActionDispatch::Unavailable,
         };
     }
 

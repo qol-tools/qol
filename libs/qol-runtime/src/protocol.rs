@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::MonitorBounds;
 
+pub use qol_conventions::dev_health::ReadinessPhase;
+
 // ── Daemon action protocol (qol-tray ↔ plugin daemon) ──────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +26,11 @@ pub enum DaemonResponse {
     Error {
         #[serde(default)]
         message: String,
+    },
+    NotReady {
+        phase: ReadinessPhase,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
 }
 
@@ -459,6 +466,48 @@ mod tests {
                 "round trip for {status}"
             );
         }
+    }
+
+    #[test]
+    fn readiness_phase_serializes_in_snake_case() {
+        for (phase, expected) in [
+            (ReadinessPhase::Starting, "starting"),
+            (ReadinessPhase::Warming, "warming"),
+            (ReadinessPhase::Failed, "failed"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&phase).unwrap(),
+                format!("\"{expected}\"")
+            );
+        }
+    }
+
+    #[test]
+    fn not_ready_round_trips_with_the_not_ready_tag() {
+        let response = DaemonResponse::NotReady {
+            phase: ReadinessPhase::Warming,
+            detail: Some("ingesting transcripts 320/900".to_string()),
+        };
+        let wire = serde_json::to_string(&response).expect("serialize");
+        assert!(wire.contains("\"status\":\"not_ready\""));
+        assert!(wire.contains("\"phase\":\"warming\""));
+        assert!(wire.contains("\"detail\":\"ingesting transcripts 320/900\""));
+        let parsed: DaemonResponse = serde_json::from_str(&wire).expect("deserialize");
+        assert_eq!(
+            serde_json::to_string(&parsed).unwrap(),
+            wire,
+            "round trip for not_ready"
+        );
+    }
+
+    #[test]
+    fn not_ready_omits_a_missing_detail() {
+        let response = DaemonResponse::NotReady {
+            phase: ReadinessPhase::Starting,
+            detail: None,
+        };
+        let wire = serde_json::to_string(&response).expect("serialize");
+        assert_eq!(wire, "{\"status\":\"not_ready\",\"phase\":\"starting\"}");
     }
 
     #[test]

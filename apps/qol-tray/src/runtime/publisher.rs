@@ -25,7 +25,7 @@ pub fn install_events(events: Arc<EventBus>) {
     let _ = EVENTS.set(events);
 }
 
-pub(super) fn events() -> Option<Arc<EventBus>> {
+pub(crate) fn events() -> Option<Arc<EventBus>> {
     EVENTS.get().cloned()
 }
 

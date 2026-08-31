@@ -1,6 +1,8 @@
 use super::manager::PluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
+use crate::plugins::daemon_health::{probe_daemon_readiness_with_timeout, DaemonReadiness};
 use crate::plugins::PluginId;
+use qol_runtime::protocol::ReadinessPhase;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -48,6 +50,10 @@ pub enum ActionExecutionError {
         action_id: String,
     },
     ActionRejected(String),
+    DaemonNotReady {
+        phase: ReadinessPhase,
+        detail: Option<String>,
+    },
     SpawnFailed(String),
 }
 
@@ -80,12 +86,29 @@ impl Display for ActionExecutionError {
                 write!(f, "no execution target for {}::{}", plugin_id, action_id)
             }
             Self::ActionRejected(message) => write!(f, "{}", message),
+            Self::DaemonNotReady { phase, detail } => match detail {
+                Some(detail) => write!(
+                    f,
+                    "daemon is not ready ({}: {})",
+                    readiness_phase_label(phase),
+                    detail
+                ),
+                None => write!(f, "daemon is not ready ({})", readiness_phase_label(phase)),
+            },
             Self::SpawnFailed(error) => write!(f, "spawn failed: {}", error),
         }
     }
 }
 
 impl std::error::Error for ActionExecutionError {}
+
+fn readiness_phase_label(phase: &ReadinessPhase) -> &'static str {
+    match phase {
+        ReadinessPhase::Starting => "starting",
+        ReadinessPhase::Warming => "warming",
+        ReadinessPhase::Failed => "failed",
+    }
+}
 
 pub fn execute_action(
     plugin_manager: &Arc<Mutex<PluginManager>>,
@@ -107,18 +130,34 @@ pub fn execute_action_with_input(
     input: serde_json::Value,
 ) {
     if let Err(error) = try_execute_action_with_input(plugin_manager, plugin_id, action_id, input) {
-        log::error!(
-            "Plugin action execution failed for {}::{}: {}",
-            plugin_id,
-            action_id,
-            error
-        );
-        #[cfg(feature = "dev")]
-        {
-            eprintln!(
-                "[\x1b[31mACTION ERROR\x1b[0m] {}::{} failed: {}",
-                plugin_id, action_id, error
-            );
+        match &error {
+            ActionExecutionError::DaemonNotReady { phase, detail } => {
+                log::info!(
+                    "Plugin action deferred for {}::{}: daemon not ready ({}{})",
+                    plugin_id,
+                    action_id,
+                    readiness_phase_label(phase),
+                    detail
+                        .as_deref()
+                        .map(|detail| format!(": {detail}"))
+                        .unwrap_or_default()
+                );
+            }
+            _ => {
+                log::error!(
+                    "Plugin action execution failed for {}::{}: {}",
+                    plugin_id,
+                    action_id,
+                    error
+                );
+                #[cfg(feature = "dev")]
+                {
+                    eprintln!(
+                        "[\x1b[31mACTION ERROR\x1b[0m] {}::{} failed: {}",
+                        plugin_id, action_id, error
+                    );
+                }
+            }
         }
     }
 }
@@ -239,6 +278,12 @@ pub fn dispatch_query_with_input(
         );
     #[cfg(debug_assertions)]
     trace_query_dispatch(plugin_id, query_name, "initial", &initial_dispatch);
+    if matches!(&initial_dispatch, DaemonActionDispatch::Handled { .. }) {
+        return query_dispatch_result(initial_dispatch, plugin_id, query_name);
+    }
+    if let DaemonReadiness::NotReady { phase, detail } = query_daemon_socket_ready(&socket_path) {
+        return Err(ActionExecutionError::DaemonNotReady { phase, detail });
+    }
     if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
@@ -513,7 +558,7 @@ fn ensure_daemon_ready(
     plugin_id: &str,
     request_id: &str,
     socket_path: &Path,
-    readiness_probe: fn(&Path) -> bool,
+    readiness_probe: fn(&Path) -> DaemonReadiness,
 ) -> Result<(), ActionExecutionError> {
     {
         let mut plugins = plugin_manager
@@ -524,47 +569,46 @@ fn ensure_daemon_ready(
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
     }
 
-    if readiness_probe(socket_path) {
-        return Ok(());
+    match readiness_probe(socket_path) {
+        DaemonReadiness::Serving => return Ok(()),
+        DaemonReadiness::NotReady { phase, detail } => {
+            return Err(ActionExecutionError::DaemonNotReady { phase, detail });
+        }
+        DaemonReadiness::Unknown => {}
     }
 
-    wait_for_daemon_socket(socket_path, readiness_probe)
-        .then_some(())
-        .ok_or_else(|| {
-            ActionExecutionError::SpawnFailed(format!(
-                "daemon socket did not become ready for {}::{}",
-                plugin_id, request_id
-            ))
-        })
+    wait_for_daemon_socket(socket_path, readiness_probe, plugin_id, request_id)
 }
 
-fn wait_for_daemon_socket(socket_path: &Path, readiness_probe: fn(&Path) -> bool) -> bool {
+fn wait_for_daemon_socket(
+    socket_path: &Path,
+    readiness_probe: fn(&Path) -> DaemonReadiness,
+    plugin_id: &str,
+    request_id: &str,
+) -> Result<(), ActionExecutionError> {
     let deadline = Instant::now() + DAEMON_READY_TIMEOUT;
     loop {
-        if readiness_probe(socket_path) {
-            return true;
+        match readiness_probe(socket_path) {
+            DaemonReadiness::Serving => return Ok(()),
+            DaemonReadiness::NotReady { phase, detail } => {
+                return Err(ActionExecutionError::DaemonNotReady { phase, detail });
+            }
+            DaemonReadiness::Unknown => {}
         }
         if Instant::now() >= deadline {
-            return false;
+            return Err(ActionExecutionError::SpawnFailed(format!(
+                "daemon socket did not become ready for {}::{}",
+                plugin_id, request_id
+            )));
         }
         std::thread::sleep(DAEMON_READY_INTERVAL);
     }
 }
 
-fn daemon_socket_ready(socket_path: &Path) -> bool {
-    matches!(
-        crate::plugins::action_transport::dispatch_daemon_action(socket_path, "ping"),
-        DaemonActionDispatch::Handled { .. }
-    )
+fn daemon_socket_ready(socket_path: &Path) -> DaemonReadiness {
+    crate::plugins::daemon_health::probe_daemon_readiness(socket_path)
 }
 
-fn query_daemon_socket_ready(socket_path: &Path) -> bool {
-    matches!(
-        crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
-            socket_path,
-            "ping",
-            QUERY_DAEMON_READY_PROBE_TIMEOUT,
-        ),
-        DaemonActionDispatch::Handled { .. }
-    )
+fn query_daemon_socket_ready(socket_path: &Path) -> DaemonReadiness {
+    probe_daemon_readiness_with_timeout(socket_path, QUERY_DAEMON_READY_PROBE_TIMEOUT)
 }

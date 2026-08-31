@@ -49,16 +49,11 @@ use std::path::PathBuf;
 #[cfg(feature = "dev")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "dev")]
-use std::time::Duration;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::daemon::Daemon;
 use crate::plugins::PluginManager;
 use types::*;
-
-#[cfg(feature = "dev")]
-const PROMOTED_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -198,41 +193,12 @@ fn complete_promotion_in_background(app_state: AppState) {
             }
         }
         let plugin_manager = app_state.plugin_manager.clone();
-        let autostart = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
-            Ok(mut manager) => {
-                manager.reconcile_and_autostart_daemons();
-                manager.wait_for_autostart_daemons_ready(PROMOTED_DAEMON_READY_TIMEOUT)
-            }
+        tokio::task::spawn_blocking(move || match plugin_manager.lock() {
+            Ok(mut manager) => manager.reconcile_and_autostart_daemons(),
             Err(_) => {
                 log::error!("plugin manager lock poisoned during promoted daemon autostart");
-                Vec::new()
             }
         });
-        let missing_daemons = tokio::select! {
-            _ = shutdown_rx.recv() => {
-                lifecycle_cancellation.cancel();
-                return;
-            }
-            result = autostart => result.unwrap_or_else(|error| {
-                log::error!("promoted daemon autostart task failed: {}", error);
-                Vec::new()
-            })
-        };
-        if !matches!(
-            shutdown_rx.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ) {
-            lifecycle_cancellation.cancel();
-            return;
-        }
-        if missing_daemons.is_empty() {
-            log::info!("Promoted dev generation: daemon autostart ready");
-        } else {
-            log::warn!(
-                "Promoted dev generation: daemon(s) not ready before handoff: {}",
-                missing_daemons.join(", ")
-            );
-        }
         crate::hotkeys::start_capture_with_fallback(app_state.plugin_manager.clone());
         start_sync_loop(&app_state);
         start_dev_discovery(&app_state);

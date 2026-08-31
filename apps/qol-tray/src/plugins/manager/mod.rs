@@ -10,7 +10,6 @@ use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
@@ -76,10 +75,6 @@ impl PluginManager {
         if !reconciled {
             self.autostart_daemons();
         }
-    }
-
-    pub fn wait_for_autostart_daemons_ready(&self, timeout: Duration) -> Vec<String> {
-        autostart::wait_for_autostart_daemons_ready(self.plugins.values(), timeout)
     }
 
     pub fn reload_plugins(&mut self) -> Result<()> {

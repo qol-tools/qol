@@ -1,13 +1,16 @@
 use crate::plugins::daemon_health::{
-    DaemonExpectation, HealthPublisher, PluginHealth, PluginRuntimeStatus,
+    probe_daemon_readiness, DaemonExpectation, DaemonReadiness, HealthPublisher, PluginHealth,
+    PluginRuntimeStatus, ReadinessRegistry,
 };
 use crate::plugins::{PluginId, PluginManager};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
-const SUPERVISION_INTERVAL: Duration = Duration::from_secs(5);
+const READINESS_INTERVAL: Duration = Duration::from_secs(1);
+const LIGHT_TICKS_PER_SUPERVISION: u32 = 5;
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 const SUPPRESSION_COOLDOWN_TICKS: u64 = 12;
 const STABLE_TICKS: u64 = 3;
@@ -17,6 +20,7 @@ struct DaemonSnapshot {
     plugin_id: PluginId,
     expectation: DaemonExpectation,
     daemon_pid: Option<u32>,
+    socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +47,27 @@ async fn run_supervision_loop(
     publisher: HealthPublisher,
 ) {
     let mut state = SupervisorState::default();
+    let mut light_ticks_until_supervision = 0u32;
+    let mut last_published: Vec<PluginHealth> = Vec::new();
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
                 log::info!("Daemon supervisor shutting down");
                 return;
             }
-            _ = tokio::time::sleep(SUPERVISION_INTERVAL) => {
-                supervise_once(&plugin_manager, &mut state, &publisher);
+            _ = tokio::time::sleep(READINESS_INTERVAL) => {
+                if light_ticks_until_supervision == 0 {
+                    last_published = supervise_once(&plugin_manager, &mut state, &publisher);
+                    light_ticks_until_supervision = LIGHT_TICKS_PER_SUPERVISION - 1;
+                } else {
+                    readiness_pass(
+                        &plugin_manager,
+                        &mut state,
+                        &publisher,
+                        &mut last_published,
+                    );
+                    light_ticks_until_supervision -= 1;
+                }
             }
         }
     }
@@ -60,20 +77,21 @@ fn supervise_once(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     state: &mut SupervisorState,
     publisher: &HealthPublisher,
-) {
+) -> Vec<PluginHealth> {
     // DeadStaysDead is retriable, so without this gate the supervisor would
     // start held-back daemons on its first tick, while the predecessor
     // generation's twins are still alive.
     if crate::dev_generation::daemon_autostart_held() {
-        return;
+        return Vec::new();
     }
     if let Err(error) = reconcile_profile_generation(plugin_manager) {
         log::error!("Daemon supervisor failed to reconcile profile generation: {error:#}");
-        return;
+        return Vec::new();
     }
     state.begin_tick();
     reap_exited_daemons(plugin_manager);
     let snapshots = snapshot_daemons(plugin_manager);
+    update_readiness(state, &snapshots);
     let outcome = classify_snapshots(&snapshots, state);
     state.note_known_plugins(&snapshots);
 
@@ -105,11 +123,70 @@ fn supervise_once(
     }
 
     state.prune_unknown_plugins();
-    publisher.publish(state.tick, state.project(&snapshots));
+    let projected = state.project(&snapshots);
+    publisher.publish(state.tick, projected.clone());
+    ReadinessRegistry::shared().reconcile(&projected);
 
     if any_state_change {
         crate::hotkeys::trigger_reload();
     }
+    projected
+}
+
+fn readiness_pass(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    state: &mut SupervisorState,
+    publisher: &HealthPublisher,
+    last_published: &mut Vec<PluginHealth>,
+) {
+    if crate::dev_generation::daemon_autostart_held() {
+        return;
+    }
+    let snapshots = snapshot_daemons(plugin_manager);
+    update_readiness(state, &snapshots);
+    let projected = state.project(&snapshots);
+    if *last_published != projected {
+        publisher.publish(state.tick, projected.clone());
+        ReadinessRegistry::shared().reconcile(&projected);
+        *last_published = projected;
+    }
+}
+
+fn update_readiness(state: &mut SupervisorState, snapshots: &[DaemonSnapshot]) {
+    for snap in snapshots {
+        if snap.expectation != DaemonExpectation::Supervised {
+            continue;
+        }
+        let alive = snap
+            .daemon_pid
+            .is_some_and(|pid| is_daemon_alive(Some(pid)));
+        match (alive, snap.socket.as_deref()) {
+            (true, Some(socket)) => {
+                let pid = snap.daemon_pid.unwrap_or_default();
+                match probe_daemon_readiness(socket) {
+                    DaemonReadiness::Unknown => {
+                        if state
+                            .readiness
+                            .get(&snap.plugin_id)
+                            .is_some_and(|(known_pid, _)| *known_pid != pid)
+                        {
+                            state.readiness.remove(&snap.plugin_id);
+                        }
+                    }
+                    answer => {
+                        state
+                            .readiness
+                            .insert(snap.plugin_id.clone(), (pid, answer));
+                    }
+                }
+            }
+            _ => {
+                state.readiness.remove(&snap.plugin_id);
+            }
+        }
+    }
+    let known: HashSet<PluginId> = snapshots.iter().map(|s| s.plugin_id.clone()).collect();
+    state.readiness.retain(|id, _| known.contains(id));
 }
 
 fn reconcile_profile_generation(plugin_manager: &Arc<Mutex<PluginManager>>) -> anyhow::Result<()> {
@@ -179,6 +256,9 @@ fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSna
         .daemon_health_snapshots()
         .into_iter()
         .map(|(plugin_id, expectation, daemon_pid)| DaemonSnapshot {
+            socket: manager
+                .get(plugin_id.as_str())
+                .and_then(crate::plugins::action_executor::daemon_socket),
             plugin_id,
             expectation,
             daemon_pid,
@@ -224,6 +304,7 @@ struct PluginRecord {
 #[derive(Default)]
 struct SupervisorState {
     records: HashMap<PluginId, PluginRecord>,
+    readiness: HashMap<PluginId, (u32, DaemonReadiness)>,
     known: HashSet<PluginId>,
     tick: u64,
 }
@@ -357,6 +438,15 @@ impl SupervisorState {
                 }
             }
             DaemonExpectation::Supervised => {
+                if let Some((pid, DaemonReadiness::NotReady { phase, detail })) =
+                    self.readiness.get(&snap.plugin_id)
+                {
+                    return PluginRuntimeStatus::Starting {
+                        pid: *pid,
+                        phase: *phase,
+                        detail: detail.clone(),
+                    };
+                }
                 let Some(record) = self.records.get(&snap.plugin_id) else {
                     return PluginRuntimeStatus::Down {
                         consecutive_failures: 0,
@@ -395,6 +485,7 @@ impl SupervisorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_runtime::protocol::ReadinessPhase;
 
     fn pid(id: &str) -> PluginId {
         PluginId::new(id.to_string())
@@ -405,6 +496,7 @@ mod tests {
             plugin_id: pid(id),
             expectation: DaemonExpectation::Supervised,
             daemon_pid,
+            socket: None,
         }
     }
 
@@ -857,9 +949,118 @@ mod tests {
                 plugin_id: pid(id),
                 expectation,
                 daemon_pid,
+                socket: None,
             };
             assert_eq!(state.status_for(&snap), expected, "plugin: {id}");
         }
+    }
+
+    #[test]
+    fn not_ready_daemon_projects_as_starting_with_its_phase_and_detail() {
+        let mut state = SupervisorState::default();
+        let warming = pid("plugin-warming");
+        state.readiness.insert(
+            warming.clone(),
+            (
+                4321,
+                DaemonReadiness::NotReady {
+                    phase: ReadinessPhase::Warming,
+                    detail: Some("ingesting transcripts 320/900".to_string()),
+                },
+            ),
+        );
+        let snap = DaemonSnapshot {
+            plugin_id: warming,
+            expectation: DaemonExpectation::Supervised,
+            daemon_pid: Some(4321),
+            socket: None,
+        };
+
+        assert_eq!(
+            state.status_for(&snap),
+            PluginRuntimeStatus::Starting {
+                pid: 4321,
+                phase: ReadinessPhase::Warming,
+                detail: Some("ingesting transcripts 320/900".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_serving_daemon_does_not_project_as_starting() {
+        let mut state = SupervisorState::default();
+        let serving = pid("plugin-serving");
+        state
+            .readiness
+            .insert(serving.clone(), (4321, DaemonReadiness::Serving));
+        let snap = DaemonSnapshot {
+            plugin_id: serving,
+            expectation: DaemonExpectation::Supervised,
+            daemon_pid: Some(4321),
+            socket: None,
+        };
+
+        assert_eq!(
+            state.status_for(&snap),
+            PluginRuntimeStatus::Down {
+                consecutive_failures: 0,
+                suppressed: false,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_readiness_records_not_ready_answers_for_live_daemons() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let socket = dir.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            let _ = stream.write_all(br#"{"status":"not_ready","phase":"starting"}"#);
+        });
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let daemon_pid = child.id();
+        let mut state = SupervisorState::default();
+        let snap = DaemonSnapshot {
+            plugin_id: pid("plugin-warming-live"),
+            expectation: DaemonExpectation::Supervised,
+            daemon_pid: Some(daemon_pid),
+            socket: Some(socket),
+        };
+
+        update_readiness(&mut state, std::slice::from_ref(&snap));
+
+        assert_eq!(
+            state.status_for(&snap),
+            PluginRuntimeStatus::Starting {
+                pid: daemon_pid,
+                phase: ReadinessPhase::Starting,
+                detail: None,
+            }
+        );
+
+        let reap = DaemonSnapshot {
+            daemon_pid: None,
+            socket: None,
+            ..snap
+        };
+        update_readiness(&mut state, std::slice::from_ref(&reap));
+        assert!(
+            state.readiness.is_empty(),
+            "readiness for a daemon without a live pid must be dropped"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]
