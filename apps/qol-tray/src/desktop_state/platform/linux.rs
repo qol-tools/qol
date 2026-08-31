@@ -246,7 +246,7 @@ fn xrandr_monitors() -> Vec<MonitorBounds> {
         .collect()
 }
 
-fn is_wayland() -> bool {
+pub(crate) fn is_wayland() -> bool {
     std::env::var("XDG_SESSION_TYPE")
         .map(|v| v == "wayland")
         .unwrap_or(false)

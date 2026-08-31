@@ -16,6 +16,7 @@ mod fingerprint_health;
 mod gpu_driver_sync;
 mod hotkey_capture_backend;
 mod hotkey_shadows;
+mod hotkey_virtual_keyboard;
 mod install_identity;
 mod orphan_plugin_configs;
 #[cfg(feature = "dev")]
@@ -54,6 +55,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
         Box::new(hotkey_capture_backend::HotkeyCaptureBackendCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
+        Box::new(hotkey_virtual_keyboard::HotkeyVirtualKeyboardCheck),
         Box::new(plugin_uid_table::PluginUidTableCheck),
         Box::new(orphan_plugin_configs::OrphanPluginConfigsCheck),
         Box::new(config_parse_failures::ConfigParseFailuresCheck),

@@ -96,6 +96,22 @@ impl PhysicalHotkeySnapshot {
             .any(|keycode| self.evdev_key_is_pressed(*keycode))
     }
 
+    #[cfg(feature = "linux_evdev")]
+    pub(in crate::hotkeys) fn down_evdev_codes(&self) -> std::collections::HashSet<u16> {
+        let mut down = std::collections::HashSet::new();
+        for x11_keycode in 0u8..=u8::MAX {
+            let byte = usize::from(x11_keycode / 8);
+            let bit = x11_keycode % 8;
+            if self.keys[byte] & (1 << bit) == 0 {
+                continue;
+            }
+            if let Some(code) = u16::from(x11_keycode).checked_sub(X11_EVDEV_OFFSET) {
+                down.insert(code);
+            }
+        }
+        down
+    }
+
     fn evdev_key_is_pressed(&self, keycode: u16) -> bool {
         let Some(x11_keycode) = keycode
             .checked_add(X11_EVDEV_OFFSET)
@@ -120,6 +136,15 @@ mod tests {
             snapshot.keys[usize::from(x11_keycode / 8)] |= 1 << (x11_keycode % 8);
         }
         snapshot
+    }
+
+    #[cfg(feature = "linux_evdev")]
+    #[test]
+    fn down_evdev_codes_inverts_the_x11_offset() {
+        let down = snapshot(&[evdev::KEY_DOWN, evdev::KEY_LEFTSHIFT]).down_evdev_codes();
+        assert!(down.contains(&evdev::KEY_DOWN));
+        assert!(down.contains(&evdev::KEY_LEFTSHIFT));
+        assert_eq!(down.len(), 2);
     }
 
     #[test]

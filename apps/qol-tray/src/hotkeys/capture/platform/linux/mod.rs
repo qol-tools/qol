@@ -6,7 +6,9 @@ use crossbeam_channel::Receiver;
 #[cfg(feature = "linux_evdev")]
 pub(crate) mod classify;
 #[cfg(feature = "linux_evdev")]
-mod evdev_backend;
+pub(crate) mod evdev_backend;
+#[cfg(feature = "linux_evdev")]
+mod heal;
 #[cfg(feature = "linux_evdev")]
 mod matcher;
 mod recorder;

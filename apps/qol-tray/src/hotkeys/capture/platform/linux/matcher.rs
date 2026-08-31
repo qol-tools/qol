@@ -107,13 +107,14 @@ impl BindingMatcher {
         }
     }
 
-    pub(super) fn reconcile(&mut self, code: u16, value: i32) {
-        if value == 0 {
-            self.held.remove(&code);
-        } else {
-            self.held.insert(code);
-        }
+    pub(super) fn reconcile(&mut self, code: u16, value: i32) -> Vec<CaptureEvent> {
         self.state.handle(code, value);
+        if value != 0 {
+            self.held.insert(code);
+            return Vec::new();
+        }
+        self.held.remove(&code);
+        self.release_key(code).events
     }
 
     pub(super) fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
@@ -432,6 +433,34 @@ mod matcher_tests {
             replayed.events.is_empty(),
             "duplicate combo press re-dispatched"
         );
+    }
+
+    #[test]
+    fn reconcile_release_stops_active_continuous_binding() {
+        let mut matcher = BindingMatcher::new(vec![binding("Ctrl+Alt+Shift+Left", true)]);
+        matcher.observe(keycodes::KEY_LEFTCTRL, 1);
+        matcher.observe(keycodes::KEY_LEFTALT, 1);
+        matcher.observe(keycodes::KEY_LEFTSHIFT, 1);
+
+        let start = matcher.observe(keycodes::KEY_LEFT, 1);
+        let stop = matcher.reconcile(keycodes::KEY_LEFT, 0);
+
+        assert_eq!(start.events[0].phase, Phase::START);
+        assert_eq!(stop.len(), 1);
+        assert_eq!(stop[0].phase, Phase::STOP);
+        assert!(matcher.active_continuous.is_empty());
+        assert!(!matcher.suppressed_keys.contains(&keycodes::KEY_LEFT));
+    }
+
+    #[test]
+    fn reconcile_release_without_active_continuous_emits_nothing() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Down", false)]);
+        matcher.reconcile(keycodes::KEY_LEFTMETA, 1);
+
+        let stopped = matcher.reconcile(keycodes::KEY_LEFTMETA, 0);
+
+        assert!(stopped.is_empty());
+        assert!(matcher.state.pressed_modifiers().is_empty());
     }
 
     #[test]

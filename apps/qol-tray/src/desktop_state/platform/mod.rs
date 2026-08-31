@@ -14,6 +14,10 @@ use linux as active;
 #[cfg(target_os = "macos")]
 use macos as active;
 
+#[cfg(target_os = "linux")]
+#[cfg(feature = "linux_evdev")]
+pub(crate) use linux::is_wayland;
+
 pub(crate) fn create() -> impl Platform {
     active::create()
 }

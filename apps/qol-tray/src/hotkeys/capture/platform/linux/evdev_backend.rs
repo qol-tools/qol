@@ -1,6 +1,7 @@
 use super::super::super::{Binding, CaptureEvent};
 use super::super::super::{OnFire, RebuildBindings};
 use super::classify::{self, DeviceCapabilities, DeviceClass, SkipReason};
+use super::heal;
 use super::matcher::BindingMatcher;
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
@@ -9,7 +10,7 @@ use evdev::{
     uinput::VirtualDevice, AttributeSet, AttributeSetRef, EventSummary, EventType, InputEvent,
     KeyCode, SynchronizationCode,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -20,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// whatever is down at that instant still latched in the X server, which then
 /// autorepeats that key forever (the desktop is unusable until reboot).
 /// Tracking every emit here gives those paths one thing to flush.
-struct TrackedVirtualDevice {
+pub(super) struct TrackedVirtualDevice {
     device: VirtualDevice,
     held: HashSet<u16>,
 }
@@ -81,6 +82,22 @@ fn release_events(held: &HashSet<u16>) -> Vec<InputEvent> {
 
 static FLUSH_TARGET: OnceLock<Arc<Mutex<TrackedVirtualDevice>>> = OnceLock::new();
 
+pub(super) fn emit_key_ups(
+    virtual_device: &Mutex<TrackedVirtualDevice>,
+    held: impl IntoIterator<Item = u16>,
+) {
+    let events = release_events(&held.into_iter().collect());
+    if events.is_empty() {
+        return;
+    }
+    let mut vd = virtual_device
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Err(error) = vd.emit(&events) {
+        log::warn!("evdev: seeded held-key release failed: {error}");
+    }
+}
+
 /// Emit key-up for everything still held on the virtual keyboard. For the
 /// ways out of the process that skip the readers' own exit release: the dev
 /// exec-restart, graceful shutdown, and the abort-on-panic hook. Uses
@@ -126,7 +143,7 @@ fn spawn_dispatch_thread(on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>) -> C
 }
 const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
-pub(super) fn keycode_name(code: u16) -> &'static str {
+pub(crate) fn keycode_name(code: u16) -> &'static str {
     const ESC: u16 = KeyCode::KEY_ESC.0;
     const ENTER: u16 = KeyCode::KEY_ENTER.0;
     const SPACE: u16 = KeyCode::KEY_SPACE.0;
@@ -295,13 +312,31 @@ pub(super) fn install(
     install_panic_safety_hook();
 
     let matcher = Arc::new(Mutex::new(BindingMatcher::new(bindings)));
-    let grabbed = Arc::new(Mutex::new(HashMap::<PathBuf, HashSet<u16>>::new()));
+    let grabbed = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let quarantined = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let keyboards = open_keyboards(true)?;
     if keyboards.is_empty() {
         anyhow::bail!("no keyboard input devices found under /dev/input");
     }
     let keyboard_count = keyboards.len();
+    // The virtual keyboard has to exist before the first EVIOCGRAB. From the
+    // instant a real keyboard is grabbed the session stops seeing it, so a key
+    // held across that moment can only be released through the virtual device;
+    // building it afterwards left a window whose stuck key autorepeated
+    // forever. Capabilities come from the opened devices, which is why the
+    // grab loop consumes paths and this reads the devices first.
+    let key_caps = Arc::new(Mutex::new(merged_key_capabilities(
+        keyboards
+            .iter()
+            .filter_map(|(_, device)| device.supported_keys()),
+    )));
+    let virtual_device = Arc::new(Mutex::new(TrackedVirtualDevice::new(build_virtual_device(
+        &key_caps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )?)));
+    let _ = FLUSH_TARGET.set(virtual_device.clone());
+    let physical_down = heal::physical_down_union(&keyboards);
     let to_grab = {
         let guard = grabbed
             .lock()
@@ -309,9 +344,8 @@ pub(super) fn install(
         let quarantine = quarantined
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let paths: HashSet<PathBuf> = guard.keys().cloned().collect();
         devices_to_grab(
-            &paths,
+            &guard,
             &quarantine,
             keyboards.into_iter().map(|(path, _)| path).collect(),
         )
@@ -319,7 +353,7 @@ pub(super) fn install(
     let mut grabbed_keyboards = Vec::new();
     let mut held_at_grab: Vec<u16> = Vec::new();
     for path in to_grab {
-        let Some(keyboard) = grab_keyboard(path, &grabbed) else {
+        let Some(keyboard) = grab_keyboard(path, &grabbed, &virtual_device) else {
             continue;
         };
         for code in keyboard.held.iter() {
@@ -327,6 +361,14 @@ pub(super) fn install(
         }
         grabbed_keyboards.push(keyboard);
     }
+
+    heal::heal_stuck_keys(
+        &virtual_device,
+        &physical_down,
+        &key_caps
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
 
     if grabbed_keyboards.is_empty() {
         anyhow::bail!(
@@ -341,17 +383,6 @@ pub(super) fn install(
         guard.seed_held(held_at_grab);
     }
 
-    let key_caps = Arc::new(Mutex::new(merged_key_capabilities(
-        grabbed_keyboards
-            .iter()
-            .filter_map(|keyboard| keyboard.device.supported_keys()),
-    )));
-    let virtual_device = Arc::new(Mutex::new(TrackedVirtualDevice::new(build_virtual_device(
-        &key_caps
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    )?)));
-    let _ = FLUSH_TARGET.set(virtual_device.clone());
     let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
     let dispatch = spawn_dispatch_thread(on_fire);
 
@@ -430,9 +461,14 @@ struct GrabbedKeyboard {
     held: AttributeSet<KeyCode>,
 }
 
+/// Taking the virtual device by reference is the structural guarantee that no
+/// keyboard can be grabbed before there is somewhere to release its held keys:
+/// a grab is what stops the session seeing a device, so the release channel has
+/// to already exist. Do not weaken this parameter to make a call site simpler.
 fn grab_keyboard(
     path: PathBuf,
-    grabbed: &Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
+    grabbed: &Arc<Mutex<HashSet<PathBuf>>>,
+    virtual_device: &Mutex<TrackedVirtualDevice>,
 ) -> Option<GrabbedKeyboard> {
     let Ok(mut device) = RawDevice::open(&path) else {
         log::warn!("evdev: failed to open {} (unplugged?)", path.display());
@@ -461,12 +497,15 @@ fn grab_keyboard(
         let mut guard = grabbed
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let held_codes: HashSet<u16> = held.iter().map(|key| key.0).collect();
-        if guard.insert(path.clone(), held_codes).is_some() {
+        if !guard.insert(path.clone()) {
             let _ = device.ungrab();
             return None;
         }
     }
+    // The session saw these as presses it will never see released, because the
+    // release now lands on the grabbed device. Cancel them or it repeats them
+    // forever.
+    emit_key_ups(virtual_device, held.iter().map(|key| key.0));
     Some(GrabbedKeyboard {
         path,
         device,
@@ -476,7 +515,7 @@ fn grab_keyboard(
 }
 
 fn spawn_rescan_thread(
-    grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
+    grabbed: Arc<Mutex<HashSet<PathBuf>>>,
     quarantined: Arc<Mutex<HashSet<PathBuf>>>,
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<TrackedVirtualDevice>>,
@@ -498,15 +537,14 @@ fn spawn_rescan_thread(
                 let quarantine = quarantined
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let paths: HashSet<PathBuf> = guard.keys().cloned().collect();
                 devices_to_grab(
-                    &paths,
+                    &guard,
                     &quarantine,
                     keyboards.into_iter().map(|(path, _)| path).collect(),
                 )
             };
             for path in to_grab {
-                let Some(keyboard) = grab_keyboard(path, &grabbed) else {
+                let Some(keyboard) = grab_keyboard(path, &grabbed, &virtual_device) else {
                     continue;
                 };
                 log::info!("evdev: rescan grabbed {}", keyboard.path.display());
@@ -640,11 +678,11 @@ fn run_reader(
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<TrackedVirtualDevice>>,
     dispatch: CaptureDispatch,
-    grabbed: Arc<Mutex<HashMap<PathBuf, HashSet<u16>>>>,
+    grabbed: Arc<Mutex<HashSet<PathBuf>>>,
     quarantined: Arc<Mutex<HashSet<PathBuf>>>,
 ) {
     let device_name = device.name().unwrap_or("unknown").to_owned();
-    let mut known_held: HashSet<u16> = initial_held.iter().map(|key| key.0).collect();
+    let mut reader_held = ReaderHeldKeys::seeded(initial_held.iter().map(|key| key.0));
     'read_loop: loop {
         let events = match device.fetch_events() {
             Ok(events) => events,
@@ -678,20 +716,20 @@ fn run_reader(
                     &dispatch,
                     &device_name,
                     grab_time,
-                    &mut known_held,
+                    &mut reader_held,
                 );
                 continue;
             };
             match device.get_key_state() {
                 Ok(state) => {
                     let current: HashSet<u16> = state.iter().map(|key| key.0).collect();
-                    for code in current.difference(&known_held).copied() {
-                        replay_state(&virtual_device, &matcher, &device_name, code, 1);
+                    let (became_down, became_up) = reader_held.resync(current);
+                    for code in &became_down {
+                        replay_state(&virtual_device, &matcher, &dispatch, &device_name, *code, 1);
                     }
-                    for code in known_held.difference(&current).copied() {
-                        replay_state(&virtual_device, &matcher, &device_name, code, 0);
+                    for code in &became_up {
+                        replay_state(&virtual_device, &matcher, &dispatch, &device_name, *code, 0);
                     }
-                    known_held = current;
                 }
                 Err(error) => {
                     log::warn!("evdev: state resync failed on {}: {error}", path.display());
@@ -702,30 +740,83 @@ fn run_reader(
     if let Err(error) = device.ungrab() {
         log::warn!("evdev: ungrab on reader exit failed: {error}");
     }
-    let to_release: Vec<u16> = {
-        let mut guard = grabbed
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let re_seeded: HashSet<u16> = guard.get(&path).cloned().unwrap_or_default();
-        let to_release: Vec<u16> = known_held.difference(&re_seeded).copied().collect();
-        guard.remove(&path);
-        to_release
-    };
-    for code in to_release {
-        replay_state(&virtual_device, &matcher, &device_name, code, 0);
+    grabbed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&path);
+    for code in reader_held.exit_release_codes() {
+        replay_state(&virtual_device, &matcher, &dispatch, &device_name, code, 0);
+    }
+}
+
+/// `pressed` is what this reader is responsible for releasing when it exits:
+/// keys it saw go down itself. `mirror` is the device's raw key state, kept
+/// only to diff against after a SYN_DROPPED. Keys already held at grab time are
+/// deliberately absent from `pressed`, because `release_seeded_keys` has
+/// already cancelled them in the session.
+#[derive(Default)]
+struct ReaderHeldKeys {
+    pressed: HashSet<u16>,
+    mirror: HashSet<u16>,
+}
+
+impl ReaderHeldKeys {
+    fn seeded(initial: impl IntoIterator<Item = u16>) -> Self {
+        Self {
+            pressed: HashSet::new(),
+            mirror: initial.into_iter().collect(),
+        }
+    }
+
+    fn observe(&mut self, code: u16, value: i32) {
+        if value == 0 {
+            self.pressed.remove(&code);
+            self.mirror.remove(&code);
+        } else {
+            self.mirror.insert(code);
+            if value == 1 {
+                self.pressed.insert(code);
+            }
+        }
+    }
+
+    /// Returns the (became_down, became_up) diff against the mirror and adopts
+    /// `current` as the new mirror.
+    fn resync(&mut self, current: HashSet<u16>) -> (Vec<u16>, Vec<u16>) {
+        let became_down: Vec<u16> = current.difference(&self.mirror).copied().collect();
+        let became_up: Vec<u16> = self.mirror.difference(&current).copied().collect();
+        for code in &became_down {
+            self.pressed.insert(*code);
+        }
+        for code in &became_up {
+            self.pressed.remove(code);
+        }
+        self.mirror = current;
+        (became_down, became_up)
+    }
+
+    fn exit_release_codes(&self) -> Vec<u16> {
+        let mut codes: Vec<u16> = self.pressed.iter().copied().collect();
+        codes.sort_unstable();
+        codes
     }
 }
 
 fn replay_state(
     virtual_device: &Mutex<TrackedVirtualDevice>,
     matcher: &Mutex<BindingMatcher>,
+    dispatch: &CaptureDispatch,
     device: &str,
     code: u16,
     value: i32,
 ) {
     trace_capture_replay(device, code, value);
-    if let Ok(mut guard) = matcher.lock() {
-        guard.reconcile(code, value);
+    let events = match matcher.lock() {
+        Ok(mut guard) => guard.reconcile(code, value),
+        Err(_) => Vec::new(),
+    };
+    for capture_event in events {
+        let _ = dispatch.send(capture_event);
     }
     let key_event = InputEvent::new(EventType::KEY.0, code, value);
     let sync_event = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
@@ -743,7 +834,7 @@ fn process_event(
     dispatch: &CaptureDispatch,
     device: &str,
     grab_time: SystemTime,
-    known_held: &mut HashSet<u16>,
+    reader_held: &mut ReaderHeldKeys,
 ) {
     let EventSummary::Key(_, key_code, value) = event.destructure() else {
         forward(event, virtual_device);
@@ -754,11 +845,7 @@ fn process_event(
         return;
     }
     trace_capture_key(device, key_code.0, value);
-    if value == 0 {
-        known_held.remove(&key_code.0);
-    } else if value == 1 {
-        known_held.insert(key_code.0);
-    }
+    reader_held.observe(key_code.0, value);
     let decision = match matcher.lock() {
         Ok(mut m) => m.observe(key_code.0, value),
         Err(_) => {
@@ -845,9 +932,13 @@ fn merged_key_capabilities<'a>(
 }
 
 fn build_virtual_device(keys: &AttributeSet<KeyCode>) -> Result<VirtualDevice> {
+    build_virtual_device_named(keys, classify::VIRTUAL_KEYBOARD_NAME)
+}
+
+fn build_virtual_device_named(keys: &AttributeSet<KeyCode>, name: &str) -> Result<VirtualDevice> {
     let mut device = VirtualDevice::builder()
         .context("creating uinput builder (is /dev/uinput accessible?)")?
-        .name(classify::VIRTUAL_KEYBOARD_NAME)
+        .name(name)
         .with_keys(keys)
         .context("declaring key capabilities on uinput device")?
         .build()
@@ -1007,6 +1098,59 @@ mod tests {
     }
 
     #[test]
+    fn reader_exit_releases_only_keys_its_own_stream_pressed() {
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let mut external = ReaderHeldKeys::default();
+        let builtin = ReaderHeldKeys::default();
+
+        external.observe(shift, 1);
+
+        assert_eq!(external.exit_release_codes(), vec![shift]);
+        assert!(
+            builtin.exit_release_codes().is_empty(),
+            "a reader whose device only had the key down at grab must not release it"
+        );
+    }
+
+    #[test]
+    fn seeded_key_repressed_by_its_device_is_released_at_exit() {
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let mut reader = ReaderHeldKeys::default();
+
+        reader.observe(shift, 1);
+        reader.observe(shift, 0);
+        reader.observe(shift, 1);
+
+        assert_eq!(reader.exit_release_codes(), vec![shift]);
+    }
+
+    #[test]
+    fn resync_updates_exit_responsibility_in_both_directions() {
+        let mut reader = ReaderHeldKeys::default();
+        reader.observe(30, 1);
+
+        let (became_down, became_up) = reader.resync(HashSet::from([31]));
+
+        assert_eq!(became_down, vec![31]);
+        assert_eq!(became_up, vec![30]);
+        assert_eq!(reader.exit_release_codes(), vec![31]);
+    }
+
+    #[test]
+    fn resync_diffs_against_the_state_present_at_grab() {
+        let mut reader = ReaderHeldKeys::seeded([30]);
+
+        let (became_down, became_up) = reader.resync(HashSet::from([30]));
+
+        assert!(became_down.is_empty(), "a key held since grab is not new");
+        assert!(became_up.is_empty());
+        assert!(
+            reader.exit_release_codes().is_empty(),
+            "a key held since grab was already cancelled by release_seeded_keys"
+        );
+    }
+
+    #[test]
     fn timestamp_before_drops_clearly_older_events_and_keeps_recent_and_newer() {
         assert!(timestamp_before_ms(1000, 2000));
         assert!(!timestamp_before_ms(1999, 2000));
@@ -1014,5 +1158,123 @@ mod tests {
         assert!(!timestamp_before_ms(2500, 2000));
         assert!(!timestamp_before_ms(0, 0));
         assert!(!timestamp_before_ms(0, 1));
+    }
+
+    #[test]
+    fn stuck_candidates_are_x_down_minus_physical_down_sorted() {
+        let empty: HashSet<u16> = HashSet::new();
+        assert!(super::heal::stuck_candidates(&empty, &empty).is_empty());
+
+        let x_down = HashSet::from([30u16, 31, 32]);
+        assert_eq!(
+            super::heal::stuck_candidates(&x_down, &empty),
+            vec![30, 31, 32]
+        );
+        assert!(super::heal::stuck_candidates(&empty, &x_down).is_empty());
+
+        let physical = HashSet::from([31u16]);
+        assert_eq!(
+            super::heal::stuck_candidates(&x_down, &physical),
+            vec![30, 32]
+        );
+
+        let disjoint_x = HashSet::from([45u16, 10]);
+        let disjoint_physical = HashSet::from([46u16]);
+        assert_eq!(
+            super::heal::stuck_candidates(&disjoint_x, &disjoint_physical),
+            vec![10, 45]
+        );
+    }
+
+    #[test]
+    fn loopback_virtual_device_relays_the_heal_key_up() {
+        let keys = AttributeSet::from_iter([KeyCode::KEY_DOWN, KeyCode::KEY_A]);
+        let mut device = match build_virtual_device_named(&keys, "qol-tray-loopback-test") {
+            Ok(device) => device,
+            Err(error) => {
+                eprintln!("skipping loopback stuck-key test: {error}");
+                return;
+            }
+        };
+        let Some(node_path) = device
+            .enumerate_dev_nodes_blocking()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .next()
+        else {
+            eprintln!("skipping loopback stuck-key test: no dev node enumerated");
+            return;
+        };
+        use std::os::unix::fs::OpenOptionsExt;
+        let open_deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let node_file = loop {
+            let attempt = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&node_path)
+                .or_else(|_| {
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&node_path)
+                });
+            match attempt {
+                Ok(file) => break file,
+                Err(error) => {
+                    if std::time::Instant::now() >= open_deadline {
+                        eprintln!("skipping loopback stuck-key test: {error}");
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        };
+        let mut node = RawDevice::from_fd(node_file.into()).expect("open loopback uinput node");
+        node.grab().expect("grab loopback uinput node");
+
+        device
+            .emit(&[
+                InputEvent::new(EventType::KEY.0, KeyCode::KEY_DOWN.0, 1),
+                InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0),
+            ])
+            .expect("virtual emit on loopback test device");
+
+        let state = node.get_key_state().expect("loopback key state");
+        assert!(
+            state.contains(KeyCode::KEY_DOWN),
+            "loopback node must report KEY_DOWN after the virtual press"
+        );
+
+        let tracked = Mutex::new(TrackedVirtualDevice::new(device));
+        tracked
+            .lock()
+            .expect("lock loopback tracked device")
+            .held
+            .insert(KeyCode::KEY_DOWN.0);
+        emit_key_ups(&tracked, [KeyCode::KEY_DOWN.0]);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(mut events) = node.fetch_events() {
+                let found = events.any(|event| {
+                    event.event_type() == EventType::KEY
+                        && event.code() == KeyCode::KEY_DOWN.0
+                        && event.value() == 0
+                });
+                if found {
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "loopback node never received the healed KEY_DOWN key-up"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let _ = node.ungrab();
+        drop(node);
     }
 }
