@@ -407,6 +407,7 @@ mod tests {
                 "FLOOR": 6.0,
                 "NOTE_COV": 0.5,
                 "NOTE_SCORE": 6.0,
+                "NOTE_MARGIN": 1.25,
                 "UNIT_COV": 1.0,
                 "UNIT_SCORE": 8.0,
                 "UNIT_MARGIN": 1.5,

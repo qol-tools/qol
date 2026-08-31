@@ -115,6 +115,8 @@ pub struct Gates {
     pub note_cov: f64,
     #[serde(rename = "NOTE_SCORE")]
     pub note_score: f64,
+    #[serde(rename = "NOTE_MARGIN")]
+    pub note_margin: f64,
     #[serde(rename = "UNIT_COV")]
     pub unit_cov: f64,
     #[serde(rename = "UNIT_SCORE")]
@@ -131,6 +133,7 @@ impl Gates {
         floor: 6.0,
         note_cov: 0.5,
         note_score: 6.0,
+        note_margin: 1.25,
         unit_cov: 1.0,
         unit_score: 8.0,
         unit_margin: 1.5,
@@ -147,6 +150,7 @@ impl Gates {
             floor: lookup_gate(&lookup, "MEM_FLOOR", Gates::DEFAULTS.floor),
             note_cov: lookup_gate(&lookup, "MEM_NOTE_COV", Gates::DEFAULTS.note_cov),
             note_score: lookup_gate(&lookup, "MEM_NOTE_SCORE", Gates::DEFAULTS.note_score),
+            note_margin: lookup_gate(&lookup, "MEM_NOTE_MARGIN", Gates::DEFAULTS.note_margin),
             unit_cov: lookup_gate(&lookup, "MEM_UNIT_COV", Gates::DEFAULTS.unit_cov),
             unit_score: lookup_gate(&lookup, "MEM_UNIT_SCORE", Gates::DEFAULTS.unit_score),
             unit_margin: lookup_gate(&lookup, "MEM_UNIT_MARGIN", Gates::DEFAULTS.unit_margin),
@@ -159,6 +163,7 @@ impl Gates {
             && self.floor == Gates::DEFAULTS.floor
             && self.note_cov == Gates::DEFAULTS.note_cov
             && self.note_score == Gates::DEFAULTS.note_score
+            && self.note_margin == Gates::DEFAULTS.note_margin
             && self.unit_cov == Gates::DEFAULTS.unit_cov
             && self.unit_score == Gates::DEFAULTS.unit_score
             && self.unit_margin == Gates::DEFAULTS.unit_margin
@@ -733,12 +738,24 @@ fn run_with_warm(
             Some(idx) => must_match_tokens(&qtokens, &idx.idf),
             None => Vec::new(),
         };
+        let note_rival = note_resolved.as_ref().and_then(|resolved| {
+            top_notes.iter().find(|hit| {
+                hit.key != resolved.key
+                    && hit.family_key() != resolved.family_key()
+                    && text::token_jaccard(&resolved.text, &hit.text) < AGREE_JACCARD
+            })
+        });
+        let note_margin = note_resolved.as_ref().map_or(0.0, |resolved| {
+            note_rival.map_or(f64::INFINITY, |hit| resolved.score / hit.score)
+        });
         let note_winner = note_resolved.as_ref().is_some_and(|resolved| {
             note_decisive
                 && curated_kinds().contains(resolved.source_kind.as_deref().unwrap_or(""))
                 && (note_cov_r >= gates.note_cov
                     || (fam_relevant && note_superseded.as_ref().is_some_and(|s| !s.is_empty())))
                 && resolved.score >= gates.note_score
+                && (note_margin >= gates.note_margin
+                    || note_superseded.as_ref().is_some_and(|s| !s.is_empty()))
                 && note_covers_must_match(resolved, note_superseded.as_ref(), &must_match)
         });
         let unit_winner = unit_top.as_ref().is_some_and(|top| {
@@ -763,12 +780,7 @@ fn run_with_warm(
             let resolved = note_resolved
                 .as_ref()
                 .expect("winner keeps a resolved note");
-            let next_family = top_notes.iter().find(|hit| {
-                hit.key != resolved.key
-                    && hit.family_key() != resolved.family_key()
-                    && text::token_jaccard(&resolved.text, &hit.text) < AGREE_JACCARD
-            });
-            let margin = next_family.map_or(f64::INFINITY, |hit| resolved.score / hit.score);
+            let margin = note_margin;
             let high = margin >= gates.high_margin
                 && !note_superseded.as_ref().is_some_and(|s| !s.is_empty());
             let rounded_margin = text::to_fixed2(margin.min(99.0));
@@ -1812,6 +1824,33 @@ mod tests {
         assert_eq!(value["signals"]["stale_layer"], false);
         assert_eq!(value["signals"]["live_units"], true);
         assert_eq!(value["non_default_gates"], false);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_note_margin_gate_is_configurable_and_the_curated_note_clears_it() {
+        let root = temp_root("note-margin");
+        build_fixture(&root);
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+
+        let gates =
+            Gates::from_lookup(|name| (name == "MEM_NOTE_MARGIN").then(|| "99".to_string()));
+
+        assert_eq!(gates.note_margin, 99.0);
+        assert!(!gates.is_default());
+
+        let out = run_ask(
+            &store,
+            "does the clipboard history ring survive tray restarts",
+            false,
+        );
+
+        assert_eq!(out.verdict, "answered");
+        assert!(
+            out.answer.expect("note answer").margin.unwrap() >= Gates::DEFAULTS.note_margin,
+            "an answering note must outscore its nearest disagreeing rival"
+        );
+
         fs::remove_dir_all(&root).ok();
     }
 
@@ -2869,6 +2908,7 @@ mod tests {
                 "FLOOR": 6.0,
                 "NOTE_COV": 0.5,
                 "NOTE_SCORE": 6.0,
+                "NOTE_MARGIN": 1.25,
                 "UNIT_COV": 1.0,
                 "UNIT_SCORE": 8.0,
                 "UNIT_MARGIN": 1.5,
