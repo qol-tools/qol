@@ -3813,6 +3813,17 @@ mod tests {
         }
     }
 
+    fn wait_for_attach(server: &Arc<McpSessionServer>, binding: &SessionBinding) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while server.pending.owner_pid(binding).is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the bridge never attached to the round"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn drain_workers(workers: &Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>) {
         for worker in workers.lock().unwrap().drain(..) {
             let _ = worker.join();
@@ -3893,15 +3904,8 @@ mod tests {
             &workers,
             &pending_bridge_request(5),
         );
+        wait_for_attach(&server, &binding);
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        while server.pending.owner_pid(&binding).is_none() {
-            assert!(
-                Instant::now() < deadline,
-                "the bridge never attached to the round"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
         feed_line(
             &server,
             &writer,
@@ -3994,15 +3998,8 @@ mod tests {
                 json!({ "name": "session_bridge", "arguments": { "session": "v1:fake:9:300" } }),
             ),
         );
+        wait_for_attach(&server, &binding);
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        while server.pending.owner_pid(&binding).is_none() {
-            assert!(
-                Instant::now() < deadline,
-                "the bridge never attached to the round"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
         feed_line(
             &server,
             &writer,

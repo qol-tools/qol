@@ -103,10 +103,12 @@ impl Drop for PendingBridgeLock {
 #[derive(Debug)]
 pub(super) struct BridgeOwner {
     file: File,
+    path: PathBuf,
 }
 
 impl Drop for BridgeOwner {
     fn drop(&mut self) {
+        let _ = fs::write(&self.path, "");
         let _ = self.file.unlock();
     }
 }
@@ -724,22 +726,17 @@ impl PendingBridgeStore {
             }
         }
         fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
-        Ok(BridgeOwner { file })
+        Ok(BridgeOwner { file, path })
     }
 
     pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
-        let path = self.owner_for(binding);
-        let file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
-        match file.try_lock() {
-            Ok(()) => {
-                let _ = file.unlock();
-                None
-            }
-            Err(TryLockError::WouldBlock) => {
-                Some(fs::read_to_string(&path).ok()?.trim().to_owned())
-            }
-            Err(TryLockError::Error(_)) => None,
+        let recorded = fs::read_to_string(self.owner_for(binding)).ok()?;
+        let recorded = recorded.trim();
+        let pid = recorded.parse::<u32>().ok()?;
+        if pid != process::id() && qol_process::is_pid_gone(pid) {
+            return None;
         }
+        Some(recorded.to_owned())
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
@@ -3916,6 +3913,44 @@ mod tests {
         assert!(
             text.contains(&combined_path.display().to_string()),
             "the grouped wake must name the combined file path: {text:?}"
+        );
+    }
+
+    #[test]
+    fn observing_the_owner_never_steals_the_attach_lock() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(PendingBridgeStore::with_dir(root.path().to_path_buf()));
+        let binding = SessionBinding::from_str("v1:fake:12:1200").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let observer = {
+            let store = Arc::clone(&store);
+            let binding = binding.clone();
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    store.owner_pid(&binding);
+                }
+            })
+        };
+
+        for round in 0..500 {
+            let owner = store
+                .acquire_owner(&binding)
+                .unwrap_or_else(|error| panic!("round {round} failed to attach: {error}"));
+            assert_eq!(
+                store.owner_pid(&binding).as_deref(),
+                Some(process::id().to_string().as_str()),
+                "round {round} attached without an observable owner"
+            );
+            drop(owner);
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        observer.join().unwrap();
+        assert!(
+            store.owner_pid(&binding).is_none(),
+            "a released attach must report no owner"
         );
     }
 }
