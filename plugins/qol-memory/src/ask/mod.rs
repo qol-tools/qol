@@ -782,7 +782,7 @@ fn run_with_warm(
                 .expect("winner keeps a resolved note");
             let margin = note_margin;
             let high = margin >= gates.high_margin
-                && !note_superseded.as_ref().is_some_and(|s| !s.is_empty());
+                && note_superseded.as_ref().is_none_or(|s| s.is_empty());
             let rounded_margin = text::to_fixed2(margin.min(99.0));
             let superseded_for_output = note_superseded.as_ref().filter(|list| !list.is_empty());
             answer = Some(Answer {

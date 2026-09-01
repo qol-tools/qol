@@ -273,6 +273,7 @@ def dependency_tables(value: object) -> Iterable[dict]:
 
 
 def load_packages(root: Path) -> dict[str, Package]:
+    root = root.resolve()
     packages: dict[str, Package] = {}
     manifests = workspace_members(root)
     manifest_to_name: dict[Path, str] = {}
