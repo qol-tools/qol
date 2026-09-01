@@ -291,8 +291,32 @@ fn tail_runtime(path: &Path) -> CliRuntimeState {
     };
     match value.get("type").and_then(Value::as_str) {
         Some("system" | "last-prompt" | "mode" | "permission-mode") => CliRuntimeState::Ready,
+        Some("user") if is_interrupt_note(&value) => CliRuntimeState::Ready,
+        Some(
+            "ai-title"
+            | "atis-latch"
+            | "cost-state"
+            | "artifact-comment-monitor"
+            | "worktree-state",
+        ) => CliRuntimeState::Ready,
         _ => CliRuntimeState::Working,
     }
+}
+
+fn is_interrupt_note(value: &Value) -> bool {
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.trim().starts_with("[Request interrupted by user"))
+            })
+        })
 }
 
 fn custom_title(line: &[u8]) -> Option<String> {

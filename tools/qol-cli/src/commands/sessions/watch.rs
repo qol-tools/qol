@@ -79,6 +79,7 @@ struct WatchedRound {
     started_at: Option<SystemTime>,
     transcript_paths: Vec<std::path::PathBuf>,
     transcript_pinned: bool,
+    transcript_owned_seen: bool,
 }
 
 impl WatchedRound {
@@ -109,6 +110,7 @@ impl WatchedRound {
             started_at: round.started_at,
             transcript_paths: round.transcript_paths,
             transcript_pinned: false,
+            transcript_owned_seen: false,
         })
     }
 
@@ -798,6 +800,21 @@ fn poll_round(
                     path.display()
                 );
             }
+        }
+    }
+    if round.transcript_pinned && !round.transcript_paths.is_empty() {
+        match interpreter.transcript_runtime(&round.transcript_paths, &round.marker) {
+            Some(_) => round.transcript_owned_seen = true,
+            None if round.transcript_owned_seen => {
+                round.transcript_pinned = false;
+                round.transcript_paths = vec![];
+                qol_runtime::probe!(
+                    "CLI_SESSION_WATCH",
+                    "event=transcript_unpinned session={} reason=ownership_lost",
+                    round.session
+                );
+            }
+            None => {}
         }
     }
     if let Some(report) = interpreter.marked_report(&round.transcript_paths, &round.marker) {
@@ -2523,6 +2540,11 @@ mod tests {
             None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
         }
         result
+    }
+
+    fn user_message_line(text: &str) -> String {
+        r#"{"type":"message","timestamp":"2026-08-29T11:06:48.266Z","message":{"role":"user","content":[{"type":"text","text":"__TEXT__"}]}}"#
+            .replace("__TEXT__", text)
     }
 
     #[test]
@@ -4893,6 +4915,10 @@ mod tests {
             *self.runtime_override.lock().unwrap() = Some(runtime);
         }
 
+        fn clear_transcript_runtime(&self) {
+            *self.runtime_override.lock().unwrap() = None;
+        }
+
         fn set_fault(&self, fault: Option<String>) {
             *self.fault.lock().unwrap() = fault;
         }
@@ -6367,11 +6393,7 @@ mod tests {
         std::fs::create_dir_all(&encoded_dir).unwrap();
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
-        std::fs::write(
-            &transcript,
-            "the pinned transcript body\nQOL_BRIDGE_DONE_pin_a",
-        )
-        .unwrap();
+        std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_a")).unwrap();
         let transcript_file = std::fs::File::open(&transcript).unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
@@ -6516,11 +6538,7 @@ mod tests {
         std::fs::create_dir_all(&encoded_dir).unwrap();
         let transcript =
             encoded_dir.join("2020-01-01T00-00-00-000Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
-        std::fs::write(
-            &transcript,
-            "the resumed lane's report\nQOL_BRIDGE_DONE_pin_c",
-        )
-        .unwrap();
+        std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_c")).unwrap();
         let transcript_file = std::fs::File::open(&transcript).unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
@@ -6628,11 +6646,7 @@ mod tests {
                 "a screen marker without a transcript carrying it must not complete: {out:?}"
             );
             assert!(!round.transcript_pinned);
-            std::fs::write(
-                &transcript,
-                "the transcript is still running\nQOL_BRIDGE_DONE_pin_d",
-            )
-            .unwrap();
+            std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_d")).unwrap();
             let transcript_file = std::fs::File::open(&transcript).unwrap();
             transcript_file.set_modified(SystemTime::now()).unwrap();
             let second = poll_round(
@@ -6696,7 +6710,7 @@ mod tests {
         std::fs::create_dir_all(&encoded_dir).unwrap();
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
-        std::fs::write(&transcript, "the exit rescue report\nQOL_BRIDGE_DONE_pin_e").unwrap();
+        std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_e")).unwrap();
         let transcript_file = std::fs::File::open(&transcript).unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
@@ -6757,6 +6771,82 @@ mod tests {
             Some("the exit rescue report")
         );
         assert_eq!(stored.transcript_paths, vec![transcript]);
+    }
+
+    #[test]
+    fn a_pin_whose_ownership_was_proven_and_then_lost_unpins_and_re_resolves() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_pin_f",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        let session_dir = tempfile::TempDir::new().unwrap();
+        let encoded_dir = session_dir.path().join("--work--");
+        std::fs::create_dir_all(&encoded_dir).unwrap();
+        let transcript =
+            encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
+        std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_f")).unwrap();
+        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        transcript_file.set_modified(SystemTime::now()).unwrap();
+        let tool = FakeTool::new(Transcript::Working);
+        tool.set_transcript_runtime(CliRuntimeState::Working);
+        let interpreter = CliSessionInterpreter::from_strategies([
+            Arc::clone(&tool) as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>
+        ])
+        .unwrap();
+        let backend = FakeBackend::new(facts("7", 100), vec!["working".to_owned(); 4]);
+        let (terminals, _) = harness(backend);
+        let mut round =
+            WatchedRound::new(pending.pending_round(&binding).unwrap().unwrap()).unwrap();
+        let mut out = Vec::new();
+        let ledger = ledger(&root);
+        let locks = locks(&root);
+        with_session_dir_override(session_dir.path(), || {
+            let first = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(first.keep);
+            assert!(
+                round.transcript_pinned && round.transcript_owned_seen,
+                "premise: the first poll pinned the transcript and proved ownership"
+            );
+            tool.clear_transcript_runtime();
+            let second = poll_round(
+                &terminals,
+                &interpreter,
+                &pending,
+                &ledger,
+                &locks,
+                &mut round,
+                &mut out,
+                root.path(),
+                fast_config(Duration::from_secs(3600)),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(second.keep);
+            assert!(
+                !round.transcript_pinned && round.transcript_paths.is_empty(),
+                "a pin whose ownership was proven and then lost must unpin"
+            );
+        });
     }
 
     #[test]

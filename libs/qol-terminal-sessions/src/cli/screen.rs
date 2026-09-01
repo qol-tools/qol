@@ -1,4 +1,5 @@
 const STATUS_TAIL: usize = 8;
+const PI_SPINNER_TAIL: usize = 12;
 const CLAUDE_STATUS_TAIL: usize = 16;
 const KIMI_STATUS_TAIL: usize = 30;
 const FOOTER_BELOW_MIN: usize = 1;
@@ -38,7 +39,7 @@ fn is_status_spinner(trimmed: &str) -> bool {
 }
 
 pub(super) fn has_braille_spinner(text: &str) -> bool {
-    tail(text, STATUS_TAIL).iter().any(|line| {
+    tail(text, PI_SPINNER_TAIL).iter().any(|line| {
         let trimmed = line.trim_start();
         starts_with_glyph(trimmed, 0x2800..=0x28FF)
             && (trimmed.contains("...") || trimmed.contains('\u{2026}'))

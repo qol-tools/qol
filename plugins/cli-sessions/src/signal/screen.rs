@@ -39,6 +39,8 @@ pub fn stable_screen<'a>(text: &'a str, tool: &CliTool) -> Cow<'a, str> {
     stabilizer.stabilize(text)
 }
 
+const PI_FOOTER_BELOW_MAX: usize = 6;
+
 fn pi_stable(text: &str) -> Cow<'_, str> {
     let lines: Vec<&str> = text.lines().collect();
     let is_rule = |line: &str| {
@@ -47,15 +49,11 @@ fn pi_stable(text: &str) -> Cow<'_, str> {
     let Some(border) = lines.iter().rposition(|line| is_rule(line)) else {
         return Cow::Borrowed(text);
     };
-    if lines.len().saturating_sub(border) > 5 {
-        return Cow::Borrowed(text);
-    }
-    let paired = lines[..border]
+    let below = lines[border + 1..]
         .iter()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(|line| is_rule(line));
-    if !paired {
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    if below > PI_FOOTER_BELOW_MAX {
         return Cow::Borrowed(text);
     }
     let end = lines[..border].iter().map(|line| line.len() + 1).sum();
@@ -110,6 +108,28 @@ mod tests {
             hash(&base),
             hash(&content),
             "content changes must count as movement"
+        );
+    }
+
+    #[test]
+    fn pi_stable_trims_a_footer_whose_draft_sits_above_the_border() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let build = |cost: &str, draft: &str| {
+            format!("conversation output\n{rule}\n{draft}\n{rule}\n/tmp\n{cost}")
+        };
+        let hash = |text: &str| screen_hash(stable_screen(text, &pi_tool()).as_ref());
+        let base = build("$0.000 (sub) 0.0%/262k (auto)", "QOL_BRIDGE_DONE_marker");
+        let bumped = build("$0.480 (sub) 30.1%/1.0M (auto)", "QOL_BRIDGE_DONE_marker");
+        let changed = build("$0.000 (sub) 0.0%/262k (auto)", "a different draft");
+        assert_eq!(
+            hash(&base),
+            hash(&bumped),
+            "footer counters must not count as movement"
+        );
+        assert_ne!(
+            hash(&base),
+            hash(&changed),
+            "content above the border must count as movement"
         );
     }
 

@@ -165,6 +165,7 @@ fn transcript_tail_type_drives_the_runtime() {
         },
     }));
 
+    let interrupt_note = "{\"parentUuid\":\"e418e25b-1b7b-4d21-b78f-cc0612994387\",\"isSidechain\":false,\"promptId\":\"54a79d67-f8c1-450a-b6b4-49e5121e2fb0\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[Request interrupted by user]\"}]},\"uuid\":\"9debe788-2871-44d1-a13f-b4f5a8216e06\",\"timestamp\":\"2026-08-04T20:41:29.417Z\",\"interruptedByShutdown\":true,\"userType\":\"external\",\"entrypoint\":\"sdk-py\",\"cwd\":\"/media/kmrh47/WD_SN850X/Git/qol-monorepo\",\"sessionId\":\"fc0458d8-3c35-4eef-9df5-f9d6a738acdc\",\"version\":\"2.1.221\",\"gitBranch\":\"main\"}\n";
     let cases = [
         ("{\"type\":\"permission-mode\"}\n", CliRuntimeState::Ready),
         ("{\"type\":\"mode\"}\n", CliRuntimeState::Ready),
@@ -173,9 +174,39 @@ fn transcript_tail_type_drives_the_runtime() {
             "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
             CliRuntimeState::Ready,
         ),
+        (
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Review build infrastructure migration for security\",\"sessionId\":\"706c6c7e-818a-4619-90b4-c5b87ba8223d\"}\n",
+            CliRuntimeState::Ready,
+        ),
+        (
+            "{\"type\":\"atis-latch\",\"atis\":\"\",\"sessionId\":\"66084504-c07b-4e89-95b7-6d351974491c\"}\n",
+            CliRuntimeState::Ready,
+        ),
+        (
+            "{\"type\":\"cost-state\",\"sessionId\":\"66084504-c07b-4e89-95b7-6d351974491c\",\"totalCostUSD\":9.576202500000003}\n",
+            CliRuntimeState::Ready,
+        ),
+        (
+            "{\"type\":\"artifact-comment-monitor\",\"v\":1,\"sessionId\":\"f6919ab1-e337-47b0-b87d-c79c36c68198\",\"artifacts\":{}}\n",
+            CliRuntimeState::Ready,
+        ),
+        (
+            "{\"type\":\"worktree-state\",\"worktreeSession\":{\"originalCwd\":\"/media/kmrh47/WD_SN850X/Git/qol-monorepo\",\"worktreeName\":\"remove-makefiles\"}}\n",
+            CliRuntimeState::Ready,
+        ),
+        (interrupt_note, CliRuntimeState::Ready),
         ("{\"type\":\"user\"}\n", CliRuntimeState::Working),
         ("{\"type\":\"assistant\"}\n", CliRuntimeState::Working),
         ("{\"type\":\"attachment\"}\n", CliRuntimeState::Working),
+        (
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"please fix the bug\"}]}}\n",
+            CliRuntimeState::Working,
+        ),
+        (
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_01\",\"content\":\"ok\"}]}}\n",
+            CliRuntimeState::Working,
+        ),
+        ("complete garbage, not json\n", CliRuntimeState::Working),
     ];
     for (content, runtime) in cases {
         std::fs::write(&transcript, content).unwrap();

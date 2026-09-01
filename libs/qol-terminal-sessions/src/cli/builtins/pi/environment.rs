@@ -6,6 +6,7 @@ use qol_agent_homes::{Harness, Registry};
 
 #[cfg(test)]
 use super::metadata::id_from_path;
+use super::metadata::transcript_owned_by;
 
 pub fn session_file_for_external_id(cwd: &str, external_id: &str) -> Option<PathBuf> {
     if external_id.is_empty() {
@@ -30,13 +31,7 @@ pub fn session_file_containing_marker(
     let mut candidates: Vec<PathBuf> = session_files(&directory)
         .into_iter()
         .filter(|path| modified_unix_secs(path).is_some_and(|modified| modified >= since))
-        .filter(|path| {
-            std::fs::read(path).ok().is_some_and(|bytes| {
-                bytes
-                    .windows(marker.len())
-                    .any(|window| window == marker.as_bytes())
-            })
-        })
+        .filter(|path| transcript_owned_by(path, marker))
         .collect();
     candidates.sort_by(|left, right| {
         match (
@@ -428,12 +423,73 @@ mod tests {
         (root, directory, marker, since)
     }
 
+    fn user_message_line(text: &str) -> String {
+        r#"{"type":"message","timestamp":"2026-09-01T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"__TEXT__"}]}}"#
+            .replace("__TEXT__", text)
+    }
+
     fn write_marker_file(directory: &std::path::Path, name: &str, marker: &str) -> PathBuf {
         let path = directory.join(name);
-        std::fs::write(&path, marker.as_bytes()).unwrap();
+        std::fs::write(&path, user_message_line(&format!("task {marker}"))).unwrap();
         let file = std::fs::File::open(&path).unwrap();
         file.set_modified(SystemTime::now()).unwrap();
         path
+    }
+
+    fn write_echo_file(directory: &std::path::Path, name: &str, marker: &str) -> PathBuf {
+        let path = directory.join(name);
+        let tool_result = r#"{"type":"message","timestamp":"2026-09-01T10:00:00.000Z","message":{"role":"toolResult","content":[{"type":"text","text":"spawn ack __TEXT__"}]}}"#
+            .replace("__TEXT__", marker);
+        let assistant = r#"{"type":"message","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"launched with __TEXT__"}]}}"#
+            .replace("__TEXT__", marker);
+        std::fs::write(&path, format!("{tool_result}\n{assistant}\n")).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        file.set_modified(SystemTime::now()).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_parent_transcript_that_echoes_the_marker_in_tool_results_is_never_selected() {
+        let (root, directory, marker, since) = marker_fixture();
+        write_echo_file(&directory, &stamped_session_name(-400), &marker);
+        with_session_dir_override(root.path(), || {
+            assert_eq!(
+                session_file_containing_marker("/work/proj", &marker, since),
+                None,
+                "an echo in toolResult and assistant entries never proves ownership"
+            );
+        });
+    }
+
+    #[test]
+    fn among_an_echoing_parent_and_a_fresh_lane_transcript_the_lane_wins() {
+        let (root, directory, marker, since) = marker_fixture();
+        write_echo_file(&directory, &stamped_session_name(-400), &marker);
+        let lane = write_marker_file(&directory, &stamped_session_name(-100), &marker);
+        with_session_dir_override(root.path(), || {
+            assert_eq!(
+                session_file_containing_marker("/work/proj", &marker, since),
+                Some(lane),
+                "the transcript whose user message carries the marker is the owner"
+            );
+        });
+    }
+
+    #[test]
+    fn an_empty_lane_transcript_and_an_echoing_parent_defer_the_pin() {
+        let (root, directory, marker, since) = marker_fixture();
+        write_echo_file(&directory, &stamped_session_name(-400), &marker);
+        let lane = write_marker_file(&directory, &stamped_session_name(-100), &marker);
+        std::fs::write(&lane, "").unwrap();
+        let file = std::fs::File::open(&lane).unwrap();
+        file.set_modified(SystemTime::now()).unwrap();
+        with_session_dir_override(root.path(), || {
+            assert_eq!(
+                session_file_containing_marker("/work/proj", &marker, since),
+                None,
+                "the pin must wait for the user-message flush instead of grabbing the echo"
+            );
+        });
     }
 
     #[test]

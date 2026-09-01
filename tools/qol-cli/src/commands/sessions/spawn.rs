@@ -4669,7 +4669,11 @@ mod tests {
         let own =
             encoded_dir.join("2026-08-24T19-22-27-530Z_01a03539-5f4a-70fb-a215-36e00f9f3323.jsonl");
         std::fs::write(&sibling, "no marker here").unwrap();
-        std::fs::write(&own, "task text ... QOL_BRIDGE_DONE_marker-abc123 ...").unwrap();
+        std::fs::write(
+            &own,
+            r#"{"type":"message","timestamp":"2026-08-24T19:22:27.530Z","message":{"role":"user","content":[{"type":"text","text":"task QOL_BRIDGE_DONE_marker-abc123"}]}}"#,
+        )
+        .unwrap();
         let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
         std::env::set_var("PI_CODING_AGENT_SESSION_DIR", session_dir.path());
         let captured = capture_lane_external_id(

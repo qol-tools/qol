@@ -203,6 +203,7 @@ fn transcript_tail_drives_the_runtime() {
             message_entry("assistant", Some("toolUse")),
             CliRuntimeState::Working,
         ),
+        (message_entry("assistant", None), CliRuntimeState::Working),
         (message_entry("user", None), CliRuntimeState::Working),
         (
             message_entry("toolResult", None),
@@ -212,6 +213,7 @@ fn transcript_tail_drives_the_runtime() {
             "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}".to_owned(),
             CliRuntimeState::Working,
         ),
+        ("pi wrote a plain line".to_owned(), CliRuntimeState::Working),
     ];
     for (content, runtime) in cases {
         std::fs::write(&file, format!("{content}\n")).unwrap();
