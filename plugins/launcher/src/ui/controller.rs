@@ -105,6 +105,7 @@ impl LauncherView {
             InputEffect::FlowDetailClose => self.close_flow_detail(window, cx),
             InputEffect::FlowDetailScrollUp => self.scroll_flow_detail(-DETAIL_SCROLL_STEP, cx),
             InputEffect::FlowDetailScrollDown => self.scroll_flow_detail(DETAIL_SCROLL_STEP, cx),
+            InputEffect::FlowDislike => self.dislike_flow_row(cx),
         }
     }
 
@@ -305,6 +306,44 @@ impl LauncherView {
                     cx.notify();
                 })
                 .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn dislike_flow_row(&mut self, cx: &mut Context<Self>) {
+        let Some(flow) = self.state.flow.as_ref() else {
+            return;
+        };
+        if flow.entry.plugin_id != "qol-memory" {
+            return;
+        }
+        let Some(row) = flow.rows.get(self.state.scroll_list.selected) else {
+            return;
+        };
+        let Some(key) = row.raw.get("key").and_then(|value| value.as_str()) else {
+            return;
+        };
+        let query = self.state.query.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let entry = flow.entry.clone();
+        let key = key.to_string();
+        trace::flow(self, "dislike");
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let outcome = async_cx
+                    .background_spawn(
+                        async move { crate::flow::send_feedback(&entry, &query, &key) },
+                    )
+                    .await;
+                if let Err(error) = outcome {
+                    eprintln!("[controller] flow dislike failed: {error}");
+                }
+                this.update(&mut async_cx, |view, _| trace::flow(view, "disliked"))
+                    .ok();
             }
         })
         .detach();

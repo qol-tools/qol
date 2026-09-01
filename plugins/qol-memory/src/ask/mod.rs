@@ -216,6 +216,14 @@ impl NoteHit {
     }
 }
 
+fn capture_restates_query(query: &str, kind: &str, text: &str) -> bool {
+    kind == crate::ingest::CAPTURE_KIND && {
+        let norm_query = crate::text::collapse_ws_lower(query);
+        let norm_text = crate::text::collapse_ws_lower(text);
+        !norm_query.is_empty() && norm_text.contains(&norm_query)
+    }
+}
+
 fn distinct_score(qt: &[String], text: &str) -> (usize, usize) {
     let lower = text.to_lowercase();
     let matched = qt.iter().filter(|t| lower.contains(t.as_str())).count();
@@ -575,7 +583,16 @@ fn run_with_warm(
     let skills_out = build_skills_out(store, &req.query, req.brief)?;
 
     let note_top: Option<&NoteHit> = top_notes.first();
-    let unit_top: Option<UnitHit> = answer_ranked.first().cloned();
+    let disliked = crate::feedback::disliked_by_norm(store.root());
+    let query_norm = retrieval_log::normalize_query(&req.query);
+    let unit_top: Option<UnitHit> = answer_ranked
+        .iter()
+        .find(|hit| {
+            disliked
+                .get(&query_norm)
+                .is_none_or(|keys| !keys.contains(&hit.key))
+        })
+        .cloned();
     let raw_unit_margin = match &unit_top {
         Some(top) => {
             let competitor = answer_ranked
@@ -762,7 +779,8 @@ fn run_with_warm(
             unit_cov >= gates.unit_cov
                 && top.score >= gates.unit_score
                 && !is_boilerplate_unit_user(top)
-                && (top.kind == crate::ingest::CAPTURE_KIND || raw_unit_margin >= gates.unit_margin)
+                && (capture_restates_query(&req.query, &top.kind, &top.text)
+                    || raw_unit_margin >= gates.unit_margin)
         });
         let capture_outranks_note = unit_winner
             && unit_top
@@ -2472,6 +2490,105 @@ mod tests {
         assert_eq!(out.answer, None);
         let margin = out.signals.unit_margin.expect("unit margin signal");
         assert!(margin < Gates::DEFAULTS.unit_margin);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn capture_answers_respect_the_unit_margin_gate() {
+        let root = temp_root("capture-margin");
+        let shared = "ember quartz flint cobalt onyx basalt garnet pyrite";
+        let reordered = "quartz ember flint cobalt onyx basalt garnet pyrite";
+        let short = crate::ingest::capture_unit(reordered, "/tmp/proj", "2026-08-01T09:00:00.000Z");
+        let long = json!({
+            "key": "u-long",
+            "kind": "capture",
+            "ts": "2026-08-01T09:30:00.000Z",
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite were catalogued during the spring survey at the canyon station"
+        });
+        let mut lines = vec![short.to_string(), long.to_string()];
+        lines.extend(margin_fillers());
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(&store, shared, false);
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(
+            margin < Gates::DEFAULTS.unit_margin,
+            "the short capture must face its longer rival below the margin gate, got {margin}"
+        );
+        assert_eq!(out.verdict, "candidates");
+        assert_eq!(out.answer, None);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn capture_restating_the_query_answers_without_a_margin() {
+        let root = temp_root("capture-restates");
+        let shared = "ember quartz flint cobalt onyx basalt garnet pyrite";
+        let short = crate::ingest::capture_unit(shared, "/tmp/proj", "2026-08-01T09:00:00.000Z");
+        let long = json!({
+            "key": "u-long",
+            "kind": "capture",
+            "ts": "2026-08-01T09:30:00.000Z",
+            "text": "ember quartz flint cobalt onyx basalt garnet pyrite were catalogued during the spring survey at the canyon station"
+        });
+        let mut lines = vec![short.to_string(), long.to_string()];
+        lines.extend(margin_fillers());
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(&store, shared, false);
+        let margin = out.signals.unit_margin.expect("unit margin signal");
+        assert!(
+            margin < Gates::DEFAULTS.unit_margin,
+            "the short capture must still face its longer rival below the margin gate, got {margin}"
+        );
+        assert_eq!(out.verdict, "answered");
+        let answer = out.answer.expect("restating capture answers");
+        assert_eq!(answer.key, short["key"].as_str().expect("short key"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ask_demotes_a_downvoted_unit_from_answering() {
+        let root = temp_root("feedback-demotion");
+        let query =
+            "ember quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
+        let answer = json!({
+            "key": "u-aaa",
+            "kind": "user",
+            "ts": "2026-08-01T09:00:00.000Z",
+            "text": query
+        });
+        let alternate = json!({
+            "key": "u-zzz",
+            "kind": "user",
+            "ts": "2026-08-01T09:30:00.000Z",
+            "text": "topaz jade opal beryl slate mica pyrite garnet basalt onyx cobalt flint quartz ember"
+        });
+        let mut lines = vec![answer.to_string(), alternate.to_string()];
+        lines.extend(margin_fillers());
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).expect("store resolves");
+        let out = run_ask(&store, query, false);
+        assert_eq!(out.verdict, "answered");
+        assert_eq!(out.answer.as_ref().expect("unit answer").key, "u-aaa");
+
+        let norm = crate::retrieval_log::normalize_query(query);
+        crate::feedback::append_vote(store.root(), &norm, "u-aaa", -1);
+        let out = run_ask(&store, query, false);
+        assert_eq!(out.verdict, "answered");
+        assert_eq!(
+            out.answer.as_ref().expect("unit answer").key,
+            "u-zzz",
+            "the downvoted unit must not answer; its rival takes over"
+        );
+        assert!(
+            out.units
+                .as_ref()
+                .expect("full ask keeps units")
+                .iter()
+                .any(|unit| unit.key == "u-aaa"),
+            "a downvoted unit still shows up in the recalled rows"
+        );
         fs::remove_dir_all(&root).ok();
     }
 

@@ -23,6 +23,11 @@ description = "Launcher rows for a question: the answer, recalled units and skil
 poll_interval_ms = 60000
 input = { query = "question typed in the launcher", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
+[query.feedback]
+description = "Record a launcher vote on a remembered answer row"
+poll_interval_ms = 60000
+input = { query = "the question the row answered", key = "key of the voted row", vote = "-1 to dislike the row or 1 to like it" }
+
 [action.capture]
 description = "Append one settled fact to the store"
 agent_tool = true

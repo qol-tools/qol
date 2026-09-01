@@ -19,6 +19,7 @@ pub fn handle(state: &mut Arc<Mutex<WarmState>>, request: &DaemonRequest) -> Rea
         "continue" => continue_request(state, &request.input),
         "capture" => capture(state, &request.input),
         "rows" => rows(state, &request.input),
+        "feedback" => feedback(state, &request.input),
         "reindex" => reindex(state),
         _ => return ReadResult::Fallback,
     };
@@ -152,6 +153,17 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     }))
 }
 
+fn feedback(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
+    let query = string_field(input, "query", "feedback")?;
+    let key = string_field(input, "key", "feedback")?;
+    let vote = vote_field(input, "feedback")?;
+    let warm = lock_state(state);
+    let store = warm.store().clone();
+    let norm = crate::retrieval_log::normalize_query(&query);
+    crate::feedback::append_vote(store.root(), &norm, &key, vote);
+    Ok(json!({ "recorded": true }))
+}
+
 fn reindex(state: &Arc<Mutex<WarmState>>) -> Result<Value> {
     let mut warm = lock_state(state);
     let store = warm.store().clone();
@@ -200,6 +212,17 @@ fn bool_field(input: &Value, field: &str, action: &str) -> Result<Option<bool>> 
             .map(Some)
             .ok_or_else(|| anyhow::anyhow!("{action}: input.{field} must be a boolean")),
     }
+}
+
+fn vote_field(input: &Value, action: &str) -> Result<i64> {
+    let vote = input
+        .get("vote")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("{action}: input.vote must be a number"))?;
+    if vote != -1 && vote != 1 {
+        anyhow::bail!("{action}: input.vote must be -1 or 1");
+    }
+    Ok(vote)
 }
 
 #[cfg(test)]
@@ -522,6 +545,77 @@ mod tests {
         assert_eq!(stored.lines().filter(|line| !line.is_empty()).count(), 2);
         assert!(stored.contains("\"agent_home\":\"/tmp/qol-home-mine\""));
         assert!(!stored.contains("/tmp/qol-home-other"));
+    }
+
+    #[test]
+    fn request_feedback_appends_a_vote_line() {
+        let mut state = warm_state("feedback", &[]);
+        let ReadResult::HandledWithData(value) = respond(
+            &mut state,
+            "feedback",
+            json!({ "query": "What is KCD2 Forge?", "key": "u-1", "vote": -1 }),
+        ) else {
+            panic!("feedback must answer with data for action `feedback`");
+        };
+        assert_eq!(value["recorded"], true);
+
+        let warm = state.lock().expect("lock");
+        let raw = std::fs::read_to_string(warm.store().root().join("feedback.jsonl"))
+            .expect("read feedback.jsonl");
+        let line: Value = serde_json::from_str(raw.lines().next().expect("one line"))
+            .expect("feedback line parses");
+        assert_eq!(line["norm"], "what is kcd2 forge");
+        assert_eq!(line["key"], "u-1");
+        assert_eq!(line["vote"], -1);
+        assert!(line["ts"].as_str().expect("ts string").contains('T'));
+    }
+
+    #[test]
+    fn request_feedback_validates_input() {
+        let mut state = warm_state("feedback-bad", &[]);
+        let result = respond(&mut state, "feedback", json!({}));
+        assert!(
+            matches!(result, ReadResult::Error(message) if message.contains("input.query")),
+            "missing query must name the field"
+        );
+
+        let result = respond(&mut state, "feedback", json!({ "query": "q" }));
+        assert!(
+            matches!(result, ReadResult::Error(message) if message.contains("input.key")),
+            "missing key must name the field"
+        );
+
+        let result = respond(&mut state, "feedback", json!({ "query": "q", "key": "k" }));
+        assert!(
+            matches!(result, ReadResult::Error(message) if message == "feedback: input.vote must be a number"),
+            "missing vote must name the field"
+        );
+
+        let result = respond(
+            &mut state,
+            "feedback",
+            json!({ "query": "q", "key": "k", "vote": 0 }),
+        );
+        assert!(
+            matches!(result, ReadResult::Error(message) if message == "feedback: input.vote must be -1 or 1"),
+            "out-of-range vote must be rejected"
+        );
+
+        let result = respond(
+            &mut state,
+            "feedback",
+            json!({ "query": "q", "key": "k", "vote": "down" }),
+        );
+        assert!(
+            matches!(result, ReadResult::Error(message) if message == "feedback: input.vote must be a number"),
+            "non-numeric vote must be rejected"
+        );
+
+        let warm = state.lock().expect("lock");
+        assert!(
+            !warm.store().root().join("feedback.jsonl").exists(),
+            "rejected votes must not touch feedback.jsonl"
+        );
     }
 
     #[test]

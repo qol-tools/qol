@@ -306,6 +306,7 @@ fn effect_label(effect: InputEffect) -> &'static str {
         InputEffect::FlowDetailClose => "flow_detail_close",
         InputEffect::FlowDetailScrollUp => "flow_detail_scroll_up",
         InputEffect::FlowDetailScrollDown => "flow_detail_scroll_down",
+        InputEffect::FlowDislike => "flow_dislike",
     }
 }
 

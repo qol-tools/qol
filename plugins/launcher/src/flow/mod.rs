@@ -221,6 +221,18 @@ pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<FlowFetch, String> {
     })
 }
 
+pub fn send_feedback(entry: &FlowEntry, query: &str, key: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "query": query, "key": key, "vote": -1 }).to_string();
+    let route = qol_conventions::api_routes::plugin_query(&entry.plugin_id, "feedback");
+    let (status, response) =
+        qol_plugin_api::host_exec::post_to_daemon_with_timeout(&route, &body, FETCH_IO_TIMEOUT)
+            .map_err(|error| error.to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!("host {status}: {response}"));
+    }
+    Ok(())
+}
+
 pub fn render_action_input(
     action: &qol_config::contract::RowActionSpec,
     row: &FlowRow,

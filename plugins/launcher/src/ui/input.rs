@@ -16,6 +16,7 @@ pub enum InputEffect {
     FlowDetailScrollUp,
     FlowDetailScrollDown,
     FlowExit,
+    FlowDislike,
 }
 
 impl LauncherState {
@@ -186,6 +187,7 @@ impl LauncherState {
                     InputEffect::Navigate
                 }
             }
+            "x" if alt => InputEffect::FlowDislike,
             "a" if secondary => {
                 self.select_all();
                 InputEffect::Navigate
@@ -521,6 +523,23 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn flow_alt_x_reports_flow_dislike_and_bare_x_still_types() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(
+            state.apply_key("x", false, false, false, true, 3),
+            InputEffect::FlowDislike
+        );
+
+        assert_eq!(
+            state.apply_key("x", false, false, false, false, 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert_eq!(state.query, "x");
     }
 
     #[test]
