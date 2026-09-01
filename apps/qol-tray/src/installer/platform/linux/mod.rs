@@ -150,18 +150,45 @@ fn install_icons() -> Result<()> {
 }
 
 fn install_desktop_entry(binary_path: &Path) -> Result<()> {
-    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
-    let apps_dir = data_dir.join("applications");
+    let apps_dir = desktop_apps_dir()?;
     std::fs::create_dir_all(&apps_dir)?;
-    std::fs::write(
-        apps_dir.join("qol-tray.desktop"),
+    write_desktop_entries(&apps_dir, binary_path)?;
+    Ok(())
+}
+
+fn desktop_apps_dir() -> Result<PathBuf> {
+    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
+    Ok(data_dir.join("applications"))
+}
+
+pub(crate) fn ensure_linux_desktop_entries(binary_path: &Path) -> Result<()> {
+    let apps_dir = desktop_apps_dir()?;
+    std::fs::create_dir_all(&apps_dir)?;
+    if write_desktop_entries(&apps_dir, binary_path)? {
+        refresh_caches();
+    }
+    Ok(())
+}
+
+fn write_desktop_entries(apps_dir: &Path, binary_path: &Path) -> Result<bool> {
+    let app_changed = write_if_changed(
+        &apps_dir.join("qol-tray.desktop"),
         render_app_desktop_entry(binary_path),
     )?;
-    std::fs::write(
-        apps_dir.join("qol-settings-surface.desktop"),
+    let settings_changed = write_if_changed(
+        &apps_dir.join("qol-settings-surface.desktop"),
         render_settings_surface_desktop_entry(binary_path),
     )?;
-    Ok(())
+    Ok(app_changed || settings_changed)
+}
+
+fn write_if_changed(path: &Path, content: String) -> Result<bool> {
+    if std::fs::read_to_string(path).is_ok_and(|existing| existing == content) {
+        return Ok(false);
+    }
+    std::fs::write(path, content)
+        .with_context(|| format!("Failed to write desktop entry {}", path.display()))?;
+    Ok(true)
 }
 
 fn render_app_desktop_entry(binary_path: &Path) -> String {
@@ -254,5 +281,26 @@ mod tests {
         );
         assert!(entry.lines().any(|line| line == "Type=Application"));
         assert!(entry.lines().any(|line| line == "Terminal=false"));
+    }
+
+    #[test]
+    fn desktop_entry_self_heal_writes_the_pinned_installer_render_and_skips_unchanged_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let apps_dir = temp.path().join("applications");
+        std::fs::create_dir_all(&apps_dir).expect("apps dir");
+        let binary = Path::new("/home/u/.local/bin/qol-tray");
+
+        assert!(write_desktop_entries(&apps_dir, binary).expect("first heal write"));
+
+        let app_entry = std::fs::read_to_string(apps_dir.join("qol-tray.desktop")).unwrap();
+        let settings_entry =
+            std::fs::read_to_string(apps_dir.join("qol-settings-surface.desktop")).unwrap();
+        assert_eq!(app_entry, render_app_desktop_entry(binary));
+        assert_eq!(
+            settings_entry,
+            render_settings_surface_desktop_entry(binary)
+        );
+
+        assert!(!write_desktop_entries(&apps_dir, binary).expect("idempotent heal write"));
     }
 }

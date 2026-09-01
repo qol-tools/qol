@@ -54,6 +54,28 @@ pub fn bootstrap_current_install() -> Result<()> {
     Ok(())
 }
 
+pub fn ensure_installed_desktop_registration() {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(current_exe) = env::current_exe() else {
+            return;
+        };
+        if !has_install_marker(&current_exe) || !is_production_mode() {
+            return;
+        }
+        if let Err(error) = platform::ensure_desktop_entries(&current_exe) {
+            log::warn!("desktop entry self-heal failed: {error:#}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_production_mode() -> bool {
+    mode::ModeConfig::load()
+        .map(|config| !config.is_dev())
+        .unwrap_or(!cfg!(feature = "dev"))
+}
+
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let args = source::parse_args(args)?;
     run_install(

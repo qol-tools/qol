@@ -67,6 +67,11 @@ pub(super) fn register_application(binary_path: &Path) -> Result<()> {
     Platform.register_application(binary_path)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn ensure_desktop_entries(binary_path: &Path) -> Result<()> {
+    linux::ensure_linux_desktop_entries(binary_path)
+}
+
 pub(super) fn warn_system_install_conflict() {
     Platform.warn_system_install_conflict()
 }

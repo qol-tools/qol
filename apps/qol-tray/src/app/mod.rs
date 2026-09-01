@@ -67,6 +67,8 @@ pub(crate) fn run() -> Result<()> {
             log::error!("Failed to bootstrap current install: {}", e);
         }
 
+        qol_tray::installer::ensure_installed_desktop_registration();
+
         if is_already_running() {
             eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
             qol_tray::surfaces::native_notifications::show_already_running();

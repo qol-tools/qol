@@ -1,6 +1,8 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -206,8 +208,10 @@ impl SurfaceDismisser {
     }
 
     pub(crate) fn retitle(&self, window: &mut Window, title: String) {
-        window.set_window_title(&title);
-        *self.state.title.borrow_mut() = title;
+        release_surface_title(&self.state.title.borrow());
+        let reserved = reserve_surface_title(&title);
+        window.set_window_title(&reserved);
+        *self.state.title.borrow_mut() = reserved;
     }
 
     pub fn dismiss(&self, cx: &mut App) {
@@ -337,7 +341,7 @@ impl Surface {
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
         let bounds = self.resolved_bounds(monitor);
-        let title = unique_surface_title(&self.title);
+        let title = reserve_surface_title(&self.title);
         let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
@@ -375,7 +379,7 @@ impl Surface {
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
-        let handle = cx.open_window(options, move |window, cx| {
+        let handle = match cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             crate::platform::square_window_corners(window);
             if applies_settings_identity {
@@ -400,7 +404,13 @@ impl Surface {
                     _bounds_subscription: bounds_subscription,
                 }
             })
-        })?;
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                release_surface_title(&title);
+                return Err(error);
+            }
+        };
         let dismiss_state = dismisser.state.clone();
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
@@ -420,6 +430,7 @@ impl Surface {
                     }
                 }
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
+                release_surface_title(&dismiss_state.title.borrow());
             }));
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
@@ -437,6 +448,7 @@ impl Surface {
                 "title={title} phase=toast-ready configured={configured} shown={shown}"
             );
             if !shown {
+                release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                 return Err(anyhow!("surface could not present passive toast"));
             }
@@ -459,6 +471,7 @@ impl Surface {
                 bounds.origin.y.to_f64()
             );
             if !frame_scheduled {
+                release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                 if !size_constrained {
                     return Err(anyhow!(
@@ -538,14 +551,32 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
     }
 }
 
-static SURFACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PANEL_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static LIVE_SURFACE_TITLES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn unique_surface_title(base: &str) -> String {
-    format!(
-        "{base}-{}",
-        SURFACE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    )
+fn reserve_surface_title(base: &str) -> String {
+    let mut live = LIVE_SURFACE_TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if live.insert(base.to_owned()) {
+        return base.to_owned();
+    }
+    let mut suffix = 1;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if live.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn release_surface_title(title: &str) {
+    LIVE_SURFACE_TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(title);
 }
 
 fn resolved_app_id(app_id: &Option<String>, title: &str) -> String {
@@ -696,6 +727,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             let _ = cx.update(|cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             });
+            release_surface_title(&dismiss_state.title.borrow());
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",
@@ -1414,7 +1446,8 @@ mod tests {
 
     #[test]
     fn surface_app_id_defaults_to_the_unique_title_and_accepts_a_stable_override() {
-        let title = super::unique_surface_title("QoL Shot Settings");
+        let title = super::reserve_surface_title("QoL Shot Settings");
+        super::release_surface_title(&title);
         let stable = qol_conventions::SETTINGS_SURFACE_APP_ID;
 
         assert_eq!(resolved_app_id(&None, &title), title);
@@ -1504,5 +1537,46 @@ mod tests {
         assert!(!state_restore_needs_retry(1, true));
         assert!(!state_restore_needs_retry(2, true));
         assert!(!state_restore_needs_retry(0, true));
+    }
+
+    #[test]
+    fn surface_titles_use_the_base_when_free_and_a_suffix_only_on_collision() {
+        let first = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(first, "Title Registry Panel");
+
+        let second = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(second, "Title Registry Panel-1");
+
+        let third = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(third, "Title Registry Panel-2");
+
+        super::release_surface_title(&first);
+        super::release_surface_title(&second);
+        super::release_surface_title(&third);
+    }
+
+    #[test]
+    fn releasing_a_surface_title_frees_the_base_for_the_next_surface() {
+        let held = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(held, "Title Release Panel");
+        let fallback = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(fallback, "Title Release Panel-1");
+
+        super::release_surface_title(&held);
+        let reused = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(reused, "Title Release Panel");
+
+        super::release_surface_title(&fallback);
+        super::release_surface_title(&reused);
+    }
+
+    #[test]
+    fn a_reserved_title_is_never_handed_out_twice() {
+        let first = super::reserve_surface_title("Title Uniqueness Panel");
+        let second = super::reserve_surface_title("Title Uniqueness Panel");
+        assert_ne!(first, second);
+
+        super::release_surface_title(&first);
+        super::release_surface_title(&second);
     }
 }

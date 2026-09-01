@@ -554,7 +554,7 @@ fn load_core_panel() -> (SettingsPanel, SettingsRuntime) {
     let mut panel = SettingsPanel::single(
         qol_conventions::CORE_PANEL_ID.to_string(),
         include_str!("core-config.toml").to_string(),
-        "qol Settings".to_string(),
+        qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME.to_string(),
     );
     panel.sources[0].heading = "General".to_string();
     let runtime = SettingsRuntime::tray_core();
@@ -648,7 +648,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
     Ok((
         SettingsPanel {
             sources,
-            heading: "qol Settings".to_string(),
+            heading: qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME.to_string(),
             focus: None,
         },
         runtimes,
@@ -807,7 +807,10 @@ mod tests {
     fn core_panel_carries_every_wired_field_in_a_valid_contract() {
         let (panel, _runtime) = super::load_core_panel();
         assert_eq!(panel.primary_plugin_id(), qol_conventions::CORE_PANEL_ID);
-        assert_eq!(panel.heading, "qol Settings");
+        assert_eq!(
+            panel.heading,
+            qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME
+        );
         let spec = qol_config::contract::parse_spec_str(&panel.sources[0].contract)
             .expect("core contract must parse");
         for (name, kind) in [
