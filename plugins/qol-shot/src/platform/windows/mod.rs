@@ -112,7 +112,9 @@ pub fn process_alive(_pid: u32) -> bool {
     false
 }
 
-pub fn show_notification(_title: &str, _message: &str, _timeout_ms: u32) {}
+pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
+    qol_plugin_daemon::notification::send_notification(title, message);
+}
 
 pub fn show_saved_notification(
     title: &str,

@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -18,6 +19,7 @@ struct CoreConfigResponse {
     native_theme: String,
     profile: String,
     residency: bool,
+    handler: NativeHandler,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +35,15 @@ fn current_config() -> CoreConfigResponse {
         native_theme: crate::features::theme::current_native_theme_key(),
         profile: crate::paths::active_profile_name(),
         residency: qol_host_fixes::residency::HostResidency::current().is_resident(),
+        handler: crate::features::notifications::native_handler(),
+    }
+}
+
+pub(super) fn do_not_disturb_status() -> String {
+    match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
+        Some(true) => "Do not disturb: on".to_string(),
+        Some(false) => "Do not disturb: off".to_string(),
+        None => "Do not disturb: unknown".to_string(),
     }
 }
 
@@ -77,6 +88,7 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             &as_str(field, value)?,
         ),
         "residency" => set_residency(as_bool(field, value)?),
+        "handler" => crate::features::notifications::set_native_handler(as_handler(field, value)?),
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))
@@ -104,6 +116,17 @@ fn as_bool(field: &str, value: &serde_json::Value) -> HttpResult<bool> {
     value
         .as_bool()
         .ok_or_else(|| Box::new(bad_request(&format!("{field} expects a boolean"))))
+}
+
+fn as_handler(field: &str, value: &serde_json::Value) -> HttpResult<NativeHandler> {
+    match value.as_str() {
+        Some("qol") => Ok(NativeHandler::Qol),
+        Some("os") => Ok(NativeHandler::Os),
+        Some("both") => Ok(NativeHandler::Both),
+        _ => Err(Box::new(bad_request(&format!(
+            "{field} expects qol, os, or both"
+        )))),
+    }
 }
 
 fn core_config_response(config: &CoreConfigResponse) -> HttpResult<Response> {

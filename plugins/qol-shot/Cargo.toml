@@ -10,6 +10,7 @@ qol-color.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
+qol-plugin-daemon.workspace = true
 qol-headless.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
@@ -28,7 +29,6 @@ workspace-hack.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-qol-plugin-daemon.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { workspace = true, features = ["shm", "xfixes"] }

@@ -1,4 +1,5 @@
-mod platform;
+pub mod gate;
+pub mod platform;
 
 use qol_runtime::protocol::{NotificationLayout, NotificationLevel};
 
@@ -27,7 +28,7 @@ pub fn send_notification_with_layout(
     ) {
         return;
     }
-    if platform::send_notification(title, message) {
+    if gate::native_allowed_now() && platform::send_notification(title, message) {
         return;
     }
 

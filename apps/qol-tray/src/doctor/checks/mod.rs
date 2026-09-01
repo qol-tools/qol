@@ -48,6 +48,7 @@ use super::framework::DoctorCheck;
 pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
     let checks: Vec<Box<dyn DoctorCheck>> = vec![
         Box::new(artifact_identity::ArtifactIdentityCheck),
+        Box::new(super::diagnosis::NativeNotificationsCheck),
         Box::new(install_identity::InstallIdentityCheck),
         Box::new(autostart_target::AutostartTargetCheck),
         Box::new(runtime_prereqs::PluginsDirCheck),

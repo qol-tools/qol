@@ -28,6 +28,7 @@ fn get_core_query_inner(query: &str) -> HttpResult<Response> {
     let value = match query {
         "theme" => crate::features::theme::current_theme_key(),
         "accent" => crate::features::theme::current_accent_key(),
+        "os_do_not_disturb" => super::core_config::do_not_disturb_status(),
         _ => return Err(Box::new(not_found(&format!("unknown query: {query}")))),
     };
     let body = CoreQueryResponse { value };
@@ -211,9 +212,10 @@ mod tests {
     use super::{get_core_query_inner, native_theme_response, NativeThemeResponse};
 
     #[test]
-    fn core_query_accepts_only_theme_and_accent() {
+    fn core_query_accepts_known_queries_only() {
         assert!(get_core_query_inner("theme").is_ok());
         assert!(get_core_query_inner("accent").is_ok());
+        assert!(get_core_query_inner("os_do_not_disturb").is_ok());
         assert!(get_core_query_inner("unknown").is_err());
     }
 

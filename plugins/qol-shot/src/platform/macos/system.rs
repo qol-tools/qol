@@ -31,19 +31,7 @@ pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
     if client.send_notification(title, message, NotificationLevel::Info) {
         return;
     }
-    let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        escape_applescript(message),
-        escape_applescript(title)
-    );
-
-    let _ = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    qol_plugin_daemon::notification::send_notification(title, message);
 }
 
 pub fn show_saved_notification(
@@ -470,10 +458,6 @@ pub(super) fn output_format_label(path: &Path) -> String {
     output_extension(path)
         .map(|ext| ext.to_ascii_uppercase())
         .unwrap_or_else(|| "recording".to_string())
-}
-
-fn escape_applescript(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub(super) fn resolve_command(command: &str) -> Option<PathBuf> {

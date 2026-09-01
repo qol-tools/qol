@@ -1,6 +1,6 @@
 use qol_runtime::protocol::NotificationLevel;
 
-pub fn show_already_running() {
+pub(crate) fn show_already_running() {
     let _ = std::process::Command::new("osascript")
         .args([
             "-e",
@@ -9,7 +9,7 @@ pub fn show_already_running() {
         .status();
 }
 
-pub fn show_first_run() {
+pub(crate) fn show_first_run() {
     let _ = std::process::Command::new("osascript")
         .args([
             "-e",
@@ -18,7 +18,7 @@ pub fn show_first_run() {
         .status();
 }
 
-pub fn show_plugin_notification(
+pub(crate) fn show_plugin_notification(
     title: &str,
     body: &str,
     _level: NotificationLevel,

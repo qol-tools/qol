@@ -8,6 +8,74 @@ use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
+use super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
+#[cfg(target_os = "linux")]
+use super::framework::{DoctorIssue, Severity};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use qol_plugin_daemon::notification::gate::NativeHandler;
+
+const NATIVE_NOTIFICATIONS_ID: &str = "native_notifications";
+
+pub(super) struct NativeNotificationsCheck;
+
+impl DoctorCheck for NativeNotificationsCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(
+            NATIVE_NOTIFICATIONS_ID,
+            "Native notifications",
+            CheckCategory::HostSurface,
+        )
+    }
+
+    fn run(&self, _ctx: &DoctorContext) -> CheckReport {
+        native_notifications_diagnosis()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_notifications_diagnosis() -> CheckReport {
+    if crate::features::notifications::native_handler() == NativeHandler::Qol {
+        return CheckReport::ok("native notifications are disabled; qol toasts are used");
+    }
+    CheckReport::warn(
+        "qol system notifications are attributed to Script Editor - disable them in System Settings > Notifications if unwanted",
+        NATIVE_NOTIFICATIONS_ID,
+        Vec::new(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn native_notifications_diagnosis() -> CheckReport {
+    if crate::features::notifications::native_handler() == NativeHandler::Qol {
+        return CheckReport::ok("native notifications are disabled; qol toasts are used");
+    }
+    match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
+        Some(true) => CheckReport::warn(
+            "OS do-not-disturb is enabled; native notifications will be suppressed",
+            NATIVE_NOTIFICATIONS_ID,
+            Vec::new(),
+        ),
+        Some(false) => {
+            CheckReport::ok("OS do-not-disturb is off; native notifications will be delivered")
+        }
+        None => CheckReport {
+            summary: "OS do-not-disturb state is unknown".to_string(),
+            issues: vec![DoctorIssue::new(
+                NATIVE_NOTIFICATIONS_ID,
+                Severity::Info,
+                "OS do-not-disturb state is unknown",
+            )],
+            advice: Vec::new(),
+            fixes: Vec::new(),
+        },
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn native_notifications_diagnosis() -> CheckReport {
+    CheckReport::ok("native notifications are not supported on this platform")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FixAction {
     SetActiveInstallId(String),

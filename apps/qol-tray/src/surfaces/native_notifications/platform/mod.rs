@@ -6,8 +6,8 @@ mod linux;
 mod macos;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub use fallback::{show_already_running, show_first_run, show_plugin_notification};
+pub(super) use fallback::{show_already_running, show_first_run, show_plugin_notification};
 #[cfg(target_os = "linux")]
-pub use linux::{show_already_running, show_first_run, show_plugin_notification};
+pub(super) use linux::{show_already_running, show_first_run, show_plugin_notification};
 #[cfg(target_os = "macos")]
-pub use macos::{show_already_running, show_first_run, show_plugin_notification};
+pub(super) use macos::{show_already_running, show_first_run, show_plugin_notification};

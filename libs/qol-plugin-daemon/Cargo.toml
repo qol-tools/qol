@@ -6,7 +6,9 @@ license.workspace = true
 description = "Resident-process OS plumbing for qol-tray plugins: unix-socket IPC, activation policy, foreground probe"
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
+qol-config.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true
 qol-conventions.workspace = true
@@ -14,3 +16,6 @@ workspace-hack.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.16.0", features = ["blocking-api"] }

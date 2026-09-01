@@ -1,13 +1,13 @@
 use qol_conventions::DEFAULT_PORT;
 use qol_runtime::protocol::NotificationLevel;
 
-pub fn show_already_running() {
+pub(crate) fn show_already_running() {
     let _ = std::process::Command::new("notify-send")
         .args(["QoL Tray", "Another instance is already running"])
         .status();
 }
 
-pub fn show_first_run() {
+pub(crate) fn show_first_run() {
     let message = format!(
         "QoL Tray is running. Click the tray icon or visit http://localhost:{DEFAULT_PORT} to get started."
     );
@@ -16,7 +16,7 @@ pub fn show_first_run() {
         .status();
 }
 
-pub fn show_plugin_notification(
+pub(crate) fn show_plugin_notification(
     title: &str,
     body: &str,
     level: NotificationLevel,

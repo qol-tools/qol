@@ -58,3 +58,25 @@ label = "Resident on this device"
 description = "Keep qol's host policy in place while qol-tray is not running."
 section = "host"
 default = false
+
+[section.notifications]
+label = "Notifications"
+
+[field.handler]
+type = "select"
+label = "Notification handler"
+section = "notifications"
+default = "qol"
+options = ["qol", "os", "both"]
+
+[field.handler.option_labels]
+qol = "qol toasts"
+os = "Operating system"
+both = "Both"
+
+[field.do_not_disturb]
+type = "status"
+label = "Do not disturb"
+section = "notifications"
+query = "os_do_not_disturb"
+value_from = "value"

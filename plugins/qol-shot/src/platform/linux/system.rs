@@ -6,34 +6,24 @@ use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
 use x11rb::connection::Connection;
 
-pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
+pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
     let client = qol_runtime::PlatformStateClient::from_env();
     if client.send_notification(title, message, NotificationLevel::Info) {
         return;
     }
-    let _ = Command::new("notify-send")
-        .args([
-            "-u",
-            "normal",
-            "-t",
-            &timeout_ms.to_string(),
-            title,
-            message,
-        ])
-        .status();
+    qol_plugin_daemon::notification::send_notification(title, message);
 }
 
 /// Saved-file notification with a clickable "Open Folder" action. Pushes
 /// through the runtime channel with the action (payload = saved file path) so
-/// the tray owns the click-through; falls back to the notify-send shell-out
-/// with the same buttons when the tray is unreachable (standalone run).
+/// the tray owns the click-through; falls back to the shared gate-aware
+/// notification helper when the tray is unreachable (standalone run).
 pub fn show_saved_notification(
     title: &str,
     message: &str,
-    timeout_ms: u32,
+    _timeout_ms: u32,
     target: crate::capture::completion::RevealTarget,
 ) {
     let client = qol_runtime::PlatformStateClient::from_env();
@@ -48,59 +38,7 @@ pub fn show_saved_notification(
     ) {
         return;
     }
-    let mut command = saved_notification_command(title, message, timeout_ms);
-    let title = title.to_string();
-    let message = message.to_string();
-    thread::spawn(move || {
-        let Ok(output) = command.output() else {
-            show_notification(&title, &message, timeout_ms);
-            return;
-        };
-        if !output.status.success() {
-            show_notification(&title, &message, timeout_ms);
-            return;
-        }
-        let action = notification_action(&output.stdout);
-        let clicked = action.is_some();
-        qol_runtime::probe!(
-            "SHOT_NOTIFICATION_ACTION",
-            "kind=open-folder clicked={clicked} file={}",
-            target
-                .path()
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("capture")
-        );
-        if !clicked {
-            return;
-        }
-        if let Err(error) = target.open("notification") {
-            eprintln!("[qol-shot] notification folder reveal failed: {error:#}");
-        }
-    });
-}
-
-fn saved_notification_command(title: &str, message: &str, timeout_ms: u32) -> Command {
-    let mut command = Command::new("notify-send");
-    command
-        .args(["-u", "normal", "-t"])
-        .arg(timeout_ms.to_string())
-        .args(["-a", "QoL Shot"])
-        .args(["-A", "default=Open Folder"])
-        .args(["-A", "open-folder=Open Folder"])
-        .arg(title)
-        .arg(message)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null());
-    command
-}
-
-fn notification_action(output: &[u8]) -> Option<&'static str> {
-    match String::from_utf8_lossy(output).trim() {
-        "default" => Some("default"),
-        "open-folder" => Some("open-folder"),
-        _ => None,
-    }
+    qol_plugin_daemon::notification::send_notification(title, message);
 }
 
 pub fn open_url(url: &str) -> Result<()> {
@@ -258,7 +196,6 @@ fn parse_pactl_devices(raw: &str) -> Vec<AudioDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
 
     #[test]
     fn pactl_device_parsing_maps_names_and_descriptions() {
@@ -274,36 +211,6 @@ mod tests {
         assert_eq!(devices[1].value, "alsa_output.bar.monitor");
         assert_eq!(devices[1].label, "alsa_output.bar.monitor");
         assert!(parse_pactl_devices("not json").is_empty());
-    }
-
-    #[test]
-    fn saved_notification_exposes_default_and_button_actions() {
-        let command = saved_notification_command("Recording saved", "video file", 8_000);
-        let args = command.get_args().collect::<Vec<_>>();
-
-        assert_eq!(command.get_program(), OsStr::new("notify-send"));
-        assert!(args
-            .windows(2)
-            .any(|pair| { pair == [OsStr::new("-A"), OsStr::new("default=Open Folder")] }));
-        assert!(args
-            .windows(2)
-            .any(|pair| { pair == [OsStr::new("-A"), OsStr::new("open-folder=Open Folder")] }));
-        assert_eq!(args[args.len() - 2], OsStr::new("Recording saved"));
-        assert_eq!(args[args.len() - 1], OsStr::new("video file"));
-    }
-
-    #[test]
-    fn notification_action_accepts_body_and_button_clicks_only() {
-        let cases = [
-            (b"default\n".as_slice(), Some("default")),
-            (b"open-folder\n".as_slice(), Some("open-folder")),
-            (b"closed\n".as_slice(), None),
-            (b"".as_slice(), None),
-        ];
-
-        for (output, expected) in cases {
-            assert_eq!(notification_action(output), expected);
-        }
     }
 
     #[test]
