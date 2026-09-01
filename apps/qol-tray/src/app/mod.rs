@@ -808,11 +808,6 @@ fn show_first_run_welcome() {
     }
 
     qol_tray::surfaces::native_notifications::show_first_run();
-
-    wait_for_server_ready();
-
-    let url = qol_tray::local_http::browser_url("", DEFAULT_PORT);
-    let _ = qol_tray::paths::open_url(&url);
 }
 
 async fn check_for_updates() -> bool {

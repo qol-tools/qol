@@ -137,7 +137,6 @@ fn run_install(
     platform::register_application(&installed_binary)?;
     write_mode_config(dev_mode)?;
     platform::start_now(&installed_binary)?;
-    open_ui_after_start();
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
 }
 
@@ -243,22 +242,6 @@ fn create_install_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("install-{}-{}", ts, std::process::id())
-}
-
-fn open_ui_after_start() {
-    crate::net::wait_for_tcp_ready(
-        ([127, 0, 0, 1], qol_conventions::DEFAULT_PORT).into(),
-        100,
-        std::time::Duration::from_millis(50),
-    );
-    for _ in 0..20 {
-        if crate::features::plugin_store::server::security::current_token().is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let url = crate::local_http::browser_url("", qol_conventions::DEFAULT_PORT);
-    let _ = crate::paths::open_url(&url);
 }
 
 fn is_in_path(dir: &Path) -> bool {
