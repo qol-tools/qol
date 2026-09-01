@@ -153,8 +153,14 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
     let data_dir = dirs::data_dir().context("Could not determine data directory")?;
     let apps_dir = data_dir.join("applications");
     std::fs::create_dir_all(&apps_dir)?;
-    let desktop = render_app_desktop_entry(binary_path);
-    std::fs::write(apps_dir.join("qol-tray.desktop"), desktop)?;
+    std::fs::write(
+        apps_dir.join("qol-tray.desktop"),
+        render_app_desktop_entry(binary_path),
+    )?;
+    std::fs::write(
+        apps_dir.join("qol-settings-surface.desktop"),
+        render_settings_surface_desktop_entry(binary_path),
+    )?;
     Ok(())
 }
 
@@ -166,12 +172,33 @@ fn render_app_desktop_entry(binary_path: &Path) -> String {
          Name=QoL Tray\n\
          Comment=Quality of Life Tray daemon\n\
          Exec={}\n\
-         Icon=qol-tray\n\
+         Icon={}\n\
          Terminal=false\n\
          Categories=Utility;\n\
          MimeType=x-scheme-handler/qol;\n\
          StartupNotify=false\n",
-        exec
+        exec,
+        qol_conventions::TRAY_ICON_NAME
+    )
+}
+
+fn render_settings_surface_desktop_entry(binary_path: &Path) -> String {
+    let exec = format_desktop_exec_command(binary_path, &[]);
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name={}\n\
+         Comment=Quality of Life settings surfaces\n\
+         Exec={}\n\
+         Icon={}\n\
+         Terminal=false\n\
+         NoDisplay=true\n\
+         StartupNotify=false\n\
+         StartupWMClass={}\n",
+        qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
+        exec,
+        qol_conventions::TRAY_ICON_NAME,
+        qol_conventions::SETTINGS_SURFACE_APP_ID
     )
 }
 
@@ -202,5 +229,30 @@ mod tests {
             .lines()
             .any(|line| line == "Exec=\"/home/u/.local/bin/qol-tray\" %u"));
         assert!(entry.contains("Type=Application"));
+    }
+
+    #[test]
+    fn settings_desktop_entry_matches_the_settings_surface_window_class() {
+        let entry = render_settings_surface_desktop_entry(Path::new("/home/u/.local/bin/qol-tray"));
+        assert_eq!(
+            entry,
+            format!(
+                "[Desktop Entry]\n\
+                 Type=Application\n\
+                 Name={}\n\
+                 Comment=Quality of Life settings surfaces\n\
+                 Exec=\"/home/u/.local/bin/qol-tray\"\n\
+                 Icon={}\n\
+                 Terminal=false\n\
+                 NoDisplay=true\n\
+                 StartupNotify=false\n\
+                 StartupWMClass={}\n",
+                qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
+                qol_conventions::TRAY_ICON_NAME,
+                qol_conventions::SETTINGS_SURFACE_APP_ID
+            )
+        );
+        assert!(entry.lines().any(|line| line == "Type=Application"));
+        assert!(entry.lines().any(|line| line == "Terminal=false"));
     }
 }

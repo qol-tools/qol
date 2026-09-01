@@ -17,6 +17,10 @@ pub(in crate::settings_surface) fn run(_boot: super::super::HostBoot) -> anyhow:
     anyhow::bail!("native settings surfaces are unsupported on this platform")
 }
 
+pub(in crate::settings_surface) fn native_available() -> bool {
+    false
+}
+
 pub(in crate::settings_surface) fn stop() {}
 
 pub(in crate::settings_surface) fn apply_theme(_native: &str, _accent: &str) -> bool {

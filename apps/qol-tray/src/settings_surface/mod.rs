@@ -10,6 +10,10 @@ enum HostBoot {
     Open(String),
 }
 
+pub fn native_available() -> bool {
+    platform::native_available()
+}
+
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     let handled = platform::request(plugin_id)?;
     finish_request(plugin_id, handled, crate::paths::open_url)
@@ -72,6 +76,12 @@ fn requested_boot(args: &[String]) -> Option<HostBoot> {
 #[cfg(test)]
 mod tests {
     use super::{finish_request, requested_boot, HostBoot, HOST_ARGUMENT};
+
+    #[test]
+    fn native_availability_matches_platform_dispatch() {
+        let expected = cfg!(any(target_os = "linux", target_os = "macos"));
+        assert_eq!(super::native_available(), expected);
+    }
 
     #[test]
     fn hidden_host_arguments_select_warm_or_single_plugin_boot() {

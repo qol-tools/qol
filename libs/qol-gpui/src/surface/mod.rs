@@ -344,6 +344,8 @@ impl Surface {
         let passive_reveal_gate =
             matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
+        let resolved_app_id = resolved_app_id(&self.app_id, &title);
+        let applies_settings_identity = resolved_app_id == qol_conventions::SETTINGS_SURFACE_APP_ID;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(Some(monitor), cx),
@@ -355,7 +357,7 @@ impl Surface {
             is_movable: true,
             is_resizable: !constrains_size,
             window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some(resolved_app_id(&self.app_id, &title)),
+            app_id: Some(resolved_app_id),
             ..Default::default()
         };
         let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
@@ -376,6 +378,9 @@ impl Surface {
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             crate::platform::square_window_corners(window);
+            if applies_settings_identity {
+                crate::platform::apply_settings_surface_identity(window);
+            }
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription =

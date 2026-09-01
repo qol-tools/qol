@@ -1,16 +1,20 @@
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
+#[cfg(target_os = "windows")]
+use windows as imp;
 
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
@@ -100,4 +104,41 @@ pub fn spawn_reassert_driver<F, G>(
             reassert();
         }
     });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TaskbarIconSource {
+    DesktopEntry { icon_id: &'static str },
+    WindowClassResource,
+    HostProcess,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SettingsSurfaceTaskbarIdentity {
+    pub app_id: &'static str,
+    pub display_name: &'static str,
+    pub icon: TaskbarIconSource,
+}
+
+pub fn settings_surface_taskbar_identity() -> SettingsSurfaceTaskbarIdentity {
+    imp::settings_surface_taskbar_identity()
+}
+
+pub fn apply_settings_surface_identity(window: &mut gpui::Window) {
+    imp::apply_settings_surface_identity(window);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_surface_taskbar_identity_matches_the_shared_constants() {
+        let identity = settings_surface_taskbar_identity();
+        assert_eq!(identity.app_id, qol_conventions::SETTINGS_SURFACE_APP_ID);
+        assert_eq!(
+            identity.display_name,
+            qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME
+        );
+    }
 }

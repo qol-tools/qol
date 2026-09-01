@@ -1,3 +1,10 @@
+use std::ffi::c_int;
+
+#[link(name = "shell32")]
+extern "system" {
+    fn SetCurrentProcessExplicitAppUserModelID(appid: *const u16) -> c_int;
+}
+
 pub fn is_modifier_held() -> bool {
     false
 }
@@ -42,8 +49,16 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
     super::SettingsSurfaceTaskbarIdentity {
         app_id: qol_conventions::SETTINGS_SURFACE_APP_ID,
         display_name: qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
-        icon: super::TaskbarIconSource::HostProcess,
+        icon: super::TaskbarIconSource::WindowClassResource,
     }
 }
 
-pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {}
+pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
+    let mut app_id: Vec<u16> = qol_conventions::SETTINGS_SURFACE_APP_ID
+        .encode_utf16()
+        .collect();
+    app_id.push(0);
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+    }
+}

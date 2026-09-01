@@ -196,3 +196,13 @@ pub fn start_window_move(window: &mut gpui::Window) {
     };
     native_window.performWindowDragWithEvent(&event);
 }
+
+pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdentity {
+    super::SettingsSurfaceTaskbarIdentity {
+        app_id: qol_conventions::SETTINGS_SURFACE_APP_ID,
+        display_name: qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
+        icon: super::TaskbarIconSource::HostProcess,
+    }
+}
+
+pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {}

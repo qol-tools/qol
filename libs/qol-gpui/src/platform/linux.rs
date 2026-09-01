@@ -122,6 +122,18 @@ pub fn start_window_move(window: &mut gpui::Window) {
     window.start_window_move();
 }
 
+pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdentity {
+    super::SettingsSurfaceTaskbarIdentity {
+        app_id: qol_conventions::SETTINGS_SURFACE_APP_ID,
+        display_name: qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
+        icon: super::TaskbarIconSource::DesktopEntry {
+            icon_id: qol_conventions::TRAY_ICON_NAME,
+        },
+    }
+}
+
+pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {}
+
 fn owns_window(conn: &RustConnection, mut window: u32, target_pid: u32) -> bool {
     loop {
         if window_pid(conn, window) == Some(target_pid) {
