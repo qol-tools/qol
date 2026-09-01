@@ -584,6 +584,32 @@ struct PendingReveal<V: Render + 'static> {
     dismiss_state: Rc<DismissState>,
 }
 
+const STATE_RESTORE_MAX_ATTEMPTS: u32 = 2;
+
+fn state_restore_needs_retry(attempts: u32, normal: bool) -> bool {
+    !normal && attempts < STATE_RESTORE_MAX_ATTEMPTS
+}
+
+fn restore_window_state_verified(title: &str, reused: bool, reason: &str) -> bool {
+    let mut attempts = 0u32;
+    let (shown, normal) = loop {
+        attempts += 1;
+        let shown = {
+            let _reason = crate::popup_window::reason_scope(reason);
+            crate::popup_window::show_normal_window_by_title(title)
+        };
+        let normal = crate::popup_window::window_presentation_is_normal_by_title(title);
+        if !state_restore_needs_retry(attempts, normal) {
+            break (shown, normal);
+        }
+    };
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=state-restored attempts={attempts} shown={shown} normal={normal} reused={reused}"
+    );
+    shown
+}
+
 fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut App) {
     let PendingReveal {
         handle,
@@ -681,10 +707,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             );
             return;
         }
-        let shown = {
-            let _reason = crate::popup_window::reason_scope("surface-reveal");
-            crate::popup_window::show_normal_window_by_title(&title)
-        };
+        let shown = restore_window_state_verified(&title, false, "surface-reveal");
         let repaint_requested = shown
             && cx
                 .update(|cx| request_surface_repaint(handle, cx))
@@ -745,6 +768,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
                 anchor.origin_for(dismiss_state.size.get()),
             );
         }
+        let _ = cx.update(|cx| trace_ready(title, false, cx));
     })
     .detach();
 }
@@ -1231,10 +1255,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             );
             return;
         }
-        let shown = {
-            let _reason = crate::popup_window::reason_scope("surface-reuse-reveal");
-            crate::popup_window::show_normal_window_by_title(&title)
-        };
+        let shown = restore_window_state_verified(&title, true, "surface-reuse-reveal");
         visible.set(shown);
         reveal_pending.set(false);
         if !shown {
@@ -1271,12 +1292,12 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             &PANEL_FOCUS_GENERATION,
             focus_commit,
         );
-        let _ = cx.update(|cx| trace_reused_ready(title, cx));
+        let _ = cx.update(|cx| trace_ready(title, true, cx));
     })
     .detach();
 }
 
-fn trace_reused_ready(title: String, cx: &mut App) {
+fn trace_ready(title: String, reused: bool, cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         for attempt in 0..=REUSED_REVEAL_MAX_ATTEMPTS {
             #[cfg(not(debug_assertions))]
@@ -1294,7 +1315,7 @@ fn trace_reused_ready(title: String, cx: &mut App) {
             if focused {
                 qol_runtime::probe!(
                     "SURFACE_REVEAL",
-                    "title={title} phase=ready focus=true attempts={attempt} reused=true"
+                    "title={title} phase=ready focus=true attempts={attempt} reused={reused}"
                 );
                 return;
             }
@@ -1304,7 +1325,7 @@ fn trace_reused_ready(title: String, cx: &mut App) {
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=ready focus=false attempts={REUSED_REVEAL_MAX_ATTEMPTS} reused=true"
+            "title={title} phase=ready focus=false attempts={REUSED_REVEAL_MAX_ATTEMPTS} reused={reused}"
         );
     })
     .detach();
@@ -1325,8 +1346,8 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 #[cfg(test)]
 mod tests {
     use super::{
-        resolved_app_id, reveal_cancelled, viewport_matches, DragGestureState, RevealReadiness,
-        Surface, SurfaceDismisser, SurfaceKind,
+        resolved_app_id, reveal_cancelled, state_restore_needs_retry, viewport_matches,
+        DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
     };
     use crate::placement::MonitorPlacement;
     use gpui::{point, px, size, Pixels, WindowKind};
@@ -1474,5 +1495,14 @@ mod tests {
         for (name, actual, matches) in cases {
             assert_eq!(viewport_matches(actual, expected), matches, "{name}");
         }
+    }
+
+    #[test]
+    fn state_restore_retries_an_unverified_restore_at_most_once() {
+        assert!(state_restore_needs_retry(1, false));
+        assert!(!state_restore_needs_retry(2, false));
+        assert!(!state_restore_needs_retry(1, true));
+        assert!(!state_restore_needs_retry(2, true));
+        assert!(!state_restore_needs_retry(0, true));
     }
 }

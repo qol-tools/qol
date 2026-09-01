@@ -562,7 +562,7 @@ fn show_window_by_title_with_focus(
             true
         }
         WindowPresentation::Normal => {
-            clear_window_type(&conn, wid) && clear_panel_window_state(&conn, root, wid)
+            restore_normal_presentation(&conn, root, list_atom, name_atom, utf8_atom, title, wid)
         }
     };
     let stack = raise_window(&conn, root, wid);
@@ -626,6 +626,101 @@ fn show_window_state(conn: &impl Connection, root: u32, wid: u32, active: Option
         height,
         window_is_override_redirect(conn, wid)
     )
+}
+
+const NORMAL_RESTORE_MAX_ATTEMPTS: u32 = 2;
+const NORMAL_RESTORE_SETTLE_MS: u64 = 10;
+
+fn normal_restore_needs_retry(attempts: u32, verified: bool) -> bool {
+    !verified && attempts < NORMAL_RESTORE_MAX_ATTEMPTS
+}
+
+fn restore_normal_presentation(
+    conn: &impl Connection,
+    root: u32,
+    list_atom: u32,
+    name_atom: u32,
+    utf8_atom: u32,
+    title: &str,
+    wid: u32,
+) -> bool {
+    let mut wid = wid;
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        clear_window_type(conn, wid);
+        clear_panel_window_state(conn, root, wid);
+        let _ = conn.flush();
+        std::thread::sleep(Duration::from_millis(NORMAL_RESTORE_SETTLE_MS));
+        let verified = window_presentation_is_normal(conn, wid);
+        if !normal_restore_needs_retry(attempts, verified) {
+            qol_runtime::probe!(
+                "SHOW_WIN_STATE",
+                "title={title} phase=state-restored attempts={attempts} normal={verified} wid={wid}"
+            );
+            return verified;
+        }
+        let Some(re_resolved) = resolve_window(conn, root, list_atom, name_atom, utf8_atom, title)
+        else {
+            qol_runtime::probe!(
+                "SHOW_WIN_STATE",
+                "title={title} phase=state-restored attempts={attempts} normal=false wid=NONE"
+            );
+            return false;
+        };
+        wid = re_resolved;
+    }
+}
+
+pub fn window_presentation_is_normal_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    window_presentation_is_normal(&conn, wid)
+}
+
+fn property_atoms(conn: &impl Connection, wid: u32, name: &[u8]) -> Option<Vec<u32>> {
+    let atom = intern(conn, name)?;
+    let reply = conn
+        .get_property(false, wid, atom, AtomEnum::ATOM, 0, 1024)
+        .ok()?
+        .reply()
+        .ok()?;
+    if reply.value.is_empty() {
+        return Some(Vec::new());
+    }
+    reply.value32().map(|iter| iter.collect::<Vec<u32>>())
+}
+
+fn window_presentation_is_normal(conn: &impl Connection, wid: u32) -> bool {
+    let Some(types) = property_atoms(conn, wid, b"_NET_WM_WINDOW_TYPE") else {
+        return false;
+    };
+    let Some(normal_type) = intern(conn, b"_NET_WM_WINDOW_TYPE_NORMAL") else {
+        return false;
+    };
+    if !types.is_empty() && !types.contains(&normal_type) {
+        return false;
+    }
+    let Some(states) = property_atoms(conn, wid, b"_NET_WM_STATE") else {
+        return false;
+    };
+    if states.is_empty() {
+        return true;
+    }
+    let panel_states = [
+        intern(conn, b"_NET_WM_STATE_ABOVE"),
+        intern(conn, b"_NET_WM_STATE_SKIP_TASKBAR"),
+        intern(conn, b"_NET_WM_STATE_SKIP_PAGER"),
+    ];
+    !panel_states
+        .into_iter()
+        .flatten()
+        .any(|atom| states.contains(&atom))
 }
 
 pub fn configure_overlay_window(title: &str) -> bool {
@@ -1904,8 +1999,8 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        composite_owner, focus_return_target, keepalive_wm_hints, normalize_opacity,
-        opacity_to_cardinal, pinned_window_kind, CompositeLease,
+        composite_owner, focus_return_target, keepalive_wm_hints, normal_restore_needs_retry,
+        normalize_opacity, opacity_to_cardinal, pinned_window_kind, CompositeLease,
     };
     use gpui::WindowKind;
     use x11rb::properties::{WmHints, WmHintsState};
@@ -2036,5 +2131,14 @@ mod tests {
     fn opacity_to_cardinal_maps_endpoints() {
         assert_eq!(opacity_to_cardinal(0.0), 0);
         assert_eq!(opacity_to_cardinal(1.0), u32::MAX);
+    }
+
+    #[test]
+    fn normal_restore_retries_an_unverified_clear_at_most_once() {
+        assert!(normal_restore_needs_retry(1, false));
+        assert!(!normal_restore_needs_retry(2, false));
+        assert!(!normal_restore_needs_retry(1, true));
+        assert!(!normal_restore_needs_retry(2, true));
+        assert!(!normal_restore_needs_retry(0, true));
     }
 }

@@ -574,6 +574,10 @@ pub fn show_normal_window_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, true, WindowPresentation::Normal, false)
 }
 
+pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug)]
 enum WindowPresentation {
     Overlay,
