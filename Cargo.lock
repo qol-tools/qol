@@ -6710,11 +6710,14 @@ name = "qol-plugin-daemon"
 version = "1.0.0"
 dependencies = [
  "libc",
+ "qol-config",
  "qol-conventions",
  "qol-runtime",
  "qol-theme",
+ "serde",
  "serde_json",
  "workspace-hack",
+ "zbus",
 ]
 
 [[package]]
