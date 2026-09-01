@@ -192,8 +192,10 @@ pub struct NotesLayer {
     pub items: Vec<Note>,
 }
 
+pub const BRIDGE_TASK_MARKER: &str = "[qol session bridge]";
+
 pub const BOILERPLATE_MARKERS: [&str; 5] = [
-    "[qol session bridge]",
+    BRIDGE_TASK_MARKER,
     "Base directory for this skill:",
     "continued from a previous conversation",
     "Review this change for security vulnerabilities",

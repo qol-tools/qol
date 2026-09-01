@@ -1,10 +1,30 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::OnceLock;
 
+use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::ingest::redact::redact;
 use crate::ingest::{unit_key, ASSISTANT_KIND, COMPACTION_KIND};
+use crate::store::BRIDGE_TASK_MARKER;
+
+const REFILL_RUN_REPORT_PATTERN: &str = r"^qolmem: \d+ captured, \d+ unanswerable";
+
+fn is_refill_lane_unit(kind: &str, text: &str) -> bool {
+    match kind {
+        "user" => text.contains(BRIDGE_TASK_MARKER),
+        ASSISTANT_KIND => text
+            .lines()
+            .any(|line| refill_report_regex().is_match(line)),
+        _ => false,
+    }
+}
+
+fn refill_report_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(REFILL_RUN_REPORT_PATTERN).unwrap())
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParseCursor {
@@ -88,11 +108,14 @@ fn handle_event(
             match message.get("role").and_then(Value::as_str) {
                 Some("user") => {
                     let text = redact(&text_of(content));
+                    if is_refill_lane_unit("user", &text) {
+                        return;
+                    }
                     units.push(transcript_unit("user", origin, &ts, &text, session, cwd));
                 }
                 Some("assistant") => {
                     let text = redact(&text_of(content));
-                    if text.trim().is_empty() {
+                    if text.trim().is_empty() || is_refill_lane_unit(ASSISTANT_KIND, &text) {
                         return;
                     }
                     units.push(transcript_unit(
@@ -171,13 +194,16 @@ fn handle_event(
             } else {
                 "user"
             };
+            if is_refill_lane_unit(kind, &text) {
+                return;
+            }
             units.push(transcript_unit(kind, origin, &ts, &text, session, cwd));
         }
         Some("assistant") => {
             let message = event.get("message").unwrap_or(&Value::Null);
             let content = message.get("content").unwrap_or(&Value::Null);
             let text = redact(&text_of(content));
-            if text.trim().is_empty() {
+            if text.trim().is_empty() || is_refill_lane_unit(ASSISTANT_KIND, &text) {
                 return;
             }
             update_context(event, session, cwd);
@@ -322,6 +348,10 @@ fn base_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::{
+        append_units, capture_unit, ingest_paths, IngestRoot, IngestRoots, KeySet,
+    };
+    use crate::store::Store;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir(std::path::PathBuf);
@@ -599,5 +629,139 @@ mod tests {
         );
         assert_eq!(unit.get("session").and_then(Value::as_str), Some("sc"));
         assert_eq!(unit.get("cwd").and_then(Value::as_str), Some("/wc"));
+    }
+
+    fn pi_event(role: &str, text: &str, millis: i64) -> Value {
+        json!({
+            "type": "message",
+            "message": {
+                "role": role,
+                "content": [{"type": "text", "text": text}],
+                "timestamp": millis
+            }
+        })
+    }
+
+    fn transcript_body(events: &[Value]) -> String {
+        let mut body = String::new();
+        for event in events {
+            body.push_str(&event.to_string());
+            body.push('\n');
+        }
+        body
+    }
+
+    fn refill_lane_events() -> Vec<Value> {
+        vec![
+            json!({"type": "session", "id": "lane-1", "cwd": "/tmp/proj"}),
+            pi_event(
+                "user",
+                "[qol session bridge] You are the answerer for a qol-memory refill run. \
+                 Research the launcher question and store the answer with the capture tool.",
+                1_787_819_945_554,
+            ),
+            pi_event(
+                "assistant",
+                "Report:\n\n1. Which language is qol monorepo - Rust\n\nqolmem: 1 captured, 0 unanswerable",
+                1_787_819_945_600,
+            ),
+        ]
+    }
+
+    #[test]
+    fn refill_lane_transcript_yields_no_units() {
+        let dir = TempDir::new("refill-lane");
+        let path = dir.0.join("lane.jsonl");
+        let body = transcript_body(&refill_lane_events());
+        std::fs::write(&path, body.clone()).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
+        assert!(parsed.units.is_empty());
+        assert_eq!(parsed.cursor.offset, body.len() as u64);
+    }
+
+    #[test]
+    fn any_bridge_task_prompt_is_skipped() {
+        let dir = TempDir::new("bridge-task");
+        let path = dir.0.join("lane.jsonl");
+        let body = transcript_body(&[
+            json!({"type": "session", "id": "lane-2", "cwd": "/tmp/proj"}),
+            pi_event(
+                "user",
+                "[qol session bridge]\nAct as the implementation agent for the bounded task below.\n\nTask:\nwhat language is qol composed of",
+                1_787_819_945_554,
+            ),
+            pi_event("assistant", "done, patched the parser", 1_787_819_945_600),
+        ]);
+        std::fs::write(&path, body).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
+        assert_eq!(parsed.units.len(), 1);
+        assert_eq!(
+            parsed.units[0].get("kind").and_then(Value::as_str),
+            Some("assistant")
+        );
+    }
+
+    #[test]
+    fn transcript_mentioning_the_refill_phrase_without_the_bridge_header_is_kept() {
+        let dir = TempDir::new("refill-mention");
+        let path = dir.0.join("chat.jsonl");
+        let body = transcript_body(&[
+            json!({"type": "session", "id": "chat-1", "cwd": "/tmp/proj"}),
+            pi_event(
+                "user",
+                "what does the qol-memory refill run do",
+                1_787_819_945_554,
+            ),
+            pi_event(
+                "assistant",
+                "it spawns an answerer for a qol-memory refill run and stores the result",
+                1_787_819_945_600,
+            ),
+        ]);
+        std::fs::write(&path, body).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
+        assert_eq!(parsed.units.len(), 2);
+        assert_eq!(parsed.units[0]["kind"], "user");
+        assert_eq!(parsed.units[1]["kind"], ASSISTANT_KIND);
+    }
+
+    #[test]
+    fn refill_lane_capture_still_stores() {
+        let dir = TempDir::new("refill-capture");
+        let store_root = dir.0.join("store");
+        std::fs::create_dir_all(&store_root).unwrap();
+        let store = Store::resolve(Some(&store_root)).unwrap();
+        let pi = dir.0.join("pi");
+        std::fs::create_dir_all(&pi).unwrap();
+        let path = pi.join("lane.jsonl");
+        std::fs::write(&path, transcript_body(&refill_lane_events())).unwrap();
+        let roots = IngestRoots {
+            roots: vec![IngestRoot {
+                path: pi,
+                source: "pi",
+                agent_home: "test-pi".to_string(),
+            }],
+        };
+        let mut keys = KeySet::load(&store).unwrap();
+        let report = ingest_paths(&store, &roots, &[path], &mut keys).unwrap();
+        assert_eq!(report.appended, 0);
+
+        let capture = capture_unit(
+            "qol is composed of Rust",
+            "/tmp/proj",
+            "2026-08-27T08:40:00.000Z",
+        );
+        assert_eq!(append_units(&store, &[capture], &mut keys).unwrap(), 1);
+        let raw = std::fs::read_to_string(store.units_path()).unwrap();
+        let units: Vec<Value> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0]["kind"], "capture");
+        assert_eq!(units[0]["text"], "qol is composed of Rust");
     }
 }
