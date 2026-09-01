@@ -559,19 +559,19 @@ fn debug_ghost_color() -> Option<Retained<NSColor>> {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay, false)
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, true)
 }
 
 pub fn show_window_interactive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, false)
 }
 
 pub fn show_normal_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true, WindowPresentation::Normal)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Normal, false)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -594,6 +594,7 @@ fn show_window_by_title_with_focus(
     title: &str,
     focus: bool,
     presentation: WindowPresentation,
+    input_passthrough: bool,
 ) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
@@ -608,7 +609,7 @@ fn show_window_by_title_with_focus(
     window.setLevel(level);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
-    window.setIgnoresMouseEvents(!focus);
+    window.setIgnoresMouseEvents(input_passthrough);
     if focus {
         let app = NSApplication::sharedApplication(mtm);
         #[allow(deprecated)]
