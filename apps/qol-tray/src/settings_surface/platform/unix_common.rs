@@ -135,7 +135,8 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
         )
         .env_remove(qol_conventions::ENV_DAEMON_SOCKET)
         .env_remove(qol_conventions::ENV_DAEMON_LISTENER_FD)
-        .env_remove(qol_conventions::ENV_DAEMON_REPLACE_EXISTING);
+        .env_remove(qol_conventions::ENV_DAEMON_REPLACE_EXISTING)
+        .env_remove("XMODIFIERS");
     if let Some(token) = crate::features::plugin_store::server::security::current_token() {
         command.env(qol_conventions::ENV_HTTP_TOKEN, token);
     }
