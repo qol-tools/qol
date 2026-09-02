@@ -86,44 +86,48 @@ fn spawn_full_resolution_load(
     Ok(receiver)
 }
 
+fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
+    let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
+    let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
+    let origin = point(px(-100.0), px(-100.0));
+    let bounds = Bounds {
+        origin,
+        size: size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
+    };
+    let content = PinnedContent {
+        path: PathBuf::new(),
+        image: None,
+        size: PIN_CACHE_SIZE,
+        file_ready: CaptureFileReady::ready(),
+        started_at: Instant::now(),
+    };
+    let spec = PinnedWindowSpec {
+        title: title.clone(),
+        bounds,
+        dismiss: PinnedDismiss::Remove,
+        border: false,
+        reveal: None,
+        active: false,
+        focus: false,
+        cacheable: true,
+    };
+    let handle = open_window(content, spec, cx)?;
+    if !platform::prepare_pin_window(&title, (-100.0, -100.0)) {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return None;
+    }
+    platform::reassert_parked(&title, cx);
+    Some(handle)
+}
+
 pub fn pre_create(cx: &mut App) {
     if !platform::pin_cache_enabled() {
         return;
     }
     for _ in 0..PIN_CACHE_CAPACITY {
-        let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
-        let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
-        let origin = point(px(-100.0), px(-100.0));
-        let bounds = Bounds {
-            origin,
-            size: size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
-        };
-        let content = PinnedContent {
-            path: PathBuf::new(),
-            image: None,
-            size: PIN_CACHE_SIZE,
-            file_ready: CaptureFileReady::ready(),
-            started_at: Instant::now(),
-        };
-        let spec = PinnedWindowSpec {
-            title: title.clone(),
-            bounds,
-            dismiss: PinnedDismiss::Remove,
-            border: false,
-            reveal: None,
-            active: false,
-            focus: false,
-            cacheable: true,
-        };
-        let Some(handle) = open_window(content, spec, cx) else {
-            continue;
-        };
-        if !platform::prepare_pin_window(&title, (-100.0, -100.0)) {
-            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
-            continue;
+        if let Some(handle) = create_parked(cx) {
+            PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
         }
-        platform::reassert_parked(&title, cx);
-        PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
     }
     PIN_CACHE.with(|cache| {
         qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={}", cache.borrow().len());
@@ -141,10 +145,17 @@ pub fn open(
         origin: (origin.x.to_f64(), origin.y.to_f64()),
         source_preview,
     };
-    if platform::pin_cache_enabled()
-        && cache::open(content.clone(), origin, dismiss, reveal.clone(), cx)
-    {
-        return true;
+    if platform::pin_cache_enabled() {
+        let cache_empty = PIN_CACHE.with(|cache| cache.borrow().is_empty());
+        if cache_empty {
+            if let Some(handle) = create_parked(cx) {
+                PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+                qol_runtime::probe!("SHOT_PIN_CACHE", "state=refilled");
+            }
+        }
+        if cache::open(content.clone(), origin, dismiss, reveal.clone(), cx) {
+            return true;
+        }
     }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
