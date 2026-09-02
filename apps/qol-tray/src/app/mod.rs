@@ -58,6 +58,7 @@ pub(crate) fn run() -> Result<()> {
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
     let mut owns_host_surface = false;
+    qol_tray::installer::ensure_installed_desktop_registration();
     if generation.is_shadow() {
         log::info!("Starting shadow dev generation");
     } else if rolling_restart {
@@ -66,8 +67,6 @@ pub(crate) fn run() -> Result<()> {
         if let Err(e) = qol_tray::installer::bootstrap_current_install() {
             log::error!("Failed to bootstrap current install: {}", e);
         }
-
-        qol_tray::installer::ensure_installed_desktop_registration();
 
         if is_already_running() {
             eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
