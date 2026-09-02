@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use anyhow::{bail, Result};
 
+pub mod audio_watch;
 pub mod retry;
 
 pub fn normalize_address(value: &str) -> Result<String> {
@@ -81,6 +82,10 @@ pub fn supports_audio_sink(device: &DeviceInfo) -> bool {
 
 pub fn audio_profile_repairable(device: &DeviceInfo) -> bool {
     device.services_resolved && supports_audio_sink(device)
+}
+
+pub fn audio_output_degraded(active_profile: Option<&str>) -> bool {
+    active_profile.is_some_and(|profile| !profile.starts_with("a2dp-sink"))
 }
 
 pub fn connection_ready(device: &DeviceInfo) -> bool {
@@ -729,6 +734,26 @@ mod tests {
         assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_disconnect"], true);
         assert_eq!(item["ready"], true);
+    }
+
+    #[test]
+    fn audio_output_degraded_flags_only_non_a2dp_profiles() {
+        let cases = [
+            ("a2dp-sink", false),
+            ("a2dp-sink-sbc_xq", false),
+            ("a2dp-sink-aac", false),
+            ("headset-head-unit", true),
+            ("headset-head-unit-msbc", true),
+            ("off", true),
+        ];
+        for (profile, expected) in cases {
+            assert_eq!(
+                audio_output_degraded(Some(profile)),
+                expected,
+                "profile={profile}"
+            );
+        }
+        assert!(!audio_output_degraded(None));
     }
 
     fn audio_device(connected: bool, services_resolved: bool, uuids: &[&str]) -> DeviceInfo {

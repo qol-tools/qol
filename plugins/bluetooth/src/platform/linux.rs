@@ -22,9 +22,10 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
+use crate::bluetooth::audio_watch::{AudioWatchState, RepairDecision};
 use crate::bluetooth::{
-    adapter_options, audio_profile_repairable, connection_ready, devices_payload, has_audio_class,
-    is_audio_device, managed_device_options, normalize_address,
+    adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
+    devices_payload, has_audio_class, is_audio_device, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, BackendCapabilities,
     DeviceActionState, DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
@@ -55,6 +56,11 @@ type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 const PROFILE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const AUDIO_PROFILE_WATCH_INTERVAL: Duration = Duration::from_secs(10);
+const AUDIO_REPAIR_COOLDOWN: Duration = Duration::from_secs(60);
+const AUDIO_REPAIR_MAX_ATTEMPTS: u32 = 3;
+const AUDIO_WATCH_TICK_BUDGET: Duration = Duration::from_secs(3);
+const DISCONNECT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_CONNECT_ATTEMPTS: u32 = 3;
 const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
 const EXPLICIT_DEVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(45);
@@ -146,6 +152,7 @@ enum ConnectionSource {
     Explicit,
     ManualReconnect,
     AutoRetry,
+    AudioRepair,
 }
 
 impl ConnectionSource {
@@ -154,6 +161,7 @@ impl ConnectionSource {
             Self::Explicit => "explicit",
             Self::ManualReconnect => "manual_reconnect",
             Self::AutoRetry => "auto_retry",
+            Self::AudioRepair => "audio_repair",
         }
     }
 }
@@ -1067,13 +1075,17 @@ async fn activate_pipewire_a2dp(
     }
 }
 
-async fn pactl_cards() -> Option<Vec<u8>> {
+async fn pactl_output(args: &[&str]) -> Option<Vec<u8>> {
     let output = tokio::process::Command::new("pactl")
-        .args(["list", "short", "cards"])
+        .args(args)
         .output()
         .await
         .ok()?;
     output.status.success().then_some(output.stdout)
+}
+
+async fn pactl_cards() -> Option<Vec<u8>> {
+    pactl_output(&["list", "short", "cards"]).await
 }
 
 async fn select_a2dp_sink(card: &str) -> Result<bool> {
@@ -1093,8 +1105,42 @@ fn pactl_has_card(output: &[u8], expected: &str) -> bool {
     })
 }
 
+fn pactl_active_card_profile(output: &[u8], card: &str) -> Option<String> {
+    let mut current: Option<String> = None;
+    for line in String::from_utf8_lossy(output).lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix("Name: ") {
+            current = Some(name.trim().to_string());
+        } else if let Some(profile) = line.strip_prefix("Active Profile: ") {
+            if current.as_deref() == Some(card) {
+                return Some(profile.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 fn pactl_device_id(address: Address) -> String {
     address.to_string().replace(':', "_")
+}
+
+async fn live_audio_profile(address: Address) -> Option<String> {
+    let output = pactl_output(&["list", "cards"]).await?;
+    let card = format!("bluez_card.{}", pactl_device_id(address));
+    pactl_active_card_profile(&output, &card)
+}
+
+async fn microphone_in_use(address: Address) -> bool {
+    let prefix = format!("bluez_input.{}", pactl_device_id(address));
+    let Some(source_index) = pactl_output(&["list", "short", "sources"])
+        .await
+        .and_then(|output| pactl_source_index(&output, &prefix))
+    else {
+        return false;
+    };
+    pactl_output(&["list", "short", "source-outputs"])
+        .await
+        .is_some_and(|output| pactl_source_in_use(&output, &source_index))
 }
 
 async fn adopt_default_sink(address: Address) -> Result<()> {
@@ -1147,6 +1193,21 @@ fn pactl_sink_matching(output: &[u8], prefix: &str) -> Option<String> {
         .filter_map(|line| line.split_whitespace().nth(1))
         .find(|sink| sink.starts_with(prefix))
         .map(str::to_string)
+}
+
+fn pactl_source_index(output: &[u8], prefix: &str) -> Option<String> {
+    String::from_utf8_lossy(output).lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let index = fields.next()?;
+        let name = fields.next()?;
+        name.starts_with(prefix).then(|| index.to_string())
+    })
+}
+
+fn pactl_source_in_use(output: &[u8], source_index: &str) -> bool {
+    String::from_utf8_lossy(output)
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(source_index))
 }
 
 async fn wait_for_connection_ready(device: &Device, address: Address) -> Result<DeviceInfo> {
@@ -1581,8 +1642,11 @@ async fn daemon_loop(
     let mut discovery: Option<DiscoverySession> = None;
     let mut subscribed = HashSet::new();
     let mut retries = retry_map(config);
+    let mut watch_states: HashMap<Address, AudioWatchState> = HashMap::new();
     let mut manager_reconcile = tokio::time::interval(Duration::from_secs(5));
     manager_reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut audio_watch = tokio::time::interval(AUDIO_PROFILE_WATCH_INTERVAL);
+    audio_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let known_addresses = adapter.device_addresses().await?;
     subscribe_addresses(
         &adapter,
@@ -1720,6 +1784,7 @@ async fn daemon_loop(
                     if result.is_ok() {
                         retries.remove(&address);
                         subscribed.remove(&address);
+                        watch_states.remove(&address);
                     }
                     trace_remove_action(address, result);
                     continue;
@@ -1824,6 +1889,9 @@ async fn daemon_loop(
                 if connected && !qol_in_flight {
                     spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                 }
+                if !connected && !qol_in_flight {
+                    watch_states.remove(&address);
+                }
                 if let Some(state) = retries.get_mut(&address) {
                     if connected {
                         state.connected();
@@ -1871,6 +1939,9 @@ async fn daemon_loop(
             }
             _ = manager_reconcile.tick() => {
                 crate::hostfix::reconcile_claimed_managers();
+            }
+            _ = audio_watch.tick() => {
+                audio_watch_tick(&adapter, &mut watch_states).await;
             }
         }
     }
@@ -2311,6 +2382,179 @@ async fn adopt_reconnected_output(address: Address, adoption: AudioAdoption) {
     }
 }
 
+async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, AudioWatchState>) {
+    let scan = async {
+        for address in adapter.device_addresses().await.unwrap_or_default() {
+            let Ok(device) = adapter.device(address) else {
+                continue;
+            };
+            let Ok(info) = device_info(&device).await else {
+                continue;
+            };
+            if !info.connected
+                || !info.paired
+                || !info.trusted
+                || !is_audio_device(&info)
+                || !supports_audio_sink(&info)
+            {
+                continue;
+            }
+            let profile = live_audio_profile(address).await;
+            if !audio_output_degraded(profile.as_deref()) {
+                continue;
+            }
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=watch outcome=degraded profile={}",
+                redacted(address),
+                profile.as_deref().unwrap_or("none"),
+            );
+            if ConnectionFlightGuard::active(address) {
+                qol_runtime::probe!(
+                    "BLUETOOTH_PROFILE_REPAIR",
+                    "device={} stage=watch outcome=in_flight",
+                    redacted(address)
+                );
+                continue;
+            }
+            if microphone_in_use(address).await {
+                qol_runtime::probe!(
+                    "BLUETOOTH_PROFILE_REPAIR",
+                    "device={} stage=watch outcome=mic_in_use",
+                    redacted(address)
+                );
+                continue;
+            }
+            let now = Instant::now();
+            let state = states.entry(address).or_default();
+            match state.decide(now, AUDIO_REPAIR_COOLDOWN, AUDIO_REPAIR_MAX_ATTEMPTS) {
+                RepairDecision::Repair => {
+                    state.attempted(now);
+                    let attempts = state.attempts();
+                    qol_runtime::probe!(
+                        "BLUETOOTH_PROFILE_REPAIR",
+                        "device={} stage=watch outcome=spawned attempt={attempts} profile={}",
+                        redacted(address),
+                        profile.as_deref().unwrap_or("none"),
+                    );
+                    spawn_audio_profile_reconnect(address);
+                }
+                RepairDecision::Cooldown => {
+                    qol_runtime::probe!(
+                        "BLUETOOTH_PROFILE_REPAIR",
+                        "device={} stage=watch outcome=cooldown",
+                        redacted(address)
+                    );
+                }
+                RepairDecision::Exhausted => {
+                    qol_runtime::probe!(
+                        "BLUETOOTH_PROFILE_REPAIR",
+                        "device={} stage=watch outcome=exhausted",
+                        redacted(address)
+                    );
+                }
+            }
+        }
+    };
+    let _ = tokio::time::timeout(AUDIO_WATCH_TICK_BUDGET, scan).await;
+}
+
+fn spawn_audio_profile_reconnect(address: Address) {
+    std::mem::drop(tokio::spawn(async move {
+        let Some(_flight) = ConnectionFlightGuard::acquire(address) else {
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=reconnect outcome=already_in_flight",
+                redacted(address)
+            );
+            return;
+        };
+        let Some(_repair) = AudioRepairGuard::acquire(address) else {
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=reconnect outcome=already_in_flight",
+                redacted(address)
+            );
+            return;
+        };
+        let repair = tokio::time::timeout(
+            EXPLICIT_DEVICE_ACTION_TIMEOUT,
+            reconnect_audio_profile(address),
+        )
+        .await;
+        match repair {
+            Ok(Ok(AudioProfile::Active)) => {
+                adopt_reconnected_output(address, AudioAdoption::Adopt).await;
+            }
+            Ok(Ok(AudioProfile::Absent)) => {}
+            Ok(Err(error)) => eprintln!(
+                "Bluetooth A2DP reconnect repair failed for {}: {error:#}",
+                redacted(address)
+            ),
+            Err(_) => eprintln!(
+                "Bluetooth A2DP reconnect repair failed for {}: the repair exceeded {} seconds",
+                redacted(address),
+                EXPLICIT_DEVICE_ACTION_TIMEOUT.as_secs()
+            ),
+        }
+    }));
+}
+
+async fn reconnect_audio_profile(address: Address) -> Result<AudioProfile> {
+    let adapter = default_adapter().await?;
+    let device = adapter.device(address)?;
+    let info = device_info(&device).await?;
+    if !info.connected || !info.paired || !info.trusted || !is_audio_device(&info) {
+        return Ok(AudioProfile::Absent);
+    }
+    qol_runtime::probe!(
+        "BLUETOOTH_PROFILE_REPAIR",
+        "device={} stage=reconnect outcome=disconnecting",
+        redacted(address)
+    );
+    device.disconnect().await.with_context(|| {
+        format!(
+            "failed to disconnect {} for the A2DP repair",
+            redacted(address)
+        )
+    })?;
+    let deadline = Instant::now() + DISCONNECT_SETTLE_TIMEOUT;
+    loop {
+        if !device.is_connected().await? {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "{} did not disconnect before the A2DP repair deadline",
+                redacted(address)
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    connect_all_profiles(&device, address, ConnectionSource::AudioRepair).await?;
+    ensure_audio_playback_profile(&device, address, ConnectionMode::Reconnect).await?;
+    let profile = live_audio_profile(address).await;
+    if audio_output_degraded(profile.as_deref()) {
+        let profile = profile.unwrap_or_else(|| "none".to_string());
+        qol_runtime::probe!(
+            "BLUETOOTH_PROFILE_REPAIR",
+            "device={} stage=reconnect outcome=failed profile={profile}",
+            redacted(address)
+        );
+        bail!(
+            "{} reconnected but PipeWire stayed on {profile}",
+            redacted(address)
+        );
+    }
+    qol_runtime::probe!(
+        "BLUETOOTH_PROFILE_REPAIR",
+        "device={} stage=reconnect outcome=connected profile={}",
+        redacted(address),
+        profile.as_deref().unwrap_or("none"),
+    );
+    Ok(AudioProfile::Active)
+}
+
 async fn ensure_reconnected_audio_profile(address: Address) -> Result<AudioProfile> {
     let adapter = default_adapter().await?;
     let device = adapter.device(address)?;
@@ -2531,8 +2775,9 @@ fn redacted(address: Address) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
-        pactl_sink_matching, parse_address, parse_daemon_request, redacted, runtime,
+        begin_device_action, complete_device_action_within, finish_device_action,
+        pactl_active_card_profile, pactl_has_card, pactl_sink_matching, pactl_source_in_use,
+        pactl_source_index, parse_address, parse_daemon_request, redacted, runtime,
         set_device_action_state, tolerated_profile_connect, transient_connect_error, Address,
         AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout,
         Duration, ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
@@ -2723,6 +2968,46 @@ mod tests {
             b"43\talsa_card.pci\talsa\n555\tbluez_card.74_68_59_7F_5F_E9\tmodule-bluez5-device.c\n";
         assert!(pactl_has_card(output, "bluez_card.74_68_59_7F_5F_E9"));
         assert!(!pactl_has_card(output, "bluez_card.88_0E_85_16_CA_67"));
+    }
+
+    #[test]
+    fn active_card_profile_reads_the_requested_card_block() {
+        let output = b"Card #0\n\t\tName: alsa_card.pci-0000_01_00.1\n\t\tActive Profile: output:analog-stereo\nCard #1\n\t\tName: bluez_card.74_68_59_7F_5F_E9\n\t\tActive Profile: headset-head-unit\n";
+        assert_eq!(
+            pactl_active_card_profile(output, "bluez_card.74_68_59_7F_5F_E9").as_deref(),
+            Some("headset-head-unit")
+        );
+        assert_eq!(
+            pactl_active_card_profile(output, "alsa_card.pci-0000_01_00.1").as_deref(),
+            Some("output:analog-stereo")
+        );
+        assert_eq!(
+            pactl_active_card_profile(output, "bluez_card.11_22_33_44_55_66"),
+            None
+        );
+    }
+
+    #[test]
+    fn microphone_source_lookup_matches_only_the_requested_device() {
+        let output = b"160\tbluez_input.74_68_59_7F_5F_E9.0\tmodule-bluez5-device.c\n161\tbluez_output.74_68_59_7F_5F_E9.1.monitor\tmodule-bluez5-device.c\n162\tbluez_input.88_0E_85_16_CA_67.0\tmodule-bluez5-device.c\n";
+        assert_eq!(
+            pactl_source_index(output, "bluez_input.74_68_59_7F_5F_E9.0").as_deref(),
+            Some("160")
+        );
+        assert_eq!(
+            pactl_source_index(output, "bluez_input.11_22_33_44_55_66.0"),
+            None
+        );
+        assert_eq!(pactl_source_index(output, "alsa_input.monitor"), None);
+    }
+
+    #[test]
+    fn microphone_is_in_use_only_when_a_stream_targets_its_source() {
+        let output = b"7\t160\t95\t1\tqol-tray\n8\t201\t96\t1\tfirefox\n";
+        assert!(pactl_source_in_use(output, "160"));
+        assert!(pactl_source_in_use(output, "201"));
+        assert!(!pactl_source_in_use(output, "205"));
+        assert!(!pactl_source_in_use(b"", "160"));
     }
 
     #[test]
