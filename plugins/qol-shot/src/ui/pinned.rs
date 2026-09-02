@@ -1090,6 +1090,10 @@ impl Render for PinnedView {
                     this.begin_drag(None, event.position, window, cx)
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| this.close(window, cx)),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_resize(window, cx)),

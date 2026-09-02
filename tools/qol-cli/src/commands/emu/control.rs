@@ -194,6 +194,46 @@ fn parse_point(value: &str) -> Result<(u32, u32)> {
     Ok((x, y))
 }
 
+pub(crate) fn cmd_click(args: &[OsString], verbose: bool) -> Result<()> {
+    let (id, words, run_roots) = id_and_rest(args, "click", "<x,y> [--button left|middle|right]")?;
+    let (point, button) = parse_click_args(&words)?;
+    print_title("qol emu click");
+    print_hint(verbose);
+    let live::VerifiedRun { run, mut qmp } = find_run(&run_roots, &id)?;
+    let (width, height) = framebuffer_size(&mut qmp, &run.run_dir)?;
+    qmp.move_pointer_absolute(point.0, point.1, width, height)?;
+    std::thread::sleep(DRAG_SETTLE);
+    qmp.click_button(button)?;
+    step_label(
+        "click",
+        StepKind::Success,
+        &format!("{},{} {}", point.0, point.1, button),
+    );
+    Ok(())
+}
+
+fn parse_click_args(words: &[String]) -> Result<((u32, u32), &'static str)> {
+    let [point, rest @ ..] = words else {
+        bail!("usage: qol emu click [--run-root <path>] <run-id|environment> <x,y> [--button left|middle|right]");
+    };
+    let point = parse_point(point)?;
+    let button = match rest {
+        [] => "left",
+        [flag, name] if flag == "--button" => match name.as_str() {
+            "left" => "left",
+            "middle" => "middle",
+            "right" => "right",
+            other => bail!(
+                "unknown button `{other}`; usage: qol emu click [--run-root <path>] <run-id|environment> <x,y> [--button left|middle|right]"
+            ),
+        },
+        _ => bail!(
+            "usage: qol emu click [--run-root <path>] <run-id|environment> <x,y> [--button left|middle|right]"
+        ),
+    };
+    Ok((point, button))
+}
+
 fn drag_waypoints(from: (u32, u32), to: (u32, u32), steps: u32) -> Vec<(u32, u32)> {
     (1..=steps)
         .map(|step| {
@@ -358,6 +398,31 @@ mod tests {
         for input in ["300", "a,b", "300,", ",300", "-1,5"] {
             assert!(parse_point(input).is_err(), "input: {input}");
         }
+    }
+
+    #[test]
+    fn click_arg_parsing_defaults_and_validates_buttons() {
+        let (point, button) = parse_click_args(&["300,300".to_string()]).unwrap();
+        assert_eq!((point, button), ((300, 300), "left"));
+
+        let (point, button) = parse_click_args(&[
+            "10,20".to_string(),
+            "--button".to_string(),
+            "middle".to_string(),
+        ])
+        .unwrap();
+        assert_eq!((point, button), ((10, 20), "middle"));
+
+        let error = parse_click_args(&[
+            "10,20".to_string(),
+            "--button".to_string(),
+            "wheel".to_string(),
+        ])
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("usage: qol emu click"),
+            "error: {error}"
+        );
     }
 
     #[test]

@@ -248,13 +248,17 @@ impl<S: Read + Write> QmpClient<S> {
     }
 
     pub(crate) fn set_left_button(&mut self, down: bool) -> Result<()> {
-        self.send_input_events(vec![left_button_event(down)])
+        self.send_input_events(vec![button_event("left", down)])
     }
 
     pub(crate) fn click_left(&mut self) -> Result<()> {
-        self.set_left_button(true)?;
+        self.click_button("left")
+    }
+
+    pub(crate) fn click_button(&mut self, button: &str) -> Result<()> {
+        self.send_input_events(vec![button_event(button, true)])?;
         std::thread::sleep(POINTER_CLICK_HOLD);
-        self.set_left_button(false)
+        self.send_input_events(vec![button_event(button, false)])
     }
 
     fn send_input_events(&mut self, events: Vec<Value>) -> Result<()> {
@@ -306,8 +310,8 @@ impl<S: Read + Write> QmpClient<S> {
     }
 }
 
-fn left_button_event(down: bool) -> Value {
-    serde_json::json!({"type": "btn", "data": {"button": "left", "down": down}})
+fn button_event(button: &str, down: bool) -> Value {
+    serde_json::json!({"type": "btn", "data": {"button": button, "down": down}})
 }
 
 #[cfg(test)]
