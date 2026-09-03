@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome, HDR_REASON,
@@ -165,6 +166,10 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
             BrightnessPolicy::Ddc => self.ddc.set_brightness(handle, value),
             BrightnessPolicy::Auto => self.set_auto(handle, value),
         }
+    }
+
+    fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.gamma.set_tint(handle, tint)
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
@@ -344,6 +349,7 @@ mod tests {
         warned: Arc<Mutex<bool>>,
         restore_outcome: Arc<Mutex<RestoreOutcome>>,
         restore_calls: Arc<Mutex<usize>>,
+        tints: Arc<Mutex<Vec<Tint>>>,
     }
 
     impl FakeGamma {
@@ -355,6 +361,7 @@ mod tests {
                 warned: Arc::new(Mutex::new(false)),
                 restore_outcome: Arc::new(Mutex::new(RestoreOutcome::Restored)),
                 restore_calls: Arc::new(Mutex::new(0)),
+                tints: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -389,6 +396,11 @@ mod tests {
         fn set_brightness(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
             *self.sets.lock().unwrap() += 1;
             *self.value.lock().unwrap() = value;
+            Ok(())
+        }
+
+        fn set_tint(&self, _handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+            self.tints.lock().unwrap().push(tint);
             Ok(())
         }
 
@@ -450,6 +462,7 @@ mod tests {
             _handle: &DisplayHandle,
             _original: &crate::monitor::GammaTable,
             _last_value: u8,
+            _last_tint: Tint,
         ) -> crate::session::LutRestoreOutcome {
             crate::session::LutRestoreOutcome::Unavailable
         }
@@ -459,6 +472,7 @@ mod tests {
             _handle: &DisplayHandle,
             _original: &crate::monitor::GammaTable,
             _last_value: u8,
+            _last_tint: Tint,
         ) {
         }
     }
@@ -693,6 +707,17 @@ mod tests {
         assert_eq!(control.gamma.set_counts(), 1);
         assert_eq!(control.gamma.value(), 33);
         assert_eq!(control.get_gamma(&display).unwrap().value, 33);
+    }
+
+    #[test]
+    fn tint_always_routes_to_gamma_even_under_ddc_policy() {
+        let control = policy(FakeDdc::healthy(40), FakeGamma::new());
+        let display = handle("id-1", "card0-DP-1");
+        control.select(display.id(), BrightnessPolicy::Ddc);
+        let tint = Tint::from_kelvin(3500);
+        control.set_tint(&display, tint).unwrap();
+        assert_eq!(control.gamma.tints.lock().unwrap().as_slice(), [tint]);
+        assert_eq!(control.ddc.set_counts(), 0);
     }
 
     #[test]

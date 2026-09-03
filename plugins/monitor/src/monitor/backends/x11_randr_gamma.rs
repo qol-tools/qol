@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome, HDR_REASON,
@@ -87,6 +88,28 @@ impl GammaTable {
             blue: self.blue.iter().map(|entry| dim(*entry)).collect(),
         }
     }
+
+    pub fn tinted(&self, tint: Tint) -> Self {
+        let scale =
+            |entry: u16, channel: u16| (u32::from(entry) * u32::from(channel) / 1000) as u16;
+        GammaTable {
+            red: self
+                .red
+                .iter()
+                .map(|entry| scale(*entry, tint.red))
+                .collect(),
+            green: self
+                .green
+                .iter()
+                .map(|entry| scale(*entry, tint.green))
+                .collect(),
+            blue: self
+                .blue
+                .iter()
+                .map(|entry| scale(*entry, tint.blue))
+                .collect(),
+        }
+    }
 }
 
 pub trait GammaTransport: Send + Sync {
@@ -106,6 +129,7 @@ struct GammaSession {
     original: Option<GammaTable>,
     written_checksum: Option<u64>,
     written_value: Option<u8>,
+    tint: Tint,
     mismatches: usize,
     warned: bool,
 }
@@ -159,7 +183,12 @@ impl<T: GammaTransport> GammaBackend<T> {
         }
     }
 
-    fn set_inner(&self, handle: &DisplayHandle, value: u8) -> Result<(), GammaError> {
+    fn set_inner(
+        &self,
+        handle: &DisplayHandle,
+        value: Option<u8>,
+        tint: Option<Tint>,
+    ) -> Result<(), GammaError> {
         let mut bus = self.transport.open()?;
         let Some(crtc) = bus.crtc_for_connector(handle.connector())? else {
             return Err(GammaError::Unsupported {
@@ -186,7 +215,9 @@ impl<T: GammaTransport> GammaBackend<T> {
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
         let original = entry.original.get_or_insert_with(|| current.clone());
-        let target = original.dimmed(value);
+        let value = value.unwrap_or_else(|| entry.written_value.unwrap_or(100));
+        let tint = tint.unwrap_or(entry.tint);
+        let target = original.dimmed(value).tinted(tint);
         let mut verified = false;
         for _ in 0..=1 {
             bus.write_gamma(crtc, &target)?;
@@ -202,6 +233,7 @@ impl<T: GammaTransport> GammaBackend<T> {
         if verified {
             entry.written_checksum = Some(target.checksum());
             entry.written_value = Some(value);
+            entry.tint = tint;
         } else {
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
@@ -216,14 +248,15 @@ impl<T: GammaTransport> GammaBackend<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        last_tint: Tint,
     ) -> Result<RestoreOutcome, GammaError> {
         let guard = {
             let session = self.session();
             match session.get(handle.id()) {
                 Some(entry) => entry
                     .written_checksum
-                    .unwrap_or_else(|| original.dimmed(last_value).checksum()),
-                None => original.dimmed(last_value).checksum(),
+                    .unwrap_or_else(|| original.dimmed(last_value).tinted(last_tint).checksum()),
+                None => original.dimmed(last_value).tinted(last_tint).checksum(),
             }
         };
         let mut bus = self.transport.open()?;
@@ -259,6 +292,7 @@ impl<T: GammaTransport> GammaBackend<T> {
             entry.original = None;
             entry.written_checksum = None;
             entry.written_value = None;
+            entry.tint = Tint::NEUTRAL;
         }
         Ok(RestoreOutcome::Restored)
     }
@@ -272,9 +306,10 @@ impl<T: GammaTransport> GammaBackend<T> {
             return Ok(RestoreOutcome::NothingToRestore);
         };
         let last_value = entry.written_value.unwrap_or(100);
+        let last_tint = entry.tint;
         let original = original.clone();
         drop(session);
-        self.restore_lut(handle, &original, last_value)
+        self.restore_lut(handle, &original, last_value, last_tint)
     }
 }
 
@@ -309,8 +344,13 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     }
 
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, value)
+        self.set_inner(handle, Some(value), None)
             .map_err(|error| error.into_monitor("brightness"))
+    }
+
+    fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.set_inner(handle, None, Some(tint))
+            .map_err(|error| error.into_monitor("tint"))
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
@@ -321,7 +361,7 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     }
 
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, value)
+        self.set_inner(handle, Some(value), None)
             .map_err(|error| error.into_monitor("gamma"))
     }
 
@@ -375,21 +415,29 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        last_tint: Tint,
     ) -> LutRestoreOutcome {
-        match self.restore_lut(handle, original, last_value) {
+        match self.restore_lut(handle, original, last_value, last_tint) {
             Ok(RestoreOutcome::Restored) => LutRestoreOutcome::Restored,
             Ok(RestoreOutcome::ForeignLutPreserved) => LutRestoreOutcome::ForeignLutPreserved,
             Ok(RestoreOutcome::NothingToRestore) | Err(_) => LutRestoreOutcome::Unavailable,
         }
     }
 
-    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+    fn adopt_baseline(
+        &self,
+        handle: &DisplayHandle,
+        original: &GammaTable,
+        last_value: u8,
+        last_tint: Tint,
+    ) {
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             entry.original = Some(original.clone());
             entry.written_value = Some(last_value);
-            entry.written_checksum = Some(original.dimmed(last_value).checksum());
+            entry.tint = last_tint;
+            entry.written_checksum = Some(original.dimmed(last_value).tinted(last_tint).checksum());
         }
     }
 }
@@ -646,6 +694,53 @@ mod tests {
     }
 
     #[test]
+    fn neutral_tint_is_identity_and_channels_scale_independently() {
+        let table = identity(4, 100);
+        assert_eq!(table.tinted(Tint::NEUTRAL), table);
+        assert_eq!(
+            table.tinted(Tint {
+                red: 1000,
+                green: 500,
+                blue: 250,
+            }),
+            GammaTable {
+                red: vec![100, 101, 102, 103],
+                green: vec![50, 51, 52, 53],
+                blue: vec![25, 25, 26, 27],
+            }
+        );
+    }
+
+    #[test]
+    fn tint_and_brightness_compose_against_the_original_ramp() {
+        let original = identity(4, 100);
+        let tint = Tint {
+            red: 1000,
+            green: 700,
+            blue: 400,
+        };
+        let backend = backend(bus(&original, 1));
+        backend.set_tint(&handle(), tint).unwrap();
+        backend.set_brightness(&handle(), 60).unwrap();
+        let bus = backend.transport.bus.lock().unwrap();
+        assert_eq!(bus.tables[&1], original.dimmed(60).tinted(tint));
+    }
+
+    #[test]
+    fn restore_after_tint_writes_the_original_ramp() {
+        let original = identity(4, 100);
+        let backend = backend(bus(&original, 1));
+        backend
+            .set_tint(&handle(), Tint::from_kelvin(3500))
+            .unwrap();
+        assert_eq!(
+            backend.restore(&handle()).unwrap(),
+            RestoreOutcome::Restored
+        );
+        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], original);
+    }
+
+    #[test]
     fn checksum_detects_any_table_change() {
         let table = identity(4, 100);
         let mut changed = table.clone();
@@ -797,6 +892,13 @@ mod tests {
         ));
         let caps = backend.probe(&handle()).unwrap();
         assert!(!caps.brightness_gamma);
+        assert!(matches!(
+            backend.set_tint(&handle(), Tint::from_kelvin(3500)),
+            Err(MonitorError::Unsupported {
+                capability: "tint",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -896,7 +998,7 @@ mod tests {
     fn write_guarded_restores_the_original_without_a_live_session() {
         let original = identity(4, 100);
         let backend = backend(bus(&original.dimmed(50), 1));
-        let outcome = backend.write_guarded(&handle(), &original, 50);
+        let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::Restored);
         let bus = backend.transport.bus.lock().unwrap();
         assert_eq!(bus.tables[&1], original);
@@ -908,7 +1010,7 @@ mod tests {
         let mut foreign = original.dimmed(50);
         foreign.red[0] += 1;
         let backend = backend(bus(&foreign, 1));
-        let outcome = backend.write_guarded(&handle(), &original, 50);
+        let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
         let bus = backend.transport.bus.lock().unwrap();
         assert_eq!(bus.tables[&1], foreign);
@@ -924,7 +1026,7 @@ mod tests {
             let mut counts = backend.transport.bus.lock().unwrap();
             counts.co_owner = Some(co_owner);
         }
-        let outcome = backend.write_guarded(&handle(), &original, 50);
+        let outcome = backend.write_guarded(&handle(), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::Unavailable);
         assert_eq!(backend.mismatch_count(&handle()), 1);
     }
@@ -944,7 +1046,7 @@ mod tests {
     fn adopt_then_set_dims_against_the_adopted_baseline_not_the_live_crtc() {
         let baseline = identity(4, 100);
         let backend = backend(bus(&baseline.dimmed(80), 1));
-        backend.adopt_baseline(&handle(), &baseline, 80);
+        backend.adopt_baseline(&handle(), &baseline, 80, Tint::NEUTRAL);
         backend.set_brightness(&handle(), 80).unwrap();
         let bus = backend.transport.bus.lock().unwrap();
         assert_eq!(bus.tables[&1], baseline.dimmed(80));
@@ -956,7 +1058,7 @@ mod tests {
         let backend = backend(bus(&identity(4, 100), 1));
         backend.set_brightness(&handle(), 50).unwrap();
         let persisted = identity(4, 900);
-        backend.adopt_baseline(&handle(), &persisted, 70);
+        backend.adopt_baseline(&handle(), &persisted, 70, Tint::NEUTRAL);
         let session = backend.sessions.lock().unwrap();
         let entry = session.get("id-1").unwrap();
         assert_eq!(entry.original.as_ref().unwrap(), &identity(4, 100));
@@ -971,7 +1073,7 @@ mod tests {
     fn get_brightness_after_adopt_reports_the_persisted_value() {
         let baseline = identity(4, 100);
         let backend = backend(bus(&baseline.dimmed(80), 1));
-        backend.adopt_baseline(&handle(), &baseline, 80);
+        backend.adopt_baseline(&handle(), &baseline, 80, Tint::NEUTRAL);
         let state = backend.get_brightness(&handle()).unwrap();
         assert_eq!(state.value, 80);
         assert_eq!(state.source, BrightnessSource::Gamma);

@@ -9,10 +9,23 @@ description = "Reload the device config from the host and apply changes at runti
 [action.set_brightness]
 description = "Set a display's brightness now: input requires a display id and a value between 0 and 100; id `all` writes every connected display"
 
+[action.night_toggle]
+description = "Toggle night mode manually"
+
+[action.night_on]
+description = "Turn night mode on manually"
+
+[action.night_off]
+description = "Turn night mode off manually"
+
 [query.displays]
 description = "Connected displays with live brightness, source, policy, and preferred value"
 poll_interval_ms = 2000
 
 [query.status]
 description = "Overall brightness control state"
+poll_interval_ms = 2000
+
+[query.night_mode]
+description = "Current night mode state, temperature, schedule reason, and host takeover state"
 poll_interval_ms = 2000

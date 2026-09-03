@@ -4,13 +4,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use qol_profile_sync::{device_local_dir, SyncPaths};
 
+use crate::monitor::night::{Minute, NightState, Schedule, ScheduleError, ScheduleMode};
 use crate::monitor::BrightnessPolicy;
 
 pub const DEVICE_NAMESPACE: &str = "monitor";
 pub const DEVICE_CONFIG_FILE: &str = "config.json";
 pub const PREFERRED_FILE: &str = "preferred.json";
+pub const NIGHT_STATE_FILE: &str = "night.json";
 pub const SESSION_SUBDIR: &str = "session";
 const PREFERRED_MAX: u8 = 100;
+const NIGHT_MIN_KELVIN: u16 = 1500;
+const NIGHT_MAX_KELVIN: u16 = 6500;
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
@@ -21,10 +25,34 @@ pub struct DeviceConfig {
     pub policy: BTreeMap<String, PolicySelection>,
     #[serde(default = "default_true")]
     pub notify_on_change: bool,
+    #[serde(default = "default_night_temperature")]
+    pub night_temperature: u16,
+    #[serde(default = "default_night_schedule")]
+    pub night_schedule: String,
+    #[serde(default = "default_night_from")]
+    pub night_from: String,
+    #[serde(default = "default_night_to")]
+    pub night_to: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_night_temperature() -> u16 {
+    3500
+}
+
+fn default_night_schedule() -> String {
+    "off".to_string()
+}
+
+fn default_night_from() -> String {
+    "20:00".to_string()
+}
+
+fn default_night_to() -> String {
+    "06:00".to_string()
 }
 
 impl Default for DeviceConfig {
@@ -33,6 +61,10 @@ impl Default for DeviceConfig {
             preferred_brightness: BTreeMap::new(),
             policy: BTreeMap::new(),
             notify_on_change: default_true(),
+            night_temperature: default_night_temperature(),
+            night_schedule: default_night_schedule(),
+            night_from: default_night_from(),
+            night_to: default_night_to(),
         }
     }
 }
@@ -95,6 +127,19 @@ impl DeviceConfig {
             .get(display_id)
             .map(|preference| preference.brightness)
     }
+
+    pub fn night_kelvin(&self) -> u16 {
+        self.night_temperature
+            .clamp(NIGHT_MIN_KELVIN, NIGHT_MAX_KELVIN)
+    }
+
+    pub fn night_schedule(&self) -> Result<Schedule, ScheduleError> {
+        Ok(Schedule {
+            mode: ScheduleMode::parse(&self.night_schedule).unwrap_or(ScheduleMode::Off),
+            from: Minute::parse(&self.night_from)?,
+            to: Minute::parse(&self.night_to)?,
+        })
+    }
 }
 
 pub fn config_root() -> Option<PathBuf> {
@@ -130,6 +175,10 @@ pub fn legacy_config_path(config_root: &Path) -> Result<PathBuf> {
 
 pub fn preferred_path(config_root: &Path) -> Result<PathBuf> {
     device_dir(config_root).map(|dir| dir.join(PREFERRED_FILE))
+}
+
+pub fn night_state_path(config_root: &Path) -> Result<PathBuf> {
+    device_dir(config_root).map(|dir| dir.join(NIGHT_STATE_FILE))
 }
 
 pub fn materialized_config_path() -> Option<PathBuf> {
@@ -205,7 +254,7 @@ fn migrate_legacy(legacy: LegacyDeviceConfig) -> DeviceConfig {
             .into_iter()
             .map(|(id, policy)| (id, PolicySelection { policy }))
             .collect(),
-        notify_on_change: default_true(),
+        ..DeviceConfig::default()
     }
 }
 
@@ -288,6 +337,32 @@ fn write_preferred(path: &Path, preferred: &BTreeMap<String, u8>) -> Result<()> 
         .with_context(|| format!("failed to commit preferred brightness {}", path.display()))
 }
 
+pub fn load_night_state(config_root: Option<&Path>) -> NightState {
+    let Some(root) = config_root else {
+        return NightState::default();
+    };
+    let Ok(path) = night_state_path(root) else {
+        return NightState::default();
+    };
+    let Ok(content) = std::fs::read(path) else {
+        return NightState::default();
+    };
+    serde_json::from_slice(&content).unwrap_or_default()
+}
+
+pub fn save_night_state(config_root: Option<&Path>, state: &NightState) -> Result<()> {
+    let root = config_root.ok_or_else(|| anyhow::anyhow!("no config root for night mode state"))?;
+    let path = night_state_path(root)?;
+    let parent = path
+        .parent()
+        .context("night mode state path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create device dir {}", parent.display()))?;
+    let content = serde_json::to_vec(state).context("failed to serialize night mode state")?;
+    qol_fs::atomic_write_durable_mode(&path, &content, 0o600)
+        .with_context(|| format!("failed to commit night mode state {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +415,10 @@ mod tests {
         assert_eq!(
             preferred_path(&config_root).unwrap(),
             device.join(PREFERRED_FILE)
+        );
+        assert_eq!(
+            night_state_path(&config_root).unwrap(),
+            device.join(NIGHT_STATE_FILE)
         );
     }
 
@@ -476,6 +555,10 @@ mod tests {
                 "id-b": { "policy": "off" },
             },
             "notify_on_change": true,
+            "night_temperature": 3500,
+            "night_schedule": "off",
+            "night_from": "20:00",
+            "night_to": "06:00",
         });
         let config = parse_store(&json).unwrap();
         assert_eq!(config.preferred_for("id-a"), Some(80));
@@ -569,6 +652,56 @@ mod tests {
         assert!(!disabled.notify_on_change);
         let enabled = parse_store(&serde_json::json!({ "notify_on_change": true })).unwrap();
         assert!(enabled.notify_on_change);
+    }
+
+    #[test]
+    fn night_defaults_parse_and_temperature_is_clamped() {
+        let config = DeviceConfig::default();
+        let schedule = config.night_schedule().unwrap();
+        assert_eq!(schedule.mode, ScheduleMode::Off);
+        assert_eq!(schedule.from, Minute::parse("20:00").unwrap());
+        assert_eq!(schedule.to, Minute::parse("06:00").unwrap());
+        assert_eq!(config.night_kelvin(), 3500);
+        assert_eq!(
+            DeviceConfig {
+                night_temperature: 900,
+                ..DeviceConfig::default()
+            }
+            .night_kelvin(),
+            1500
+        );
+        assert_eq!(
+            DeviceConfig {
+                night_temperature: 9000,
+                ..DeviceConfig::default()
+            }
+            .night_kelvin(),
+            6500
+        );
+    }
+
+    #[test]
+    fn invalid_night_time_surfaces_the_parse_error() {
+        let config = DeviceConfig {
+            night_from: "24:00".to_string(),
+            ..DeviceConfig::default()
+        };
+        assert!(matches!(
+            config.night_schedule(),
+            Err(ScheduleError::Range(value)) if value == "24:00"
+        ));
+    }
+
+    #[test]
+    fn night_state_round_trips_in_the_device_scope() {
+        let (_dir, config_root) = root();
+        let state = NightState {
+            override_active: Some(true),
+            override_until_unix: Some(12345),
+        };
+        save_night_state(Some(&config_root), &state).unwrap();
+        assert_eq!(load_night_state(Some(&config_root)), state);
+        assert_eq!(load_night_state(None), NightState::default());
     }
 
     #[test]

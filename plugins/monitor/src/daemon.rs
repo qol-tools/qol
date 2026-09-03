@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,12 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 
 use crate::config::{self, DeviceConfig};
+use crate::host_night_light::{
+    HostNightLight, HostNightLightStatus, NoopHostNightLight, TakeoverOutcome,
+};
+use crate::monitor::night::{
+    self, Decision, Minute, NightState, Now, Reason, Schedule, ScheduleMode, Tint,
+};
 use crate::monitor::{
     BrightnessPolicy, BrightnessSource, BrightnessState, DisplayControl, GammaStateControl,
     MonitorError, BRIGHTNESS_MAX, BRIGHTNESS_MIN, BRIGHTNESS_STEP,
@@ -18,6 +24,8 @@ use crate::session::{LutProvider, RestoreMode, Session, SessionStore, Snapshot};
 use qol_windowing::display::DisplayHandle;
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
+pub const NIGHT_TICK: Duration = Duration::from_secs(30);
+pub const HOST_NIGHT_LIGHT_SETTLE_SECS: i64 = 4;
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -60,10 +68,19 @@ pub enum Command {
     Settings,
     ApplyPreferred,
     Reload,
+    Night(NightRequest),
+    Tick,
     Kill,
     Evicted,
     Handoff,
     HandoffSuccessor { generation: Option<String> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NightRequest {
+    Toggle,
+    On,
+    Off,
 }
 
 pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
@@ -73,6 +90,9 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         "settings" => return ReadResult::Command(Command::Settings),
         "apply" => return ReadResult::Command(Command::ApplyPreferred),
         "reload" => return ReadResult::Command(Command::Reload),
+        "night_toggle" => return ReadResult::Command(Command::Night(NightRequest::Toggle)),
+        "night_on" => return ReadResult::Command(Command::Night(NightRequest::On)),
+        "night_off" => return ReadResult::Command(Command::Night(NightRequest::Off)),
         "handoff" => {
             let generation = request
                 .input
@@ -89,7 +109,7 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 Err(error) => ReadResult::Error(error),
             };
         }
-        "displays" | "status" => return live_query(request.action.as_str()),
+        "displays" | "status" | "night_mode" => return live_query(request.action.as_str()),
         "brightness-up" => {
             return match Phase::parse(&request.input) {
                 Ok(phase) => ReadResult::Command(Command::Brightness {
@@ -143,9 +163,16 @@ fn live_query(name: &str) -> ReadResult<Command> {
     };
     let control = Arc::clone(runtime.session().control());
     let preferred = runtime.preferred.clone();
+    let night_kelvin = runtime.active_night_kelvin();
     let payload = match name {
-        "displays" => displays_payload(&*control, &preferred, &mut runtime.brightness_cache),
+        "displays" => displays_payload(
+            &*control,
+            &preferred,
+            &mut runtime.brightness_cache,
+            night_kelvin,
+        ),
         "status" => status_payload(&*control, &mut runtime.brightness_cache),
+        "night_mode" => runtime.night_payload(),
         _ => unreachable!("live_query only handles declared queries"),
     };
     ReadResult::HandledWithData(payload)
@@ -157,10 +184,21 @@ fn policy_config(config: &DeviceConfig) -> DeviceConfig {
     policy_only
 }
 
+fn local_now() -> Now {
+    use chrono::Timelike;
+
+    let now = chrono::Local::now();
+    Now {
+        unix: now.timestamp(),
+        minute: Minute((now.hour() * 60 + now.minute()) as u16),
+    }
+}
+
 pub(crate) fn displays_payload(
     control: &dyn MonitorControl,
     preferred: &BTreeMap<String, u8>,
     cache: &mut BTreeMap<String, BrightnessState>,
+    night_kelvin: Option<u16>,
 ) -> serde_json::Value {
     let handles = control.enumerate().unwrap_or_default();
     let rows: Vec<serde_json::Value> = handles
@@ -169,7 +207,7 @@ pub(crate) fn displays_payload(
             let id = handle.id().to_string();
             let policy = control.selection(handle.id()).label();
             let preferred = preferred.get(&id).copied();
-            let (brightness, source, detail) = match cache.get(handle.id()).copied() {
+            let (brightness, source, mut detail) = match cache.get(handle.id()).copied() {
                 Some(state) => (
                     serde_json::Value::from(state.value),
                     state.source.label(),
@@ -191,6 +229,9 @@ pub(crate) fn displays_payload(
                     ),
                 },
             };
+            if let Some(kelvin) = night_kelvin {
+                detail.push_str(&format!(" warm {kelvin}K"));
+            }
             serde_json::json!({
                 "id": id,
                 "connector": handle.connector(),
@@ -299,11 +340,24 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     preferred_save: PreferredSave,
     brightness_cache: BTreeMap<String, BrightnessState>,
     residency: ResidencyCheck,
+    night: NightState,
+    night_applied: Option<(bool, u16)>,
+    night_tinted_displays: HashSet<String>,
+    night_unsupported: bool,
+    night_schedule_error: Option<String>,
+    night_decision: Option<Decision>,
+    night_next_change: Option<String>,
+    night_settle_until_unix: Option<i64>,
+    host_night_light_conflict: bool,
+    host_night_light: Arc<dyn HostNightLight>,
+    clock: Clock,
+    night_platform_supported: bool,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type PreferredSave = Arc<dyn Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync>;
 type ResidencyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+type Clock = Arc<dyn Fn() -> Now + Send + Sync>;
 
 impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
     pub fn new(
@@ -326,6 +380,18 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             preferred_save: Arc::new(preferred_save),
             brightness_cache: BTreeMap::new(),
             residency: Arc::new(residency),
+            night: NightState::default(),
+            night_applied: None,
+            night_tinted_displays: HashSet::new(),
+            night_unsupported: false,
+            night_schedule_error: None,
+            night_decision: None,
+            night_next_change: None,
+            night_settle_until_unix: None,
+            host_night_light_conflict: false,
+            host_night_light: Arc::new(NoopHostNightLight),
+            clock: Arc::new(local_now),
+            night_platform_supported: true,
         }
     }
 
@@ -337,6 +403,17 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         (self.residency)()
     }
 
+    fn with_host_night_light(mut self, host_night_light: Arc<dyn HostNightLight>) -> Self {
+        self.host_night_light = host_night_light;
+        self
+    }
+
+    fn with_night_platform_supported(mut self, supported: bool) -> Self {
+        self.night_platform_supported = supported;
+        self.night_unsupported = !supported;
+        self
+    }
+
     #[cfg(test)]
     fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
         self.session = self.session.with_adoption_generation(generation);
@@ -346,6 +423,12 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
     #[cfg(test)]
     fn with_residency(mut self, resident: bool) -> Self {
         self.residency = Arc::new(move || resident);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_clock(mut self, clock: impl Fn() -> Now + Send + Sync + 'static) -> Self {
+        self.clock = Arc::new(clock);
         self
     }
 
@@ -378,6 +461,10 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         } else {
             let recovery = self.session.restore_all(RestoreMode::Recovery);
             self.surface_gamma_warnings(&recovery);
+            if let Err(error) = self.host_night_light.release(RestoreMode::Recovery) {
+                self.host_night_light_conflict = true;
+                eprintln!("[plugin-monitor] host night light recovery failed: {error}");
+            }
             if recovery.restored > 0 {
                 (self.notify)(
                     "Monitor",
@@ -394,7 +481,196 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         self.preferred = config::load_preferred(self.config_root.as_deref());
         self.adopt_handoffs(&handoffs);
         self.apply_preferred_map();
+        self.night = config::load_night_state(self.config_root.as_deref());
+        self.evaluate_night(true);
         recovery
+    }
+
+    fn parsed_schedule(&self) -> (Schedule, Option<String>) {
+        match self.config().night_schedule() {
+            Ok(schedule) => (schedule, None),
+            Err(error) => (
+                Schedule {
+                    mode: ScheduleMode::Off,
+                    from: Minute(0),
+                    to: Minute(0),
+                },
+                Some(error.to_string()),
+            ),
+        }
+    }
+
+    fn evaluate_night(&mut self, force: bool) {
+        let config = self.config();
+        let (schedule, schedule_error) = self.parsed_schedule();
+        let now = (self.clock)();
+        let decision = night::decide(&schedule, &self.night, now);
+        let override_on = decision.active && decision.reason == Reason::Manual;
+        let armed = schedule.mode == ScheduleMode::Daily || override_on;
+        if armed {
+            self.reconcile_host_night_light(true, now.unix);
+        }
+        let kelvin = config.night_kelvin();
+        let target = (decision.active, kelvin);
+        let previous = self.night_applied;
+        let changed = previous != Some(target);
+        let should_apply =
+            decision.active || !decision.active && previous.is_some_and(|state| state.0);
+        let settling = self
+            .night_settle_until_unix
+            .is_some_and(|until| now.unix < until);
+        if !settling {
+            let reassert = self.night_settle_until_unix.take().is_some();
+            if should_apply {
+                self.apply_night_tint(decision.active, kelvin, changed || force || reassert);
+            } else if !decision.active {
+                self.night_unsupported = !self.night_platform_supported;
+            }
+            self.night_applied = Some(target);
+        }
+        if !armed {
+            self.reconcile_host_night_light(false, now.unix);
+        }
+        self.night_schedule_error = schedule_error;
+        self.night_next_change = schedule.next_transition(now.minute).map(Minute::label);
+        self.night_decision = Some(decision);
+        if changed
+            && previous.map(|state| state.0).unwrap_or(false) != decision.active
+            && config.notify_on_change
+        {
+            let message = if decision.active {
+                format!("Night mode on ({kelvin}K)")
+            } else {
+                "Night mode off".to_string()
+            };
+            (self.notify)("Monitor", &message);
+        }
+        trace_night(
+            decision,
+            kelvin,
+            self.host_night_light.status(),
+            self.host_night_light_conflict,
+            changed || force,
+        );
+    }
+
+    fn apply_night_tint(&mut self, active: bool, kelvin: u16, reset_targets: bool) {
+        if !self.night_platform_supported {
+            self.night_unsupported = true;
+            self.night_tinted_displays.clear();
+            return;
+        }
+        let handles = self.session.control().enumerate().unwrap_or_default();
+        let handle_count = handles.len();
+        let targets: Vec<DisplayHandle> = if active && !reset_targets {
+            handles
+                .into_iter()
+                .filter(|handle| !self.night_tinted_displays.contains(handle.id()))
+                .collect()
+        } else {
+            handles
+        };
+        let tint = if active {
+            Tint::from_kelvin(kelvin)
+        } else {
+            Tint::NEUTRAL
+        };
+        let mut successes = 0;
+        let mut unsupported = 0;
+        for handle in &targets {
+            match self.session.mutate_tint(handle, tint) {
+                Ok(()) => {
+                    successes += 1;
+                    if active {
+                        self.night_tinted_displays.insert(handle.id().to_string());
+                    }
+                }
+                Err(MonitorError::Unsupported { .. }) => unsupported += 1,
+                Err(error) => {
+                    eprintln!(
+                        "[plugin-monitor] night mode write failed on {}: {error}",
+                        handle.connector()
+                    );
+                }
+            }
+        }
+        if !active {
+            self.night_tinted_displays.clear();
+        }
+        if active && (reset_targets || !targets.is_empty()) {
+            self.night_unsupported = handle_count == 0
+                || (!targets.is_empty() && successes == 0 && unsupported == targets.len());
+        }
+    }
+
+    fn reconcile_host_night_light(&mut self, armed: bool, now_unix: i64) {
+        let result = if armed && !self.host_night_light.is_taken_over() {
+            self.host_night_light.take_over().map(|outcome| {
+                if outcome == TakeoverOutcome::Disabled {
+                    self.night_settle_until_unix = Some(now_unix + HOST_NIGHT_LIGHT_SETTLE_SECS);
+                }
+            })
+        } else if !armed && self.host_night_light.is_taken_over() {
+            self.night_settle_until_unix = None;
+            self.host_night_light.release(RestoreMode::Exit)
+        } else {
+            Ok(())
+        };
+        match result {
+            Ok(()) => self.host_night_light_conflict = false,
+            Err(error) => {
+                self.host_night_light_conflict = armed;
+                eprintln!("[plugin-monitor] host night light takeover failed: {error}");
+            }
+        }
+    }
+
+    fn active_night_kelvin(&self) -> Option<u16> {
+        self.night_decision
+            .filter(|decision| decision.active && !self.night_tinted_displays.is_empty())
+            .map(|_| self.config().night_kelvin())
+    }
+
+    fn night_payload(&self) -> serde_json::Value {
+        let decision = self.night_decision.unwrap_or(Decision {
+            active: false,
+            reason: Reason::Off,
+            next_change_unix: None,
+        });
+        let state = if self.night_schedule_error.is_some() {
+            "invalid_schedule"
+        } else if self.host_night_light_conflict {
+            "conflict"
+        } else if self.night_unsupported {
+            "unsupported"
+        } else if decision.active {
+            "active"
+        } else {
+            "inactive"
+        };
+        serde_json::json!({
+            "state": state,
+            "active": decision.active,
+            "temperature": self.config().night_kelvin(),
+            "reason": decision.reason.label(),
+            "next_change": self.night_next_change,
+            "host_night_light": self.host_night_light.status().label(),
+        })
+    }
+
+    fn next_night_wait(&self) -> Option<Duration> {
+        if let Some(until) = self.night_settle_until_unix {
+            let remaining = (until - (self.clock)().unix).max(1);
+            return Some(Duration::from_secs(remaining as u64).min(NIGHT_TICK));
+        }
+        let active = self
+            .night_decision
+            .map(|decision| decision.active)
+            .unwrap_or(false);
+        let scheduled = self.config().night_schedule().ok().is_some_and(|schedule| {
+            schedule.mode == ScheduleMode::Daily && schedule.from != schedule.to
+        });
+        (active || scheduled).then_some(NIGHT_TICK)
     }
 
     fn handoff_snapshots(&self) -> Vec<Snapshot> {
@@ -527,26 +803,60 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 });
                 self.preferred = config::load_preferred(self.config_root.as_deref());
                 self.reload_config(&next);
+                self.night = NightState::default();
+                if let Err(error) =
+                    config::save_night_state(self.config_root.as_deref(), &self.night)
+                {
+                    eprintln!("[plugin-monitor] failed to clear night mode override: {error:#}");
+                }
+                self.evaluate_night(true);
+                true
+            }
+            Command::Night(request) => {
+                let (schedule, _) = self.parsed_schedule();
+                let now = (self.clock)();
+                self.night = match request {
+                    NightRequest::Toggle => night::toggled(&schedule, &self.night, now),
+                    NightRequest::On => night::set_active(&schedule, &self.night, now, true),
+                    NightRequest::Off => night::set_active(&schedule, &self.night, now, false),
+                };
+                if let Err(error) =
+                    config::save_night_state(self.config_root.as_deref(), &self.night)
+                {
+                    eprintln!("[plugin-monitor] failed to persist night mode state: {error:#}");
+                }
+                self.evaluate_night(false);
+                true
+            }
+            Command::Tick => {
+                self.evaluate_night(false);
                 true
             }
             Command::Kill => {
                 if !self.is_resident() {
                     let report = self.session.restore_all(RestoreMode::Exit);
                     self.surface_gamma_warnings(&report);
+                    if let Err(error) = self.host_night_light.release(RestoreMode::Exit) {
+                        eprintln!("[plugin-monitor] host night light restore failed: {error}");
+                    }
                 }
                 false
             }
             Command::Evicted => {
                 self.session
                     .mark_handoff_all(Some(crate::session::EVICTION_GENERATION));
+                self.host_night_light
+                    .mark_handoff(Some(crate::session::EVICTION_GENERATION));
                 false
             }
             Command::Handoff => {
                 self.session.mark_handoff_all(None);
+                self.host_night_light.mark_handoff(None);
                 false
             }
             Command::HandoffSuccessor { generation } => {
                 self.session.mark_handoff_all(generation.as_deref());
+                self.host_night_light.mark_handoff(generation.as_deref());
                 false
             }
         }
@@ -670,8 +980,18 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     }
 }
 
-fn receive_commands(rx: &Receiver<Command>) -> Result<Option<Command>, ()> {
-    rx.recv().map(Some).map_err(|_| ())
+fn receive_commands(
+    rx: &Receiver<Command>,
+    timeout: Option<Duration>,
+) -> Result<Option<Command>, ()> {
+    let Some(timeout) = timeout else {
+        return rx.recv().map(Some).map_err(|_| ());
+    };
+    match rx.recv_timeout(timeout) {
+        Ok(command) => Ok(Some(command)),
+        Err(RecvTimeoutError::Timeout) => Ok(Some(Command::Tick)),
+        Err(RecvTimeoutError::Disconnected) => Err(()),
+    }
 }
 
 fn is_heartbeat(command: &Command) -> bool {
@@ -701,7 +1021,14 @@ fn run_loop<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized>(
     runtime: &Mutex<Runtime<C>>,
     rx: &Receiver<Command>,
 ) {
-    while let Ok(Some(command)) = receive_commands(rx) {
+    loop {
+        let timeout = runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_night_wait();
+        let Ok(Some(command)) = receive_commands(rx, timeout) else {
+            break;
+        };
         let mut runtime = runtime
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -789,6 +1116,7 @@ fn build_runtime(
         let root = config_root.clone();
         move |preferred: &BTreeMap<String, u8>| config::save_preferred(root.as_deref(), preferred)
     };
+    let host_night_light = crate::host_night_light::control(config_root.as_deref());
     Runtime::new(
         control,
         store,
@@ -798,6 +1126,8 @@ fn build_runtime(
         preferred_save,
         || HostResidency::current().is_resident(),
     )
+    .with_host_night_light(host_night_light)
+    .with_night_platform_supported(cfg!(target_os = "linux"))
 }
 
 fn session_store_for(config_root: Option<&std::path::Path>) -> SessionStore {
@@ -833,13 +1163,38 @@ fn trace_startup(recovery: &crate::session::RestoreReport) {
     let _ = recovery;
 }
 
+fn trace_night(
+    decision: Decision,
+    kelvin: u16,
+    host: HostNightLightStatus,
+    conflict: bool,
+    emitted: bool,
+) {
+    #[cfg(debug_assertions)]
+    if emitted {
+        qol_runtime::probe!(
+            "MONITOR_SESSION",
+            "event=night active={} reason={} kelvin={} next={:?} host={} conflict={}",
+            decision.active,
+            decision.reason.label(),
+            kelvin,
+            decision.next_change_unix,
+            host.label(),
+            conflict
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (decision, kelvin, host, conflict, emitted);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{self, BrightnessPreference, PolicySelection};
+    use crate::host_night_light::HostNightLightError;
     use crate::monitor::{
-        BrightnessPolicy, BrightnessSource, DisplayCapabilities, DisplayMode, GammaState, HdrState,
-        RestoreOutcome,
+        BrightnessPolicy, BrightnessSource, DisplayCapabilities, DisplayMode, GammaState,
+        GammaTable, HdrState, RestoreOutcome,
     };
     use crate::session::NoLutProvider;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -946,6 +1301,22 @@ mod tests {
     }
 
     #[test]
+    fn routes_every_night_mode_action() {
+        assert!(matches!(
+            parse_request(&request("night_toggle", serde_json::Value::Null)),
+            ReadResult::Command(Command::Night(NightRequest::Toggle))
+        ));
+        assert!(matches!(
+            parse_request(&request("night_on", serde_json::Value::Null)),
+            ReadResult::Command(Command::Night(NightRequest::On))
+        ));
+        assert!(matches!(
+            parse_request(&request("night_off", serde_json::Value::Null)),
+            ReadResult::Command(Command::Night(NightRequest::Off))
+        ));
+    }
+
+    #[test]
     fn parses_set_brightness_with_an_id_and_value() {
         assert!(matches!(
             parse_request(&request(
@@ -1033,6 +1404,7 @@ mod tests {
         warned: StdMutex<bool>,
         refuse_get: bool,
         selections: StdMutex<Vec<(String, BrightnessPolicy)>>,
+        tints: StdMutex<Vec<(String, Tint)>>,
     }
 
     impl FakeControl {
@@ -1051,11 +1423,16 @@ mod tests {
                 warned: StdMutex::new(false),
                 refuse_get: false,
                 selections: StdMutex::new(Vec::new()),
+                tints: StdMutex::new(Vec::new()),
             }
         }
 
         fn calls(&self) -> Vec<(String, u8)> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn tints(&self) -> Vec<(String, Tint)> {
+            self.tints.lock().unwrap().clone()
         }
     }
 
@@ -1142,6 +1519,14 @@ mod tests {
             Ok(())
         }
 
+        fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+            self.tints
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), tint));
+            Ok(())
+        }
+
         fn get_gamma(&self, _handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
             Err(MonitorError::unsupported("gamma", "test"))
         }
@@ -1181,6 +1566,55 @@ mod tests {
             |_preferred| Ok(()),
             || false,
         )
+    }
+
+    struct StaticLut;
+
+    impl LutProvider for StaticLut {
+        fn capture(&self, _connector: &str) -> Option<GammaTable> {
+            Some(GammaTable {
+                red: vec![0, u16::MAX],
+                green: vec![0, u16::MAX],
+                blue: vec![0, u16::MAX],
+            })
+        }
+
+        fn write_guarded(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &GammaTable,
+            _last_value: u8,
+            _last_tint: Tint,
+        ) -> crate::session::LutRestoreOutcome {
+            crate::session::LutRestoreOutcome::Restored
+        }
+
+        fn adopt_baseline(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &GammaTable,
+            _last_value: u8,
+            _last_tint: Tint,
+        ) {
+        }
+    }
+
+    fn night_runtime(
+        control: Arc<FakeControl>,
+        store: SessionStore,
+        config_root: PathBuf,
+        clock: Arc<StdMutex<Now>>,
+    ) -> Runtime<FakeControl> {
+        Runtime::new(
+            control,
+            store,
+            Arc::new(StaticLut),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
     }
 
     fn runtime_with_generation(
@@ -1276,6 +1710,7 @@ mod tests {
             value,
             source: "ddc".into(),
             last_value,
+            last_tint: crate::monitor::night::Tint::NEUTRAL,
             mutations: 3,
             clean: false,
             handoff: false,
@@ -1283,6 +1718,193 @@ mod tests {
             lut: None,
             checksum: String::new(),
         }
+    }
+
+    #[test]
+    fn night_toggle_tints_every_display_persists_and_then_restores_neutral() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root.clone(), clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        let warm = Tint::from_kelvin(3500);
+        assert_eq!(
+            control.tints(),
+            vec![("id-1".to_string(), warm), ("id-2".to_string(), warm)]
+        );
+        assert_eq!(
+            config::load_night_state(Some(&config_root)).override_active,
+            Some(true)
+        );
+        assert_eq!(runtime.night_payload()["state"], "active");
+        let rows = displays_payload(
+            &*control,
+            &BTreeMap::new(),
+            &mut BTreeMap::new(),
+            runtime.active_night_kelvin(),
+        );
+        assert!(rows[0]["detail"].as_str().unwrap().contains("warm 3500K"));
+
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        assert_eq!(control.tints().len(), 4);
+        assert_eq!(control.tints()[2].1, Tint::NEUTRAL);
+        assert_eq!(control.tints()[3].1, Tint::NEUTRAL);
+        assert_eq!(runtime.night_payload()["state"], "inactive");
+    }
+
+    #[derive(Default)]
+    struct DisablingNightLight {
+        taken: StdMutex<bool>,
+    }
+
+    impl HostNightLight for DisablingNightLight {
+        fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
+            *self.taken.lock().unwrap() = true;
+            Ok(TakeoverOutcome::Disabled)
+        }
+
+        fn release(&self, _mode: RestoreMode) -> Result<(), HostNightLightError> {
+            *self.taken.lock().unwrap() = false;
+            Ok(())
+        }
+
+        fn mark_handoff(&self, _successor: Option<&str>) {}
+
+        fn is_taken_over(&self) -> bool {
+            *self.taken.lock().unwrap()
+        }
+
+        fn status(&self) -> HostNightLightStatus {
+            if self.is_taken_over() {
+                HostNightLightStatus::TakenOver
+            } else {
+                HostNightLightStatus::Off
+            }
+        }
+    }
+
+    #[test]
+    fn tint_waits_for_the_host_night_light_fade_before_touching_the_ramp() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock.clone())
+            .with_host_night_light(Arc::new(DisablingNightLight::default()));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        assert!(
+            control.tints().is_empty(),
+            "the host night light is still fading out; writing now would capture its ramp"
+        );
+        assert_eq!(runtime.night_payload()["state"], "active");
+        assert_eq!(
+            runtime.next_night_wait(),
+            Some(Duration::from_secs(HOST_NIGHT_LIGHT_SETTLE_SECS as u64))
+        );
+        clock.lock().unwrap().unix += 1;
+        runtime.handle(Command::Tick);
+        assert!(control.tints().is_empty());
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.tints(),
+            vec![("id-1".to_string(), Tint::from_kelvin(3500))]
+        );
+        assert_eq!(runtime.next_night_wait(), Some(NIGHT_TICK));
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.tints().len(),
+            1,
+            "a steady-state tick must not rewrite the gamma ramp"
+        );
+        runtime.handle(Command::Night(NightRequest::Off));
+        assert_eq!(control.tints().len(), 2);
+        assert_eq!(control.tints()[1].1, Tint::NEUTRAL);
+        assert_eq!(runtime.next_night_wait(), None);
+    }
+
+    #[test]
+    fn daily_tick_changes_only_at_the_schedule_boundary() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(21 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock.clone());
+        let config = DeviceConfig {
+            night_schedule: "daily".to_string(),
+            ..DeviceConfig::default()
+        };
+        runtime.start(&config);
+        assert_eq!(control.tints().len(), 1);
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.tints().len(),
+            1,
+            "a steady-state tick must not rewrite the gamma ramp"
+        );
+        *clock.lock().unwrap() = Now {
+            unix: 136_000,
+            minute: Minute(7 * 60),
+        };
+        runtime.handle(Command::Tick);
+        assert_eq!(control.tints().len(), 2);
+        assert_eq!(control.tints()[1].1, Tint::NEUTRAL);
+        assert_eq!(runtime.night_payload()["reason"], "schedule");
+        assert_eq!(runtime.night_payload()["state"], "inactive");
+    }
+
+    #[test]
+    fn unsupported_gamma_surfaces_without_panicking() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with_root(control.clone(), store, Some(config_root));
+        runtime.start(&DeviceConfig::default());
+        assert!(runtime.handle(Command::Night(NightRequest::On)));
+        assert!(control.tints().is_empty());
+        assert_eq!(runtime.night_payload()["state"], "unsupported");
+        assert_eq!(runtime.night_payload()["active"], true);
+    }
+
+    #[test]
+    fn invalid_schedule_is_visible_in_the_live_payload() {
+        let (_session_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = runtime_with(control, store);
+        runtime.start(&DeviceConfig {
+            night_from: "24:00".to_string(),
+            ..DeviceConfig::default()
+        });
+        assert_eq!(runtime.night_payload()["state"], "invalid_schedule");
     }
 
     #[test]
@@ -2411,7 +3033,7 @@ mod tests {
         );
         control.select("id-1", BrightnessPolicy::Gamma);
         let preferred = BTreeMap::from([("id-1".to_string(), 80)]);
-        let payload = displays_payload(&control, &preferred, &mut BTreeMap::new());
+        let payload = displays_payload(&control, &preferred, &mut BTreeMap::new(), None);
         assert_eq!(
             payload,
             serde_json::json!([
@@ -2437,7 +3059,7 @@ mod tests {
             BrightnessSource::Ddc,
         );
         control.refuse_get = true;
-        let payload = displays_payload(&control, &BTreeMap::new(), &mut BTreeMap::new());
+        let payload = displays_payload(&control, &BTreeMap::new(), &mut BTreeMap::new(), None);
         assert_eq!(payload[0]["brightness"], serde_json::Value::Null);
         assert_eq!(payload[0]["source"], "unavailable");
         assert_eq!(payload[0]["detail"], "control is off for this display");
@@ -2492,8 +3114,12 @@ mod tests {
             value: 25,
         });
         let gets_after_write = control.gets.load(Ordering::SeqCst);
-        let payload =
-            displays_payload(&*control, &runtime.preferred, &mut runtime.brightness_cache);
+        let payload = displays_payload(
+            &*control,
+            &runtime.preferred,
+            &mut runtime.brightness_cache,
+            None,
+        );
         assert_eq!(payload[0]["brightness"], 25);
         assert_eq!(payload[0]["detail"], "25% via ddc");
         assert_eq!(
@@ -2511,10 +3137,10 @@ mod tests {
             BrightnessSource::Ddc,
         );
         let mut cache = BTreeMap::new();
-        let first = displays_payload(&control, &BTreeMap::new(), &mut cache);
+        let first = displays_payload(&control, &BTreeMap::new(), &mut cache, None);
         assert_eq!(first[0]["brightness"], 42);
         assert_eq!(control.gets.load(Ordering::SeqCst), 1);
-        let second = displays_payload(&control, &BTreeMap::new(), &mut cache);
+        let second = displays_payload(&control, &BTreeMap::new(), &mut cache, None);
         assert_eq!(second[0]["brightness"], 42);
         assert_eq!(
             control.gets.load(Ordering::SeqCst),
@@ -2538,7 +3164,7 @@ mod tests {
                 source: BrightnessSource::Ddc,
             },
         )]);
-        displays_payload(&control, &BTreeMap::new(), &mut cache);
+        displays_payload(&control, &BTreeMap::new(), &mut cache, None);
         assert!(
             !cache.contains_key("id-gone"),
             "a display that left the topology must leave the cache"

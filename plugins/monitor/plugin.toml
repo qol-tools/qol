@@ -32,6 +32,18 @@ args = ["apply"]
 label = "Reload Monitor Config"
 args = ["reload"]
 
+[action.night_toggle]
+label = "Toggle Night Mode"
+args = ["night_toggle"]
+
+[action.night_on]
+label = "Night Mode On"
+args = ["night_on"]
+
+[action.night_off]
+label = "Night Mode Off"
+args = ["night_off"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"

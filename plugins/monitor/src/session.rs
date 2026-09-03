@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use qol_windowing::display::DisplayHandle;
 
+use crate::monitor::night::Tint;
 use crate::monitor::{BrightnessSource, DisplayControl, GammaTable, MonitorError};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -19,6 +20,8 @@ pub struct Snapshot {
     pub value: u8,
     pub source: String,
     pub last_value: u8,
+    #[serde(default, skip_serializing_if = "tint_is_neutral")]
+    pub last_tint: Tint,
     pub mutations: u32,
     pub clean: bool,
     #[serde(default)]
@@ -29,6 +32,10 @@ pub struct Snapshot {
     pub lut: Option<GammaTable>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checksum: String,
+}
+
+fn tint_is_neutral(tint: &Tint) -> bool {
+    tint.is_neutral()
 }
 
 impl Snapshot {
@@ -74,6 +81,14 @@ impl Snapshot {
             _ => None,
         }
     }
+
+    fn lut_percent(&self) -> u8 {
+        if self.source_kind() == Some(BrightnessSource::Gamma) {
+            self.last_value
+        } else {
+            100
+        }
+    }
 }
 
 impl qol_host_session::SessionSnapshot for Snapshot {
@@ -103,8 +118,15 @@ pub trait LutProvider: Send + Sync {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        last_tint: Tint,
     ) -> LutRestoreOutcome;
-    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8);
+    fn adopt_baseline(
+        &self,
+        handle: &DisplayHandle,
+        original: &GammaTable,
+        last_value: u8,
+        last_tint: Tint,
+    );
 }
 
 pub struct NoLutProvider;
@@ -119,11 +141,19 @@ impl LutProvider for NoLutProvider {
         _handle: &DisplayHandle,
         _original: &GammaTable,
         _last_value: u8,
+        _last_tint: Tint,
     ) -> LutRestoreOutcome {
         LutRestoreOutcome::Unavailable
     }
 
-    fn adopt_baseline(&self, _handle: &DisplayHandle, _original: &GammaTable, _last_value: u8) {}
+    fn adopt_baseline(
+        &self,
+        _handle: &DisplayHandle,
+        _original: &GammaTable,
+        _last_value: u8,
+        _last_tint: Tint,
+    ) {
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,33 +351,37 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         if snapshot.clean {
             return false;
         }
-        if snapshot.source_kind() != Some(BrightnessSource::Gamma) {
-            return false;
-        }
         let Some(lut) = &snapshot.lut else {
             return false;
         };
-        self.lut.adopt_baseline(handle, lut, snapshot.last_value);
+        self.lut
+            .adopt_baseline(handle, lut, snapshot.lut_percent(), snapshot.last_tint);
         self.mark_snapshotted(handle.id());
         true
     }
 
-    fn ensure_snapshot(&self, handle: &DisplayHandle) -> Result<(), MonitorError> {
+    fn ensure_snapshot(&self, handle: &DisplayHandle, need_lut: bool) -> Result<(), MonitorError> {
         if self.is_snapshotted(handle.id()) {
-            return Ok(());
+            return self.ensure_snapshot_lut(handle, need_lut);
         }
         if self.adopt_persisted(handle) {
-            return Ok(());
+            return self.ensure_snapshot_lut(handle, need_lut);
         }
         let state = self
             .control
             .get_brightness(handle)
             .map_err(|error| MonitorError::refused("brightness", format!("{error}")))?;
-        let lut = if state.source == BrightnessSource::Gamma {
+        let lut = if state.source == BrightnessSource::Gamma || need_lut {
             self.lut.capture(handle.connector())
         } else {
             None
         };
+        if need_lut && lut.is_none() {
+            return Err(MonitorError::unsupported(
+                "tint",
+                format!("no gamma ramp is readable for {}", handle.connector()),
+            ));
+        }
         let snapshot = Snapshot {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             session_id: qol_host_fixes::policy::new_session_id()
@@ -357,6 +391,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             value: state.value,
             source: state.source.label().to_string(),
             last_value: state.value,
+            last_tint: Tint::NEUTRAL,
             mutations: 0,
             clean: false,
             handoff: false,
@@ -369,6 +404,45 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
         self.mark_snapshotted(handle.id());
         Ok(())
+    }
+
+    fn ensure_snapshot_lut(
+        &self,
+        handle: &DisplayHandle,
+        need_lut: bool,
+    ) -> Result<(), MonitorError> {
+        if !need_lut {
+            return Ok(());
+        }
+        let Some(mut snapshot) = self
+            .store
+            .load_snapshot(handle.id())
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?
+        else {
+            return Err(MonitorError::refused(
+                "tint",
+                "the display snapshot vanished",
+            ));
+        };
+        if snapshot.lut.is_some() {
+            return Ok(());
+        }
+        if snapshot.source_kind() == Some(BrightnessSource::Gamma) && snapshot.mutations > 0 {
+            return Err(MonitorError::refused(
+                "tint",
+                "the original gamma ramp was not captured before brightness changed",
+            ));
+        }
+        snapshot.lut = self.lut.capture(handle.connector());
+        if snapshot.lut.is_none() {
+            return Err(MonitorError::unsupported(
+                "tint",
+                format!("no gamma ramp is readable for {}", handle.connector()),
+            ));
+        }
+        self.store
+            .write_snapshot(&snapshot)
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))
     }
 
     pub fn adopt(&self, handle: &DisplayHandle) {
@@ -413,7 +487,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     pub fn mutate(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.ensure_snapshot(handle)?;
+        self.ensure_snapshot(handle, false)?;
         let snapshot = self
             .store
             .load_snapshot(handle.id())
@@ -432,18 +506,53 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.control.set_brightness(handle, value)
     }
 
+    pub fn mutate_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.ensure_snapshot(handle, true)?;
+        let snapshot = self
+            .store
+            .load_snapshot(handle.id())
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?
+            .ok_or_else(|| MonitorError::refused("tint", "the display snapshot vanished"))?;
+        let updated = Snapshot {
+            mutations: snapshot.mutations + 1,
+            last_tint: tint,
+            ..snapshot
+        };
+        self.store
+            .write_snapshot(&updated)
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?;
+        self.control.set_tint(handle, tint)
+    }
+
     fn restore_one(&self, snapshot: &Snapshot, handle: &DisplayHandle) -> RestoreOutcome {
-        if snapshot.source_kind() == Some(BrightnessSource::Gamma) {
-            if let Some(original) = &snapshot.lut {
-                return match self
-                    .lut
-                    .write_guarded(handle, original, snapshot.last_value)
-                {
+        if let Some(original) = &snapshot.lut {
+            let lut_outcome = self.lut.write_guarded(
+                handle,
+                original,
+                snapshot.lut_percent(),
+                snapshot.last_tint,
+            );
+            if snapshot.source_kind() == Some(BrightnessSource::Gamma) {
+                return match lut_outcome {
                     LutRestoreOutcome::Restored => RestoreOutcome::Restored,
                     LutRestoreOutcome::ForeignLutPreserved => RestoreOutcome::ForeignLutPreserved,
                     LutRestoreOutcome::Unavailable => RestoreOutcome::Failed,
                 };
             }
+            if snapshot.last_value != snapshot.value {
+                if let Err(error) = self.control.set_brightness(handle, snapshot.value) {
+                    eprintln!(
+                        "[plugin-monitor] restore of {} failed: {error}",
+                        handle.connector()
+                    );
+                    return RestoreOutcome::Failed;
+                }
+            }
+            return match lut_outcome {
+                LutRestoreOutcome::Restored => RestoreOutcome::Restored,
+                LutRestoreOutcome::ForeignLutPreserved => RestoreOutcome::ForeignLutPreserved,
+                LutRestoreOutcome::Unavailable => RestoreOutcome::Failed,
+            };
         }
         match self.control.set_brightness(handle, snapshot.value) {
             Ok(()) => RestoreOutcome::Restored,
@@ -570,6 +679,7 @@ mod tests {
         source: BrightnessSource,
         sets: AtomicUsize,
         calls: StdMutex<Vec<(String, u8)>>,
+        tints: StdMutex<Vec<(String, Tint)>>,
     }
 
     impl RecordingControl {
@@ -580,6 +690,7 @@ mod tests {
                 source: BrightnessSource::Ddc,
                 sets: AtomicUsize::new(0),
                 calls: StdMutex::new(Vec::new()),
+                tints: StdMutex::new(Vec::new()),
             }
         }
 
@@ -616,6 +727,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((_handle.id().to_string(), value));
+            Ok(())
+        }
+
+        fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+            self.tints
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), tint));
             Ok(())
         }
 
@@ -665,6 +784,7 @@ mod tests {
             value,
             source: "ddc".into(),
             last_value,
+            last_tint: Tint::NEUTRAL,
             mutations,
             clean,
             handoff,
@@ -989,6 +1109,7 @@ mod tests {
     struct FakeLut {
         current: Arc<StdMutex<GammaTable>>,
         adoptions: StdMutex<Vec<(String, GammaTable, u8)>>,
+        captures: AtomicUsize,
     }
 
     impl FakeLut {
@@ -996,23 +1117,35 @@ mod tests {
             Self {
                 current,
                 adoptions: StdMutex::new(Vec::new()),
+                captures: AtomicUsize::new(0),
             }
         }
 
         fn adoptions(&self) -> Vec<(String, GammaTable, u8)> {
             self.adoptions.lock().unwrap().clone()
         }
+
+        fn captures(&self) -> usize {
+            self.captures.load(Ordering::SeqCst)
+        }
     }
 
     impl LutProvider for FakeLut {
         fn capture(&self, _connector: &str) -> Option<GammaTable> {
+            self.captures.fetch_add(1, Ordering::SeqCst);
             Some(self.current.lock().unwrap().clone())
         }
 
-        fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+        fn adopt_baseline(
+            &self,
+            handle: &DisplayHandle,
+            original: &GammaTable,
+            last_value: u8,
+            last_tint: Tint,
+        ) {
             self.adoptions.lock().unwrap().push((
                 handle.id().to_string(),
-                original.clone(),
+                original.tinted(last_tint),
                 last_value,
             ));
         }
@@ -1022,9 +1155,10 @@ mod tests {
             _handle: &DisplayHandle,
             original: &GammaTable,
             last_value: u8,
+            last_tint: Tint,
         ) -> LutRestoreOutcome {
             let mut current = self.current.lock().unwrap();
-            if current.checksum() == original.dimmed(last_value).checksum() {
+            if current.checksum() == original.dimmed(last_value).tinted(last_tint).checksum() {
                 *current = original.clone();
                 LutRestoreOutcome::Restored
             } else {
@@ -1065,6 +1199,78 @@ mod tests {
             original.checksum(),
             "the original LUT is written back"
         );
+    }
+
+    #[test]
+    fn tint_only_ddc_session_restores_the_lut_and_leaves_brightness_alone() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 75));
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        let tint = Tint::from_kelvin(3500);
+        session.mutate_tint(&display, tint).unwrap();
+        *current.lock().unwrap() = original.tinted(tint);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snapshot.source_kind(), Some(BrightnessSource::Ddc));
+        assert_eq!(snapshot.lut.as_ref(), Some(&original));
+        assert_eq!(snapshot.last_tint, tint);
+
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), original);
+        assert!(
+            control.calls().is_empty(),
+            "a tint-only session never touched DDC brightness, so restore must not either"
+        );
+    }
+
+    #[test]
+    fn tinted_and_dimmed_ddc_session_restores_both_lut_and_brightness() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 75));
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        let tint = Tint::from_kelvin(3500);
+        session.mutate_tint(&display, tint).unwrap();
+        session.mutate(&display, 40).unwrap();
+        *current.lock().unwrap() = original.tinted(tint);
+
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), original);
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 40), ("id-1".to_string(), 75)]
+        );
+    }
+
+    #[test]
+    fn gamma_brightness_and_tint_share_one_captured_baseline() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(current));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control, store.clone(), lut.clone());
+        session.mutate(&display, 80).unwrap();
+        session
+            .mutate_tint(&display, Tint::from_kelvin(3500))
+            .unwrap();
+        assert_eq!(lut.captures(), 1);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snapshot.lut.as_ref(), Some(&original));
+        assert_eq!(snapshot.last_value, 80);
+        assert_eq!(snapshot.last_tint, Tint::from_kelvin(3500));
+        assert_eq!(snapshot.mutations, 2);
     }
 
     #[test]

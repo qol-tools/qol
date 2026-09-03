@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use qol_windowing::DisplayEnumerator;
 
 use crate::monitor::backends::x11_randr_gamma::MISMATCH_WARN_AT;
+use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, GammaStateControl, GammaTable, HdrState, MonitorError, RestoreOutcome,
@@ -288,6 +289,7 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        _last_tint: Tint,
     ) -> LutRestoreOutcome {
         match self.restore_lut(handle, original, last_value) {
             Ok(RestoreOutcome::Restored) => LutRestoreOutcome::Restored,
@@ -296,7 +298,13 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         }
     }
 
-    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+    fn adopt_baseline(
+        &self,
+        handle: &DisplayHandle,
+        original: &GammaTable,
+        last_value: u8,
+        _last_tint: Tint,
+    ) {
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
@@ -513,7 +521,7 @@ mod tests {
     fn write_guarded_restores_the_original_without_a_live_session() {
         let original = identity_table(4, 100);
         let backend = backend(seam_with(scaled_table(&original, 50)));
-        let outcome = backend.write_guarded(&handle("cg-1"), &original, 50);
+        let outcome = backend.write_guarded(&handle("cg-1"), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::Restored);
         let tables = backend.seam.tables.lock().unwrap();
         assert_eq!(tables[&1], original);
@@ -525,7 +533,7 @@ mod tests {
         let mut foreign = scaled_table(&original, 50);
         foreign.red[0] += 1;
         let backend = backend(seam_with(foreign.clone()));
-        let outcome = backend.write_guarded(&handle("cg-1"), &original, 50);
+        let outcome = backend.write_guarded(&handle("cg-1"), &original, 50, Tint::NEUTRAL);
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
         let tables = backend.seam.tables.lock().unwrap();
         assert_eq!(tables[&1], foreign);

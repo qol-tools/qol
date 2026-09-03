@@ -5891,6 +5891,7 @@ name = "plugin-monitor"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "libc",
  "qol-apps",
  "qol-config",

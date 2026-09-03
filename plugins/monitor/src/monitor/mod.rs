@@ -2,6 +2,7 @@ use std::fmt;
 
 pub mod backends;
 pub mod grant;
+pub mod night;
 pub mod policy;
 
 pub use backends::i2c_ddc::I2cError;
@@ -152,6 +153,12 @@ pub trait DisplayControl: Send + Sync {
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError>;
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError>;
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
+    fn set_tint(&self, _handle: &DisplayHandle, _tint: night::Tint) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported(
+            "tint",
+            "gamma tint is not implemented on this display or platform",
+        ))
+    }
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError>;
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
     fn list_modes(&self, handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError>;

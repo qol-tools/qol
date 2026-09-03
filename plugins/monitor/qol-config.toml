@@ -6,6 +6,10 @@ description = "Display brightness, gamma, and mode control."
 label = "Displays"
 description = "Live brightness state for every connected display, read from the monitor daemon."
 
+[section.night]
+label = "Night mode"
+description = "Warm display colours manually or on a daily schedule."
+
 [section.preferences]
 label = "Preferences"
 description = "Per-display preferred brightness and control policy, applied at daemon start and when changed."
@@ -36,6 +40,68 @@ section = "displays"
 action = "apply"
 variant = "primary"
 description = "Set every connected display to its preferred brightness immediately."
+
+[field.night_status]
+type = "status"
+label = "Night mode status"
+section = "night"
+query = "night_mode"
+value_from = "state"
+label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "Cinnamon night light could not be taken over; it will fight qol night mode", invalid_schedule = "Schedule times are invalid" }
+tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", invalid_schedule = "danger" }
+
+[field.night_toggle]
+type = "action"
+label = "Night mode"
+active_label = "Night mode"
+description = "Switch the warm colour filter on or off."
+section = "night"
+action = "night_on"
+active_action = "night_off"
+active_query = "night_mode"
+active_value_from = "active"
+variant = "toggle"
+
+[field.night_temperature]
+type = "number"
+variant = "slider"
+config_key = "night_temperature"
+label = "Colour temperature"
+description = "Colour temperature in kelvin while night mode is on; lower is warmer."
+section = "night"
+default = 3500
+min = 1500
+max = 6500
+step = 100
+
+[field.night_schedule]
+type = "select"
+config_key = "night_schedule"
+label = "Schedule"
+description = "Run night mode between the daily start and end times."
+section = "night"
+default = "off"
+options = ["off", "daily"]
+
+[field.night_schedule.option_labels]
+off = "Off"
+daily = "Daily"
+
+[field.night_from]
+type = "string"
+config_key = "night_from"
+label = "From"
+description = "Daily start time in 24-hour HH:MM format."
+section = "night"
+default = "20:00"
+
+[field.night_to]
+type = "string"
+config_key = "night_to"
+label = "To"
+description = "Daily end time in 24-hour HH:MM format."
+section = "night"
+default = "06:00"
 
 [field.policy]
 type = "object_map"
