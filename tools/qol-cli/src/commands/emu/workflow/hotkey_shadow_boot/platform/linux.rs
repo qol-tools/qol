@@ -1,8 +1,10 @@
 use anyhow::{bail, Context, Result};
 
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, exec, install_payload,
-    launch_tray_and_wait_api, require_exec, spawn, wait_for_command, wait_for_probe_line,
+    command, connect_after_reboot, connect_desktop_guest, current_trace_cursor, exec,
+    install_payload, is_connection_error, kill_guest_screensaver, launch_tray_and_wait_api,
+    reboot_guest_cleanly, require_exec, spawn, wait_for_autostart_tray, wait_for_command,
+    wait_for_probe_line, write_autostart,
 };
 use crate::commands::emu::workflow::hotkey_shadow_boot::platform::Verdict;
 use crate::commands::emu::BootedVm;
@@ -14,7 +16,6 @@ use std::thread;
 use std::time::Duration;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-const BOOT_READY_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const BOOT_SETTLE: Duration = Duration::from_secs(150);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(25);
 const CHORD_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,7 +37,6 @@ const MANAGED_NAME: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings
 const CUSTOM_LIST: &str = "/org/cinnamon/desktop/keybindings/custom-list";
 const CLAIMS_GLOB: &str = "*/host-takeover/qol-tray-hotkeys/takeover-*";
 const CLEARED: &str = "@as []";
-const AUTOSTART_PATH: &str = "/home/qol/.config/autostart/qol-tray.desktop";
 const DE_MARKER: &str = "/tmp/de-shadow-evidence";
 
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
@@ -239,63 +239,6 @@ fn harvest_staging_tray_stderr(guest: &mut GuestControlClient) -> Result<()> {
     Ok(())
 }
 
-fn connect_after_reboot(vm: &BootedVm) -> Result<GuestControlClient> {
-    let deadline = std::time::Instant::now() + BOOT_READY_TIMEOUT;
-    loop {
-        match connect_desktop_guest(vm) {
-            Ok(guest) => return Ok(guest),
-            Err(error) => {
-                if std::time::Instant::now() >= deadline {
-                    return Err(error);
-                }
-                thread::sleep(Duration::from_secs(10));
-            }
-        }
-    }
-}
-
-fn reboot_guest_cleanly(guest: &mut GuestControlClient) -> Result<()> {
-    match exec(
-        guest,
-        command("/usr/bin/systemctl", &["reboot"]),
-        COMMAND_TIMEOUT,
-    ) {
-        Ok(outcome) if outcome.exit_code == Some(0) => Ok(()),
-        Ok(outcome) => bail!(
-            "systemctl reboot failed: exit={:?}, stderr={}",
-            outcome.exit_code,
-            outcome.stderr.trim()
-        ),
-        Err(error) if is_connection_error(&error) => {
-            step_label(
-                "reboot",
-                StepKind::Pending,
-                "the guest dropped the control connection during shutdown; reboot accepted",
-            );
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn is_connection_error(error: &anyhow::Error) -> bool {
-    let text = format!("{error:#}");
-    [
-        "guest sent a duplicate hello frame",
-        "guest-control connection closed",
-        "guest-control response timed out",
-        "failed to read guest-control frame",
-        "failed to write guest-control frame",
-        "guest-control connection cancelled",
-        "broken pipe",
-        "connection reset",
-        "connection closed",
-        "operation timed out",
-    ]
-    .iter()
-    .any(|marker| text.contains(marker))
-}
-
 fn set_hotkeys(guest: &mut GuestControlClient, auth: &str, body: &str) -> Result<()> {
     require_status(
         request(guest, auth, "PUT", "/api/hotkeys", Some(body))?,
@@ -328,24 +271,6 @@ fn seed_de_conflict(guest: &mut GuestControlClient) -> Result<()> {
     for (key, value) in writes {
         dconf_write(guest, key, value)?;
     }
-    Ok(())
-}
-
-fn write_autostart(guest: &mut GuestControlClient) -> Result<()> {
-    require_exec(
-        guest,
-        command(
-            "/usr/bin/sh",
-            &[
-                "-c",
-                &format!(
-                    "install -d -m 0755 /home/qol/.config/autostart && printf '%s' '{}' > {AUTOSTART_PATH}",
-                    autostart_desktop()
-                ),
-            ],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
     Ok(())
 }
 
@@ -396,41 +321,6 @@ fn require_status(response: HttpResponse, expected: u16) -> Result<String> {
 struct HttpResponse {
     status: u16,
     body: String,
-}
-
-fn autostart_desktop() -> &'static str {
-    "[Desktop Entry]\nType=Application\nName=qol-tray\nExec=/home/qol/.local/bin/qol-tray\nX-GNOME-Autostart-enabled=true\n"
-}
-
-fn wait_for_autostart_tray(guest: &mut GuestControlClient) -> Result<String> {
-    step_label(
-        "tray",
-        StepKind::Pending,
-        "waiting for the autostarted production tray API",
-    );
-    let token = wait_for_command(
-        guest,
-        command("/usr/bin/cat", &["/home/qol/.config/qol-tray/.http-token"]),
-        BOOT_READY_TIMEOUT,
-        |outcome| !outcome.stdout.trim().is_empty(),
-        "the autostarted tray HTTP token",
-    )?
-    .stdout
-    .trim()
-    .to_string();
-    let auth = format!("X-Qol-Token: {token}");
-    let api = format!("{}/api/shortcuts", local_base_url());
-    wait_for_command(
-        guest,
-        command(
-            "/usr/bin/curl",
-            &["--fail", "--silent", "--header", &auth, &api],
-        ),
-        BOOT_READY_TIMEOUT,
-        |_| true,
-        "the autostarted tray shortcuts API",
-    )?;
-    Ok(auth)
 }
 
 fn require_binding(
@@ -577,31 +467,6 @@ fn send_key_xdotool(guest: &mut GuestControlClient, key: &str) -> bool {
         Duration::from_secs(20),
     )
     .is_ok()
-}
-
-fn kill_guest_screensaver(guest: &mut GuestControlClient) -> Result<()> {
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/bash",
-            &["-lc", "pkill -9 -f 'cinnamon-screen[s]aver' 2>/dev/null; sleep 2; pgrep -f 'cinnamon-screen[s]aver' || true"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    if outcome.stdout.trim().is_empty() {
-        step_label(
-            "screensaver",
-            StepKind::Success,
-            "the guest-only cinnamon-screensaver is dead, so its periodic keyboard grab cannot eat the chords",
-        );
-        Ok(())
-    } else {
-        eprintln!(
-            "cinnamon-screensaver respawned after the kill: {:?}",
-            outcome.stdout
-        );
-        Ok(())
-    }
 }
 
 fn diagnose_chord_eaten(guest: &mut GuestControlClient, error: anyhow::Error) -> anyhow::Error {

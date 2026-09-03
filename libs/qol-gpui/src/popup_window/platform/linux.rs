@@ -963,6 +963,31 @@ pub fn make_override_redirect(title: &str) -> bool {
     true
 }
 
+pub fn set_override_redirect_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    if window_is_override_redirect(&conn, wid) {
+        return true;
+    }
+    let aux = ChangeWindowAttributesAux::new().override_redirect(1);
+    let applied = conn
+        .change_window_attributes(wid, &aux)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let _ = conn.flush();
+    qol_runtime::probe!(
+        "OVERRIDE_REDIRECT",
+        "title={title} wid={wid} applied={applied}"
+    );
+    applied
+}
+
 struct RaiseResult {
     frame: u32,
     client: bool,

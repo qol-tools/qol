@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use qol_conventions::{local_base_url, TRACE_LOG_PATH};
@@ -12,19 +12,17 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, desktop_resolution, exec, fd_count,
-    install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
-    start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    wait_for_window_id, within_fd_budget, xdotool_key, TraceCursor,
+    command, connect_desktop_guest, desktop_resolution, dispatch, exec, fd_count, install_payload,
+    key, launch_fixture, plugin_daemon_pid, post_action, require_exec,
+    require_plugin_action_guards, require_visible_window_count, start_tray_and_wait_plugin,
+    wait_for_command, wait_for_probe_fields, wait_for_probe_line, wait_for_window_id,
+    within_fd_budget, TraceCursor, ACTION_TIMEOUT, PLUGIN_ID, PREVIEW_PREFIX,
 };
 use super::Verdict;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
-const PLUGIN_ID: &str = "qol-shot";
 const FIXTURE_TITLE: &str = "qol-shot-storm-fixture";
 const SELECTOR_PREFIX: &str = "^qol-shot-selector-";
-const PREVIEW_PREFIX: &str = "^qol-shot-preview";
 const CANCEL_CYCLES: usize = 24;
 const SCREENSHOT_BURST: usize = 16;
 const COUNTDOWN_CYCLES: usize = 4;
@@ -43,7 +41,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         "state=ready",
         ACTION_TIMEOUT,
     )?;
-    launch_fixture(&mut guest)?;
+    launch_fixture(&mut guest, FIXTURE_TITLE)?;
     let (width, height) = desktop_resolution(&mut guest)?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
     let artifacts_dir = vm.run_dir.join("artifacts");
@@ -106,94 +104,8 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     })
 }
 
-fn launch_fixture(guest: &mut GuestControlClient) -> Result<()> {
-    spawn(
-        guest,
-        command(
-            "/usr/bin/xterm",
-            &["-T", FIXTURE_TITLE, "-geometry", "80x24+100+100"],
-        ),
-    )?;
-    wait_for_window_id(guest, FIXTURE_TITLE, Duration::from_secs(15))?;
-    Ok(())
-}
-
-fn post_action(guest: &mut GuestControlClient, auth: Option<&str>, action: &str) -> Result<()> {
-    let url = format!(
-        "{}/api/plugins/{PLUGIN_ID}/actions/{action}",
-        local_base_url()
-    );
-    let mut args = vec![
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--header",
-        "Content-Type: application/json",
-        "--request",
-        "POST",
-        "--data",
-        "{}",
-    ];
-    if let Some(auth) = auth {
-        args.extend(["--header", auth]);
-    }
-    args.push(&url);
-    require_exec(guest, command("/usr/bin/curl", &args), ACTION_TIMEOUT)?;
-    Ok(())
-}
-
-fn dispatch(guest: &mut GuestControlClient, auth: &str, action: &str) -> Result<TraceCursor> {
-    let cursor = current_trace_cursor(guest)?;
-    post_action(guest, Some(auth), action)?;
-    Ok(cursor)
-}
-
-fn key(guest: &mut GuestControlClient, value: &str) -> Result<()> {
-    xdotool_key(guest, value, false)
-}
-
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
     plugin_daemon_pid(guest, &["-x", "qol-shot"], "qol-shot daemon")
-}
-
-fn visible_window_count(guest: &mut GuestControlClient, pattern: &str) -> Result<usize> {
-    let outcome = exec(
-        guest,
-        command(
-            "/usr/bin/xdotool",
-            &["search", "--onlyvisible", "--name", pattern],
-        ),
-        Duration::from_secs(2),
-    )?;
-    if outcome.state != ProcessState::Exited {
-        bail!("xdotool window search did not exit");
-    }
-    match outcome.exit_code {
-        Some(0) => Ok(outcome.stdout.lines().count()),
-        Some(1) => Ok(0),
-        exit => bail!(
-            "xdotool window search failed: exit={exit:?}, stderr={}",
-            outcome.stderr.trim()
-        ),
-    }
-}
-
-fn require_visible_window_count(
-    guest: &mut GuestControlClient,
-    pattern: &str,
-    expected: usize,
-) -> Result<()> {
-    let deadline = Instant::now() + ACTION_TIMEOUT;
-    loop {
-        let count = visible_window_count(guest, pattern)?;
-        if count == expected {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("visible window count for {pattern} was {count}, expected {expected}");
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
 }
 
 fn require_no_capture_process(guest: &mut GuestControlClient) -> Result<()> {

@@ -3066,7 +3066,7 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             plugin_dir: "launcher",
             plugin_id: "plugin-launcher",
         },
-        "qol-shot-capture" | "qol-shot-storm" => DesktopCompanionRecipe {
+        "qol-shot-capture" | "qol-shot-cold-boot" | "qol-shot-storm" => DesktopCompanionRecipe {
             package: "qol-shot",
             binary: "qol-shot",
             plugin_dir: "qol-shot",
@@ -4882,6 +4882,18 @@ mod tests {
                 },
             ),
             (
+                "qol-shot-cold-boot",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "qol-shot",
+                        binary: "qol-shot",
+                        plugin_dir: "qol-shot",
+                        plugin_id: "qol-shot",
+                    }),
+                    tray_features: None,
+                },
+            ),
+            (
                 "qol-shot-storm",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe {
@@ -4989,6 +5001,11 @@ mod tests {
             .unwrap()
             .companion
             .unwrap();
+        let cold_boot_recipe = desktop_payload_recipe("qol-shot-cold-boot")
+            .unwrap()
+            .companion
+            .unwrap();
+        assert_eq!(recipe, cold_boot_recipe);
 
         let files = desktop_plugin_payload_files(root.path(), recipe).unwrap();
         let relative = files

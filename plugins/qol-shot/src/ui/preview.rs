@@ -20,7 +20,8 @@ use qol_gpui::theme::{
     TEXT_NANO,
 };
 use qol_gpui::window::{
-    centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
+    centered_window_placement, cursor_window_placement, target_monitor_key, ActiveWindows,
+    MonitorKey, WindowPlacement,
 };
 
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
@@ -213,10 +214,14 @@ fn show_with_completion(
     Ok(())
 }
 
-pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) {
+pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) -> usize {
     let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, control_count());
     let default_size = size(px(default.0), px(default.1));
-    for monitor in tracker.all_monitors_or_snapshot() {
+    let monitors = tracker.all_monitors_or_snapshot();
+    let existing = windows.borrow().keys();
+    let missing = missing_monitors(&existing, monitors.clone());
+    let mut created = 0;
+    for monitor in missing {
         let placement = centered_window_placement(Some(&monitor), default_size, cx);
         let target = placement.target;
         let title = ghost_window_title(PREVIEW_TITLE, target);
@@ -232,12 +237,29 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
         };
         windows.borrow_mut().insert(target, handle);
         configure_popup_window(&title);
+        qol_gpui::popup_window::set_override_redirect_by_title(&title);
         let _ = handle.update(cx, |view, window, _cx| {
             view.set_showing(false);
             park_ghost(&title, window, view.window_origin);
         });
         crate::platform::reassert_parked(&title, cx);
+        created += 1;
     }
+    qol_runtime::probe!(
+        "SHOT_PREWARM",
+        "monitors={} created={} parked={}",
+        monitors.len(),
+        created,
+        windows.borrow().len()
+    );
+    created
+}
+
+fn missing_monitors(existing: &[MonitorKey], monitors: Vec<ActiveMonitor>) -> Vec<ActiveMonitor> {
+    monitors
+        .into_iter()
+        .filter(|monitor| !existing.contains(&target_monitor_key(Some(monitor))))
+        .collect()
 }
 
 pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
@@ -1320,10 +1342,14 @@ fn circles_total_width(count: usize) -> f32 {
 mod tests {
     use gpui::{Keystroke, Modifiers};
 
+    use qol_gpui::window::target_monitor_key;
+    use qol_runtime::MonitorBounds;
+
     use super::{
-        circles_total_width, combine_focus_truth, preview_control_for_keystroke, preview_controls,
-        read_render_image, reveal_blur_guard, thumbnail_size, window_dims, GhostOpenMode,
-        PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
+        circles_total_width, combine_focus_truth, missing_monitors, preview_control_for_keystroke,
+        preview_controls, read_render_image, reveal_blur_guard, thumbnail_size, window_dims,
+        ActiveMonitor, GhostOpenMode, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W,
+        PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1499,5 +1525,43 @@ mod tests {
     fn window_grows_to_fit_the_circle_row() {
         let (width, _) = window_dims(40.0, 40.0, 2);
         assert!(width >= circles_total_width(2), "row fits inside window");
+    }
+
+    fn monitor(x: f32, y: f32) -> ActiveMonitor {
+        ActiveMonitor::from_bounds(MonitorBounds {
+            x,
+            y,
+            width: 1920.0,
+            height: 1080.0,
+        })
+    }
+
+    fn key(monitor: &ActiveMonitor) -> super::MonitorKey {
+        target_monitor_key(Some(monitor))
+    }
+
+    #[test]
+    fn missing_monitors_keeps_everything_when_no_windows_exist() {
+        let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
+        let missing = missing_monitors(&[], monitors.clone());
+        let expected: Vec<_> = monitors.iter().map(key).collect();
+        let actual: Vec<_> = missing.iter().map(key).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn missing_monitors_skips_monitors_that_already_have_windows() {
+        let first = monitor(0.0, 0.0);
+        let second = monitor(1920.0, 0.0);
+        let missing = missing_monitors(&[key(&first)], vec![first.clone(), second.clone()]);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(key(&missing[0]), key(&second));
+    }
+
+    #[test]
+    fn missing_monitors_returns_nothing_when_all_windows_exist() {
+        let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
+        let existing: Vec<_> = monitors.iter().map(key).collect();
+        assert!(missing_monitors(&existing, monitors).is_empty());
     }
 }

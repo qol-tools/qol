@@ -20,6 +20,8 @@ use crate::ui::preview::PreviewWindows;
 const APP_ID: &str = "qol-tray-shot";
 const RECORDING_COUNTDOWN_STEP: Duration = Duration::from_secs(1);
 const CAPTURE_STATUS_TIMEOUT: Duration = Duration::from_millis(2_800);
+const PREWARM_RETRY_INTERVAL: Duration = Duration::from_millis(500);
+const PREWARM_RETRY_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct State {
@@ -90,6 +92,9 @@ pub fn run() {
         };
         spawn_active_monitor_cache(cx);
         crate::ui::preview::pre_create(&state.windows, &state.tracker, cx);
+        if state.windows.borrow().is_empty() {
+            spawn_prewarm_retry(state.windows.clone(), state.tracker.clone(), cx);
+        }
         crate::platform::pre_create_selector(cx);
         crate::platform::pre_create_pins(cx);
         spawn_screenshot_loop(rx, state, cx);
@@ -222,6 +227,7 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
         return;
     };
     park_preview_before_capture(cx, state, "screenshot").await;
+    let _ = cx.update(|cx| crate::ui::preview::pre_create(&state.windows, &state.tracker, cx));
     let frozen_frame = cx
         .background_spawn(async { crate::capture::screenshot::freeze_frame() })
         .await;
@@ -498,6 +504,25 @@ fn spawn_active_monitor_cache(cx: &mut App) {
             qol_gpui::ghost::record_active_monitor(event);
         },
     );
+}
+
+fn spawn_prewarm_retry(windows: PreviewWindows, tracker: MonitorTracker, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let started = std::time::Instant::now();
+        loop {
+            cx.background_executor().timer(PREWARM_RETRY_INTERVAL).await;
+            if started.elapsed() > PREWARM_RETRY_LIMIT {
+                qol_runtime::probe!("SHOT_PREWARM", "state=retry-abandoned");
+                break;
+            }
+            let _ = cx.update(|cx| crate::ui::preview::pre_create(&windows, &tracker, cx));
+            if !windows.borrow().is_empty() {
+                qol_runtime::probe!("SHOT_PREWARM", "state=retry-done");
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) -> bool {

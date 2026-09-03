@@ -27,6 +27,13 @@ const PAYLOAD_INSTALLER: &str = "/run/qol-payload/installer/qol-sandbox-payload"
 pub(in crate::commands::emu::workflow) const TRAY_BINARY: &str = "/home/qol/.local/bin/qol-tray";
 pub(in crate::commands::emu::workflow) const HTTP_TOKEN_PATH: &str =
     "/home/qol/.config/qol-tray/.http-token";
+pub(in crate::commands::emu::workflow) const BOOT_READY_TIMEOUT: Duration =
+    Duration::from_secs(6 * 60);
+pub(in crate::commands::emu::workflow) const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(in crate::commands::emu::workflow) const AUTOSTART_PATH: &str =
+    "/home/qol/.config/autostart/qol-tray.desktop";
+pub(in crate::commands::emu::workflow) const PLUGIN_ID: &str = "qol-shot";
+pub(in crate::commands::emu::workflow) const PREVIEW_PREFIX: &str = "^qol-shot-preview";
 const QOL_SHOT_SOCKET_PATH: &str = "/home/qol/.local/share/qol-tray/runtime/sockets/qol-shot.sock";
 const CAPTURE_MARKER: &str = "/tmp/qol-workflow-capture-start";
 const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
@@ -495,7 +502,7 @@ pub(in crate::commands::emu::workflow) fn launch_tray_and_wait_api(
     Ok(auth_header)
 }
 
-fn wait_for_plugin(
+pub(in crate::commands::emu::workflow) fn wait_for_plugin(
     guest: &mut GuestControlClient,
     plugin_id: &str,
     auth_header: &str,
@@ -1171,6 +1178,251 @@ pub(in crate::commands::emu::workflow) fn require_plugin_action_guards(
         }
     }
     Ok(())
+}
+
+pub(in crate::commands::emu::workflow) fn launch_fixture(
+    guest: &mut GuestControlClient,
+    title: &str,
+) -> Result<()> {
+    spawn(
+        guest,
+        command(
+            "/usr/bin/xterm",
+            &["-T", title, "-geometry", "80x24+100+100"],
+        ),
+    )?;
+    wait_for_window_id(guest, title, Duration::from_secs(15))?;
+    Ok(())
+}
+
+pub(in crate::commands::emu::workflow) fn post_action(
+    guest: &mut GuestControlClient,
+    auth: Option<&str>,
+    action: &str,
+) -> Result<()> {
+    let url = format!(
+        "{}/api/plugins/{PLUGIN_ID}/actions/{action}",
+        local_base_url()
+    );
+    let mut args = vec![
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--header",
+        "Content-Type: application/json",
+        "--request",
+        "POST",
+        "--data",
+        "{}",
+    ];
+    if let Some(auth) = auth {
+        args.extend(["--header", auth]);
+    }
+    args.push(&url);
+    require_exec(guest, command("/usr/bin/curl", &args), ACTION_TIMEOUT)?;
+    Ok(())
+}
+
+pub(in crate::commands::emu::workflow) fn dispatch(
+    guest: &mut GuestControlClient,
+    auth: &str,
+    action: &str,
+) -> Result<TraceCursor> {
+    let cursor = current_trace_cursor(guest)?;
+    post_action(guest, Some(auth), action)?;
+    Ok(cursor)
+}
+
+pub(in crate::commands::emu::workflow) fn key(
+    guest: &mut GuestControlClient,
+    value: &str,
+) -> Result<()> {
+    xdotool_key(guest, value, false)
+}
+
+fn visible_window_count(guest: &mut GuestControlClient, pattern: &str) -> Result<usize> {
+    let outcome = exec(
+        guest,
+        command(
+            "/usr/bin/xdotool",
+            &["search", "--onlyvisible", "--name", pattern],
+        ),
+        Duration::from_secs(2),
+    )?;
+    if outcome.state != ProcessState::Exited {
+        bail!("xdotool window search did not exit");
+    }
+    match outcome.exit_code {
+        Some(0) => Ok(outcome.stdout.lines().count()),
+        Some(1) => Ok(0),
+        exit => bail!(
+            "xdotool window search failed: exit={exit:?}, stderr={}",
+            outcome.stderr.trim()
+        ),
+    }
+}
+
+pub(in crate::commands::emu::workflow) fn require_visible_window_count(
+    guest: &mut GuestControlClient,
+    pattern: &str,
+    expected: usize,
+) -> Result<()> {
+    let deadline = Instant::now() + ACTION_TIMEOUT;
+    loop {
+        let count = visible_window_count(guest, pattern)?;
+        if count == expected {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("visible window count for {pattern} was {count}, expected {expected}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+pub(in crate::commands::emu::workflow) fn connect_after_reboot(
+    vm: &BootedVm,
+) -> Result<GuestControlClient> {
+    let deadline = Instant::now() + BOOT_READY_TIMEOUT;
+    loop {
+        match connect_desktop_guest(vm) {
+            Ok(guest) => return Ok(guest),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
+                thread::sleep(Duration::from_secs(10));
+            }
+        }
+    }
+}
+
+pub(in crate::commands::emu::workflow) fn reboot_guest_cleanly(
+    guest: &mut GuestControlClient,
+) -> Result<()> {
+    match exec(
+        guest,
+        command("/usr/bin/systemctl", &["reboot"]),
+        GUEST_COMMAND_TIMEOUT,
+    ) {
+        Ok(outcome) if outcome.exit_code == Some(0) => Ok(()),
+        Ok(outcome) => bail!(
+            "systemctl reboot failed: exit={:?}, stderr={}",
+            outcome.exit_code,
+            outcome.stderr.trim()
+        ),
+        Err(error) if is_connection_error(&error) => {
+            step_label(
+                "reboot",
+                StepKind::Pending,
+                "the guest dropped the control connection during shutdown; reboot accepted",
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(in crate::commands::emu::workflow) fn is_connection_error(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}");
+    [
+        "guest sent a duplicate hello frame",
+        "guest-control connection closed",
+        "guest-control response timed out",
+        "failed to read guest-control frame",
+        "failed to write guest-control frame",
+        "guest-control connection cancelled",
+        "broken pipe",
+        "connection reset",
+        "connection closed",
+        "operation timed out",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+}
+
+pub(in crate::commands::emu::workflow) fn write_autostart(
+    guest: &mut GuestControlClient,
+) -> Result<()> {
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/sh",
+            &[
+                "-c",
+                &format!(
+                    "install -d -m 0755 /home/qol/.config/autostart && printf '%s' '{}' > {AUTOSTART_PATH}",
+                    autostart_desktop()
+                ),
+            ],
+        ),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    Ok(())
+}
+
+fn autostart_desktop() -> &'static str {
+    "[Desktop Entry]\nType=Application\nName=qol-tray\nExec=/home/qol/.local/bin/qol-tray\nX-GNOME-Autostart-enabled=true\n"
+}
+
+pub(in crate::commands::emu::workflow) fn wait_for_autostart_tray(
+    guest: &mut GuestControlClient,
+) -> Result<String> {
+    step_label(
+        "tray",
+        StepKind::Pending,
+        "waiting for the autostarted production tray API",
+    );
+    let token = wait_for_command(
+        guest,
+        command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
+        BOOT_READY_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty(),
+        "the autostarted tray HTTP token",
+    )?
+    .stdout
+    .trim()
+    .to_string();
+    let auth = format!("X-Qol-Token: {token}");
+    let api = format!("{}/api/shortcuts", local_base_url());
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/curl",
+            &["--fail", "--silent", "--header", &auth, &api],
+        ),
+        BOOT_READY_TIMEOUT,
+        |_| true,
+        "the autostarted tray shortcuts API",
+    )?;
+    Ok(auth)
+}
+
+pub(in crate::commands::emu::workflow) fn kill_guest_screensaver(
+    guest: &mut GuestControlClient,
+) -> Result<()> {
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &["-lc", "pkill -9 -f 'cinnamon-screen[s]aver' 2>/dev/null; sleep 2; pgrep -f 'cinnamon-screen[s]aver' || true"],
+        ),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    if outcome.stdout.trim().is_empty() {
+        step_label(
+            "screensaver",
+            StepKind::Success,
+            "the guest-only cinnamon-screensaver is dead, so its periodic keyboard grab cannot eat the chords",
+        );
+        Ok(())
+    } else {
+        eprintln!(
+            "cinnamon-screensaver respawned after the kill: {:?}",
+            outcome.stdout
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]

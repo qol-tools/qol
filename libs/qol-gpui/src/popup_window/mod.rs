@@ -67,11 +67,12 @@ pub use platform::{
     park_window_by_title, pinned_window_kind, pointer_over_window_by_title,
     prepare_window_reveal_by_title, present_topmost, register_native_display,
     release_focus_by_title, release_input, reposition_window_by_title, restore_composite,
-    set_unmap_hide, set_window_type_dock_by_title, show_window_by_title,
-    show_window_interactive_by_title, show_window_passive_by_title, sync_window_layout,
-    sync_window_layout_by_title, visible_windows_by_title_prefix, window_backing_scale,
-    window_bounds_primary_anchored, window_geometry_session, window_holds_input_focus,
-    window_position_by_title, window_presentation_is_normal_by_title, WindowGeometrySession,
+    set_override_redirect_by_title, set_unmap_hide, set_window_type_dock_by_title,
+    show_window_by_title, show_window_interactive_by_title, show_window_passive_by_title,
+    sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
+    window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
+    window_holds_input_focus, window_position_by_title, window_presentation_is_normal_by_title,
+    WindowGeometrySession,
 };
 
 #[cfg(target_os = "macos")]

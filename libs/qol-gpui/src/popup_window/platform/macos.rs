@@ -217,6 +217,10 @@ pub fn make_override_redirect(_title: &str) -> bool {
     false
 }
 
+pub fn set_override_redirect_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn focus_window_by_title(_title: &str) -> bool {
     false
 }
