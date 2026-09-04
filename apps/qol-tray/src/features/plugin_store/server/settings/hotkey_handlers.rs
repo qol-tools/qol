@@ -18,6 +18,13 @@ pub(in super::super) struct HotkeyRecordingStatus {
     native: bool,
 }
 
+#[derive(Serialize)]
+pub(in super::super) struct HotkeyCaptureResult {
+    native: bool,
+    key: Option<String>,
+    canceled: bool,
+}
+
 pub(in super::super) async fn get_hotkeys() -> impl IntoResponse {
     blocking(get_hotkeys_inner).await
 }
@@ -51,6 +58,53 @@ pub(in super::super) async fn start_hotkey_recording(
 pub(in super::super) async fn cancel_hotkey_recording(Path(session_id): Path<u64>) -> StatusCode {
     crate::hotkeys::cancel_recording(session_id);
     StatusCode::NO_CONTENT
+}
+
+pub(in super::super) async fn capture_hotkey_recording(
+    Path(session_id): Path<u64>,
+    State(state): State<AppState>,
+) -> axum::Json<HotkeyCaptureResult> {
+    let mut events = state.daemon.events.subscribe();
+    if !crate::hotkeys::start_recording(session_id, state.daemon.events.clone()) {
+        return axum::Json(HotkeyCaptureResult {
+            native: false,
+            key: None,
+            canceled: false,
+        });
+    }
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        wait_for_recording(&mut events, session_id),
+    )
+    .await
+    .unwrap_or(None);
+    crate::hotkeys::cancel_recording(session_id);
+    let canceled = outcome.is_none();
+    axum::Json(HotkeyCaptureResult {
+        native: true,
+        key: outcome,
+        canceled,
+    })
+}
+
+async fn wait_for_recording(
+    events: &mut tokio::sync::broadcast::Receiver<crate::daemon::DaemonEvent>,
+    session_id: u64,
+) -> Option<String> {
+    loop {
+        match events.recv().await {
+            Ok(crate::daemon::DaemonEvent::HotkeyRecorded {
+                session_id: recorded,
+                key,
+            }) if recorded == session_id => return Some(key),
+            Ok(crate::daemon::DaemonEvent::HotkeyRecordingCanceled {
+                session_id: canceled,
+            }) if canceled == session_id => return None,
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
 }
 
 async fn blocking<F>(work: F) -> Response
@@ -189,5 +243,33 @@ mod tests {
 
         let config = parse_hotkeys(body).expect("disabled binding does not compete for the chord");
         assert_eq!(config.hotkeys.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn native_capture_waits_for_its_own_session() {
+        let bus = crate::daemon::EventBus::new();
+        let mut events = bus.subscribe();
+        bus.send(crate::daemon::DaemonEvent::HotkeyRecorded {
+            session_id: 8,
+            key: "F8".to_string(),
+        });
+        bus.send(crate::daemon::DaemonEvent::HotkeyRecorded {
+            session_id: 9,
+            key: "Ctrl+F9".to_string(),
+        });
+
+        assert_eq!(
+            wait_for_recording(&mut events, 9).await,
+            Some("Ctrl+F9".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn native_capture_cancel_is_terminal() {
+        let bus = crate::daemon::EventBus::new();
+        let mut events = bus.subscribe();
+        bus.send(crate::daemon::DaemonEvent::HotkeyRecordingCanceled { session_id: 11 });
+
+        assert_eq!(wait_for_recording(&mut events, 11).await, None);
     }
 }

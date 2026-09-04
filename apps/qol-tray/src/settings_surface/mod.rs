@@ -4,6 +4,44 @@ use qol_runtime::protocol::NotificationLayout;
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoreTool {
+    AddHotkey,
+    AddShortcut,
+    Hotkeys,
+    Shortcuts,
+}
+
+impl CoreTool {
+    pub(crate) fn wire_id(self) -> &'static str {
+        match self {
+            Self::AddHotkey => "__core-hotkeys-add",
+            Self::AddShortcut => "__core-shortcuts-add",
+            Self::Hotkeys => "__core-hotkeys",
+            Self::Shortcuts => "__core-shortcuts",
+        }
+    }
+
+    pub(crate) fn from_wire_id(value: &str) -> Option<Self> {
+        match value {
+            "__core-hotkeys-add" => Some(Self::AddHotkey),
+            "__core-shortcuts-add" => Some(Self::AddShortcut),
+            "__core-hotkeys" => Some(Self::Hotkeys),
+            "__core-shortcuts" => Some(Self::Shortcuts),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn fallback_route(self) -> &'static str {
+        match self {
+            Self::AddHotkey => "hotkeys",
+            Self::AddShortcut => "shortcuts/add",
+            Self::Hotkeys => "hotkeys",
+            Self::Shortcuts => "shortcuts",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum HostBoot {
     Warm,
@@ -17,6 +55,30 @@ pub fn native_available() -> bool {
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     let handled = platform::request(plugin_id)?;
     finish_request(plugin_id, handled, crate::paths::open_url)
+}
+
+pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
+    match platform::request(tool.wire_id()) {
+        Ok(true) => Ok(true),
+        result => {
+            let url = qol_conventions::local_hash_url(
+                tool.fallback_route(),
+                qol_conventions::DEFAULT_PORT,
+            );
+            crate::paths::open_url(&url)?;
+            let reason = if result.is_ok() {
+                "platform_unsupported"
+            } else {
+                "native_failed"
+            };
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "tool={} phase=fallback reason={reason} outcome=opened",
+                tool.wire_id()
+            );
+            Ok(true)
+        }
+    }
 }
 
 fn finish_request(
@@ -75,7 +137,7 @@ fn requested_boot(args: &[String]) -> Option<HostBoot> {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_request, requested_boot, HostBoot, HOST_ARGUMENT};
+    use super::{finish_request, requested_boot, CoreTool, HostBoot, HOST_ARGUMENT};
 
     #[test]
     fn native_availability_matches_platform_dispatch() {
@@ -122,5 +184,19 @@ mod tests {
         .unwrap();
 
         assert!(handled);
+    }
+
+    #[test]
+    fn core_tool_wire_ids_round_trip_without_colliding_with_plugin_ids() {
+        for tool in [
+            CoreTool::AddHotkey,
+            CoreTool::AddShortcut,
+            CoreTool::Hotkeys,
+            CoreTool::Shortcuts,
+        ] {
+            assert_eq!(CoreTool::from_wire_id(tool.wire_id()), Some(tool));
+            assert!(tool.wire_id().starts_with("__core-"));
+        }
+        assert_eq!(CoreTool::from_wire_id("plugin-monitor"), None);
     }
 }

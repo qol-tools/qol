@@ -17,6 +17,7 @@ use axum::{
 use super::types::AppState;
 
 pub(super) use hotkey_handlers::cancel_hotkey_recording;
+pub(super) use hotkey_handlers::capture_hotkey_recording;
 pub(super) use hotkey_handlers::get_hotkey_errors;
 pub(super) use hotkey_handlers::get_hotkeys;
 pub(super) use hotkey_handlers::open_hotkeys_file;
@@ -49,6 +50,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/hotkeys/recording/{session_id}",
             post(start_hotkey_recording).delete(cancel_hotkey_recording),
+        )
+        .route(
+            "/hotkeys/recording/{session_id}/capture",
+            post(capture_hotkey_recording),
         )
         .route("/hotkeys/open-file", post(open_hotkeys_file))
         .route("/shortcuts/open-file", post(open_shortcuts_file))

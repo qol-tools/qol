@@ -14,6 +14,7 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
 
 use super::super::HostBoot;
+use super::native_tools::NativeToolsHost;
 
 #[derive(Debug)]
 enum Command {
@@ -344,15 +345,24 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
         let tracker = MonitorTracker::start(cx);
         let toast_host = ToastHost::new(tracker.clone());
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
+        let tools = Rc::new(RefCell::new(NativeToolsHost::default()));
         if let Some(plugin_id) = initial {
             let activation_host = host.clone();
+            let activation_tools = tools.clone();
             let activation_tracker = tracker.clone();
             cx.spawn(async move |cx| {
-                activate(activation_host, activation_tracker, plugin_id, cx).await;
+                activate(
+                    activation_host,
+                    activation_tools,
+                    activation_tracker,
+                    plugin_id,
+                    cx,
+                )
+                .await;
             })
             .detach();
         }
-        spawn_command_loop(command_rx, host, tracker, toast_host, cx);
+        spawn_command_loop(command_rx, host, tools, tracker, toast_host, cx);
     });
     core_daemon::cleanup(&config);
     Ok(())
@@ -361,12 +371,14 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
 fn spawn_command_loop(
     command_rx: mpsc::Receiver<Command>,
     host: Rc<RefCell<SettingsWindowHost>>,
+    tools: Rc<RefCell<NativeToolsHost>>,
     tracker: MonitorTracker,
     toast_host: ToastHost,
     cx: &mut App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, command_rx, move |cx, command| {
         let host = host.clone();
+        let tools = tools.clone();
         let tracker = tracker.clone();
         let toast_host = toast_host.clone();
         async move {
@@ -376,7 +388,7 @@ fn spawn_command_loop(
                         "SURFACE_ACTIVATION",
                         "plugin={plugin_id} phase=command outcome=received"
                     );
-                    activate(host, tracker, plugin_id, &cx).await;
+                    activate(host, tools, tracker, plugin_id, &cx).await;
                     LoopFlow::Continue
                 }
                 Command::Toast {
@@ -456,10 +468,43 @@ fn toast_tone(level: &str) -> ToastTone {
 
 async fn activate(
     host: Rc<RefCell<SettingsWindowHost>>,
+    tools: Rc<RefCell<NativeToolsHost>>,
     tracker: MonitorTracker,
     plugin_id: String,
     cx: &gpui::AsyncApp,
 ) {
+    if let Some(tool) = super::super::CoreTool::from_wire_id(&plugin_id) {
+        let activation = cx.update(move |cx| {
+            host.borrow_mut().hide_active(cx);
+            tools.borrow_mut().activate(tool, &tracker, cx)
+        });
+        match activation {
+            Ok(Ok(())) => qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "tool={} phase=activate outcome=opened visible_windows=1",
+                tool.wire_id()
+            ),
+            Ok(Err(error)) => {
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "tool={} phase=activate outcome=failed error={error}",
+                    tool.wire_id()
+                );
+                open_browser_fallback(&plugin_id, "activation_failed");
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "tool={} phase=activate outcome=app_update_failed error={error}",
+                    tool.wire_id()
+                );
+                open_browser_fallback(&plugin_id, "activation_failed");
+            }
+        }
+        return;
+    }
+    let dismiss_tools = tools.clone();
+    let _ = cx.update(move |cx| dismiss_tools.borrow_mut().dismiss(cx));
     let focused_host = host.clone();
     let focused_tracker = tracker.clone();
     let focused_plugin_id = plugin_id.clone();
@@ -787,7 +832,12 @@ fn activation_name(activation: SettingsActivation) -> &'static str {
 }
 
 fn open_browser_fallback(plugin_id: &str, reason: &str) {
-    let result = crate::paths::open_url(&qol_conventions::settings_url(plugin_id));
+    let url = super::super::CoreTool::from_wire_id(plugin_id)
+        .map(|tool| {
+            qol_conventions::local_hash_url(tool.fallback_route(), qol_conventions::DEFAULT_PORT)
+        })
+        .unwrap_or_else(|| qol_conventions::settings_url(plugin_id));
+    let result = crate::paths::open_url(&url);
     #[cfg(not(debug_assertions))]
     let _ = (&reason, &result);
     qol_runtime::probe!(

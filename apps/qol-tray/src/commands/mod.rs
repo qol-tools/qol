@@ -5,6 +5,7 @@ pub struct ExportedCommand {
     pub id: &'static str,
     pub label: &'static str,
     pub route: &'static str,
+    pub core_action: &'static str,
 }
 
 /// Brand prefix prepended to every exported command's launcher label, so
@@ -17,11 +18,25 @@ pub const EXPORTED: &[ExportedCommand] = &[
         id: "shortcuts-add",
         label: "Add Shortcut",
         route: "shortcuts/add",
+        core_action: "shortcuts-add",
     },
     ExportedCommand {
         id: "shortcuts-open",
         label: "Shortcuts",
         route: "shortcuts",
+        core_action: "shortcuts",
+    },
+    ExportedCommand {
+        id: "hotkeys-add",
+        label: "Add Hotkey",
+        route: "hotkeys",
+        core_action: "hotkeys-add",
+    },
+    ExportedCommand {
+        id: "hotkeys-open",
+        label: "Hotkeys",
+        route: "hotkeys",
+        core_action: "hotkeys",
     },
 ];
 
@@ -69,6 +84,7 @@ mod tests {
             assert!(ids.insert(c.id), "duplicate command id: {}", c.id);
             assert!(!c.label.is_empty());
             assert!(!c.route.is_empty());
+            assert!(!c.core_action.is_empty());
             assert!(
                 !c.route.starts_with('#') && !c.route.starts_with('/'),
                 "route must be bare: {}",

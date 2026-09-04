@@ -144,6 +144,12 @@ enum ActivationDecision {
 }
 
 impl SettingsWindowHost {
+    pub fn hide_active(&mut self, cx: &mut App) {
+        if let Some(active) = self.active.as_ref() {
+            active.surface.dismisser.dismiss(cx);
+        }
+    }
+
     pub fn present_active(
         &mut self,
         plugin_id: &str,

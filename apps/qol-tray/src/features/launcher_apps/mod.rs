@@ -43,7 +43,11 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
             display_name: crate::commands::command_label(c),
             description: format!("QoL command: {}", c.label),
             bundle_id: format!("com.qol-tools.command.{}", c.id),
-            exec_args: vec!["open".into(), c.route.into()],
+            exec_args: vec![
+                "exec".into(),
+                qol_conventions::CORE_PANEL_ID.into(),
+                c.core_action.into(),
+            ],
             shortcut_action: None,
         })
         .collect()
@@ -346,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_command_entries_maps_catalog_to_open_stubs() {
+    fn collect_command_entries_maps_catalog_to_native_core_actions() {
         let entries = collect_command_entries();
         assert_eq!(entries.len(), crate::commands::EXPORTED.len());
         let add = entries
@@ -356,7 +360,11 @@ mod tests {
         assert_eq!(add.display_name, "QoL › Add Shortcut");
         assert_eq!(
             add.exec_args,
-            vec!["open".to_string(), "shortcuts/add".to_string()]
+            vec![
+                "exec".to_string(),
+                qol_conventions::CORE_PANEL_ID.to_string(),
+                "shortcuts-add".to_string()
+            ]
         );
         assert!(add.shortcut_action.is_none());
     }

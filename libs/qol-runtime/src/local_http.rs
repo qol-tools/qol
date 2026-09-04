@@ -4,6 +4,7 @@ use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
+    Delete,
     Get,
     Post,
     Put,
@@ -12,6 +13,7 @@ pub enum Method {
 impl Method {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Delete => "DELETE",
             Self::Get => "GET",
             Self::Post => "POST",
             Self::Put => "PUT",
@@ -284,6 +286,7 @@ mod tests {
         let port = qol_conventions::DEFAULT_PORT;
         let client = Client::new(port, "secret-token");
         let cases = [
+            (Method::Delete, "/api/config/item", "", "DELETE"),
             (Method::Get, "/api/config", "", "GET"),
             (Method::Post, "/api/actions/open", "{}", "POST"),
             (Method::Put, "/api/config", r#"{"enabled":true}"#, "PUT"),
