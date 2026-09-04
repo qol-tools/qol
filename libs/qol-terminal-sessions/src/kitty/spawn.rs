@@ -53,9 +53,12 @@ pub(super) fn launch_argv(
         launch_type(request.identity.surface).to_owned(),
     ];
     if request.identity.surface == SpawnSurface::Tab {
-        let anchor = anchor_window_id.ok_or_else(|| TerminalError::SpawnFailed {
-            backend: super::backend_id().clone(),
-            message: "cannot spawn a tab without the current window id".to_owned(),
+        let anchor = anchor_window_id.ok_or_else(|| {
+            trace_spawn_anchor_error();
+            TerminalError::SpawnFailed {
+                backend: super::backend_id().clone(),
+                message: "missing Kitty terminal identity: KITTY_WINDOW_ID is not set in this terminal, so kitty cannot spawn a tab beside it; run inside Kitty or pass surface=os_window".to_owned(),
+            }
         })?;
         argv.push("--next-to".to_owned());
         argv.push(format!("id:{anchor}"));
@@ -84,6 +87,14 @@ pub(super) fn launch_argv(
     argv.push(request.launch.program.clone());
     argv.extend(request.launch.args.iter().cloned());
     Ok(argv)
+}
+
+fn trace_spawn_anchor_error() {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "TERMINAL_SESSIONS",
+        "event=spawn_anchor outcome=error reason=missing_kitty_identity surface=tab"
+    );
 }
 
 fn cwd_string(request: &SpawnRequest) -> Result<String, TerminalError> {
@@ -245,7 +256,10 @@ mod tests {
         let error = launch_argv(&request(SpawnSurface::Tab, None), None, None).unwrap_err();
 
         assert!(matches!(error, TerminalError::SpawnFailed { .. }));
-        assert!(error.to_string().contains("current window"));
+        assert!(error
+            .to_string()
+            .contains("missing Kitty terminal identity"));
+        assert!(error.to_string().contains("KITTY_WINDOW_ID"));
         assert!(launch_argv(&request(SpawnSurface::OsWindow, None), None, None).is_ok());
     }
 

@@ -1287,7 +1287,10 @@ mod tests {
             .spawn_at(&spawn_request(SpawnSurface::Tab), None, None)
             .unwrap_err();
 
-        assert!(error.to_string().contains("current window"));
+        assert!(error
+            .to_string()
+            .contains("missing Kitty terminal identity"));
+        assert!(error.to_string().contains("KITTY_WINDOW_ID"));
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 
