@@ -14,6 +14,7 @@ pub enum Key {
     Digit(u8),
     Function(u8),
     Named(NamedKey),
+    Symbol(char),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +43,8 @@ pub struct Hotkey {
     pub mods: BTreeSet<Modifier>,
     pub key: Key,
 }
+
+const PLUS: &str = "Plus";
 
 pub fn parse(input: &str) -> Option<Hotkey> {
     let mut mods = BTreeSet::new();
@@ -81,6 +84,8 @@ pub fn format(hotkey: &Hotkey) -> Option<String> {
 
 fn format_key(key: Key) -> Option<String> {
     match key {
+        Key::Symbol('+') => Some(PLUS.to_string()),
+        Key::Symbol(symbol) if symbol_is_bindable(symbol) => Some(symbol.to_string()),
         Key::Letter(index) if index < 26 => Some(char::from(b'A' + index).to_string()),
         Key::Digit(index) if index < 10 => Some(char::from(b'0' + index).to_string()),
         Key::Function(number) if (1..=12).contains(&number) => Some(format!("F{number}")),
@@ -120,7 +125,27 @@ pub fn parse_key(token: &str) -> Option<Key> {
     if let Some(function) = function_index(token) {
         return Some(Key::Function(function));
     }
-    parse_named(token).map(Key::Named)
+    if token.eq_ignore_ascii_case(PLUS) {
+        return Some(Key::Symbol('+'));
+    }
+    if let Some(named) = parse_named(token) {
+        return Some(Key::Named(named));
+    }
+    let mut symbol = token.chars();
+    let candidate = symbol.next()?;
+    symbol.next().is_none().then_some(())?;
+    symbol_key(candidate)
+}
+
+pub fn symbol_key(symbol: char) -> Option<Key> {
+    symbol_is_bindable(symbol).then_some(Key::Symbol(symbol))
+}
+
+fn symbol_is_bindable(symbol: char) -> bool {
+    u32::from(symbol) <= 0xff
+        && !symbol.is_ascii_alphanumeric()
+        && !symbol.is_whitespace()
+        && !symbol.is_control()
 }
 
 fn parse_modifier(token: &str) -> Option<Modifier> {
@@ -225,6 +250,24 @@ mod tests {
         ];
         for (input, expected) in cases {
             assert_eq!(key(input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn symbol_keys_round_trip_through_their_own_token() {
+        let cases = [
+            ("super+plus", Key::Symbol('+'), "Super+Plus"),
+            ("super+-", Key::Symbol('-'), "Super+-"),
+            ("super+,", Key::Symbol(','), "Super+,"),
+            ("super+\u{e5}", Key::Symbol('\u{e5}'), "Super+\u{e5}"),
+        ];
+        for (input, expected, formatted) in cases {
+            assert_eq!(key(input), expected, "input: {input}");
+            assert_eq!(
+                format(&parse(input).unwrap()).as_deref(),
+                Some(formatted),
+                "input: {input}"
+            );
         }
     }
 

@@ -286,7 +286,7 @@ fn keysym_to_key(keysym: u32) -> Option<Key> {
         XK_RIGHT => NamedKey::Right,
         XK_PRINT => NamedKey::PrintScreen,
         XK_PAUSE => NamedKey::Pause,
-        _ => return None,
+        _ => return char::from_u32(keysym).and_then(grammar::symbol_key),
     }))
 }
 
@@ -316,6 +316,22 @@ mod tests {
         assert_eq!(keysym_to_key(u32::from(b'q')), Some(Key::Letter(16)));
         assert_eq!(keysym_to_key(u32::from(b'5')), Some(Key::Digit(5)));
         assert_eq!(keysym_to_key(XK_F12), Some(Key::Function(12)));
+    }
+
+    #[test]
+    fn maps_symbol_keysyms_to_the_key_they_type() {
+        assert_eq!(keysym_to_key(0x2b), Some(Key::Symbol('+')));
+        assert_eq!(keysym_to_key(0x2d), Some(Key::Symbol('-')));
+        assert_eq!(keysym_to_key(0xe5), Some(Key::Symbol('\u{e5}')));
+        assert_eq!(
+            grammar::format(&Hotkey {
+                mods: BTreeSet::from([Modifier::Super]),
+                key: keysym_to_key(0x2b).unwrap(),
+            })
+            .as_deref(),
+            Some("Super+Plus")
+        );
+        assert_eq!(keysym_to_key(0xfe51), None);
     }
 
     #[test]

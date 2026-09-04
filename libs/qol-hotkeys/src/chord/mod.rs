@@ -70,6 +70,7 @@ pub(crate) fn key_label(key: Key) -> Option<String> {
         Key::Digit(index) if index < 10 => Some(char::from(b'0' + index).to_string()),
         Key::Function(number) if (1..=12).contains(&number) => Some(format!("F{number}")),
         Key::Named(named) => Some(named_label(named).to_string()),
+        Key::Symbol(symbol) => Some(symbol.to_string()),
         _ => None,
     }
 }

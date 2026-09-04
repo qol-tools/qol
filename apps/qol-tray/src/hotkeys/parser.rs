@@ -9,12 +9,15 @@ pub(super) fn parse_hotkey(s: &str) -> Option<HotKey> {
         .fold(Modifiers::empty(), |acc, modifier| {
             acc | modifier_to_global(*modifier)
         });
-    Some(HotKey::new(Some(modifiers), key_to_code(parsed.key)))
+    if let (true, Key::Symbol(symbol)) = (cfg!(target_os = "linux"), parsed.key) {
+        return Some(HotKey::with_keysym(Some(modifiers), u32::from(symbol)));
+    }
+    Some(HotKey::new(Some(modifiers), key_to_code(parsed.key)?))
 }
 
 #[cfg(test)]
 pub(super) fn parse_key_code(s: &str) -> Option<Code> {
-    grammar::parse_key(&s.trim().to_ascii_lowercase()).map(key_to_code)
+    grammar::parse_key(&s.trim().to_ascii_lowercase()).and_then(key_to_code)
 }
 
 fn modifier_to_global(modifier: Modifier) -> Modifiers {
@@ -26,13 +29,31 @@ fn modifier_to_global(modifier: Modifier) -> Modifiers {
     }
 }
 
-fn key_to_code(key: Key) -> Code {
-    match key {
-        Key::Letter(index) => LETTER_CODES[index as usize],
-        Key::Digit(index) => DIGIT_CODES[index as usize],
-        Key::Function(number) => FUNCTION_CODES[(number - 1) as usize],
+fn key_to_code(key: Key) -> Option<Code> {
+    Some(match key {
+        Key::Letter(index) => *LETTER_CODES.get(index as usize)?,
+        Key::Digit(index) => *DIGIT_CODES.get(index as usize)?,
+        Key::Function(number) => *FUNCTION_CODES.get(number.checked_sub(1)? as usize)?,
         Key::Named(named) => named_to_code(named),
-    }
+        Key::Symbol(symbol) => symbol_to_code(symbol)?,
+    })
+}
+
+fn symbol_to_code(symbol: char) -> Option<Code> {
+    Some(match symbol {
+        '-' => Code::Minus,
+        '=' => Code::Equal,
+        '[' => Code::BracketLeft,
+        ']' => Code::BracketRight,
+        ';' => Code::Semicolon,
+        '\'' => Code::Quote,
+        '`' => Code::Backquote,
+        '\\' => Code::Backslash,
+        ',' => Code::Comma,
+        '.' => Code::Period,
+        '/' => Code::Slash,
+        _ => return None,
+    })
 }
 
 fn named_to_code(named: NamedKey) -> Code {

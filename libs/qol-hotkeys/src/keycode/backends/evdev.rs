@@ -3,6 +3,17 @@ use std::collections::BTreeSet;
 use crate::grammar::{Key, Modifier, NamedKey};
 
 pub const KEY_ESC: u16 = 1;
+const KEY_MINUS: u16 = 12;
+const KEY_EQUAL: u16 = 13;
+const KEY_LEFTBRACE: u16 = 26;
+const KEY_RIGHTBRACE: u16 = 27;
+const KEY_SEMICOLON: u16 = 39;
+const KEY_APOSTROPHE: u16 = 40;
+const KEY_GRAVE: u16 = 41;
+const KEY_BACKSLASH: u16 = 43;
+const KEY_COMMA: u16 = 51;
+const KEY_DOT: u16 = 52;
+const KEY_SLASH: u16 = 53;
 pub const KEY_BACKSPACE: u16 = 14;
 pub const KEY_TAB: u16 = 15;
 pub const KEY_ENTER: u16 = 28;
@@ -125,6 +136,24 @@ pub fn key_to_keycode(key: Key) -> Option<u16> {
             _ => return None,
         },
         Key::Named(named) => named_to_keycode(named),
+        Key::Symbol(symbol) => symbol_to_keycode(symbol)?,
+    })
+}
+
+fn symbol_to_keycode(symbol: char) -> Option<u16> {
+    Some(match symbol {
+        '-' => KEY_MINUS,
+        '=' => KEY_EQUAL,
+        '[' => KEY_LEFTBRACE,
+        ']' => KEY_RIGHTBRACE,
+        ';' => KEY_SEMICOLON,
+        '\'' => KEY_APOSTROPHE,
+        '`' => KEY_GRAVE,
+        '\\' => KEY_BACKSLASH,
+        ',' => KEY_COMMA,
+        '.' => KEY_DOT,
+        '/' => KEY_SLASH,
+        _ => return None,
     })
 }
 
@@ -182,6 +211,15 @@ mod tests {
         assert_eq!(code("down"), Some(KEY_DOWN));
         assert_eq!(code("left"), Some(KEY_LEFT));
         assert_eq!(code("right"), Some(KEY_RIGHT));
+    }
+
+    #[test]
+    fn maps_only_the_symbols_that_hold_a_physical_position() {
+        assert_eq!(code("-"), Some(KEY_MINUS));
+        assert_eq!(code(","), Some(KEY_COMMA));
+        assert_eq!(code("/"), Some(KEY_SLASH));
+        assert_eq!(key_to_keycode(Key::Symbol('+')), None);
+        assert_eq!(key_to_keycode(Key::Symbol('\u{e5}')), None);
     }
 
     #[test]

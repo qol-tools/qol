@@ -131,7 +131,9 @@ fn register_hotkey(
 ) -> crate::Result<()> {
     let (mods, key) = (
         modifiers_to_x11_mods(hotkey.mods),
-        keycode_to_x11_keysym(hotkey.key),
+        hotkey
+            .keysym
+            .or_else(|| keycode_to_x11_keysym(hotkey.key)),
     );
 
     let Some(key) = key else {
@@ -206,7 +208,9 @@ fn unregister_hotkey(
 ) -> crate::Result<()> {
     let (modifiers, key) = (
         modifiers_to_x11_mods(hotkey.mods),
-        keycode_to_x11_keysym(hotkey.key),
+        hotkey
+            .keysym
+            .or_else(|| keycode_to_x11_keysym(hotkey.key)),
     );
 
     let Some(key) = key else {

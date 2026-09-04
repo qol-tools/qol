@@ -85,6 +85,7 @@ pub fn key_to_keycode(key: Key) -> Option<u16> {
         Key::Digit(index) => *DIGITS.get(index as usize)?,
         Key::Function(number) => *FUNCTION_KEYS.get(number.checked_sub(1)? as usize)?,
         Key::Named(named) => return named_to_keycode(named),
+        Key::Symbol(_) => return None,
     })
 }
 

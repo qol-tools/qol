@@ -8,6 +8,8 @@ use fallback as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
 
+#[cfg(all(target_os = "linux", feature = "linux_evdev"))]
+pub(super) use imp::evdev_keycode;
 pub(super) use imp::{PhysicalHotkeyState, POLL_INTERVAL, POLL_WHILE_IDLE};
 
 pub(super) fn release_active_grab(
