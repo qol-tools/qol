@@ -8,14 +8,15 @@ use gpui::{App, AppContext, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::SettingsActivation;
-use qol_gpui::settings_panel::{PanelSource, SettingsPanel, SettingsRuntime, SettingsWindowHost};
+use qol_gpui::settings_panel::{
+    CustomPanelNoticeTone, CustomPanelNotifier, PanelSource, PanelSourceGroup, SettingsPanel,
+    SettingsRuntime, SettingsWindowHost,
+};
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
 
 use super::super::HostBoot;
-use super::native_tools::NativeToolsHost;
-
 #[derive(Debug)]
 enum Command {
     Open(String),
@@ -345,24 +346,17 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
         let tracker = MonitorTracker::start(cx);
         let toast_host = ToastHost::new(tracker.clone());
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
-        let tools = Rc::new(RefCell::new(NativeToolsHost::default()));
+        host.borrow_mut()
+            .set_custom_notifier(custom_notifier(toast_host.clone()));
         if let Some(plugin_id) = initial {
             let activation_host = host.clone();
-            let activation_tools = tools.clone();
             let activation_tracker = tracker.clone();
             cx.spawn(async move |cx| {
-                activate(
-                    activation_host,
-                    activation_tools,
-                    activation_tracker,
-                    plugin_id,
-                    cx,
-                )
-                .await;
+                activate(activation_host, activation_tracker, plugin_id, cx).await;
             })
             .detach();
         }
-        spawn_command_loop(command_rx, host, tools, tracker, toast_host, cx);
+        spawn_command_loop(command_rx, host, tracker, toast_host, cx);
     });
     core_daemon::cleanup(&config);
     Ok(())
@@ -371,14 +365,12 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
 fn spawn_command_loop(
     command_rx: mpsc::Receiver<Command>,
     host: Rc<RefCell<SettingsWindowHost>>,
-    tools: Rc<RefCell<NativeToolsHost>>,
     tracker: MonitorTracker,
     toast_host: ToastHost,
     cx: &mut App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, command_rx, move |cx, command| {
         let host = host.clone();
-        let tools = tools.clone();
         let tracker = tracker.clone();
         let toast_host = toast_host.clone();
         async move {
@@ -388,7 +380,7 @@ fn spawn_command_loop(
                         "SURFACE_ACTIVATION",
                         "plugin={plugin_id} phase=command outcome=received"
                     );
-                    activate(host, tools, tracker, plugin_id, &cx).await;
+                    activate(host, tracker, plugin_id, &cx).await;
                     LoopFlow::Continue
                 }
                 Command::Toast {
@@ -412,6 +404,23 @@ fn spawn_command_loop(
             }
         }
     });
+}
+
+fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
+    Rc::new(move |tone, message, cx| {
+        let toast = Toast::new(
+            qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
+            message,
+            ToastLayout::compact(),
+        )
+        .tone(match tone {
+            CustomPanelNoticeTone::Success => ToastTone::Success,
+            CustomPanelNoticeTone::Failure => ToastTone::Danger,
+        });
+        if let Err(error) = toast_host.show(toast, cx) {
+            log::warn!("[toast] settings notice failed: {error:#}");
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -468,23 +477,95 @@ fn toast_tone(level: &str) -> ToastTone {
 
 async fn activate(
     host: Rc<RefCell<SettingsWindowHost>>,
-    tools: Rc<RefCell<NativeToolsHost>>,
     tracker: MonitorTracker,
     plugin_id: String,
     cx: &gpui::AsyncApp,
 ) {
     if let Some(tool) = super::super::CoreTool::from_wire_id(&plugin_id) {
-        let activation = cx.update(move |cx| {
-            host.borrow_mut().hide_active(cx);
-            tools.borrow_mut().activate(tool, &tracker, cx)
-        });
-        match activation {
-            Ok(Ok(())) => qol_runtime::probe!(
+        let page_id = tool.page_wire_id().to_string();
+        let focused = if matches!(
+            tool,
+            super::super::CoreTool::AddHotkey | super::super::CoreTool::AddShortcut
+        ) {
+            Ok(false)
+        } else {
+            let activation_host = host.clone();
+            let activation_tracker = tracker.clone();
+            let page_id = page_id.clone();
+            cx.update(move |cx| {
+                activation_host
+                    .borrow_mut()
+                    .present_active(&page_id, &activation_tracker, cx)
+            })
+        };
+        if matches!(focused, Ok(true)) {
+            qol_runtime::probe!(
                 "SURFACE_ACTIVATION",
-                "tool={} phase=activate outcome=opened visible_windows=1",
+                "tool={} phase=activate outcome=focused visible_windows=1",
                 tool.wire_id()
+            );
+            return;
+        }
+        let loaded = cx
+            .background_spawn(async move { load_unified_panel() })
+            .await;
+        let activation = match loaded {
+            Ok((mut panel, runtimes)) => {
+                if !panel
+                    .sources
+                    .iter()
+                    .any(|source| source.plugin_id == page_id)
+                {
+                    Err(anyhow::anyhow!(
+                        "core settings source is not available in the unified panel"
+                    ))
+                } else {
+                    panel.focus = Some(page_id);
+                    match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx)
+                        .await
+                    {
+                        Ok(prepared) => {
+                            let activation_host = host.clone();
+                            let activation_tracker = tracker.clone();
+                            let custom_factories = super::native_tools::factories(tool);
+                            cx.update(move |cx| {
+                                let mut host = activation_host.borrow_mut();
+                                if matches!(
+                                    tool,
+                                    super::super::CoreTool::AddHotkey
+                                        | super::super::CoreTool::AddShortcut
+                                ) {
+                                    host.activate_prepared_with_custom_force(
+                                        prepared,
+                                        custom_factories,
+                                        &activation_tracker,
+                                        cx,
+                                    )
+                                } else {
+                                    host.activate_prepared_with_custom(
+                                        prepared,
+                                        custom_factories,
+                                        &activation_tracker,
+                                        cx,
+                                    )
+                                }
+                            })
+                            .and_then(|result| result)
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        };
+        match activation {
+            Ok(activation) => qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "tool={} phase=activate outcome={} visible_windows=1",
+                tool.wire_id(),
+                activation_name(activation)
             ),
-            Ok(Err(error)) => {
+            Err(error) => {
                 qol_runtime::probe!(
                     "SURFACE_ACTIVATION",
                     "tool={} phase=activate outcome=failed error={error}",
@@ -492,19 +573,9 @@ async fn activate(
                 );
                 open_browser_fallback(&plugin_id, "activation_failed");
             }
-            Err(error) => {
-                qol_runtime::probe!(
-                    "SURFACE_ACTIVATION",
-                    "tool={} phase=activate outcome=app_update_failed error={error}",
-                    tool.wire_id()
-                );
-                open_browser_fallback(&plugin_id, "activation_failed");
-            }
         }
         return;
     }
-    let dismiss_tools = tools.clone();
-    let _ = cx.update(move |cx| dismiss_tools.borrow_mut().dismiss(cx));
     let focused_host = host.clone();
     let focused_tracker = tracker.clone();
     let focused_plugin_id = plugin_id.clone();
@@ -554,10 +625,15 @@ async fn activate(
                 match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx).await {
                     Ok(prepared) => {
                         let activation_host = host.clone();
+                        let custom_factories =
+                            super::native_tools::factories(super::super::CoreTool::Shortcuts);
                         cx.update(move |cx| {
-                            activation_host
-                                .borrow_mut()
-                                .activate_prepared(prepared, &tracker, cx)
+                            activation_host.borrow_mut().activate_prepared_with_custom(
+                                prepared,
+                                custom_factories,
+                                &tracker,
+                                cx,
+                            )
                         })
                         .and_then(|result| result)
                     }
@@ -660,6 +736,19 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         .next()
         .expect("core panel has one source")];
     let mut runtimes = vec![core_runtime];
+    for (tool, heading) in [
+        (super::super::CoreTool::Shortcuts, "Shortcuts"),
+        (super::super::CoreTool::Hotkeys, "Hotkeys"),
+    ] {
+        sources.push(PanelSource {
+            plugin_id: tool.wire_id().to_string(),
+            contract: String::new(),
+            heading: heading.to_string(),
+            group: PanelSourceGroup::Core,
+            custom: true,
+        });
+        runtimes.push(SettingsRuntime::empty());
+    }
     let mut eligible = Vec::new();
     for resolved in resolved_plugins()? {
         let manifest = match crate::plugins::manifest::PluginManifest::read_from_dir(&resolved.path)
@@ -683,6 +772,8 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                     plugin_id,
                     contract: source.contract,
                     heading: source.heading,
+                    group: PanelSourceGroup::Plugin,
+                    custom: false,
                 });
                 runtimes.push(runtime);
             }

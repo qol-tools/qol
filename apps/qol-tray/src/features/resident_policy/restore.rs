@@ -381,7 +381,7 @@ mod tests {
         std::env::set_var("QOL_POLICY_LOCK_RETRY_WINDOW_MS", "50");
         let policy = ResidentPolicy::from_id(UDEV_UACCESS_POLICY_ID).unwrap();
         let _held = acquire_policy_lock(&policy).unwrap();
-        let error = restore_one(UDEV_UACCESS_POLICY_ID).unwrap_err();
+        let error = restore_one(&policy).unwrap_err();
         std::env::remove_var("QOL_POLICY_LOCK_RETRY_WINDOW_MS");
         assert!(
             format!("{error:#}").contains("another process holds"),

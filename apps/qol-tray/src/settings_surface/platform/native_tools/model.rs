@@ -31,15 +31,17 @@ impl AppRefKind {
             Self::Path => "Path",
         }
     }
+}
 
-    pub(super) fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|kind| *kind == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ManagedShortcut {
+    pub(super) plugin_id: String,
+    pub(super) action: String,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct ShortcutDraft {
+    pub(super) managed: Option<ManagedShortcut>,
     pub(super) original_id: Option<String>,
     pub(super) name: String,
     pub(super) enabled: bool,
@@ -66,18 +68,12 @@ impl ShortcutActionKind {
             Self::Url => "Open URL",
         }
     }
-
-    pub(super) fn next(self) -> Self {
-        match self {
-            Self::App => Self::Url,
-            Self::Url => Self::App,
-        }
-    }
 }
 
 impl ShortcutDraft {
     pub(super) fn blank() -> Self {
         Self {
+            managed: None,
             original_id: None,
             name: String::new(),
             enabled: true,
@@ -92,7 +88,8 @@ impl ShortcutDraft {
         }
     }
 
-    pub(super) fn from_shortcut(shortcut: &Shortcut) -> Option<Self> {
+    pub(super) fn from_shortcut(shortcut: &Shortcut) -> Self {
+        let mut managed = None;
         let (action_kind, target_kind, target, browser_override, browser_kind, browser) =
             match &shortcut.action {
                 ShortcutAction::OpenUrl {
@@ -123,9 +120,23 @@ impl ShortcutDraft {
                         String::new(),
                     )
                 }
-                ShortcutAction::PluginAction { .. } => return None,
+                ShortcutAction::PluginAction { plugin_id, action } => {
+                    managed = Some(ManagedShortcut {
+                        plugin_id: plugin_id.clone(),
+                        action: action.clone(),
+                    });
+                    (
+                        ShortcutActionKind::Url,
+                        AppRefKind::Path,
+                        format!("{plugin_id} \u{203a} {action}"),
+                        false,
+                        AppRefKind::BundleId,
+                        String::new(),
+                    )
+                }
             };
-        Some(Self {
+        Self {
+            managed,
             original_id: Some(shortcut.id.clone()),
             name: shortcut.name.clone(),
             enabled: shortcut.enabled,
@@ -137,10 +148,13 @@ impl ShortcutDraft {
             browser_kind,
             browser,
             selected: 0,
-        })
+        }
     }
 
     pub(super) fn field_count(&self) -> usize {
+        if self.managed.is_some() {
+            return MANAGED_FIELD_COUNT;
+        }
         match (self.action_kind, self.browser_override) {
             (ShortcutActionKind::Url, true) => 8,
             (ShortcutActionKind::Url, false) => 6,
@@ -149,6 +163,9 @@ impl ShortcutDraft {
     }
 
     pub(super) fn can_save(&self) -> bool {
+        if self.managed.is_some() {
+            return true;
+        }
         !self.name.trim().is_empty()
             && !self.target.trim().is_empty()
             && (!self.browser_override || !self.browser.trim().is_empty())
@@ -159,15 +176,21 @@ impl ShortcutDraft {
             .original_id
             .clone()
             .unwrap_or_else(|| derive_shortcut_id(&self.name, existing_ids));
-        let action = match self.action_kind {
-            ShortcutActionKind::App => ShortcutAction::LaunchApp {
-                app: app_ref(self.target_kind, &self.target),
+        let action = match &self.managed {
+            Some(managed) => ShortcutAction::PluginAction {
+                plugin_id: managed.plugin_id.clone(),
+                action: managed.action.clone(),
             },
-            ShortcutActionKind::Url => ShortcutAction::OpenUrl {
-                url: self.target.clone(),
-                browser_override: self
-                    .browser_override
-                    .then(|| app_ref(self.browser_kind, &self.browser)),
+            None => match self.action_kind {
+                ShortcutActionKind::App => ShortcutAction::LaunchApp {
+                    app: app_ref(self.target_kind, &self.target),
+                },
+                ShortcutActionKind::Url => ShortcutAction::OpenUrl {
+                    url: self.target.clone(),
+                    browser_override: self
+                        .browser_override
+                        .then(|| app_ref(self.browser_kind, &self.browser)),
+                },
             },
         };
         Shortcut {
@@ -180,6 +203,8 @@ impl ShortcutDraft {
         }
     }
 }
+
+pub(super) const MANAGED_FIELD_COUNT: usize = 2;
 
 #[derive(Clone, Debug)]
 pub(super) struct HotkeyDraft {
@@ -410,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_managed_shortcut_does_not_open_the_native_editor() {
+    fn a_managed_shortcut_opens_an_editor_that_only_carries_its_toggles() {
         let shortcut = Shortcut {
             id: "managed".to_string(),
             name: "Managed".to_string(),
@@ -426,7 +451,38 @@ mod tests {
             },
         };
         assert!(shortcut_is_managed(&shortcut));
-        assert!(ShortcutDraft::from_shortcut(&shortcut).is_none());
+
+        let mut draft = ShortcutDraft::from_shortcut(&shortcut);
+        assert_eq!(
+            draft.managed,
+            Some(ManagedShortcut {
+                plugin_id: "plugin-a".to_string(),
+                action: "open".to_string(),
+            })
+        );
+        assert_eq!(
+            draft.field_count(),
+            MANAGED_FIELD_COUNT,
+            "the plugin owns the action, so only the toggles are editable"
+        );
+        assert_eq!(
+            MANAGED_FIELD_COUNT, 2,
+            "only Enabled and Export to launcher stay editable"
+        );
+        assert!(draft.can_save(), "toggling enabled is always saveable");
+
+        draft.enabled = false;
+        let rebuilt = draft.build(&[]);
+        assert_eq!(rebuilt.id, "managed");
+        assert!(!rebuilt.enabled);
+        assert!(
+            matches!(
+                rebuilt.action,
+                ShortcutAction::PluginAction { plugin_id, action }
+                    if plugin_id == "plugin-a" && action == "open"
+            ),
+            "saving must not rewrite the plugin action"
+        );
     }
 
     #[test]

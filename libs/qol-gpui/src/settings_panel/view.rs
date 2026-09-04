@@ -6,6 +6,10 @@ use gpui::*;
 use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
+use super::components::{
+    paint_settings_selection, rail_caption, settings_description, settings_label, SettingsFeedback,
+    SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
+};
 use super::object_array_row::{
     shared_key_chip, Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome,
     ObjectArrayState,
@@ -18,8 +22,12 @@ use super::rows::{
     ListActions, ListItem, ListSlider, Row, RowControl, RowQueryState, RowSection, SelectOption,
     SliderHold,
 };
-use super::{SettingsPanel, SettingsRuntime, SourceState};
+use super::{
+    CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelNotifier,
+    CustomPanelView, PanelSourceGroup, SettingsPanel, SettingsRuntime, SourceState,
+};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
+use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -32,8 +40,6 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const BODY_SIDE_PADDING: f32 = 16.0;
-const GROUP_HEADER_INSET: f32 = 8.0;
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 /// How long the rail selection must hold still before its source starts polling.
@@ -164,76 +170,6 @@ impl HeightCache {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct CardSliver {
-    left: f32,
-    width: f32,
-    inset: f32,
-}
-
-fn slivers_for(depth: usize) -> Vec<CardSliver> {
-    match depth {
-        0 => Vec::new(),
-        1 => vec![CardSliver {
-            left: 0.0,
-            width: 12.0,
-            inset: 8.0,
-        }],
-        _ => vec![
-            CardSliver {
-                left: 0.0,
-                width: 10.0,
-                inset: 14.0,
-            },
-            CardSliver {
-                left: 9.0,
-                width: 10.0,
-                inset: 7.0,
-            },
-        ],
-    }
-}
-
-fn deck_front_offset(depth: usize) -> f32 {
-    if depth > 1 {
-        18.0
-    } else {
-        10.0
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DeckMotion {
-    Push,
-    Pop,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct DeckSlide {
-    step: usize,
-    from: f32,
-    to: f32,
-}
-
-fn deck_slide(
-    step: usize,
-    motion: Option<DeckMotion>,
-    depth: usize,
-    width: f32,
-) -> Option<DeckSlide> {
-    let to = if depth == 0 {
-        0.0
-    } else {
-        deck_front_offset(depth)
-    };
-    let from = match motion {
-        Some(DeckMotion::Push) => width,
-        Some(DeckMotion::Pop) => deck_front_offset(depth + 1),
-        None => to,
-    };
-    (from != to).then_some(DeckSlide { step, from, to })
-}
-
 use std::sync::PoisonError;
 
 #[derive(Default)]
@@ -319,6 +255,8 @@ pub(super) struct SettingsPanelView {
     streams: Vec<super::stream::StreamClient>,
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
+    custom_views: Vec<Option<CustomPanelView>>,
+    custom_focus_pending: bool,
 }
 
 pub(super) struct SettingsPanelState {
@@ -371,6 +309,8 @@ impl SettingsPanelView {
         panel: SettingsPanel,
         state: SettingsPanelState,
         dismisser: SurfaceDismisser,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        notify: CustomPanelNotifier,
         cx: &mut Context<Self>,
     ) -> Self {
         let row_bounds = (0..state.rows.len())
@@ -445,12 +385,39 @@ impl SettingsPanelView {
             sample_signal: None,
             sampler_stop: None,
             poll_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dismisser,
+            dismisser: dismisser.clone(),
             palette: settings_panel_runtime(),
             kit: crate::kit::kit(),
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
+            custom_views: Vec::new(),
+            custom_focus_pending: false,
         };
+        let parent = cx.weak_entity();
+        view.custom_views = view
+            .panel
+            .sources
+            .iter()
+            .map(|source| {
+                custom_factories
+                    .iter()
+                    .find(|(plugin_id, _)| plugin_id == &source.plugin_id)
+                    .map(|(_, factory)| {
+                        let parent = parent.clone();
+                        let on_back: CustomPanelCallback = Rc::new(move |window, app| {
+                            let _ = parent.update(app, |view, cx| view.custom_back(window, cx));
+                        });
+                        factory(
+                            CustomPanelContext {
+                                dismisser: dismisser.clone(),
+                                on_back,
+                                notify: Rc::clone(&notify),
+                            },
+                            cx,
+                        )
+                    })
+            })
+            .collect();
         let focused_source = view.panel.focused_index();
         let fallback_section = (0..view.level().sections.len())
             .find(|index| !view.section_visible_rows(*index).is_empty());
@@ -465,7 +432,9 @@ impl SettingsPanelView {
         let first_visible = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.level_mut().selected = first_visible;
         if view.panel_names_a_source() {
-            view.descend_source_menu(cx);
+            view.set_source_menu(false);
+            view.open_selected_section();
+            view.custom_focus_pending = view.current_source_is_custom();
         }
         view.resume_runtime_poll(cx);
         view
@@ -694,7 +663,12 @@ impl SettingsPanelView {
         self.level_mut().active_control = None;
     }
 
-    pub(super) fn retarget_focus(&mut self, plugin_id: &str, cx: &mut Context<Self>) -> bool {
+    pub(super) fn retarget_focus(
+        &mut self,
+        plugin_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(source_index) = self
             .sources
             .iter()
@@ -705,6 +679,15 @@ impl SettingsPanelView {
         self.forget_last_visit();
         self.select_source(source_index, cx);
         self.materialize_source(cx);
+        if self.current_source_is_custom() {
+            self.set_source_menu(false);
+            self.custom_focus_pending = true;
+            if let Some(custom) = self.custom_view() {
+                (custom.focus)(window, cx);
+            }
+            cx.notify();
+            return true;
+        }
         let Some(section_index) = (0..self.level().sections.len()).find(|index| {
             let section = &self.level().sections[*index];
             section.source == source_index && !self.section_visible_rows(*index).is_empty()
@@ -713,7 +696,8 @@ impl SettingsPanelView {
         };
         self.level_mut().selected_section = section_index;
         if focus_enters_the_body(plugin_id) {
-            self.descend_source_menu(cx);
+            self.set_source_menu(false);
+            self.open_selected_section();
         } else {
             self.set_source_menu(self.sources.len() > 1);
         }
@@ -727,6 +711,29 @@ impl SettingsPanelView {
             return false;
         };
         focus_enters_the_body(focus) && self.sources.iter().any(|source| source.plugin_id == focus)
+    }
+
+    fn current_source_is_custom(&self) -> bool {
+        self.panel
+            .sources
+            .get(self.materialized_source)
+            .is_some_and(|source| source.custom)
+    }
+
+    fn custom_view(&self) -> Option<&CustomPanelView> {
+        self.custom_views
+            .get(self.materialized_source)
+            .and_then(Option::as_ref)
+    }
+
+    fn custom_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.current_source_is_custom() {
+            return;
+        }
+        self.pause_runtime_poll();
+        self.set_source_menu(true);
+        window.focus(&self.focus_handle);
+        cx.notify();
     }
 
     fn forget_last_visit(&mut self) {
@@ -840,12 +847,18 @@ impl SettingsPanelView {
         .detach();
     }
 
-    fn descend_source_menu(&mut self, cx: &mut Context<Self>) {
+    fn descend_source_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.materialize_source(cx);
         self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
         self.resume_runtime_poll(cx);
         self.set_source_menu(false);
         self.open_selected_section();
+        if self.current_source_is_custom() {
+            self.custom_focus_pending = false;
+            if let Some(custom) = self.custom_view() {
+                (custom.focus)(window, cx);
+            }
+        }
     }
 
     fn set_source_menu(&mut self, open: bool) {
@@ -855,11 +868,11 @@ impl SettingsPanelView {
             .state_changed(changed, std::time::Instant::now());
     }
 
-    fn on_rail_key(&mut self, key: &str, cx: &mut Context<Self>) {
+    fn on_rail_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         match key {
             "up" => self.step_selected_source(-1, cx),
             "down" => self.step_selected_source(1, cx),
-            "enter" | "return" => self.descend_source_menu(cx),
+            "enter" | "return" => self.descend_source_menu(window, cx),
             "escape" => {
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
@@ -1208,6 +1221,9 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
+        if self.current_source_is_custom() && self.body_has_focus() {
+            return;
+        }
         if !event.keystroke.modifiers.modified() && !self.filter_open {
             let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
             if !editing && self.level().active_control.is_none() {
@@ -1224,7 +1240,7 @@ impl SettingsPanelView {
             }
         }
         if self.rail_has_key_focus() {
-            self.on_rail_key(key, cx);
+            self.on_rail_key(key, window, cx);
             return;
         }
         if let Some(ActiveControl::Wheel(wheel)) = &self.level().active_control {
@@ -2729,14 +2745,7 @@ impl SettingsPanelView {
     }
 
     fn dropdown_style(&self) -> DropdownStyle {
-        DropdownStyle {
-            bg: self.palette.dropdown_bg,
-            bg_selected: self.palette.row_bg_selected,
-            border: self.palette.row_border_selected,
-            text: self.palette.label_text,
-            text_selected: self.palette.section_text,
-            accent: self.palette.row_border_selected,
-        }
+        super::components::settings_dropdown_style(self.palette)
     }
 
     fn wheel_style(&self) -> WheelStyle {
@@ -2763,25 +2772,7 @@ impl SettingsPanelView {
     }
 
     fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        row.relative()
-            .ml(px(-BODY_SIDE_PADDING))
-            .pl(px(BODY_SIDE_PADDING + 8.0))
-            .rounded_none()
-            .rounded_r(px(qol_theme::RADIUS_CARD))
-            .bg(rgba(self.kit.washes.wash_selected.packed()))
-            .border(px(1.0))
-            .border_color(rgba(self.kit.washes.hairline.packed()))
-            .border_l(px(0.))
-            .overflow_hidden()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(4.0))
-                    .bg(rgb(self.palette.row_border_selected)),
-            )
+        paint_settings_selection(row, self.palette)
     }
 
     /// The freshness of a row's value: unavailable wins over loading, and a row
@@ -2910,55 +2901,14 @@ impl SettingsPanelView {
     }
 
     fn render_toggle_value(&self, active: bool) -> Div {
-        let track_color = if active {
-            self.palette.state_on
-        } else {
-            self.palette.dropdown_bg
-        };
-        div().flex().flex_row().items_center().child(
-            div()
-                .flex()
-                .items_center()
-                .when(active, |track| track.justify_end())
-                .when(!active, |track| track.justify_start())
-                .w(px(40.))
-                .h(px(24.))
-                .p(px(2.))
-                .rounded_full()
-                .bg(rgb(track_color))
-                .child(
-                    div()
-                        .w(px(20.))
-                        .h(px(20.))
-                        .rounded_full()
-                        .bg(rgb(if active {
-                            self.palette.window_bg
-                        } else {
-                            self.palette.label_text
-                        })),
-                ),
-        )
+        div().child(SettingsToggle::new(active, self.palette))
     }
 
     fn render_select_value(&self, index: usize) -> Div {
-        let mut value = div().flex().flex_row().items_center().gap_2();
-        if let Some(accent) = self.option_accent(index) {
-            value = value.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
-        }
-        value
-            .px_2()
-            .py_1()
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .bg(rgb(self.palette.dropdown_bg))
-            .text_size(px(qol_theme::TEXT_BODY))
-            .text_color(rgb(self.palette.label_text))
-            .child(self.display_value(index))
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.status_muted))
-                    .child("▾"),
-            )
+        div().child(
+            SettingsSelectValue::new(self.display_value(index), self.palette)
+                .accent(self.option_accent(index)),
+        )
     }
 
     fn render_number_value(
@@ -3132,67 +3082,17 @@ impl SettingsPanelView {
                 .flex_1()
                 .flex_col()
                 .gap_0p5()
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(self.palette.section_text))
-                        .child(label),
-                )
+                .child(settings_label(label, self.palette))
                 .when_some(row.description.clone(), |group, description| {
-                    group.child(
-                        div()
-                            .truncate()
-                            .text_size(px(qol_theme::TEXT_MICRO))
-                            .text_color(rgb(self.kit.palette.text_muted))
-                            .child(description),
-                    )
+                    group.child(settings_description(description, self.palette))
                 }),
         };
         let selected = index == self.level().selected;
-        let mut line = div()
-            .id(("settings-row", index))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .h(px(row_body_height(row, false)))
-            .px_2()
-            .py_1()
-            .rounded_none()
-            .child(label_group);
         let mut value_cell = if has_chips {
             None
         } else {
             Some(self.render_value_cell(index))
         };
-        line = self.mark_selected(line, selected);
-        let row_bounds = Rc::clone(&self.level().row_bounds[index]);
-        line = line.relative().child(
-            canvas(
-                move |bounds, _, _| row_bounds.set(Some(bounds)),
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0(),
-        );
-        if !matches!(
-            row.control,
-            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
-        ) {
-            line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
-                move |this, event: &ClickEvent, window, cx| {
-                    if !event.standard_click() {
-                        return;
-                    }
-                    this.level_mut().selected = index;
-                    this.activate(window, cx);
-                    cx.notify();
-                },
-            ));
-        }
         if selected {
             if let Some(ActiveControl::Dropdown(dropdown)) = &self.level().active_control {
                 let items = match &row.control {
@@ -3249,6 +3149,34 @@ impl SettingsPanelView {
                     value_cell = value_cell.map(|cell| div().relative().child(menu).child(cell));
                 }
             }
+        }
+        let row_bounds = Rc::clone(&self.level().row_bounds[index]);
+        let bounds = canvas(
+            move |bounds, _, _| row_bounds.set(Some(bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        let mut line = if self.level().object_array.is_some() {
+            SettingsRow::rule(("settings-row", index), self.palette)
+        } else {
+            SettingsRow::setting(("settings-row", index), self.palette)
+        }
+        .selected(selected, self.body_has_focus())
+        .child(label_group)
+        .child(bounds);
+        if !matches!(
+            row.control,
+            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
+        ) {
+            line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.level_mut().selected = index;
+                this.activate(window, cx);
+                cx.notify();
+            }));
         }
         if let Some(cell) = value_cell {
             line = line.child(cell);
@@ -3352,14 +3280,18 @@ impl SettingsPanelView {
         if active {
             item = self.paint_selection(item);
         }
-        item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+        item.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if !event.standard_click() {
                 return;
             }
             this.select_source(index, cx);
-            this.descend_source_menu(cx);
+            this.descend_source_menu(window, cx);
             cx.notify();
         }))
+    }
+
+    fn render_rail_plugin_caption(&self) -> impl IntoElement {
+        rail_caption("QoL Plugin Settings").id("settings-rail-plugin-caption")
     }
 
     fn render_list(&self, index: usize) -> Div {
@@ -3697,24 +3629,12 @@ impl SettingsPanelView {
         )
     }
 
-    fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> Stateful<Div> {
-        let mut line = div()
-            .id(("settings-object-entry", entry_id(index, entry)))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .flex_none()
-            .h(px(super::PANEL_OBJECT_ROW_HEIGHT))
-            .overflow_hidden()
-            .px_2()
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .cursor(CursorStyle::PointingHand);
-        if selected {
-            line = self.mark_selected(line, true);
-        }
-        line
+    fn object_array_line(&self, index: usize, entry: usize, selected: bool) -> SettingsRow {
+        SettingsRow::rule(
+            ("settings-object-entry", entry_id(index, entry)),
+            self.palette,
+        )
+        .selected(selected, self.body_has_focus())
     }
 
     fn object_array_state(&self, index: usize) -> Option<&ObjectArrayState> {
@@ -3744,9 +3664,11 @@ impl SettingsPanelView {
         field_index: usize,
         field: &DraftField,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> AnyElement {
         let Some(state) = self.object_array_state(index) else {
-            return div().id(("settings-draft-empty", entry_id(index, field_index)));
+            return div()
+                .id(("settings-draft-empty", entry_id(index, field_index)))
+                .into_any_element();
         };
         let selected = state
             .draft
@@ -3768,6 +3690,7 @@ impl SettingsPanelView {
                 this.select_draft_field(index, field_index);
                 cx.notify();
             }))
+            .into_any_element()
     }
 
     fn render_draft_value(
@@ -3882,7 +3805,7 @@ impl SettingsPanelView {
         index: usize,
         selected: bool,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> AnyElement {
         let entry = usize::MAX;
         self.object_array_line(index, entry, selected)
             .child(
@@ -3904,6 +3827,7 @@ impl SettingsPanelView {
                 this.commit_object_array_draft(index);
                 cx.notify();
             }))
+            .into_any_element()
     }
 
     fn toggle_draft_mod(&mut self, index: usize, field_index: usize, option_index: usize) {
@@ -4045,9 +3969,11 @@ impl SettingsPanelView {
             )
     }
 
-    fn render_list_card_item(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_list_card_item(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(origin_row) = self.level().origin_row else {
-            return div().id(("settings-list-card-empty", index));
+            return div()
+                .id(("settings-list-card-empty", index))
+                .into_any_element();
         };
         let Some(RowControl::List {
             actions,
@@ -4057,46 +3983,31 @@ impl SettingsPanelView {
             ..
         }) = self.root().rows.get(origin_row).map(|row| &row.control)
         else {
-            return div().id(("settings-list-card-empty", index));
+            return div()
+                .id(("settings-list-card-empty", index))
+                .into_any_element();
         };
         let Some(item) = selected_list_item(actions, items, filter, index) else {
-            return div().id(("settings-list-card-empty", index));
+            return div()
+                .id(("settings-list-card-empty", index))
+                .into_any_element();
         };
         let selected = index == self.level().selected;
-        let mut line = div()
-            .id(("settings-list-card-item", index))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .h(px(row_body_height(&self.level().rows[index], false)))
-            .px_2()
-            .py_1()
-            .rounded_none()
-            .cursor(CursorStyle::PointingHand)
+        let mut line = SettingsRow::rule(("settings-list-card-item", index), self.palette)
+            .selected(selected, self.body_has_focus())
             .child(
-                div()
+                settings_label(item.label.clone(), self.palette)
                     .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(self.palette.section_text))
-                    .child(item.label.clone()),
+                    .min_w(px(0.)),
             )
             .child(self.render_list_card_value(item))
             .child(self.render_list_card_action(index, origin_row, item, selected, cx));
-        line = line.when_some(
-            slider.as_deref().and_then(|slider| {
-                list_card_slider_value(slider, actions, items, filter, index)
-                    .map(|value| (slider, value))
-            }),
-            |line, (slider, value)| {
-                line.child(self.render_list_slider_element(origin_row, slider, item, value, cx))
-            },
-        );
-        line = self.mark_selected(line, selected);
+        if let Some((slider, value)) = slider.as_deref().and_then(|slider| {
+            list_card_slider_value(slider, actions, items, filter, index)
+                .map(|value| (slider, value))
+        }) {
+            line = line.child(self.render_list_slider_element(origin_row, slider, item, value, cx));
+        }
         line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
                 return;
@@ -4104,6 +4015,7 @@ impl SettingsPanelView {
             this.level_mut().selected = index;
             cx.notify();
         }))
+        .into_any_element()
     }
 
     fn render_list_card_value(&self, item: &ListItem) -> Div {
@@ -4247,10 +4159,30 @@ impl Render for SettingsPanelView {
             self.pump_frame_paced_samples(window, cx);
         }
         self.fit_lists();
+        if self.custom_focus_pending {
+            if let Some(custom) = self.custom_view() {
+                (custom.focus)(window, cx);
+            }
+            self.custom_focus_pending = false;
+        }
         let rail: Vec<AnyElement> = if self.rail_is_open() {
-            (0..self.sources.len())
-                .map(|index| self.render_source_menu_item(index, cx).into_any_element())
-                .collect()
+            let mut rail = vec![rail_caption("QoL Settings")
+                .id("settings-rail-core-caption")
+                .into_any_element()];
+            let groups = self
+                .panel
+                .sources
+                .iter()
+                .map(|source| source.group)
+                .collect::<Vec<_>>();
+            let separators = rail_group_breaks(&groups);
+            for index in 0..self.sources.len() {
+                if separators.contains(&index) {
+                    rail.push(self.render_rail_plugin_caption().into_any_element());
+                }
+                rail.push(self.render_source_menu_item(index, cx).into_any_element());
+            }
+            rail
         } else {
             Vec::new()
         };
@@ -4274,6 +4206,7 @@ impl Render for SettingsPanelView {
                 }
             }
         }
+        let custom_view = self.custom_view().map(|custom| custom.view.clone());
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_FRAME",
@@ -4295,7 +4228,12 @@ impl Render for SettingsPanelView {
             .shadow(crate::kit::float_shadow(self.palette.section_text))
             .bg(rgb(self.palette.window_bg))
             .child(self.render_band())
-            .child(self.render_content(window.viewport_size().width.to_f64() as f32, rail, items))
+            .child(self.render_content(
+                window.viewport_size().width.to_f64() as f32,
+                rail,
+                items,
+                custom_view,
+            ))
             .when_some(self.save_error.clone(), |root, message| {
                 root.child(self.render_failure_bar(message))
             })
@@ -4305,52 +4243,68 @@ impl Render for SettingsPanelView {
 }
 
 impl SettingsPanelView {
-    fn render_card(&self, level_index: usize, items: Vec<AnyElement>) -> Div {
+    fn render_card(
+        &self,
+        level_index: usize,
+        items: Vec<AnyElement>,
+        custom_view: Option<AnyView>,
+    ) -> Div {
         let front = level_index + 1 == self.stack.len();
+        let has_custom_view = custom_view.is_some();
+        let mut body = div()
+            .id(("settings-panel-body", level_index))
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_1();
+        if let Some(custom_view) = custom_view {
+            body = body.child(custom_view);
+        } else {
+            body = body
+                .track_scroll(self.stack[level_index].body_scroll.handle())
+                .overflow_y_scroll()
+                .px(px(qol_theme::SPACE_PAD))
+                .pb_4()
+                .when(front && self.filter_open, |body| {
+                    body.pt(px(FILTER_OVERLAY_HEIGHT))
+                })
+                .children(items);
+        }
         div().flex_1().min_w_0().h_full().flex().flex_col().child(
             div()
                 .relative()
                 .flex_1()
                 .min_h(px(0.))
                 .w_full()
-                .child(
-                    div()
-                        .id(("settings-panel-body", level_index))
-                        .size_full()
-                        .track_scroll(self.stack[level_index].body_scroll.handle())
-                        .overflow_y_scroll()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .px(px(BODY_SIDE_PADDING))
-                        .pb_4()
-                        .when(front && self.filter_open, |body| {
-                            body.pt(px(FILTER_OVERLAY_HEIGHT))
-                        })
-                        .children(items),
-                )
-                .when(front, |frame| {
+                .child(body)
+                .when(front && !has_custom_view, |frame| {
                     frame.child(crate::scrollbar::seam_track(
                         self.stack[level_index].body_scroll.handle().clone(),
                         crate::kit::alpha(self.palette.panel_border, 0x48),
                         crate::kit::alpha(self.palette.section_text, 0x8c),
                     ))
                 })
-                .when(self.filter_open && front, |frame| {
+                .when(self.filter_open && front && !has_custom_view, |frame| {
                     frame.child(self.render_filter_overlay())
                 }),
         )
     }
 
-    fn render_content(&self, width: f32, rail: Vec<AnyElement>, items: Vec<AnyElement>) -> Div {
+    fn render_content(
+        &self,
+        width: f32,
+        rail: Vec<AnyElement>,
+        items: Vec<AnyElement>,
+        custom_view: Option<AnyView>,
+    ) -> Div {
         let depth = self.stack.len() - 1;
-        let card = self.render_card(self.stack.len() - 1, items);
+        let card = self.render_card(self.stack.len() - 1, items, custom_view);
         let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
         if !self.rail_is_open() {
             let slide = if self.deck_transition.snapped {
                 None
             } else {
-                deck_slide(self.deck_transition.step, self.deck_motion, depth, width)
+                deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
             };
             let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
             if depth == 0 {
@@ -4484,59 +4438,7 @@ impl SettingsPanelView {
     }
 
     fn render_deck(&self, depth: usize, card: Div, slide: Option<DeckSlide>) -> Div {
-        let card = card
-            .absolute()
-            .right_0()
-            .top_0()
-            .bottom_0()
-            .left(px(deck_front_offset(depth)))
-            .bg(rgb(self.palette.window_bg))
-            .border_t(px(1.))
-            .border_r(px(1.))
-            .border_b(px(1.))
-            .border_color(self.hairline())
-            .rounded_l(px(qol_theme::RADIUS_CARD))
-            .shadow(crate::kit::float_shadow(self.palette.section_text))
-            .child(crate::kit::accent_left_edge(
-                qol_theme::RADIUS_CARD,
-                RAIL_CARD_ACCENT,
-                self.palette.row_border_selected,
-            ));
-        let card = match slide {
-            Some(slide) => card
-                .with_animation(
-                    ("settings-card-deck-slide", slide.step),
-                    Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint()),
-                    move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
-                )
-                .into_any_element(),
-            None => card.into_any_element(),
-        };
-        div()
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .children(slivers_for(depth).into_iter().map(|sliver| {
-                div()
-                    .absolute()
-                    .left(px(sliver.left))
-                    .w(px(sliver.width))
-                    .top(px(sliver.inset))
-                    .bottom(px(sliver.inset))
-                    .bg(rgb(self.palette.window_bg))
-                    .border_t(px(1.))
-                    .border_r(px(1.))
-                    .border_b(px(1.))
-                    .border_color(self.hairline())
-                    .rounded_l(px(qol_theme::RADIUS_CARD))
-                    .child(crate::kit::accent_left_edge(
-                        qol_theme::RADIUS_CARD,
-                        RAIL_CARD_ACCENT,
-                        self.palette.row_border_selected,
-                    ))
-            }))
-            .child(card)
+        deck::render(self.palette, depth, card, slide, "settings-card-deck-slide")
     }
 
     fn panel_row_total(&self) -> usize {
@@ -4621,7 +4523,9 @@ impl SettingsPanelView {
                         }))
                     }),
             )
-            .child(self.render_count_chip(total, plural(total, "setting")))
+            .when(!self.current_source_is_custom(), |band| {
+                band.child(self.render_count_chip(total, plural(total, "setting")))
+            })
     }
 
     fn render_count_chip(&self, count: usize, noun: String) -> Div {
@@ -4770,50 +4674,13 @@ impl SettingsPanelView {
             })
     }
 
-    fn render_group_header(&self, title: &str, count: usize) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_end()
-            .justify_between()
-            .gap_3()
-            .h(px(super::PANEL_GROUP_HEADER_HEIGHT))
-            .pb_1p5()
-            .ml(px(-BODY_SIDE_PADDING))
-            .mr(px(-BODY_SIDE_PADDING))
-            .pl(px(GROUP_HEADER_INSET))
-            .pr(px(BODY_SIDE_PADDING))
-            .border_b(px(1.))
-            .border_color(self.hairline())
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(qol_theme::TEXT_CAPTION))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(self.palette.label_text))
-                            .child(title.to_uppercase()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .px_2()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgba(self.kit.washes.fill_resting.packed()))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .text_color(rgb(self.kit.palette.text_muted))
-                    .child(format!("{count} {}", plural(count, "setting"))),
-            )
+    fn render_group_header(&self, title: &str, count: usize) -> impl IntoElement {
+        SettingsGroupHeader::new(
+            title.to_string(),
+            count,
+            plural(count, "setting"),
+            self.palette,
+        )
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
@@ -4840,6 +4707,28 @@ impl SettingsPanelView {
     }
 
     fn render_hint_bar(&self) -> Div {
+        if self.current_source_is_custom() && self.body_has_focus() {
+            return div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_4()
+                .h(px(super::PANEL_HINT_BAR_HEIGHT))
+                .px(px(qol_theme::SPACE_GUTTER))
+                .border_t(px(1.))
+                .border_color(self.hairline())
+                .bg(rgba(self.kit.washes.fill_resting.packed()))
+                .child(self.render_hint("\u{2191}\u{2193}", "move"))
+                .child(self.render_hint("\u{21b5}", "open"))
+                .child(self.render_hint("A", "add"))
+                .child(self.render_hint("\u{232b}", "delete"))
+                .when(self.custom_tool_is_shortcuts(), |bar| {
+                    bar.child(self.render_hint("R", "run"))
+                })
+                .child(div().flex_1())
+                .child(self.render_hint("esc", "back"));
+        }
         let mut bar = div()
             .flex_none()
             .flex()
@@ -4885,44 +4774,15 @@ impl SettingsPanelView {
             )
     }
 
-    fn render_failure_bar(&self, message: String) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .border_t(px(1.))
-            .border_color(self.hairline())
-            .bg(rgba(self.kit.washes.wash_invalid.packed()))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(qol_theme::SPACE_MARK))
-                    .bg(rgb(self.palette.status_danger)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px(px(qol_theme::SPACE_GUTTER))
-                    .py_2()
-                    .child(
-                        self.kit
-                            .lamp(self.palette.status_danger)
-                            .w(px(7.))
-                            .h(px(7.)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_size(px(qol_theme::TEXT_MICRO))
-                            .text_color(rgb(self.palette.status_danger))
-                            .child(message),
-                    ),
-            )
+    fn custom_tool_is_shortcuts(&self) -> bool {
+        self.panel
+            .sources
+            .get(self.materialized_source)
+            .is_some_and(|source| source.plugin_id == "__core-shortcuts")
+    }
+
+    fn render_failure_bar(&self, message: String) -> impl IntoElement {
+        SettingsFeedback::new(message, self.palette.status_danger, true)
     }
 
     fn resize_canvas(&mut self) -> impl IntoElement {
@@ -5925,8 +5785,16 @@ fn bare_filter_seed(key: &str, key_char: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn rail_open(sources: usize, filtering: bool) -> bool {
+pub(super) fn rail_open(sources: usize, filtering: bool) -> bool {
     sources > 1 && !filtering
+}
+
+fn rail_group_breaks(groups: &[PanelSourceGroup]) -> Vec<usize> {
+    groups
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| (pair[0] != pair[1]).then_some(index + 1))
+        .collect()
 }
 
 fn filtered_visible_rows(
@@ -6078,16 +5946,16 @@ fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) ->
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, clamp_selected, color_display, crumb_labels, deck_slide,
-        due_query_indices, escape_step, focus_level, format_number, header_is_redundant,
-        horizontal_step_direction, intent, list_action_affordance, list_card_slider_value,
-        list_fit_updates, list_slider_value, live_card_level, live_card_sync, live_card_sync_back,
-        number_preview, number_unit, parsed_color, parsed_number, pop_level, push_level,
-        query_is_due, row_body_height, selected_list_item, slider_fraction, slider_percent_label,
-        slider_value_from_fraction, slivers_for, source_window_height_for, step_list_slider,
-        stepped_number, stepped_slider_value, text_or_placeholder, transition_in_flight,
-        transition_policy, CardSliver, ChipRowPart, DeckMotion, DeckSlide, EscapeStep, HeightCache,
-        Intent, Level, ObjectArrayState, Row, RowControl, RowSection, SliderHold, TransitionAction,
+        binary_state_label, clamp_selected, color_display, crumb_labels, due_query_indices,
+        escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
+        intent, list_action_affordance, list_card_slider_value, list_fit_updates,
+        list_slider_value, live_card_level, live_card_sync, live_card_sync_back, number_preview,
+        number_unit, parsed_color, parsed_number, pop_level, push_level, query_is_due,
+        rail_group_breaks, row_body_height, selected_list_item, slider_fraction,
+        slider_percent_label, slider_value_from_fraction, source_window_height_for,
+        step_list_slider, stepped_number, stepped_slider_value, text_or_placeholder,
+        transition_in_flight, transition_policy, ChipRowPart, EscapeStep, HeightCache, Intent,
+        Level, ObjectArrayState, Row, RowControl, RowSection, SliderHold, TransitionAction,
         TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
@@ -6095,6 +5963,22 @@ mod tests {
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::object_array_row::{Chip, ChipTone, Entry, Item, ItemChips};
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
+    use crate::settings_panel::PanelSourceGroup;
+
+    #[test]
+    fn rail_separator_only_marks_the_core_to_plugin_boundary() {
+        assert_eq!(
+            rail_group_breaks(&[
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Plugin,
+                PanelSourceGroup::Plugin,
+            ]),
+            vec![3]
+        );
+        assert!(rail_group_breaks(&[PanelSourceGroup::Core]).is_empty());
+    }
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
@@ -8057,59 +7941,6 @@ default = "visible"
             crumb_labels("Key remap", Some("Key remap".to_string()), Vec::new()),
             vec!["Key remap"]
         );
-    }
-
-    #[test]
-    fn deck_slivers_follow_the_one_window_depth_geometry() {
-        assert_eq!(slivers_for(0), Vec::new());
-        assert_eq!(
-            slivers_for(1),
-            vec![CardSliver {
-                left: 0.0,
-                width: 12.0,
-                inset: 8.0
-            }]
-        );
-        let depth_two = slivers_for(2);
-        assert_eq!(
-            depth_two,
-            vec![
-                CardSliver {
-                    left: 0.0,
-                    width: 10.0,
-                    inset: 14.0
-                },
-                CardSliver {
-                    left: 9.0,
-                    width: 10.0,
-                    inset: 7.0
-                },
-            ]
-        );
-        assert_eq!(slivers_for(3), depth_two);
-        assert_eq!(slivers_for(7), depth_two);
-    }
-
-    #[test]
-    fn deck_slide_maps_counter_and_direction_to_key_and_opposite_starts() {
-        let push = deck_slide(7, Some(DeckMotion::Push), 1, 520.0).unwrap();
-        let pop = deck_slide(8, Some(DeckMotion::Pop), 1, 520.0).unwrap();
-        assert_ne!(push.step, pop.step);
-        assert_eq!(push.step, 7);
-        assert_eq!(pop.step, 8);
-        assert_eq!(push.from, 520.0);
-        assert_eq!(pop.from, 18.0);
-        assert!(push.from > pop.from);
-        assert_eq!(push.to, pop.to);
-        assert_eq!(
-            deck_slide(9, Some(DeckMotion::Pop), 0, 520.0),
-            Some(DeckSlide {
-                step: 9,
-                from: 10.0,
-                to: 0.0,
-            })
-        );
-        assert_eq!(deck_slide(10, None, 2, 520.0), None);
     }
 
     #[test]

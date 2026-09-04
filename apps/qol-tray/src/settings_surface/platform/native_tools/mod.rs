@@ -2,58 +2,52 @@ mod data;
 mod model;
 mod view;
 
-use gpui::{px, size, App};
-use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
+use std::rc::Rc;
+
+use gpui::{App, AppContext, Focusable, Window};
+use qol_gpui::settings_panel::{CustomPanelContext, CustomPanelFactory, CustomPanelView};
 
 use crate::settings_surface::CoreTool;
 
 use view::NativeToolsView;
 
-const WINDOW_WIDTH: f32 = 720.0;
-const WINDOW_HEIGHT: f32 = 620.0;
-
-#[derive(Default)]
-pub(super) struct NativeToolsHost {
-    active: Option<ActiveTools>,
+pub(super) fn factories(target: CoreTool) -> Vec<(String, CustomPanelFactory)> {
+    let shortcut_target = if target == CoreTool::AddShortcut {
+        CoreTool::AddShortcut
+    } else {
+        CoreTool::Shortcuts
+    };
+    let hotkey_target = if target == CoreTool::AddHotkey {
+        CoreTool::AddHotkey
+    } else {
+        CoreTool::Hotkeys
+    };
+    vec![
+        (
+            CoreTool::Shortcuts.wire_id().to_string(),
+            factory(shortcut_target),
+        ),
+        (
+            CoreTool::Hotkeys.wire_id().to_string(),
+            factory(hotkey_target),
+        ),
+    ]
 }
 
-struct ActiveTools {
-    surface: OpenedSurface<NativeToolsView>,
-    dismisser: SurfaceDismisser,
-}
-
-impl NativeToolsHost {
-    pub(super) fn activate(
-        &mut self,
-        target: CoreTool,
-        tracker: &MonitorTracker,
-        cx: &mut App,
-    ) -> anyhow::Result<()> {
-        self.dismiss(cx);
-        let dismisser_cell = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let build_cell = dismisser_cell.clone();
-        let surface = Surface::new(SurfaceKind::Panel)
-            .title("QoL Shortcuts & Hotkeys")
-            .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
-            .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
-            .show_focused(tracker, cx, move |dismisser, _window, cx| {
-                *build_cell.borrow_mut() = Some(dismisser.clone());
-                NativeToolsView::new(target, dismisser, cx)
-            })?;
-        let dismisser = dismisser_cell
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("native tools surface did not initialize"))?;
-        self.active = Some(ActiveTools { surface, dismisser });
-        Ok(())
-    }
-
-    pub(super) fn dismiss(&mut self, cx: &mut App) {
-        let Some(active) = self.active.take() else {
-            return;
-        };
-        let _ = active.surface;
-        active.dismisser.dismiss(cx);
-    }
+fn factory(target: CoreTool) -> CustomPanelFactory {
+    Rc::new(move |context: CustomPanelContext, cx| {
+        let CustomPanelContext {
+            dismisser,
+            on_back,
+            notify,
+        } = context;
+        let view = cx.new(|cx| NativeToolsView::new(target, dismisser, Some(on_back), notify, cx));
+        let focus_view = view.clone();
+        CustomPanelView {
+            view: view.into(),
+            focus: Rc::new(move |window: &mut Window, cx: &mut App| {
+                window.focus(&focus_view.focus_handle(cx));
+            }),
+        }
+    })
 }

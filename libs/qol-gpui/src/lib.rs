@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod color_wheel;
 pub mod command_loop;
+pub mod deck;
 pub mod dropdown;
 pub mod event_router;
 pub mod format;

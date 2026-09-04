@@ -4,13 +4,16 @@ mod rows;
 mod stream;
 mod view;
 
+pub mod components;
+
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::surface::{OpenedSurface, Surface, SurfaceKind};
+use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
 use rows::{rows_from_resolved, sections_from_resolved, Row, RowControl, RowSection};
 use view::{SettingsPanelState, SettingsPanelView};
 
@@ -27,7 +30,6 @@ const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 20.0;
 const PANEL_LIST_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_RULE_ROW;
 const PANEL_LIST_GAP: f32 = 4.0;
 const PANEL_LIST_PADDING_Y: f32 = 8.0;
-const PANEL_OBJECT_ROW_HEIGHT: f32 = qol_theme::HEIGHT_RULE_ROW;
 const PANEL_QR_CODE_HEIGHT: f32 = 180.0;
 const PANEL_QR_URL_HEIGHT: f32 = 20.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
@@ -37,17 +39,27 @@ const PANEL_GROUP_HEADER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_HINT_BAR_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
 const PANEL_FILTER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_MAX_HEIGHT: f32 = 720.0;
+const PANEL_CUSTOM_WIDTH: f32 = 560.0;
+const PANEL_CUSTOM_HEIGHT: f32 = PANEL_MAX_HEIGHT;
 
 fn chrome_height(_sections: &[RowSection]) -> f32 {
     PANEL_BAND_HEIGHT + PANEL_HINT_BAR_HEIGHT
 }
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelSourceGroup {
+    Core,
+    Plugin,
+}
+
 #[derive(Clone)]
 pub struct PanelSource {
     pub plugin_id: String,
     pub contract: String,
     pub heading: String,
+    pub group: PanelSourceGroup,
+    pub custom: bool,
 }
 
 #[derive(Clone)]
@@ -59,11 +71,18 @@ pub struct SettingsPanel {
 
 impl SettingsPanel {
     pub fn single(plugin_id: String, contract: String, heading: String) -> SettingsPanel {
+        let group = if plugin_id == qol_conventions::CORE_PANEL_ID {
+            PanelSourceGroup::Core
+        } else {
+            PanelSourceGroup::Plugin
+        };
         SettingsPanel {
             sources: vec![PanelSource {
                 plugin_id,
                 contract,
                 heading: heading.clone(),
+                group,
+                custom: false,
             }],
             heading,
             focus: None,
@@ -84,6 +103,29 @@ impl SettingsPanel {
             .unwrap_or_default()
     }
 }
+
+pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+
+pub struct CustomPanelView {
+    pub view: AnyView,
+    pub focus: CustomPanelCallback,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CustomPanelNoticeTone {
+    Success,
+    Failure,
+}
+
+pub type CustomPanelNotifier = Rc<dyn Fn(CustomPanelNoticeTone, String, &mut App)>;
+
+pub struct CustomPanelContext {
+    pub dismisser: SurfaceDismisser,
+    pub on_back: CustomPanelCallback,
+    pub notify: CustomPanelNotifier,
+}
+
+pub type CustomPanelFactory = Rc<dyn Fn(CustomPanelContext, &mut App) -> CustomPanelView>;
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
 type ActionHandler =
@@ -107,6 +149,17 @@ pub enum SettingsActivation {
 #[derive(Default)]
 pub struct SettingsWindowHost {
     active: Option<ActivePanel>,
+    notify: Option<CustomPanelNotifier>,
+}
+
+impl SettingsWindowHost {
+    pub fn set_custom_notifier(&mut self, notify: CustomPanelNotifier) {
+        self.notify = Some(notify);
+    }
+
+    fn notifier(&self) -> CustomPanelNotifier {
+        self.notify.clone().unwrap_or_else(|| Rc::new(|_, _, _| {}))
+    }
 }
 
 struct ActivePanel {
@@ -165,9 +218,9 @@ impl SettingsWindowHost {
         let retargeted = active
             .surface
             .handle
-            .update(cx, |root, _, cx| {
+            .update(cx, |root, window, cx| {
                 root.inner
-                    .update(cx, |view, cx| view.retarget_focus(plugin_id, cx))
+                    .update(cx, |view, cx| view.retarget_focus(plugin_id, window, cx))
             })
             .ok()
             .unwrap_or(false);
@@ -186,23 +239,85 @@ impl SettingsWindowHost {
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
+        self.activate_prepared_with_custom(prepared, Vec::new(), tracker, cx)
+    }
+
+    pub fn activate_prepared_with_custom(
+        &mut self,
+        prepared: PreparedSettingsPanel,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+    ) -> anyhow::Result<SettingsActivation> {
+        self.activate_prepared_with_custom_mode(prepared, custom_factories, false, tracker, cx)
+    }
+
+    pub fn activate_prepared_with_custom_force(
+        &mut self,
+        prepared: PreparedSettingsPanel,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+    ) -> anyhow::Result<SettingsActivation> {
+        self.activate_prepared_with_custom_mode(prepared, custom_factories, true, tracker, cx)
+    }
+
+    fn activate_prepared_with_custom_mode(
+        &mut self,
+        prepared: PreparedSettingsPanel,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        force_replace: bool,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+    ) -> anyhow::Result<SettingsActivation> {
         let plugin_id = prepared.panel.primary_plugin_id().to_string();
+        let requested_focus = prepared.panel.focus.clone();
         let decision = activation_decision(
             self.active.as_ref().map(|active| active.plugin_id.as_str()),
             &plugin_id,
         );
-        if decision == ActivationDecision::Focus && self.present(tracker, cx) {
+        let can_focus = if !force_replace && decision == ActivationDecision::Focus {
+            requested_focus
+                .as_deref()
+                .is_none_or(|focus| self.retarget_active_source(focus, cx))
+        } else {
+            false
+        };
+        if can_focus && self.present(tracker, cx) {
             return Ok(SettingsActivation::Focused);
         }
 
         let prepared = size_prepared_panel(prepared, tracker)?;
-        if decision == ActivationDecision::Replace && self.active_is_open(cx) {
-            self.replace(prepared, tracker, cx)?;
+        if (force_replace || decision == ActivationDecision::Replace || !can_focus)
+            && self.active_is_open(cx)
+        {
+            self.replace(prepared, custom_factories, tracker, cx)?;
             return Ok(SettingsActivation::Replaced);
         }
 
-        self.active = Some(open_prepared(prepared, tracker, cx)?);
+        self.active = Some(open_prepared(
+            prepared,
+            custom_factories,
+            self.notifier(),
+            tracker,
+            cx,
+        )?);
         Ok(SettingsActivation::Opened)
+    }
+
+    fn retarget_active_source(&mut self, plugin_id: &str, cx: &mut App) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        active
+            .surface
+            .handle
+            .update(cx, |root, window, cx| {
+                root.inner
+                    .update(cx, |view, cx| view.retarget_focus(plugin_id, window, cx))
+            })
+            .ok()
+            .unwrap_or(false)
     }
 
     fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
@@ -240,9 +355,11 @@ impl SettingsWindowHost {
     fn replace(
         &mut self,
         prepared: PreparedPanel,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<()> {
+        let notify = self.notifier();
         let Some(active) = self.active.as_mut() else {
             return Err(anyhow::anyhow!(
                 "settings window disappeared before replacement"
@@ -256,8 +373,16 @@ impl SettingsWindowHost {
         active.surface.handle.update(cx, move |root, window, cx| {
             root.inner.update(cx, |view, _| view.pause_runtime_poll());
             dismisser.retitle(window, heading);
-            let inner =
-                cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
+            let inner = cx.new(|cx| {
+                SettingsPanelView::new(
+                    prepared.panel,
+                    prepared.state,
+                    dismisser,
+                    custom_factories,
+                    notify,
+                    cx,
+                )
+            });
             let focus = inner.read(cx).focus_handle(cx);
             root.inner = inner;
             window.focus(&focus);
@@ -400,7 +525,7 @@ pub async fn open_from_async(
     let prepared = prepare_from_async(panel, runtime, cx).await?;
     cx.update(move |cx| {
         let prepared = size_prepared_panel(prepared, &tracker)?;
-        open_prepared(prepared, &tracker, cx).map(|_| ())
+        open_prepared(prepared, Vec::new(), Rc::new(|_, _, _| {}), &tracker, cx).map(|_| ())
     })?
 }
 
@@ -483,6 +608,20 @@ fn prepare_source(
     source: &PanelSource,
     runtime: SettingsRuntime,
 ) -> anyhow::Result<PreparedSource> {
+    if source.custom {
+        return Ok(PreparedSource {
+            rows: Vec::new(),
+            sections: Vec::new(),
+            description: None,
+            state: SourceState {
+                plugin_id: source.plugin_id.clone(),
+                values: serde_json::json!({}),
+                path: None,
+                runtime,
+                daemon_port: None,
+            },
+        });
+    }
     let spec = qol_config::contract::parse_spec_str(&source.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
     let base = persistence::panel_base(&source.plugin_id);
@@ -521,9 +660,20 @@ fn size_prepared_panel(
     let available = (monitor.bounds().size.height.to_f64() as f32
         - 2.0 * crate::placement::CORNER_MARGIN)
         .min(PANEL_MAX_HEIGHT);
-    let body_width = panel_width(&prepared.rows);
-    let width = body_width + rail_width(&prepared.sections);
-    let height = panel_height(&prepared.rows, &prepared.sections).min(available);
+    let has_custom_source = prepared.panel.sources.iter().any(|source| source.custom);
+    let body_width = panel_width(&prepared.rows).max(if has_custom_source {
+        PANEL_CUSTOM_WIDTH
+    } else {
+        0.0
+    });
+    let width = body_width + rail_width(prepared.sources.len());
+    let height = panel_height(&prepared.rows, &prepared.sections)
+        .max(if has_custom_source {
+            PANEL_CUSTOM_HEIGHT
+        } else {
+            0.0
+        })
+        .min(available);
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
@@ -539,6 +689,8 @@ fn size_prepared_panel(
 
 fn open_prepared(
     prepared: PreparedPanel,
+    custom_factories: Vec<(String, CustomPanelFactory)>,
+    notify: CustomPanelNotifier,
     tracker: &MonitorTracker,
     cx: &mut App,
 ) -> anyhow::Result<ActivePanel> {
@@ -550,7 +702,14 @@ fn open_prepared(
         .size(prepared.size)
         .retain_on_dismiss()
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
-            SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx)
+            SettingsPanelView::new(
+                prepared.panel,
+                prepared.state,
+                dismisser,
+                custom_factories,
+                notify,
+                cx,
+            )
         })?;
     Ok(ActivePanel {
         plugin_id,
@@ -591,8 +750,11 @@ fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
     chrome_height(sections) + body
 }
 
-fn rail_width(sections: &[RowSection]) -> f32 {
-    if sections.len() > 1 {
+/// Sized against the same predicate the view opens the rail with, so a panel
+/// never reserves rail width the body will not show. Sources that failed to
+/// prepare are already gone from `source_count`, and a panel opens unfiltered.
+fn rail_width(source_count: usize) -> f32 {
+    if view::rail_open(source_count, false) {
         PANEL_RAIL_WIDTH
     } else {
         0.0
@@ -641,8 +803,9 @@ fn row_fits_a_compact_panel(row: &Row) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, panel_height, panel_width, rail_width, ActivationDecision, Row,
-        RowSection, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
+        activation_decision, panel_height, panel_width, rail_width, ActivationDecision,
+        PanelSource, PanelSourceGroup, Row, RowSection, SettingsPanel, SettingsRuntime,
+        PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::rows::RowControl;
@@ -775,8 +938,8 @@ mod tests {
             super::chrome_height(&sections)
                 + 3.0 * (super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT)
         );
-        assert_eq!(rail_width(&sections), super::PANEL_RAIL_WIDTH);
-        assert_eq!(rail_width(&sections[..1]), 0.0);
+        assert_eq!(rail_width(2), super::PANEL_RAIL_WIDTH);
+        assert_eq!(rail_width(1), 0.0);
     }
 
     #[test]
@@ -850,6 +1013,59 @@ mod tests {
                 "active={active:?} requested={requested}"
             );
         }
+    }
+
+    #[test]
+    fn custom_sources_do_not_require_a_settings_contract() {
+        let source = PanelSource {
+            plugin_id: "__core-shortcuts".into(),
+            contract: String::new(),
+            heading: "Shortcuts".into(),
+            group: PanelSourceGroup::Core,
+            custom: true,
+        };
+        let prepared = super::prepare_source(&source, SettingsRuntime::empty()).unwrap();
+
+        assert!(prepared.rows.is_empty());
+        assert!(prepared.sections.is_empty());
+        assert_eq!(prepared.state.plugin_id, "__core-shortcuts");
+    }
+
+    #[test]
+    fn a_skipped_source_reserves_no_rail_width() {
+        let panel = SettingsPanel {
+            sources: vec![
+                PanelSource {
+                    plugin_id: "__core-shortcuts".into(),
+                    contract: String::new(),
+                    heading: "Shortcuts".into(),
+                    group: PanelSourceGroup::Core,
+                    custom: true,
+                },
+                PanelSource {
+                    plugin_id: "plugin-broken".into(),
+                    contract: "this is not a contract".into(),
+                    heading: "Broken".into(),
+                    group: PanelSourceGroup::Plugin,
+                    custom: false,
+                },
+            ],
+            heading: "Settings".into(),
+            focus: None,
+        };
+
+        let prepared = super::prepare_panel(
+            panel,
+            vec![SettingsRuntime::empty(), SettingsRuntime::empty()],
+        )
+        .expect("a broken source is skipped, not fatal");
+
+        assert_eq!(prepared.sources.len(), 1, "the broken source is dropped");
+        assert_eq!(
+            rail_width(prepared.sources.len()),
+            0.0,
+            "sizing must not reserve a rail the body will not open"
+        );
     }
 
     #[test]

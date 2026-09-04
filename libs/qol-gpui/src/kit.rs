@@ -341,8 +341,8 @@ impl Kit {
 
     pub fn button_primary(&self, text: impl Into<SharedString>) -> Div {
         self.button_base(text)
-            .bg(rgb(self.palette.accent))
-            .text_color(rgb(self.palette.surface_raised))
+            .bg(rgb(self.palette.solid_fill))
+            .text_color(rgb(self.palette.solid_ink))
             .shadow(raised_shadow(self.palette.text_primary))
     }
 

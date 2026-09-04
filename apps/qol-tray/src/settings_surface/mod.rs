@@ -40,6 +40,13 @@ impl CoreTool {
             Self::Shortcuts => "shortcuts",
         }
     }
+
+    pub(crate) fn page_wire_id(self) -> &'static str {
+        match self {
+            Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",
+            Self::AddShortcut | Self::Shortcuts => "__core-shortcuts",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]

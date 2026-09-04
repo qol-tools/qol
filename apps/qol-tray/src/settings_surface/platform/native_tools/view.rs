@@ -1,13 +1,24 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::*;
 use gpui::*;
+use qol_gpui::deck;
+use qol_gpui::dropdown::{Dropdown, DropdownEvent};
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
-use qol_gpui::surface::{PanelDragArea, SurfaceDismisser};
+use qol_gpui::settings_panel::components::{
+    settings_description, settings_dropdown_style, settings_label, settings_value_group,
+    SettingsGroupHeader, SettingsKeyCombination, SettingsRow, SettingsSelectValue,
+    SettingsTextField, SettingsToggle,
+};
+use qol_gpui::settings_panel::{CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier};
+use qol_gpui::surface::SurfaceDismisser;
+use qol_gpui::theme::settings_panel_runtime;
 
 use crate::hotkeys::HotkeyBinding;
 use crate::settings_surface::CoreTool;
-use crate::shortcuts::model::{Shortcut, ShortcutAction};
+use crate::shortcuts::model::Shortcut;
 
 use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
@@ -16,6 +27,16 @@ use super::model::{
 };
 
 const MAX_VISIBLE: usize = 9;
+const EDITOR_DEPTH: usize = 1;
+const HOTKEY_FIELDS: usize = 4;
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        noun.to_string()
+    } else {
+        format!("{noun}s")
+    }
+}
 const ROW_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 
 enum Mode {
@@ -24,9 +45,30 @@ enum Mode {
     Hotkey(HotkeyDraft),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectField {
+    ActionKind,
+    TargetKind,
+    BrowserKind,
+    Plugin,
+    Action,
+}
+
+struct FieldMenu {
+    field: usize,
+    menu: Dropdown,
+}
+
 pub(super) struct NativeToolsView {
     focus_handle: FocusHandle,
+    body_focused: bool,
+    body_width: Rc<Cell<f32>>,
+    editor_step: usize,
+    editor_motion: Option<deck::Motion>,
+    menu: Option<FieldMenu>,
     dismisser: SurfaceDismisser,
+    on_back: Option<CustomPanelCallback>,
+    notify: CustomPanelNotifier,
     tool: ToolKind,
     initial_editor: bool,
     mode: Mode,
@@ -38,8 +80,6 @@ pub(super) struct NativeToolsView {
     hotkey_list: ScrollList,
     loading: bool,
     pending: bool,
-    error: Option<String>,
-    notice: Option<String>,
     sequence: u64,
 }
 
@@ -47,6 +87,8 @@ impl NativeToolsView {
     pub(super) fn new(
         target: CoreTool,
         dismisser: SurfaceDismisser,
+        on_back: Option<CustomPanelCallback>,
+        notify: CustomPanelNotifier,
         cx: &mut Context<Self>,
     ) -> Self {
         let (tool, initial_editor) = match target {
@@ -61,7 +103,14 @@ impl NativeToolsView {
             .as_millis() as u64;
         let view = Self {
             focus_handle: cx.focus_handle(),
+            body_focused: false,
+            body_width: Rc::new(Cell::new(0.0)),
+            editor_step: 0,
+            editor_motion: None,
+            menu: None,
             dismisser,
+            on_back,
+            notify,
             tool,
             initial_editor,
             mode: Mode::List,
@@ -73,8 +122,6 @@ impl NativeToolsView {
             hotkey_list: ScrollList::new(MAX_VISIBLE),
             loading: true,
             pending: false,
-            error: None,
-            notice: None,
             sequence,
         };
         Self::spawn_load(cx);
@@ -100,7 +147,7 @@ impl NativeToolsView {
                                 view.open_add();
                             }
                         }
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -110,88 +157,105 @@ impl NativeToolsView {
     }
 
     fn sync_lists(&mut self) {
-        self.shortcut_list.sync(self.shortcuts.len());
-        self.hotkey_list.sync(self.hotkeys.len());
+        self.shortcut_list.sync(self.shortcuts.len() + 1);
+        self.hotkey_list.sync(self.hotkeys.len() + 1);
     }
 
-    fn set_selected_index(&mut self, index: usize) {
+    fn item_count(&self) -> usize {
         match self.tool {
-            ToolKind::Hotkeys => {
-                self.hotkey_list.selected = index;
-                self.hotkey_list.sync(self.hotkeys.len());
-            }
-            ToolKind::Shortcuts => {
-                self.shortcut_list.selected = index;
-                self.shortcut_list.sync(self.shortcuts.len());
-            }
+            ToolKind::Hotkeys => self.hotkeys.len(),
+            ToolKind::Shortcuts => self.shortcuts.len(),
         }
     }
 
-    fn switch_tool(&mut self, tool: ToolKind) {
-        self.cancel_capture();
-        self.tool = tool;
-        self.mode = Mode::List;
-        self.error = None;
-        self.notice = None;
-        self.sync_lists();
+    fn list_len(&self) -> usize {
+        self.item_count() + 1
+    }
+
+    fn list(&self) -> &ScrollList {
+        match self.tool {
+            ToolKind::Hotkeys => &self.hotkey_list,
+            ToolKind::Shortcuts => &self.shortcut_list,
+        }
+    }
+
+    fn list_mut(&mut self) -> &mut ScrollList {
+        match self.tool {
+            ToolKind::Hotkeys => &mut self.hotkey_list,
+            ToolKind::Shortcuts => &mut self.shortcut_list,
+        }
+    }
+
+    fn selected_item(&self) -> Option<usize> {
+        self.list().selected.checked_sub(1)
+    }
+
+    fn set_selected_index(&mut self, index: usize) {
+        let total = self.list_len();
+        let list = self.list_mut();
+        list.selected = index;
+        list.sync(total);
+    }
+
+    fn report(&self, message: &str, cx: &mut Context<Self>) {
+        (self.notify)(CustomPanelNoticeTone::Success, message.to_string(), cx);
+    }
+
+    fn fail(&self, message: &str, cx: &mut Context<Self>) {
+        (self.notify)(CustomPanelNoticeTone::Failure, message.to_string(), cx);
     }
 
     fn open_add(&mut self) {
-        self.error = None;
-        self.notice = None;
-        self.mode = match self.tool {
+        let mode = match self.tool {
             ToolKind::Hotkeys => Mode::Hotkey(HotkeyDraft::blank(&self.plugins, &self.hotkeys)),
             ToolKind::Shortcuts => Mode::Shortcut(ShortcutDraft::blank()),
         };
+        self.open_editor(mode);
     }
 
-    fn activate_selected(&mut self, cx: &mut Context<Self>) {
-        self.error = None;
-        self.notice = None;
+    fn open_editor(&mut self, mode: Mode) {
+        self.menu = None;
+        self.mode = mode;
+        self.editor_step = self.editor_step.wrapping_add(1);
+        self.editor_motion = Some(deck::Motion::Push);
+    }
+
+    fn activate_selected(&mut self) {
+        let Some(item) = self.selected_item() else {
+            self.open_add();
+            return;
+        };
         match self.tool {
             ToolKind::Shortcuts => {
-                let Some(shortcut) = self.shortcuts.get(self.shortcut_list.selected) else {
+                let Some(shortcut) = self.shortcuts.get(item) else {
                     return;
                 };
-                if shortcut_is_managed(shortcut) {
-                    self.run_shortcut(cx);
-                    return;
-                }
-                if let Some(draft) = ShortcutDraft::from_shortcut(shortcut) {
-                    self.mode = Mode::Shortcut(draft);
-                }
+                self.open_editor(Mode::Shortcut(ShortcutDraft::from_shortcut(shortcut)));
             }
             ToolKind::Hotkeys => {
-                let Some(hotkey) = self.hotkeys.get(self.hotkey_list.selected) else {
+                let Some(hotkey) = self.hotkeys.get(item) else {
                     return;
                 };
-                self.mode = Mode::Hotkey(HotkeyDraft::from_hotkey(hotkey));
+                self.open_editor(Mode::Hotkey(HotkeyDraft::from_hotkey(hotkey)));
             }
         }
     }
 
     fn close_editor(&mut self) {
         self.cancel_capture();
+        self.menu = None;
         self.mode = Mode::List;
-        self.error = None;
+        self.editor_step = self.editor_step.wrapping_add(1);
+        self.editor_motion = Some(deck::Motion::Pop);
     }
 
     fn move_list(&mut self, direction: isize) {
-        match self.tool {
-            ToolKind::Hotkeys => {
-                if direction < 0 {
-                    self.hotkey_list.move_up();
-                } else {
-                    self.hotkey_list.move_down(self.hotkeys.len());
-                }
-            }
-            ToolKind::Shortcuts => {
-                if direction < 0 {
-                    self.shortcut_list.move_up();
-                } else {
-                    self.shortcut_list.move_down(self.shortcuts.len());
-                }
-            }
+        let total = self.list_len();
+        let list = self.list_mut();
+        if direction < 0 {
+            list.move_up();
+        } else {
+            list.move_down(total);
         }
     }
 
@@ -206,16 +270,18 @@ impl NativeToolsView {
     }
 
     fn delete_shortcut(&mut self, cx: &mut Context<Self>) {
-        let Some(shortcut) = self.shortcuts.get(self.shortcut_list.selected) else {
+        let Some(shortcut) = self
+            .selected_item()
+            .and_then(|item| self.shortcuts.get(item))
+        else {
             return;
         };
         if shortcut_is_managed(shortcut) {
-            self.error = Some("Plugin-managed shortcuts cannot be deleted here".to_string());
+            self.fail("Plugin-managed shortcuts cannot be deleted here", cx);
             return;
         }
         let id = shortcut.id.clone();
         self.pending = true;
-        self.error = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -227,10 +293,10 @@ impl NativeToolsView {
                     match result {
                         Ok(shortcuts) => {
                             view.shortcuts = shortcuts;
-                            view.shortcut_list.sync(view.shortcuts.len());
-                            view.notice = Some("Shortcut deleted".to_string());
+                            view.shortcut_list.sync(view.shortcuts.len() + 1);
+                            view.report("Shortcut deleted", cx);
                         }
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -240,13 +306,15 @@ impl NativeToolsView {
     }
 
     fn delete_hotkey(&mut self, cx: &mut Context<Self>) {
-        if self.hotkeys.get(self.hotkey_list.selected).is_none() {
+        let Some(item) = self.selected_item() else {
+            return;
+        };
+        if self.hotkeys.get(item).is_none() {
             return;
         }
         let mut next = self.hotkeys.clone();
-        next.remove(self.hotkey_list.selected);
+        next.remove(item);
         self.pending = true;
-        self.error = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -261,10 +329,10 @@ impl NativeToolsView {
                     match result {
                         Ok(()) => {
                             view.hotkeys = next;
-                            view.hotkey_list.sync(view.hotkeys.len());
-                            view.notice = Some("Hotkey deleted".to_string());
+                            view.hotkey_list.sync(view.hotkeys.len() + 1);
+                            view.report("Hotkey deleted", cx);
                         }
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -277,13 +345,14 @@ impl NativeToolsView {
         if self.pending {
             return;
         }
-        let Some(shortcut) = self.shortcuts.get(self.shortcut_list.selected) else {
+        let Some(shortcut) = self
+            .selected_item()
+            .and_then(|item| self.shortcuts.get(item))
+        else {
             return;
         };
         let id = shortcut.id.clone();
         self.pending = true;
-        self.error = None;
-        self.notice = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -293,8 +362,8 @@ impl NativeToolsView {
                 let _ = this.update(&mut async_cx, |view, cx| {
                     view.pending = false;
                     match result {
-                        Ok(()) => view.notice = Some("Shortcut launched".to_string()),
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Ok(()) => view.report("Shortcut launched", cx),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -311,7 +380,7 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            self.error = Some("Name and target are required".to_string());
+            self.fail("Name and target are required", cx);
             return;
         }
         let existing_ids = self
@@ -323,7 +392,6 @@ impl NativeToolsView {
         let editing = draft.original_id.is_some();
         let selected_id = shortcut.id.clone();
         self.pending = true;
-        self.error = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -345,16 +413,19 @@ impl NativeToolsView {
                                 .shortcuts
                                 .iter()
                                 .position(|shortcut| shortcut.id == selected_id)
-                                .unwrap_or(0);
-                            view.shortcut_list.sync(view.shortcuts.len());
-                            view.mode = Mode::List;
-                            view.notice = Some(if editing {
-                                "Shortcut saved".to_string()
-                            } else {
-                                "Shortcut added".to_string()
-                            });
+                                .map_or(0, |item| item + 1);
+                            view.shortcut_list.sync(view.shortcuts.len() + 1);
+                            view.close_editor();
+                            view.report(
+                                if editing {
+                                    "Shortcut saved"
+                                } else {
+                                    "Shortcut added"
+                                },
+                                cx,
+                            );
                         }
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -371,7 +442,7 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            self.error = Some("Plugin, action, and shortcut are required".to_string());
+            self.fail("Plugin, action, and shortcut are required", cx);
             return;
         }
         self.sequence = self.sequence.wrapping_add(1);
@@ -387,7 +458,6 @@ impl NativeToolsView {
             next.push(binding);
         }
         self.pending = true;
-        self.error = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -406,16 +476,19 @@ impl NativeToolsView {
                                 .hotkeys
                                 .iter()
                                 .position(|hotkey| hotkey.id == selected_id)
-                                .unwrap_or(0);
-                            view.hotkey_list.sync(view.hotkeys.len());
-                            view.mode = Mode::List;
-                            view.notice = Some(if editing {
-                                "Hotkey saved".to_string()
-                            } else {
-                                "Hotkey added".to_string()
-                            });
+                                .map_or(0, |item| item + 1);
+                            view.hotkey_list.sync(view.hotkeys.len() + 1);
+                            view.close_editor();
+                            view.report(
+                                if editing {
+                                    "Hotkey saved"
+                                } else {
+                                    "Hotkey added"
+                                },
+                                cx,
+                            );
                         }
-                        Err(error) => view.error = Some(format!("{error:#}")),
+                        Err(error) => view.fail(&format!("{error:#}"), cx),
                     }
                     cx.notify();
                 });
@@ -433,7 +506,6 @@ impl NativeToolsView {
         draft.recording = true;
         draft.capture_session = Some(session);
         draft.key.clear();
-        self.error = None;
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -454,14 +526,22 @@ impl NativeToolsView {
                             if let Some(key) = result.key {
                                 draft.key = key;
                             } else if result.canceled {
-                                view.notice = Some("Recording canceled".to_string());
+                                view.report("Recording canceled", cx);
                             }
                         }
-                        Ok(_) => {}
+                        Ok(_) => {
+                            draft.recording = false;
+                            draft.capture_session = None;
+                            view.fail(
+                                "The desktop is holding the keyboard, so keys cannot be recorded here",
+                                cx,
+                            );
+                        }
                         Err(error) => {
                             draft.recording = false;
                             draft.capture_session = None;
-                            view.error = Some(format!("{error:#}"));
+                            let message = format!("{error:#}");
+                            view.fail(&message, cx);
                         }
                     }
                     cx.notify();
@@ -485,7 +565,7 @@ impl NativeToolsView {
         });
     }
 
-    fn capture_local_key(&mut self, event: &KeyDownEvent) -> bool {
+    fn capture_local_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let Mode::Hotkey(draft) = &mut self.mode else {
             return false;
         };
@@ -494,7 +574,7 @@ impl NativeToolsView {
         }
         if matches!(event.keystroke.key.as_str(), "escape" | "esc") {
             self.cancel_capture();
-            self.notice = Some("Recording canceled".to_string());
+            self.report("Recording canceled", cx);
             return true;
         }
         let Some(chord) = chord_from_keystroke(&event.keystroke) else {
@@ -511,37 +591,61 @@ impl NativeToolsView {
         true
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        if self.capture_local_key(event) {
+    fn go_back(&self, window: &mut Window, cx: &mut App) {
+        if let Some(on_back) = &self.on_back {
+            on_back(window, cx);
+        } else {
+            self.dismisser.dismiss(cx);
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        if self.capture_local_key(event, cx) {
             cx.notify();
             return;
         }
         if self.loading || self.pending {
             if matches!(event.keystroke.key.as_str(), "escape" | "esc") {
-                self.dismisser.dismiss(cx);
+                self.go_back(window, cx);
             }
+            return;
+        }
+        if self.on_menu_key(event, cx) {
             return;
         }
         let list_mode = matches!(self.mode, Mode::List);
         if list_mode {
-            self.on_list_key(event, cx);
+            self.on_list_key(event, window, cx);
         } else {
             self.on_editor_key(event, cx);
         }
     }
 
-    fn on_list_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn on_menu_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(open) = self.menu.as_mut() else {
+            return false;
+        };
+        let Some(action) = open.menu.handle_key(event.keystroke.key.as_str()) else {
+            return false;
+        };
+        match action {
+            DropdownEvent::Moved => {}
+            DropdownEvent::Pick(choice) => self.pick_menu(choice),
+            DropdownEvent::Close => self.menu = None,
+        }
+        cx.notify();
+        true
+    }
+
+    fn on_list_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.modified();
         match key {
-            "escape" | "esc" => self.dismisser.dismiss(cx),
-            "tab" => self.switch_tool(match self.tool {
-                ToolKind::Hotkeys => ToolKind::Shortcuts,
-                ToolKind::Shortcuts => ToolKind::Hotkeys,
-            }),
+            "escape" | "esc" => self.go_back(window, cx),
             "up" => self.move_list(-1),
             "down" => self.move_list(1),
-            "enter" | "return" => self.activate_selected(cx),
+            "enter" | "return" => self.activate_selected(),
             "backspace" | "delete" => self.delete_selected(cx),
             "a" if !modified => self.open_add(),
             "r" if !modified && self.tool == ToolKind::Shortcuts => self.run_shortcut(cx),
@@ -553,11 +657,7 @@ impl NativeToolsView {
     fn on_editor_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if modifier_is_secondary(&event.keystroke.modifiers) && matches!(key, "enter" | "return") {
-            match self.mode {
-                Mode::Shortcut(_) => self.save_shortcut(cx),
-                Mode::Hotkey(_) => self.save_hotkey(cx),
-                Mode::List => {}
-            }
+            self.save_current(cx);
             return;
         }
         if matches!(key, "escape" | "esc") {
@@ -565,87 +665,54 @@ impl NativeToolsView {
             cx.notify();
             return;
         }
+        let fields = match &mut self.mode {
+            Mode::Shortcut(draft) => draft.field_count(),
+            Mode::Hotkey(_) => HOTKEY_FIELDS,
+            Mode::List => return,
+        };
+        let entries = fields + 1;
+        let navigated = match &mut self.mode {
+            Mode::Shortcut(draft) => navigate_form(&mut draft.selected, entries, event),
+            Mode::Hotkey(draft) => navigate_form(&mut draft.selected, entries, event),
+            Mode::List => false,
+        };
+        if navigated {
+            cx.notify();
+            return;
+        }
+        let selected = self.editor_selected();
+        if selected == fields {
+            if matches!(key, "enter" | "return" | "space") {
+                self.save_current(cx);
+            }
+            return;
+        }
+        if matches!(key, "enter" | "return" | "space" | "right")
+            && self.select_field_at(selected).is_some()
+        {
+            self.open_menu(selected);
+            cx.notify();
+            return;
+        }
         match &mut self.mode {
             Mode::Shortcut(draft) => {
-                let count = draft.field_count();
-                if navigate_form(&mut draft.selected, count, event) {
-                    cx.notify();
-                    return;
-                }
                 if apply_shortcut_field(draft, event, cx) {
                     cx.notify();
                 }
             }
-            Mode::Hotkey(draft) => {
-                if navigate_form(&mut draft.selected, 4, event) {
+            Mode::Hotkey(draft) => match selected {
+                0 if matches!(key, "enter" | "return" | "space") => {
+                    draft.enabled = !draft.enabled;
                     cx.notify();
-                    return;
                 }
-                match draft.selected {
-                    0 if matches!(key, "enter" | "return" | "space") => {
-                        draft.enabled = !draft.enabled;
-                        cx.notify();
-                    }
-                    1 if matches!(key, "enter" | "return" | "space" | "right") => {
-                        self.cycle_plugin();
-                        cx.notify();
-                    }
-                    2 if matches!(key, "enter" | "return" | "space" | "right") => {
-                        self.cycle_action();
-                        cx.notify();
-                    }
-                    3 if matches!(key, "enter" | "return" | "space") => {
-                        self.start_capture(cx);
-                        cx.notify();
-                    }
-                    _ => {}
+                3 if matches!(key, "enter" | "return" | "space") => {
+                    self.start_capture(cx);
+                    cx.notify();
                 }
-            }
+                _ => {}
+            },
             Mode::List => {}
         }
-    }
-
-    fn cycle_plugin(&mut self) {
-        let Mode::Hotkey(draft) = &mut self.mode else {
-            return;
-        };
-        if self.plugins.is_empty() {
-            return;
-        }
-        let current = self
-            .plugins
-            .iter()
-            .position(|plugin| plugin.uid == draft.plugin_uid)
-            .unwrap_or(0);
-        let plugin = &self.plugins[(current + 1) % self.plugins.len()];
-        draft.plugin_uid = plugin.uid.clone();
-        draft.action = available_actions(plugin, &self.hotkeys, draft.original_id.as_deref())
-            .first()
-            .map(|action| action.id.clone())
-            .unwrap_or_default();
-    }
-
-    fn cycle_action(&mut self) {
-        let Mode::Hotkey(draft) = &mut self.mode else {
-            return;
-        };
-        let Some(plugin) = self
-            .plugins
-            .iter()
-            .find(|plugin| plugin.uid == draft.plugin_uid)
-        else {
-            return;
-        };
-        let actions = available_actions(plugin, &self.hotkeys, draft.original_id.as_deref());
-        if actions.is_empty() {
-            draft.action.clear();
-            return;
-        }
-        let current = actions
-            .iter()
-            .position(|action| action.id == draft.action)
-            .unwrap_or(0);
-        draft.action = actions[(current + 1) % actions.len()].id.clone();
     }
 
     fn current_plugin(&self, uid: &str) -> Option<&PluginOption> {
@@ -660,112 +727,56 @@ impl NativeToolsView {
         plugin.actions.iter().find(|action| action.id == action_id)
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        let tool = self.tool;
-        let editor = !matches!(self.mode, Mode::List);
-        let title = if editor {
-            match &self.mode {
-                Mode::Shortcut(draft) if draft.original_id.is_some() => "Edit Shortcut",
-                Mode::Shortcut(_) => "Add Shortcut",
-                Mode::Hotkey(draft) if draft.original_id.is_some() => "Edit Hotkey",
-                Mode::Hotkey(_) => "Add Hotkey",
-                Mode::List => "Shortcuts & Hotkeys",
-            }
-        } else {
-            "Shortcuts & Hotkeys"
-        };
-        let mut header = div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_3()
-            .h(px(qol_gpui::kit::HEADER_HEIGHT))
-            .px(px(qol_gpui::kit::GUTTER))
-            .border_b(px(1.0))
-            .border_color(rgba(kit.washes.hairline.packed()))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_gpui::theme::TEXT_TITLE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(kit.palette.text_primary))
-                    .panel_drag_area()
-                    .child(title),
-            );
-        if editor {
-            return header
-                .child(
-                    kit.button_ghost("Cancel")
-                        .id("native-tools-cancel")
-                        .cursor(CursorStyle::PointingHand)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close_editor();
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    kit.button_primary(if self.pending { "Saving…" } else { "Save" })
-                        .id("native-tools-save")
-                        .cursor(CursorStyle::PointingHand)
-                        .on_click(cx.listener(|this, _, _, cx| match this.mode {
-                            Mode::Shortcut(_) => this.save_shortcut(cx),
-                            Mode::Hotkey(_) => this.save_hotkey(cx),
-                            Mode::List => {}
-                        })),
-                )
-                .into_any_element();
-        }
-        for (kind, label) in [
-            (ToolKind::Shortcuts, "Shortcuts"),
-            (ToolKind::Hotkeys, "Hotkeys"),
-        ] {
-            let active = tool == kind;
-            let mut tab = kit
-                .button_ghost(label)
-                .id(match kind {
-                    ToolKind::Hotkeys => "native-tools-tab-hotkeys",
-                    ToolKind::Shortcuts => "native-tools-tab-shortcuts",
-                })
-                .cursor(CursorStyle::PointingHand)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.switch_tool(kind);
-                    cx.notify();
-                }));
-            if active {
-                tab = tab
-                    .bg(rgb(kit.palette.accent))
-                    .text_color(rgb(kit.palette.surface_raised));
-            }
-            header = header.child(tab);
-        }
-        header
-            .child(
-                kit.button_primary(match tool {
-                    ToolKind::Hotkeys => "+ Hotkey",
-                    ToolKind::Shortcuts => "+ Shortcut",
-                })
-                .id("native-tools-add")
-                .cursor(CursorStyle::PointingHand)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_add();
-                    cx.notify();
-                })),
-            )
-            .into_any_element()
-    }
-
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.loading {
             return self.render_message("Loading shortcuts and hotkeys…", false);
         }
-        match &self.mode {
-            Mode::List => self.render_list(cx),
+        let editor = match &self.mode {
+            Mode::List => return self.page(self.render_list(cx)).into_any_element(),
             Mode::Shortcut(draft) => self.render_shortcut_editor(draft, cx),
             Mode::Hotkey(draft) => self.render_hotkey_editor(draft, cx),
-        }
+        };
+        let slide = deck::slide(
+            self.editor_step,
+            self.editor_motion,
+            EDITOR_DEPTH,
+            self.body_width.get(),
+        );
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_row()
+            .items_start()
+            .child(deck::render(
+                settings_panel_runtime(),
+                EDITOR_DEPTH,
+                self.page(editor),
+                slide,
+                "native-tools-editor-slide",
+            ))
+            .into_any_element()
+    }
+
+    fn measure_body_width(&self) -> impl IntoElement {
+        let width = Rc::clone(&self.body_width);
+        canvas(
+            move |bounds, _, _| width.set(bounds.size.width.to_f64() as f32),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    fn page(&self, body: AnyElement) -> Div {
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .px(px(qol_theme::SPACE_PAD))
+            .pb_4()
+            .child(body)
     }
 
     fn render_message(&self, message: &str, danger: bool) -> AnyElement {
@@ -786,212 +797,208 @@ impl NativeToolsView {
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let body = match self.tool {
-            ToolKind::Shortcuts => self.render_shortcuts(cx),
-            ToolKind::Hotkeys => self.render_hotkeys(cx),
-        };
+        let count = self.item_count();
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
-            .child(self.render_status())
-            .child(body)
+            .gap_1()
+            .child(SettingsGroupHeader::new(
+                self.list_title(),
+                count,
+                plural(count, self.item_noun()),
+                settings_panel_runtime(),
+            ))
+            .child(self.render_rows(cx))
             .into_any_element()
     }
 
-    fn render_shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.shortcuts.is_empty() {
-            return self.render_message("No shortcuts yet. Press A to add one.", false);
+    fn list_title(&self) -> &'static str {
+        match self.tool {
+            ToolKind::Shortcuts => "Shortcuts",
+            ToolKind::Hotkeys => "Hotkeys",
         }
-        let kit = qol_gpui::kit::kit();
-        let range = self.shortcut_list.visible_range(self.shortcuts.len());
+    }
+
+    fn item_noun(&self) -> &'static str {
+        match self.tool {
+            ToolKind::Shortcuts => "shortcut",
+            ToolKind::Hotkeys => "hotkey",
+        }
+    }
+
+    fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let total = self.list_len();
         let mut list = div()
-            .id("native-shortcuts-list")
+            .id("native-tools-list")
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
-            .py_2()
+            .gap_1()
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, ROW_HEIGHT);
                     for _ in 0..rows.max(0) as usize {
-                        this.shortcut_list.move_down(this.shortcuts.len());
+                        this.move_list(1);
                     }
                     for _ in 0..(-rows).max(0) as usize {
-                        this.shortcut_list.move_up();
+                        this.move_list(-1);
                     }
                     cx.notify();
                 }),
             );
-        for index in range {
-            let shortcut = &self.shortcuts[index];
-            let managed = shortcut_is_managed(shortcut);
-            let enabled = shortcut.enabled;
-            let name = shortcut.name.clone();
-            let summary = shortcut_summary(shortcut);
-            let kind = match shortcut.action {
-                ShortcutAction::LaunchApp { .. } => "App",
-                ShortcutAction::OpenUrl { .. } => "URL",
-                ShortcutAction::PluginAction { .. } => "Plugin",
-            };
-            let selected = index == self.shortcut_list.selected;
-            let row = div()
-                .id(("native-shortcut-row", index))
-                .flex_none()
-                .h(px(ROW_HEIGHT))
-                .mx_2()
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .flex()
-                .items_center()
-                .gap_3()
-                .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_selected_index(index);
-                    this.activate_selected(cx);
-                    cx.notify();
-                }))
-                .child(kit.lamp(if enabled {
-                    kit.palette.success
-                } else {
-                    kit.palette.text_muted
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(kit.label(name))
-                        .child(kit.description(summary).truncate()),
-                )
-                .when(managed, |row| {
-                    row.child(kit.chip("Managed", kit.palette.info))
-                })
-                .when(shortcut.export_to_launcher, |row| {
-                    row.child(kit.chip("Launcher", kit.palette.accent))
-                })
-                .child(kit.chip(kind, kit.palette.text_secondary));
-            list = list.child(kit.row_selected(row, selected));
-        }
-        list.into_any_element()
-    }
-
-    fn render_hotkeys(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.hotkeys.is_empty() {
-            return self.render_message("No hotkeys yet. Press A to add one.", false);
-        }
-        let kit = qol_gpui::kit::kit();
-        let range = self.hotkey_list.visible_range(self.hotkeys.len());
-        let mut list = div()
-            .id("native-hotkeys-list")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .py_2()
-            .on_scroll_wheel(
-                cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
-                    let rows = wheel_rows(&event.delta, ROW_HEIGHT);
-                    for _ in 0..rows.max(0) as usize {
-                        this.hotkey_list.move_down(this.hotkeys.len());
-                    }
-                    for _ in 0..(-rows).max(0) as usize {
-                        this.hotkey_list.move_up();
-                    }
-                    cx.notify();
-                }),
-            );
-        for index in range {
-            let hotkey = &self.hotkeys[index];
-            let plugin = self.current_plugin(hotkey.plugin_uid.as_str());
-            let plugin_name = plugin
-                .map(|plugin| plugin.name.clone())
-                .unwrap_or_else(|| hotkey.plugin_uid.as_str().to_string());
-            let action = plugin
-                .and_then(|plugin| self.current_action(plugin, &hotkey.action))
-                .map(|action| action.label.clone())
-                .unwrap_or_else(|| hotkey.action.clone());
-            let enabled = hotkey.enabled;
-            let key = hotkey.key.clone();
-            let selected = index == self.hotkey_list.selected;
-            let row = div()
-                .id(("native-hotkey-row", index))
-                .flex_none()
-                .h(px(ROW_HEIGHT))
-                .mx_2()
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .flex()
-                .items_center()
-                .gap_3()
-                .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_selected_index(index);
-                    this.activate_selected(cx);
-                    cx.notify();
-                }))
-                .child(kit.lamp(if enabled {
-                    kit.palette.success
-                } else {
-                    kit.palette.text_muted
-                }))
-                .child(kit.keycap(key))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(kit.label(plugin_name))
-                        .child(kit.description(action).truncate()),
-                );
-            list = list.child(kit.row_selected(row, selected));
-        }
-        list.into_any_element()
-    }
-
-    fn render_status(&self) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        let registration = if self.tool == ToolKind::Hotkeys {
-            self.registration_errors
-                .first()
-                .map(|error| format!("{}: {}", error.key, error.error))
-        } else {
-            None
-        };
-        let value = self
-            .error
-            .as_ref()
-            .map(|message| (message.clone(), kit.palette.danger))
-            .or_else(|| registration.map(|message| (message, kit.palette.warning)))
-            .or_else(|| {
-                self.notice
-                    .as_ref()
-                    .map(|message| (message.clone(), kit.palette.success))
+        for index in self.list().visible_range(total) {
+            list = list.child(match index.checked_sub(1) {
+                None => self.render_add_row(cx),
+                Some(item) => match self.tool {
+                    ToolKind::Shortcuts => self.render_shortcut_row(item, cx),
+                    ToolKind::Hotkeys => self.render_hotkey_row(item, cx),
+                },
             });
-        match value {
-            Some((message, tone)) => div()
-                .flex_none()
-                .min_h(px(qol_gpui::theme::HEIGHT_INLINE))
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .flex()
-                .items_center()
-                .bg(rgba(qol_gpui::kit::alpha(tone, 0x16)))
-                .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                .text_color(rgb(tone))
-                .child(message)
-                .into_any_element(),
-            None => div().h_0().into_any_element(),
+        }
+        if self.item_count() == 0 {
+            list = list.child(self.render_message(self.empty_message(), false));
+        }
+        list.into_any_element()
+    }
+
+    fn empty_message(&self) -> &'static str {
+        match self.tool {
+            ToolKind::Shortcuts => "No shortcuts yet.",
+            ToolKind::Hotkeys => "No hotkeys yet.",
+        }
+    }
+
+    fn render_add_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = settings_panel_runtime();
+        let label = match self.tool {
+            ToolKind::Shortcuts => "Add shortcut",
+            ToolKind::Hotkeys => "Add hotkey",
+        };
+        SettingsRow::add("native-tools-add", palette)
+            .selected(self.list().selected == 0, self.body_focused)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_selected_index(0);
+                this.open_add();
+                cx.notify();
+            }))
+            .child(settings_label(format!("+ {label}"), palette))
+            .into_any_element()
+    }
+
+    fn render_shortcut_row(&self, item: usize, cx: &mut Context<Self>) -> AnyElement {
+        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
+        let Some(shortcut) = self.shortcuts.get(item) else {
+            return div().into_any_element();
+        };
+        let kind = if shortcut_is_managed(shortcut) {
+            "Plugin \u{b7} managed".to_string()
+        } else {
+            shortcut.action.kind().to_string()
+        };
+        SettingsRow::setting(("native-shortcut-row", item), palette)
+            .selected(self.list().selected == item + 1, self.body_focused)
+            .dimmed(!shortcut.enabled)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_selected_index(item + 1);
+                this.activate_selected();
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(settings_label(shortcut.name.clone(), palette))
+                    .child(settings_description(shortcut_summary(shortcut), palette)),
+            )
+            .child(settings_value_group().child(kit.value(kind)))
+            .into_any_element()
+    }
+
+    fn render_hotkey_row(&self, item: usize, cx: &mut Context<Self>) -> AnyElement {
+        let palette = settings_panel_runtime();
+        let Some(hotkey) = self.hotkeys.get(item) else {
+            return div().into_any_element();
+        };
+        let plugin = self.current_plugin(hotkey.plugin_uid.as_str());
+        let plugin_name = plugin
+            .map(|plugin| plugin.name.clone())
+            .unwrap_or_else(|| hotkey.plugin_uid.as_str().to_string());
+        let action = plugin
+            .and_then(|plugin| self.current_action(plugin, &hotkey.action))
+            .map(|action| action.label.clone())
+            .unwrap_or_else(|| hotkey.action.clone());
+        SettingsRow::setting(("native-hotkey-row", item), palette)
+            .selected(self.list().selected == item + 1, self.body_focused)
+            .dimmed(!hotkey.enabled)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_selected_index(item + 1);
+                this.activate_selected();
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(settings_label(plugin_name, palette))
+                    .child(settings_description(action, palette)),
+            )
+            .child(
+                settings_value_group()
+                    .children(self.registration_chip(&hotkey.key))
+                    .child(SettingsKeyCombination::new(
+                        hotkey.key.clone(),
+                        false,
+                        false,
+                        palette,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn registration_chip(&self, key: &str) -> Option<Div> {
+        let failure = self
+            .registration_errors
+            .iter()
+            .find(|error| error.key == key)?;
+        let kit = qol_gpui::kit::kit();
+        Some(kit.chip(failure.error.clone(), kit.palette.warning))
+    }
+
+    fn editor_title(&self) -> &'static str {
+        match (&self.mode, self.tool) {
+            (Mode::Shortcut(draft), _) if draft.managed.is_some() => "Plugin shortcut",
+            (_, ToolKind::Shortcuts) => "Shortcut",
+            (_, ToolKind::Hotkeys) => "Hotkey",
         }
     }
 
     fn render_shortcut_editor(&self, draft: &ShortcutDraft, cx: &mut Context<Self>) -> AnyElement {
         let mut body = self.editor_body();
+        if let Some(managed) = &draft.managed {
+            return body
+                .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
+                .child(self.boolean_field(
+                    1,
+                    "Export to launcher",
+                    draft.export_to_launcher,
+                    draft.selected == 1,
+                    cx,
+                ))
+                .child(self.read_only_field(0, "Runs", &managed.action))
+                .child(self.read_only_field(1, "Owned by", &managed.plugin_id))
+                .child(self.render_save_row(cx))
+                .into_any_element();
+        }
         body = body
             .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
             .child(self.boolean_field(
@@ -1072,7 +1079,7 @@ impl NativeToolsView {
                 }
             }
         }
-        body.child(self.render_status()).into_any_element()
+        body.child(self.render_save_row(cx)).into_any_element()
     }
 
     fn render_hotkey_editor(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
@@ -1095,12 +1102,89 @@ impl NativeToolsView {
             .child(self.select_field(1, "Plugin", plugin_label, draft.selected == 1, cx))
             .child(self.select_field(2, "Action", action_label, draft.selected == 2, cx))
             .child(self.capture_field(draft, cx))
-            .child(self.render_status())
+            .child(self.render_save_row(cx))
             .into_any_element()
     }
 
+    fn render_save_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = settings_panel_runtime();
+        SettingsRow::rule("native-tools-save", palette)
+            .selected(self.save_selected(), self.body_focused)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.select_save_row();
+                this.save_current(cx);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(palette.state_on))
+                    .child(if self.pending {
+                        "Saving\u{2026}"
+                    } else {
+                        "Save"
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_color(rgb(palette.label_text))
+                    .child("enter"),
+            )
+            .into_any_element()
+    }
+
+    fn save_selected(&self) -> bool {
+        self.editor_selected() == self.editor_field_count()
+    }
+
+    fn select_save_row(&mut self) {
+        let count = self.editor_field_count();
+        match &mut self.mode {
+            Mode::Shortcut(draft) => draft.selected = count,
+            Mode::Hotkey(draft) => draft.selected = count,
+            Mode::List => {}
+        }
+    }
+
+    fn save_current(&mut self, cx: &mut Context<Self>) {
+        match self.mode {
+            Mode::Shortcut(_) => self.save_shortcut(cx),
+            Mode::Hotkey(_) => self.save_hotkey(cx),
+            Mode::List => {}
+        }
+    }
+
     fn editor_body(&self) -> Div {
-        div().flex_1().min_h_0().flex().flex_col().py_2().gap_1()
+        let count = self.editor_field_count();
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(SettingsGroupHeader::new(
+                self.editor_title(),
+                count,
+                plural(count, "field"),
+                settings_panel_runtime(),
+            ))
+    }
+
+    fn read_only_field(&self, index: usize, label: &'static str, value: &str) -> AnyElement {
+        let palette = settings_panel_runtime();
+        SettingsRow::rule(("native-tools-readonly", index), palette)
+            .child(settings_label(label, palette))
+            .child(settings_description(value.to_string(), palette))
+            .into_any_element()
+    }
+
+    fn editor_field_count(&self) -> usize {
+        match &self.mode {
+            Mode::Shortcut(draft) => draft.field_count(),
+            Mode::Hotkey(_) => HOTKEY_FIELDS,
+            Mode::List => 0,
+        }
     }
 
     fn boolean_field(
@@ -1111,20 +1195,17 @@ impl NativeToolsView {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        let row = kit
-            .row()
-            .id(("native-tools-boolean", index))
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        let palette = settings_panel_runtime();
+        SettingsRow::rule(("native-tools-boolean", index), palette)
+            .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(kit.label(label))
-            .child(kit.check(value));
-        kit.row_selected(row, selected).into_any_element()
+            .child(settings_label(label, palette))
+            .child(SettingsToggle::new(value, palette))
+            .into_any_element()
     }
 
     fn select_field(
@@ -1135,27 +1216,51 @@ impl NativeToolsView {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        let row = kit
-            .row()
-            .id(("native-tools-select", index))
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        let palette = settings_panel_runtime();
+        SettingsRow::rule(("native-tools-select", index), palette)
+            .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(kit.label(label))
+            .child(settings_label(label, palette))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(kit.value(value.to_string()))
-                    .child(kit.keycap("▾")),
-            );
-        kit.row_selected(row, selected).into_any_element()
+                    .relative()
+                    .flex_none()
+                    .children(self.render_field_menu(index, cx))
+                    .child(SettingsSelectValue::new(value.to_string(), palette)),
+            )
+            .into_any_element()
+    }
+
+    fn render_field_menu(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self.menu.as_ref().filter(|open| open.field == index)?;
+        let labels = self.select_labels(self.select_field_at(index)?);
+        let view = cx.weak_entity();
+        Some(
+            open.menu
+                .render_clickable(
+                    format!("native-tools-menu-{index}"),
+                    &labels,
+                    settings_dropdown_style(settings_panel_runtime()),
+                    move |choice, event, _, cx| {
+                        if !event.standard_click() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        let view = view.clone();
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.pick_menu(choice);
+                                cx.notify();
+                            });
+                        });
+                    },
+                )
+                .into_any_element(),
+        )
     }
 
     fn text_field(
@@ -1167,7 +1272,7 @@ impl NativeToolsView {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
+        let palette = settings_panel_runtime();
         let empty = value.is_empty();
         let display = if selected {
             format!("{}▏", if empty { "" } else { value })
@@ -1176,45 +1281,19 @@ impl NativeToolsView {
         } else {
             value.to_string()
         };
-        let row = kit
-            .row()
-            .id(("native-tools-text", index))
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        SettingsRow::rule(("native-tools-text", index), palette)
+            .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 cx.notify();
             }))
-            .child(kit.label(label))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .ml_4()
-                    .px_3()
-                    .py_1p5()
-                    .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-                    .border(px(1.0))
-                    .border_color(rgb(if selected {
-                        kit.palette.accent
-                    } else {
-                        kit.palette.border_subtle
-                    }))
-                    .bg(rgb(kit.palette.surface_raised))
-                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .text_color(rgb(if empty && !selected {
-                        kit.palette.text_muted
-                    } else {
-                        kit.palette.text_primary
-                    }))
-                    .truncate()
-                    .child(display),
-            );
-        kit.row_selected(row, selected).into_any_element()
+            .child(settings_label(label, palette))
+            .child(SettingsTextField::new(display, empty, selected, palette))
+            .into_any_element()
     }
 
     fn capture_field(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
+        let palette = settings_panel_runtime();
         let selected = draft.selected == 3;
         let display = if draft.recording {
             "Press a shortcut…  Esc cancels".to_string()
@@ -1223,43 +1302,21 @@ impl NativeToolsView {
         } else {
             draft.key.clone()
         };
-        let row = kit
-            .row()
-            .id("native-tools-capture")
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        SettingsRow::rule("native-tools-capture", palette)
+            .selected(selected, self.body_focused)
             .on_click(cx.listener(|this, _, _, cx| {
                 this.select_editor_field(3);
                 this.start_capture(cx);
                 cx.notify();
             }))
-            .child(kit.label("Shortcut"))
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-                    .border(px(1.0))
-                    .border_color(rgb(if draft.recording || selected {
-                        kit.palette.accent
-                    } else {
-                        kit.palette.border_subtle
-                    }))
-                    .bg(rgba(if draft.recording {
-                        kit.washes.wash_selected.packed()
-                    } else {
-                        kit.palette.surface_raised << 8 | 0xff
-                    }))
-                    .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .text_color(rgb(if draft.key.is_empty() {
-                        kit.palette.text_muted
-                    } else {
-                        kit.palette.text_primary
-                    }))
-                    .child(display),
-            );
-        kit.row_selected(row, selected).into_any_element()
+            .child(settings_label("Shortcut", palette))
+            .child(SettingsKeyCombination::new(
+                display,
+                selected,
+                draft.recording,
+                palette,
+            ))
+            .into_any_element()
     }
 
     fn select_editor_field(&mut self, index: usize) {
@@ -1273,14 +1330,17 @@ impl NativeToolsView {
     }
 
     fn activate_editor_field(&mut self, cx: &mut Context<Self>) {
+        let field = self.editor_selected();
+        if self.select_field_at(field).is_some() {
+            self.open_menu(field);
+            return;
+        }
         match &mut self.mode {
             Mode::Shortcut(draft) => {
                 activate_shortcut_field(draft);
             }
             Mode::Hotkey(draft) => match draft.selected {
                 0 => draft.enabled = !draft.enabled,
-                1 => self.cycle_plugin(),
-                2 => self.cycle_action(),
                 3 => self.start_capture(cx),
                 _ => {}
             },
@@ -1288,31 +1348,157 @@ impl NativeToolsView {
         }
     }
 
-    fn render_footer(&self) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        let mut bar = kit.hint_bar();
-        match self.mode {
-            Mode::List => {
-                bar = bar
-                    .child(kit.hint("↑↓", "select"))
-                    .child(kit.hint("⏎", "open"))
-                    .child(kit.hint("A", "add"))
-                    .child(kit.hint("⌫", "delete"));
-                if self.tool == ToolKind::Shortcuts {
-                    bar = bar.child(kit.hint("R", "run"));
+    fn editor_selected(&self) -> usize {
+        match &self.mode {
+            Mode::Shortcut(draft) => draft.selected,
+            Mode::Hotkey(draft) => draft.selected,
+            Mode::List => usize::MAX,
+        }
+    }
+
+    fn select_field_at(&self, field: usize) -> Option<SelectField> {
+        match &self.mode {
+            Mode::Shortcut(draft) if draft.managed.is_none() => match (draft.action_kind, field) {
+                (_, 3) => Some(SelectField::ActionKind),
+                (ShortcutActionKind::App, 4) => Some(SelectField::TargetKind),
+                (ShortcutActionKind::Url, 6) if draft.browser_override => {
+                    Some(SelectField::BrowserKind)
                 }
-                bar = bar.child(div().flex_1()).child(kit.hint("Tab", "switch"));
+                _ => None,
+            },
+            Mode::Hotkey(_) => match field {
+                1 => Some(SelectField::Plugin),
+                2 => Some(SelectField::Action),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn select_labels(&self, field: SelectField) -> Vec<String> {
+        match field {
+            SelectField::ActionKind => [ShortcutActionKind::App, ShortcutActionKind::Url]
+                .iter()
+                .map(|kind| kind.label().to_string())
+                .collect(),
+            SelectField::TargetKind | SelectField::BrowserKind => AppRefKind::ALL
+                .iter()
+                .map(|kind| kind.label().to_string())
+                .collect(),
+            SelectField::Plugin => self
+                .plugins
+                .iter()
+                .map(|plugin| plugin.name.clone())
+                .collect(),
+            SelectField::Action => self
+                .draft_actions()
+                .into_iter()
+                .map(|action| action.label)
+                .collect(),
+        }
+    }
+
+    fn draft_actions(&self) -> Vec<ActionOption> {
+        let Mode::Hotkey(draft) = &self.mode else {
+            return Vec::new();
+        };
+        let Some(plugin) = self.current_plugin(&draft.plugin_uid) else {
+            return Vec::new();
+        };
+        available_actions(plugin, &self.hotkeys, draft.original_id.as_deref())
+    }
+
+    fn select_index(&self, field: SelectField) -> usize {
+        match (&self.mode, field) {
+            (Mode::Shortcut(draft), SelectField::ActionKind) => {
+                usize::from(draft.action_kind == ShortcutActionKind::Url)
             }
-            Mode::Shortcut(_) | Mode::Hotkey(_) => {
-                bar = bar
-                    .child(kit.hint("↑↓", "field"))
-                    .child(kit.hint("⏎", "change"))
-                    .child(div().flex_1())
-                    .child(kit.hint("Ctrl+⏎", "save"))
-                    .child(kit.hint("Esc", "cancel"));
+            (Mode::Shortcut(draft), SelectField::TargetKind) => AppRefKind::ALL
+                .iter()
+                .position(|kind| *kind == draft.target_kind)
+                .unwrap_or(0),
+            (Mode::Shortcut(draft), SelectField::BrowserKind) => AppRefKind::ALL
+                .iter()
+                .position(|kind| *kind == draft.browser_kind)
+                .unwrap_or(0),
+            (Mode::Hotkey(draft), SelectField::Plugin) => self
+                .plugins
+                .iter()
+                .position(|plugin| plugin.uid == draft.plugin_uid)
+                .unwrap_or(0),
+            (Mode::Hotkey(draft), SelectField::Action) => self
+                .draft_actions()
+                .iter()
+                .position(|action| action.id == draft.action)
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn open_menu(&mut self, field: usize) {
+        let Some(select) = self.select_field_at(field) else {
+            return;
+        };
+        let count = self.select_labels(select).len();
+        if count == 0 {
+            return;
+        }
+        let menu = Dropdown::open(count, self.select_index(select));
+        self.menu = Some(FieldMenu { field, menu });
+    }
+
+    fn pick_menu(&mut self, choice: usize) {
+        let Some(open) = self.menu.take() else {
+            return;
+        };
+        let Some(select) = self.select_field_at(open.field) else {
+            return;
+        };
+        match select {
+            SelectField::ActionKind => {
+                let kinds = [ShortcutActionKind::App, ShortcutActionKind::Url];
+                if let (Mode::Shortcut(draft), Some(kind)) = (&mut self.mode, kinds.get(choice)) {
+                    draft.action_kind = *kind;
+                    let count = draft.field_count();
+                    draft.selected = draft.selected.min(count.saturating_sub(1));
+                }
+            }
+            SelectField::TargetKind => {
+                if let (Mode::Shortcut(draft), Some(kind)) =
+                    (&mut self.mode, AppRefKind::ALL.get(choice))
+                {
+                    draft.target_kind = *kind;
+                }
+            }
+            SelectField::BrowserKind => {
+                if let (Mode::Shortcut(draft), Some(kind)) =
+                    (&mut self.mode, AppRefKind::ALL.get(choice))
+                {
+                    draft.browser_kind = *kind;
+                }
+            }
+            SelectField::Plugin => {
+                let Some(plugin) = self.plugins.get(choice).cloned() else {
+                    return;
+                };
+                let action = available_actions(&plugin, &self.hotkeys, None)
+                    .first()
+                    .map(|action| action.id.clone())
+                    .unwrap_or_default();
+                if let Mode::Hotkey(draft) = &mut self.mode {
+                    draft.plugin_uid = plugin.uid.clone();
+                    draft.action = action;
+                }
+            }
+            SelectField::Action => {
+                let Some(action) = self.draft_actions().get(choice).cloned() else {
+                    return;
+                };
+                if let Mode::Hotkey(draft) = &mut self.mode {
+                    draft.action = action.id;
+                }
             }
         }
-        bar.into_any_element()
     }
 }
 
@@ -1323,18 +1509,34 @@ impl Focusable for NativeToolsView {
 }
 
 impl Render for NativeToolsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_lists();
+        self.body_focused = self.focus_handle.is_focused(window);
         let kit = qol_gpui::kit::kit();
-        kit.panel()
-            .id("qol-native-shortcuts-hotkeys")
+        div()
+            .id("qol-native-shortcuts-hotkeys-body")
             .track_focus(&self.focus_handle)
             .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
             .text_color(rgb(kit.palette.text_primary))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.on_key(event, cx)))
-            .child(self.render_header(cx))
-            .child(self.render_body(cx))
-            .child(self.render_footer())
+            .on_key_down(
+                cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.on_key(event, window, cx)
+                }),
+            )
+            .child(
+                div()
+                    .id("qol-native-shortcuts-hotkeys-content")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(self.measure_body_width())
+                    .child(self.render_body(cx)),
+            )
     }
 }
 
@@ -1368,6 +1570,9 @@ fn apply_shortcut_field(
     let key = event.keystroke.key.as_str();
     if matches!(key, "enter" | "return" | "space" | "right") && activate_shortcut_field(draft) {
         return true;
+    }
+    if draft.managed.is_some() {
+        return false;
     }
     let target = shortcut_text_target(draft);
     let Some(value) = target else {
@@ -1406,15 +1611,8 @@ fn activate_shortcut_field(draft: &mut ShortcutDraft) -> bool {
     match draft.selected {
         0 => draft.enabled = !draft.enabled,
         1 => draft.export_to_launcher = !draft.export_to_launcher,
-        3 => draft.action_kind = draft.action_kind.next(),
-        4 if draft.action_kind == ShortcutActionKind::App => {
-            draft.target_kind = draft.target_kind.next();
-        }
         5 if draft.action_kind == ShortcutActionKind::Url => {
             draft.browser_override = !draft.browser_override;
-        }
-        6 if draft.action_kind == ShortcutActionKind::Url && draft.browser_override => {
-            draft.browser_kind = draft.browser_kind.next();
         }
         _ => return false,
     }
