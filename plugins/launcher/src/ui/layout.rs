@@ -23,7 +23,10 @@ pub fn window_height_for_rows(visible_rows: usize) -> f32 {
 }
 
 pub fn full_window_height() -> f32 {
-    window_height_for_rows(MAX_VISIBLE)
+    window_height_for_rows(MAX_VISIBLE).max(window_height_for_trail(
+        true,
+        qol_gpui::trail::motion::ROW_H,
+    ))
 }
 
 pub fn window_height_for_trail(fence: bool, head_height: f32) -> f32 {
@@ -35,4 +38,18 @@ pub fn window_height_for_trail(fence: bool, head_height: f32) -> f32 {
 
 pub fn window_height_for_detail() -> f32 {
     HEADER_HEIGHT + DETAIL_HEIGHT + qol_gpui::theme::HEIGHT_HINT_BAR
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{full_window_height, window_height_for_trail};
+    use crate::ui::view::CARD_HEIGHT;
+    use qol_gpui::trail::motion::ROW_H;
+
+    #[test]
+    fn full_window_holds_every_trail_layout() {
+        for (fence, head) in [(true, ROW_H), (false, ROW_H), (false, CARD_HEIGHT)] {
+            assert!(window_height_for_trail(fence, head) <= full_window_height());
+        }
+    }
 }
