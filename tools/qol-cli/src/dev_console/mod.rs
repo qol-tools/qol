@@ -11,6 +11,7 @@ mod draw;
 mod emu_panel;
 mod feature_flags;
 mod filters;
+mod handoff_display;
 mod key_bindings;
 mod log_pane;
 mod picker;

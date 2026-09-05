@@ -330,6 +330,9 @@ pub(super) enum Reload {
         rx: Receiver<String>,
         activity: ReloadProgress,
     },
+    Handoff {
+        activity: ReloadProgress,
+    },
 }
 
 pub(super) enum ReloadOutcome {
@@ -485,7 +488,7 @@ impl Dash {
     }
 
     pub(super) fn is_reloading(&self) -> bool {
-        matches!(self.reload, Reload::Running { .. })
+        matches!(self.reload, Reload::Running { .. } | Reload::Handoff { .. })
     }
 
     pub(super) fn is_busy(&self) -> bool {
@@ -494,7 +497,9 @@ impl Dash {
 
     pub(super) fn activity(&self) -> Option<Activity> {
         match &self.reload {
-            Reload::Running { activity, .. } => Some(activity.activity()),
+            Reload::Running { activity, .. } | Reload::Handoff { activity } => {
+                Some(activity.activity())
+            }
             Reload::Idle => self
                 .doctor
                 .manual

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
+use super::handoff_display::HandoffUpdates;
+
 use super::{
     spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
     ReloadProgress, TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL,
@@ -162,7 +164,7 @@ fn reload_prebuild_args(
 pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
     let mut drained = Vec::new();
     let status = match &mut dash.reload {
-        Reload::Idle => return ReloadOutcome::Pending,
+        Reload::Idle | Reload::Handoff { .. } => return ReloadOutcome::Pending,
         Reload::Running {
             child,
             rx,
@@ -187,8 +189,13 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
     for line in drained {
         dash.push_log(line);
     }
-    dash.reload = Reload::Idle;
+    let completed = std::mem::replace(&mut dash.reload, Reload::Idle);
     if status.success() {
+        if let Reload::Running { mut activity, .. } = completed {
+            activity.phase = "handoff".to_string();
+            activity.detail = "successor generation".to_string();
+            dash.reload = Reload::Handoff { activity };
+        }
         return ReloadOutcome::Ready;
     }
     dash.push_log(format!("[qol dev] reload aborted: prebuild {status}"));
@@ -198,18 +205,21 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
 pub(super) fn restart_child_from_prebuilt(
     child: &mut TrayHandle,
     lines: &mut Receiver<String>,
-    dash: &mut Dash,
+    selection: &WorktreeSelection,
+    updates: &HandoffUpdates,
 ) -> Result<()> {
     let prior = crate::commands::dev::current_active_worktree_marker();
-    let desired = desired_marker(&dash.worktree_selection, prior.clone());
+    let desired = desired_marker(selection, prior.clone());
     if desired != prior {
         crate::commands::dev::persist_active_worktree(desired.as_deref())?;
     }
-    let result = hand_off_to_prebuilt(child, lines, dash, desired.clone());
+    let result = hand_off_to_prebuilt(child, lines, updates, desired.clone());
     if result.is_err() && desired != prior {
         match crate::commands::dev::persist_active_worktree(prior.as_deref()) {
-            Ok(()) => dash.push_log("[qol dev] handoff failed: worktree selection rolled back"),
-            Err(error) => dash.push_log(format!("[qol dev] selection rollback failed: {error:#}")),
+            Ok(()) => updates.push_log("[qol dev] handoff failed: worktree selection rolled back"),
+            Err(error) => {
+                updates.push_log(format!("[qol dev] selection rollback failed: {error:#}"))
+            }
         }
     }
     result
@@ -222,14 +232,14 @@ fn desired_marker(selection: &WorktreeSelection, prior: Option<String>) -> Optio
     }
 }
 
-fn address_monitor_handoff_to_successor(dash: &mut Dash, successor_id: &str) {
+fn address_monitor_handoff_to_successor(updates: &HandoffUpdates, successor_id: &str) {
     let Some(runtime) = qol_config::runtime_dir() else {
-        dash.push_log("[qol dev] monitor handoff not addressed: runtime dir unavailable");
+        updates.push_log("[qol dev] monitor handoff not addressed: runtime dir unavailable");
         return;
     };
     let socket = runtime.join("sockets").join(MONITOR_DAEMON_SOCKET_FILE);
     if !socket.exists() {
-        dash.push_log(
+        updates.push_log(
             "[qol dev] monitor handoff not addressed: predecessor monitor socket absent; relying on SIGHUP",
         );
         return;
@@ -246,11 +256,11 @@ fn address_monitor_handoff_to_successor(dash: &mut Dash, successor_id: &str) {
     )
     .is_ok();
     if delivered {
-        dash.push_log(format!(
+        updates.push_log(format!(
             "[qol dev] monitor handoff addressed to successor generation {successor_id}"
         ));
     } else {
-        dash.push_log(
+        updates.push_log(
             "[qol dev] monitor handoff socket delivery failed; relying on SIGHUP fallback",
         );
     }
@@ -259,13 +269,13 @@ fn address_monitor_handoff_to_successor(dash: &mut Dash, successor_id: &str) {
 fn hand_off_to_prebuilt(
     child: &mut TrayHandle,
     lines: &mut Receiver<String>,
-    dash: &mut Dash,
+    updates: &HandoffUpdates,
     marker: Option<String>,
 ) -> Result<()> {
-    dash.push_log("[qol dev] starting successor generation");
+    updates.push_log("[qol dev] starting successor generation");
     let predecessor_daemons = snapshot_runtime_daemon_pids();
     if !predecessor_daemons.is_empty() {
-        dash.push_log(format!(
+        updates.push_log(format!(
             "[qol dev] predecessor daemons tracked for handoff: {}",
             format_daemon_pids(&predecessor_daemons)
         ));
@@ -273,69 +283,75 @@ fn hand_off_to_prebuilt(
     let root = crate::workspace::repo_root()?;
     let (target, note) = crate::commands::dev::marker_tray_target(&root, marker);
     if let Some(note) = note {
-        dash.push_log(note);
+        updates.push_log(note);
     }
     let built_binary = crate::commands::dev::dev_binary_path(&target.root);
+    updates.phase("stage", "tray executable");
     let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(|error| anyhow::anyhow!("tray runtime staging failed: {error}"))?;
     let run_root = crate::commands::dev::dev_run_root(&target.root);
-    let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, dash)?;
+    updates.phase("start", "successor generation");
+    let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, updates)?;
     let mut next = TrayHandle::Owned(next);
-    address_monitor_handoff_to_successor(dash, runtime.id());
+    updates.phase("handoff", "plugin daemons");
+    address_monitor_handoff_to_successor(updates, runtime.id());
     let remaining = handoff_daemon_groups(predecessor_daemons.clone());
     if remaining.is_empty() {
-        dash.push_log("[qol dev] predecessor daemons handed off for reload");
+        updates.push_log("[qol dev] predecessor daemons handed off for reload");
     } else {
-        dash.push_log(format!(
+        updates.push_log(format!(
             "[qol dev] predecessor daemons did not hand off: {}",
             format_daemon_pids(&remaining)
         ));
     }
+    updates.phase("stop", "previous generation");
     if let Err(error) = retire_child_for_handoff(child) {
         terminate_child(&mut next);
         let _ = next.wait();
         return Err(error);
     }
-    if let Err(error) = wait_for_predecessor_daemons(predecessor_daemons, dash) {
+    updates.phase("wait", "previous daemons");
+    if let Err(error) = wait_for_predecessor_daemons(predecessor_daemons, updates) {
         abandon_failed_successor(&mut next);
         return Err(error);
     }
-    if let Err(error) = promote_shadow_generation(ready.port, &mut next, &next_lines, dash) {
-        dash.push_log(format!("[qol dev] successor promotion failed: {error:#}"));
+    updates.phase("promote", "successor generation");
+    if let Err(error) = promote_shadow_generation(ready.port, &mut next, &next_lines, updates) {
+        updates.push_log(format!("[qol dev] successor promotion failed: {error:#}"));
         abandon_failed_successor(&mut next);
         return Err(error);
     }
-    dash.adopt_running_worktree(run_root);
+    updates.adopt_running_worktree(run_root);
     *child = next;
     *lines = next_lines;
+    updates.phase("cleanup", "runtime generations");
     if let Err(error) =
         qol_dev_build::tray::prune_runtime_generations(&root, &[runtime.executable()])
     {
-        dash.push_log(format!("[qol dev] runtime prune failed: {error}"));
+        updates.push_log(format!("[qol dev] runtime prune failed: {error}"));
     }
-    repair_autostart_after_promotion(dash, &root);
-    dash.pokes.doctor = true;
-    dash.pokes.links = true;
-    dash.push_log("[qol dev] successor generation active");
+    updates.phase("repair", "autostart target");
+    repair_autostart_after_promotion(updates, &root);
+    updates.push_log("[qol dev] successor generation active");
     Ok(())
 }
 
-fn repair_autostart_after_promotion(dash: &mut Dash, root: &Path) {
+fn repair_autostart_after_promotion(updates: &HandoffUpdates, root: &Path) {
     let binary = crate::workspace::doctor_binary_path(root);
     if !binary.is_file() {
-        dash.push_log("[qol dev] autostart repair skipped: base doctor not built");
+        updates.push_log("[qol dev] autostart repair skipped: base doctor not built");
         return;
     }
     let output = autostart_repair_command(root, &binary).output();
     match output {
         Ok(out) if out.status.success() => {
-            dash.push_log("[qol dev] autostart re-aligned to the promoted selection");
+            updates.push_log("[qol dev] autostart re-aligned to the promoted selection");
         }
-        Ok(out) => dash.push_log(format!(
+        Ok(out) => updates.push_log(format!(
             "[qol dev] autostart repair failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )),
-        Err(error) => dash.push_log(format!("[qol dev] autostart repair failed: {error}")),
+        Err(error) => updates.push_log(format!("[qol dev] autostart repair failed: {error}")),
     }
 }
 
@@ -357,11 +373,11 @@ fn autostart_repair_command(root: &Path, binary: &Path) -> Command {
 fn start_shadow_generation(
     root: &Path,
     runtime: &qol_dev_build::tray::StagedRuntimeGeneration,
-    dash: &mut Dash,
+    updates: &HandoffUpdates,
 ) -> Result<(Child, Receiver<String>, ShadowGenerationReady)> {
     let ready_file = shadow_ready_file(root, runtime.id());
     let _ = fs::remove_file(&ready_file);
-    dash.push_log(format!(
+    updates.push_log(format!(
         "[qol dev] booting successor generation {}",
         runtime.id()
     ));
@@ -375,7 +391,7 @@ fn start_shadow_generation(
         )
     })?;
     let rx = spawn_forwarders(&mut child);
-    let ready = match wait_for_shadow_ready(&ready_file, &mut child, &rx, dash) {
+    let ready = match wait_for_shadow_ready(&ready_file, &mut child, &rx, updates) {
         Ok(ready) => ready,
         Err(error) => {
             let _ = child.kill();
@@ -383,7 +399,7 @@ fn start_shadow_generation(
             return Err(error);
         }
     };
-    dash.push_log(format!(
+    updates.push_log(format!(
         "[qol dev] successor ready: {} localhost:{} state={}",
         ready.id.as_deref().unwrap_or("unknown"),
         ready.port,
@@ -396,13 +412,13 @@ fn promote_shadow_generation(
     port: u16,
     child: &mut TrayHandle,
     rx: &Receiver<String>,
-    dash: &mut Dash,
+    updates: &HandoffUpdates,
 ) -> Result<()> {
     let deadline = Instant::now() + PROMOTION_TIMEOUT;
     let mut requested = false;
     let mut last_error = None;
     while Instant::now() < deadline {
-        let _ = drain_shadow_logs(rx, dash);
+        let _ = drain_shadow_logs(rx, updates);
         if let Some(status) = child.try_wait()? {
             bail!("successor generation exited during promotion: {status}");
         }
@@ -410,7 +426,7 @@ fn promote_shadow_generation(
             match post_promote_generation(port) {
                 Ok(()) => {
                     requested = true;
-                    dash.push_log("[qol dev] successor promotion requested");
+                    updates.push_log("[qol dev] successor promotion requested");
                 }
                 Err(error) => last_error = Some(error.to_string()),
             }
@@ -460,17 +476,17 @@ fn wait_for_shadow_ready(
     ready_file: &Path,
     child: &mut Child,
     rx: &Receiver<String>,
-    dash: &mut Dash,
+    updates: &HandoffUpdates,
 ) -> Result<ShadowGenerationReady> {
     let deadline = Instant::now() + SHADOW_READY_TIMEOUT;
     let mut recent_logs = VecDeque::new();
     while Instant::now() < deadline {
-        append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
+        append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, updates));
         if ready_file.is_file() {
             return read_shadow_ready(ready_file);
         }
         if let Some(status) = child.try_wait()? {
-            append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
+            append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, updates));
             bail!(
                 "shadow generation exited before ready: {status}{}",
                 shadow_crash_detail(&recent_logs)
@@ -478,18 +494,18 @@ fn wait_for_shadow_ready(
         }
         std::thread::sleep(SHADOW_READY_INTERVAL);
     }
-    append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
+    append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, updates));
     bail!(
         "shadow generation did not become ready within {SHADOW_READY_TIMEOUT:?}{}",
         shadow_crash_detail(&recent_logs)
     )
 }
 
-fn drain_shadow_logs(rx: &Receiver<String>, dash: &mut Dash) -> Vec<String> {
+fn drain_shadow_logs(rx: &Receiver<String>, updates: &HandoffUpdates) -> Vec<String> {
     let mut drained = Vec::new();
     while let Ok(line) = rx.try_recv() {
         let line = format!("[qol dev:shadow] {line}");
-        dash.push_log(line.clone());
+        updates.push_log(line.clone());
         drained.push(line);
     }
     drained
@@ -529,21 +545,21 @@ fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
 
 fn wait_for_predecessor_daemons(
     predecessor_daemons: Vec<TrackedDaemonPid>,
-    dash: &mut Dash,
+    updates: &HandoffUpdates,
 ) -> Result<()> {
     if predecessor_daemons.is_empty() {
         return Ok(());
     }
-    dash.push_log(format!(
+    updates.push_log(format!(
         "[qol dev] waiting for predecessor daemons to exit: {}",
         format_daemon_pids(&predecessor_daemons)
     ));
     let remaining = wait_for_daemons_to_exit(predecessor_daemons, PREDECESSOR_DAEMON_STOP_GRACE);
     if remaining.is_empty() {
-        dash.push_log("[qol dev] predecessor daemons exited cleanly");
+        updates.push_log("[qol dev] predecessor daemons exited cleanly");
         return Ok(());
     }
-    dash.push_log(format!(
+    updates.push_log(format!(
         "[qol dev] predecessor daemons still alive; terminating groups: {}",
         format_daemon_pids(&remaining)
     ));
@@ -555,7 +571,7 @@ fn wait_for_predecessor_daemons(
             format_daemon_pids(&remaining)
         );
     }
-    dash.push_log("[qol dev] predecessor daemon groups terminated");
+    updates.push_log("[qol dev] predecessor daemon groups terminated");
     Ok(())
 }
 
@@ -586,6 +602,33 @@ fn retire_child_for_handoff(child: &mut TrayHandle) -> Result<()> {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn successful_prebuild_keeps_elapsed_activity_for_the_handoff() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut activity = ReloadProgress::new();
+        activity.started = Instant::now() - Duration::from_secs(8);
+        let started = activity.started;
+        let mut dash = Dash::new(Vec::new());
+        dash.reload = Reload::Running {
+            child,
+            rx,
+            activity,
+        };
+
+        assert!(matches!(poll_reload(&mut dash), ReloadOutcome::Ready));
+        assert!(dash.is_reloading());
+        let activity = dash.activity().expect("handoff remains an active reload");
+        assert_eq!(activity.phase, "handoff");
+        assert!(activity.elapsed >= Duration::from_secs(8));
+        assert!(activity.elapsed <= started.elapsed());
+    }
 
     #[test]
     fn reload_activity_accepts_only_structured_worker_progress() {

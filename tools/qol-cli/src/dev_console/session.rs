@@ -322,7 +322,15 @@ pub(super) fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            let handoff = restart_child_from_prebuilt(child, lines, dash);
+            let selection = dash.worktree_selection.clone();
+            let handoff = super::handoff_display::run(
+                dash,
+                |dash| {
+                    terminal.draw(|frame| draw(frame, dash))?;
+                    Ok(())
+                },
+                |updates| restart_child_from_prebuilt(child, lines, &selection, updates),
+            )?;
             let check = handoff
                 .as_ref()
                 .ok()
