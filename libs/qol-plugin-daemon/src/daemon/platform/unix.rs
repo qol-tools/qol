@@ -13,6 +13,11 @@ use std::sync::{Arc, Mutex};
 use qol_runtime::local_ipc;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::is_listening_socket;
+
 const ACK_TIMEOUT_MS: u64 = 80;
 const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 const REPLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -558,6 +563,7 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
     Ok(unsafe { UnixListener::from_raw_fd(fd) })
 }
 
+#[cfg(not(target_os = "macos"))]
 fn is_listening_socket(fd: RawFd) -> bool {
     socket_opt(fd, libc::SO_ACCEPTCONN).is_some_and(|accepting| accepting != 0)
 }
@@ -1354,6 +1360,43 @@ mod tests {
     fn listener_from_fd_str_rejects_malformed_value() {
         let error = listener_from_fd_str("not-a-number").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn listening_socket_validation_preserves_pending_connections_and_rejects_other_fds() {
+        use std::os::fd::{AsRawFd, OwnedFd};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _pending = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (connected, _peer) = UnixStream::pair().unwrap();
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let file = fs::File::open("/dev/null").unwrap();
+        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+        assert!(raw >= 0);
+        let unbound = unsafe { OwnedFd::from_raw_fd(raw) };
+
+        for (label, fd, expected) in [
+            ("listener", listener.as_raw_fd(), true),
+            ("connected stream", connected.as_raw_fd(), false),
+            ("unbound stream", unbound.as_raw_fd(), false),
+            ("datagram", udp.as_raw_fd(), false),
+            ("file", file.as_raw_fd(), false),
+            ("invalid", -1, false),
+        ] {
+            assert_eq!(is_listening_socket(fd), expected, "{label}");
+            if fd >= 0 {
+                assert!(unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0, "{label}");
+            }
+        }
+
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            listener.accept().is_ok(),
+            "validation must not accept clients"
+        );
+        assert!(is_adoptable_socket(udp.as_raw_fd()));
+        assert!(!is_adoptable_socket(unbound.as_raw_fd()));
+        assert!(!is_adoptable_socket(connected.as_raw_fd()));
     }
 
     fn fd_has_cloexec(fd: RawFd) -> bool {

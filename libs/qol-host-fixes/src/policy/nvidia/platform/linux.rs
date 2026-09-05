@@ -4244,8 +4244,8 @@ mod tests {
         test_support::reset_dir();
         let policy = policy();
         let held = lock::try_acquire(&policy).unwrap();
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "sleep 30"])
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
             .spawn()
             .unwrap();
         assert!(

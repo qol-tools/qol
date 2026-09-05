@@ -6708,6 +6708,7 @@ dependencies = [
 name = "qol-plugin-daemon"
 version = "1.0.0"
 dependencies = [
+ "cc",
  "libc",
  "qol-config",
  "qol-conventions",

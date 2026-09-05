@@ -361,6 +361,8 @@ fn cached_screen(
             .analysis
             .as_ref()
             .is_some_and(|previous| Arc::ptr_eq(previous, &analysis));
+        #[cfg(not(debug_assertions))]
+        let reused = false;
         entry.analysis = Some(analysis);
         entry.last_read = now;
         qol_runtime::probe!(
