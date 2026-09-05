@@ -10,6 +10,7 @@ const CYCLE: Duration = Duration::from_millis(1200);
 pub struct ActivityAnimation {
     id: ElementId,
     active: bool,
+    interval: Duration,
     child: AnyElement,
 }
 
@@ -18,8 +19,14 @@ impl ActivityAnimation {
         Self {
             id: id.into(),
             active,
+            interval: FRAME_INTERVAL,
             child: child.into_any_element(),
         }
+    }
+
+    pub fn interval(mut self, interval: Duration) -> Self {
+        self.interval = interval;
+        self
     }
 }
 
@@ -30,13 +37,13 @@ struct FrameClock {
 }
 
 impl FrameClock {
-    fn schedule(&mut self, cx: &mut Context<Self>) {
+    fn schedule(&mut self, interval: Duration, cx: &mut Context<Self>) {
         if self.pending {
             return;
         }
         self.pending = true;
         self.task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(FRAME_INTERVAL).await;
+            cx.background_executor().timer(interval).await;
             let _ = this.update(cx, |clock, cx| {
                 clock.pending = false;
                 cx.notify();
@@ -49,19 +56,23 @@ impl RenderOnce for ActivityAnimation {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         if self.active {
             let clock = window.use_keyed_state(self.id, cx, |_, _| FrameClock::default());
-            clock.update(cx, |clock, cx| clock.schedule(cx));
+            clock.update(cx, |clock, cx| clock.schedule(self.interval, cx));
         }
         self.child
     }
 }
 
 pub(crate) fn progress() -> f32 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    cycle_progress(START.get_or_init(Instant::now).elapsed())
+    progress_of(CYCLE)
 }
 
-fn cycle_progress(elapsed: Duration) -> f32 {
-    (elapsed.as_secs_f64() % CYCLE.as_secs_f64() / CYCLE.as_secs_f64()) as f32
+pub(crate) fn progress_of(cycle: Duration) -> f32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    cycle_progress(START.get_or_init(Instant::now).elapsed(), cycle)
+}
+
+fn cycle_progress(elapsed: Duration, cycle: Duration) -> f32 {
+    (elapsed.as_secs_f64() % cycle.as_secs_f64() / cycle.as_secs_f64()) as f32
 }
 
 #[cfg(test)]
@@ -71,7 +82,9 @@ mod tests {
     #[test]
     fn activity_phase_wraps_without_depending_on_frame_count() {
         for (millis, expected) in [(0, 0.0), (300, 0.25), (600, 0.5), (1200, 0.0), (1500, 0.25)] {
-            assert!((cycle_progress(Duration::from_millis(millis)) - expected).abs() < 0.001);
+            assert!(
+                (cycle_progress(Duration::from_millis(millis), CYCLE) - expected).abs() < 0.001
+            );
         }
     }
 }

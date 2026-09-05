@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use futures::StreamExt as _;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
@@ -951,6 +952,7 @@ impl SettingsPanelView {
                 Self::sample_queries_on_demand(runtime, queries, signal, samples)
             });
         }
+        let (wake_tx, mut wake_rx) = futures::channel::mpsc::unbounded::<()>();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -968,10 +970,10 @@ impl SettingsPanelView {
                         visible,
                         samples.clone(),
                         async_cx.background_executor().clone(),
+                        wake_tx,
                     ))
                     .detach();
-                loop {
-                    async_cx.background_executor().timer(apply_tick).await;
+                while wake_rx.next().await.is_some() {
                     let batch = std::mem::take(&mut *samples.lock().unwrap());
                     let applied = this
                         .update(&mut async_cx, |this, cx| {
@@ -1193,6 +1195,7 @@ impl SettingsPanelView {
         visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
         latest: SampledQueryResults,
         executor: BackgroundExecutor,
+        wake: futures::channel::mpsc::UnboundedSender<()>,
     ) {
         let intervals = queries
             .iter()
@@ -1212,12 +1215,16 @@ impl SettingsPanelView {
                     due[index] = started + intervals[index];
                 }
             }
+            let sampled = !fresh.is_empty();
             {
                 let mut latest = latest.lock().unwrap();
                 for (query, result) in fresh {
                     latest.retain(|(name, _)| name != &query);
                     latest.push((query, result));
                 }
+            }
+            if sampled {
+                let _ = wake.unbounded_send(());
             }
             let next_due = due.iter().min().copied().unwrap_or(started);
             let wait = next_due.saturating_duration_since(std::time::Instant::now());

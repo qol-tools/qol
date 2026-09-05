@@ -3,8 +3,7 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Animation, AnimationExt as _, AnyElement, App, ElementId, FontWeight, Hsla,
-    RenderOnce, SharedString, Window,
+    div, px, AnyElement, App, ElementId, FontWeight, Hsla, RenderOnce, SharedString, Window,
 };
 
 const PULSE_DURATION: Duration = Duration::from_millis(1200);
@@ -85,10 +84,12 @@ impl RenderOnce for StatusIndicator {
 }
 
 pub(crate) fn pulse_dot(dot: gpui::Div, id: ElementId) -> AnyElement {
-    dot.with_animation(
+    crate::activity_animation::ActivityAnimation::new(
         id,
-        Animation::new(PULSE_DURATION).repeat(),
-        |dot, progress| dot.opacity(pulse_opacity(progress)),
+        true,
+        dot.opacity(pulse_opacity(crate::activity_animation::progress_of(
+            PULSE_DURATION,
+        ))),
     )
     .into_any_element()
 }

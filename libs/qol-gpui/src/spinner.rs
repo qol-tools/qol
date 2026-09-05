@@ -1,10 +1,7 @@
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{
-    div, px, Animation, AnimationExt as _, App, ElementId, Hsla, Pixels, RenderOnce, SharedString,
-    Window,
-};
+use gpui::{div, px, App, ElementId, Hsla, Pixels, RenderOnce, SharedString, Window};
 
 const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const DEFAULT_SIZE: Pixels = px(14.);
@@ -34,7 +31,8 @@ impl Spinner {
 
 impl RenderOnce for Spinner {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        div()
+        let frame = FRAMES[frame_index(crate::activity_animation::progress_of(ROTATION_DURATION))];
+        let glyph = div()
             .flex()
             .items_center()
             .justify_center()
@@ -42,11 +40,9 @@ impl RenderOnce for Spinner {
             .h(self.size)
             .text_size(self.size)
             .text_color(self.color)
-            .with_animation(
-                self.id,
-                Animation::new(ROTATION_DURATION).repeat(),
-                |spinner, progress| spinner.child(FRAMES[frame_index(progress)]),
-            )
+            .child(frame);
+        crate::activity_animation::ActivityAnimation::new(self.id, true, glyph)
+            .interval(ROTATION_DURATION / FRAMES.len() as u32)
     }
 }
 
