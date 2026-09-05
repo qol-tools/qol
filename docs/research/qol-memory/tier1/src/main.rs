@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
+use qol_memory_tier1_probe::embedding::{dot, embed_text};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use rayon::prelude::*;
 
 const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
-const MAX_SEQ: usize = 512;
 
 #[derive(Deserialize)]
 struct Question {
@@ -22,14 +22,12 @@ struct Question {
 
 #[derive(Deserialize)]
 struct QuestionsDoc {
-    run_pin: Option<String>,
     questions: Vec<Question>,
 }
 
 #[derive(Deserialize)]
 struct Unit {
     key: String,
-    source: String,
     kind: String,
     text: String,
 }
@@ -82,37 +80,6 @@ struct Report {
     next: Vec<String>,
 }
 
-fn embed_text(
-    model: &BertModel,
-    tokenizer: &Tokenizer,
-    text: &str,
-    device: &Device,
-) -> Result<Tensor> {
-    let encoding = tokenizer
-        .encode(text, true)
-        .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
-    let ids: Vec<u32> = encoding
-        .get_ids()
-        .iter()
-        .take(MAX_SEQ)
-        .map(|v| *v as u32)
-        .collect();
-    if ids.is_empty() {
-        anyhow::bail!("empty token ids");
-    }
-    let input = Tensor::new(ids.as_slice(), device)?.unsqueeze(0)?;
-    let token_type_ids = input.zeros_like()?;
-    let output = model.forward(&input, &token_type_ids, None)?;
-    let cls = output.narrow(1, 0, 1)?.squeeze(1)?;
-    let norm: f32 = cls.sqr()?.sum_all()?.sqrt()?.to_scalar()?;
-    Ok((cls / (norm as f64))?.squeeze(0)?)
-}
-
-fn dot(a: &Tensor, b: &Tensor) -> Result<f32> {
-    let d = a.broadcast_mul(b)?.sum_all()?.to_scalar::<f32>()?;
-    Ok(d)
-}
-
 fn main() -> Result<()> {
     let started = std::time::Instant::now();
     let args: Vec<String> = std::env::args().collect();
@@ -128,10 +95,14 @@ fn main() -> Result<()> {
     let snapshot = PathBuf::from(pick("--snapshot", ""));
     let snapshot = if snapshot.as_os_str().is_empty() {
         let home = std::env::var("HOME").unwrap_or_default();
-        let data_home = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty());
+        let data_home = std::env::var("XDG_DATA_HOME")
+            .ok()
+            .filter(|s| !s.is_empty());
         let store_root = data_home
             .map(|d| std::path::PathBuf::from(d).join("qol-tray/plugins/qol-memory"))
-            .unwrap_or_else(|| std::path::PathBuf::from(home).join(".local/share/qol-tray/plugins/qol-memory"));
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(home).join(".local/share/qol-tray/plugins/qol-memory")
+            });
         let root = store_root.join("snapshot");
         let mut runs: Vec<PathBuf> = std::fs::read_dir(&root)?
             .filter_map(|e| e.ok())
@@ -150,10 +121,7 @@ fn main() -> Result<()> {
         .split(',')
         .map(|k| k.to_string())
         .collect();
-    let threads: usize = pick("--threads", "4")
-        .parse()
-        .unwrap_or(4)
-        .clamp(1, 8);
+    let threads: usize = pick("--threads", "4").parse().unwrap_or(4).clamp(1, 8);
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
@@ -167,7 +135,10 @@ fn main() -> Result<()> {
     };
     let model_dir = PathBuf::from(pick(
         "--model-dir",
-        &format!("{}/.cache/qol-memory/bge-small-en-v1.5", std::env::var("HOME")?),
+        &format!(
+            "{}/.cache/qol-memory/bge-small-en-v1.5",
+            std::env::var("HOME")?
+        ),
     ));
 
     let questions_doc: QuestionsDoc =
@@ -180,7 +151,8 @@ fn main() -> Result<()> {
     let user_units: Vec<&Unit> = units.iter().filter(|u| kinds.contains(&u.kind)).collect();
 
     let device = Device::Cpu;
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
+    let config: Config =
+        serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json").to_str().unwrap())
         .map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
     let vb = unsafe {
@@ -217,12 +189,14 @@ fn main() -> Result<()> {
                 .then_with(|| a.0.cmp(&b.0))
         });
         dense_dump.insert(q.id.clone(), scored.clone());
-        let cat = by_category.entry(q.category.clone()).or_insert(CategoryStats {
-            n: 0,
-            covered: 0,
-            hit1: 0,
-            hit5: 0,
-        });
+        let cat = by_category
+            .entry(q.category.clone())
+            .or_insert(CategoryStats {
+                n: 0,
+                covered: 0,
+                hit1: 0,
+                hit5: 0,
+            });
         cat.n += 1;
         let rank = q
             .target_key
@@ -279,12 +253,14 @@ fn main() -> Result<()> {
     if !dump_dense.is_empty() {
         let dump: std::collections::BTreeMap<String, Vec<(String, f32)>> = dense_dump
             .iter()
-            .map(|(qid, rows)| (qid.clone(), rows.iter().map(|(k, v)| (k.clone(), *v)).collect()))
+            .map(|(qid, rows)| {
+                (
+                    qid.clone(),
+                    rows.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                )
+            })
             .collect();
-        std::fs::write(
-            &dump_dense,
-            serde_json::to_string(&dump)?,
-        )?;
+        std::fs::write(&dump_dense, serde_json::to_string(&dump)?)?;
         println!("dense dump written: {dump_dense}");
     }
     std::fs::create_dir_all(&out_dir)?;
@@ -312,8 +288,10 @@ fn main() -> Result<()> {
         stats,
         results,
         next: vec![
-            "Compare against BM25 baseline: hit@1 40%, hit@5 55% on the same frozen questions".to_string(),
-            "If dense wins, decide: index assistant text or summaries next (coverage gap)".to_string(),
+            "Compare against BM25 baseline: hit@1 40%, hit@5 55% on the same frozen questions"
+                .to_string(),
+            "If dense wins, decide: index assistant text or summaries next (coverage gap)"
+                .to_string(),
         ],
     };
     std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;

@@ -1,0 +1,20 @@
+{
+  "embedding": {
+    "repository": "BAAI/bge-small-en-v1.5",
+    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+    "files": {
+      "config.json": "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
+      "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+      "model.safetensors": "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad"
+    }
+  },
+  "equivalence": {
+    "repository": "cross-encoder/quora-distilroberta-base",
+    "revision": "f62e7a4b20b97195c2868e53ec59126df5eac743",
+    "files": {
+      "config.json": "4d3d424eb9a2e40b2bc7ae274147f274b031e508de73cdf28e75f759a4360a08",
+      "tokenizer.json": "2bb1a22cfbe25b8e5a232b7fc4d7fc5073923b45724a5f813b00811bb6620f66",
+      "model.safetensors": "73fd14ad7d08f3ef30eb25841c8f4ba89e91230f48159279233b37015ccb33fb"
+    }
+  }
+}
