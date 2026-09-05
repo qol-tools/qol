@@ -1,4 +1,6 @@
 use super::state::{EdgeHit, LauncherState, NavDirection};
+use gpui::Modifiers;
+use qol_gpui::text_edit::{self, word_end_after, word_start_before, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEffect {
@@ -23,16 +25,18 @@ impl LauncherState {
     pub fn apply_key(
         &mut self,
         key: &str,
-        secondary: bool,
-        control: bool,
-        shift: bool,
-        alt: bool,
+        modifiers: &Modifiers,
         result_count: usize,
     ) -> InputEffect {
         if self.flow.is_some() {
-            return self.apply_flow_key(key, secondary, control, shift, alt, result_count);
+            return self.apply_flow_key(key, modifiers, result_count);
         }
-        let boost = secondary || control || alt;
+        let secondary = modifiers.secondary();
+        let control = modifiers.control;
+        let shift = modifiers.shift;
+        let alt = modifiers.alt;
+        let span = text_edit::span(modifiers);
+        let boost = (secondary || alt) && span == Span::Char;
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
             eprintln!(
@@ -62,11 +66,11 @@ impl LauncherState {
             "left" if boost => InputEffect::BoostDown,
             "right" if boost => InputEffect::BoostUp,
             "left" => {
-                self.move_left(shift);
+                self.move_left(shift, span);
                 InputEffect::Navigate
             }
             "right" => {
-                self.move_right(shift);
+                self.move_right(shift, span);
                 InputEffect::Navigate
             }
             "home" => {
@@ -93,14 +97,14 @@ impl LauncherState {
             }
             "enter" => InputEffect::Launch,
             "backspace" => {
-                if self.backspace() {
+                if self.backspace(span) {
                     InputEffect::QueryChanged
                 } else {
                     InputEffect::Navigate
                 }
             }
             "delete" => {
-                if self.delete_forward() {
+                if self.delete_forward(span) {
                     InputEffect::QueryChanged
                 } else {
                     InputEffect::Navigate
@@ -130,10 +134,7 @@ impl LauncherState {
     fn apply_flow_key(
         &mut self,
         key: &str,
-        secondary: bool,
-        control: bool,
-        shift: bool,
-        alt: bool,
+        modifiers: &Modifiers,
         result_count: usize,
     ) -> InputEffect {
         if self.flow_detail_open() {
@@ -145,7 +146,12 @@ impl LauncherState {
                 _ => InputEffect::Ignore,
             };
         }
-        let boost = secondary || control || alt;
+        let secondary = modifiers.secondary();
+        let control = modifiers.control;
+        let shift = modifiers.shift;
+        let alt = modifiers.alt;
+        let span = text_edit::span(modifiers);
+        let boost = (secondary || alt) && span == Span::Char;
         match key {
             "escape" | "esc" => InputEffect::FlowExit,
             "enter" => InputEffect::FlowDetail,
@@ -158,11 +164,11 @@ impl LauncherState {
                 InputEffect::Navigate
             }
             "left" if !boost => {
-                self.move_left(shift);
+                self.move_left(shift, span);
                 InputEffect::Navigate
             }
             "right" if !boost => {
-                self.move_right(shift);
+                self.move_right(shift, span);
                 InputEffect::Navigate
             }
             "home" => {
@@ -174,14 +180,14 @@ impl LauncherState {
                 InputEffect::Navigate
             }
             "backspace" => {
-                if self.backspace() {
+                if self.backspace(span) {
                     InputEffect::FlowQueryChanged
                 } else {
                     InputEffect::Navigate
                 }
             }
             "delete" => {
-                if self.delete_forward() {
+                if self.delete_forward(span) {
                     InputEffect::FlowQueryChanged
                 } else {
                     InputEffect::Navigate
@@ -261,33 +267,44 @@ impl LauncherState {
         self.clear_launch_error();
     }
 
-    fn backspace(&mut self) -> bool {
-        if self.delete_selection() {
-            return true;
+    fn span_start(&self, span: Span) -> usize {
+        match span {
+            Span::Char => self.cursor.saturating_sub(1),
+            Span::Word => word_start_before(&self.query, self.cursor),
+            Span::Line => 0,
         }
-        if self.cursor == 0 {
-            return false;
-        }
-        let start = self.cursor - 1;
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, self.cursor);
-        self.query.replace_range(start_b..end_b, "");
-        self.cursor = start;
-        self.clear_launch_error();
-        true
     }
 
-    fn delete_forward(&mut self) -> bool {
+    fn span_end(&self, span: Span) -> usize {
+        match span {
+            Span::Char => (self.cursor + 1).min(self.query_len()),
+            Span::Word => word_end_after(&self.query, self.cursor),
+            Span::Line => self.query_len(),
+        }
+    }
+
+    fn backspace(&mut self, span: Span) -> bool {
         if self.delete_selection() {
             return true;
         }
-        let len = self.query_len();
-        if self.cursor >= len {
+        self.delete_chars(self.span_start(span), self.cursor)
+    }
+
+    fn delete_forward(&mut self, span: Span) -> bool {
+        if self.delete_selection() {
+            return true;
+        }
+        self.delete_chars(self.cursor, self.span_end(span))
+    }
+
+    fn delete_chars(&mut self, start: usize, end: usize) -> bool {
+        if start >= end {
             return false;
         }
-        let start_b = Self::char_to_byte_index(&self.query, self.cursor);
-        let end_b = Self::char_to_byte_index(&self.query, self.cursor + 1);
+        let start_b = Self::char_to_byte_index(&self.query, start);
+        let end_b = Self::char_to_byte_index(&self.query, end);
         self.query.replace_range(start_b..end_b, "");
+        self.cursor = start;
         self.clear_launch_error();
         true
     }
@@ -297,20 +314,15 @@ impl LauncherState {
         self.cursor = self.query_len();
     }
 
-    fn move_left(&mut self, selecting: bool) {
+    fn move_left(&mut self, selecting: bool, span: Span) {
         let old = self.cursor;
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
+        self.cursor = self.span_start(span);
         self.update_selection_anchor(selecting, old);
     }
 
-    fn move_right(&mut self, selecting: bool) {
+    fn move_right(&mut self, selecting: bool, span: Span) {
         let old = self.cursor;
-        let len = self.query_len();
-        if self.cursor < len {
-            self.cursor += 1;
-        }
+        self.cursor = self.span_end(span);
         self.update_selection_anchor(selecting, old);
     }
 
@@ -344,53 +356,153 @@ mod tests {
     use crate::discovery::search::{Fuzziness, SearchMode};
     use crate::flow::FlowEntry;
 
+    fn mods(secondary: bool, control: bool, shift: bool, alt: bool) -> Modifiers {
+        let mut modifiers = if secondary {
+            Modifiers::secondary_key()
+        } else {
+            Modifiers::none()
+        };
+        modifiers.control |= control;
+        modifiers.shift = shift;
+        modifiers.alt = alt;
+        modifiers
+    }
+
+    fn word() -> Modifiers {
+        [Modifiers::control(), Modifiers::alt(), Modifiers::command()]
+            .into_iter()
+            .find(|modifiers| text_edit::span(modifiers) == Span::Word)
+            .expect("every platform maps a modifier to word motion")
+    }
+
+    fn typed(query: &str) -> LauncherState {
+        let mut state = LauncherState::new();
+        for ch in query.chars() {
+            let key = if ch == ' ' {
+                "space".to_string()
+            } else {
+                ch.to_string()
+            };
+            state.apply_key(&key, &mods(false, false, false, false), 0);
+        }
+        state
+    }
+
+    #[test]
+    fn word_backspace_deletes_the_word_and_trailing_separators() {
+        for (query, cursor, expect_query, expect_cursor) in [
+            ("qol memory", 10, "qol ", 4),
+            ("qol memory ", 11, "qol ", 4),
+            ("qol-shot", 8, "qol-", 4),
+            ("qol memory", 5, "qol emory", 4),
+            ("qol memory", 0, "qol memory", 0),
+        ] {
+            let mut state = typed(query);
+            state.cursor = cursor;
+            let effect = state.apply_key("backspace", &word(), 0);
+            assert_eq!(state.query, expect_query, "{query:?} at {cursor}");
+            assert_eq!(state.cursor, expect_cursor, "{query:?} at {cursor}");
+            let changed = query != expect_query;
+            assert_eq!(effect == InputEffect::QueryChanged, changed);
+        }
+    }
+
+    #[test]
+    fn word_delete_removes_the_next_word() {
+        for (query, cursor, expect_query) in [
+            ("qol memory", 0, " memory"),
+            ("qol memory", 3, "qol"),
+            ("qol  memory", 3, "qol"),
+            ("qol memory", 10, "qol memory"),
+        ] {
+            let mut state = typed(query);
+            state.cursor = cursor;
+            state.apply_key("delete", &word(), 0);
+            assert_eq!(state.query, expect_query, "{query:?} at {cursor}");
+            assert_eq!(state.cursor, cursor);
+        }
+    }
+
+    #[test]
+    fn word_backspace_deletes_a_word_in_flow_mode() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        state.apply_key("m", &mods(false, false, false, false), 3);
+        state.apply_key("e", &mods(false, false, false, false), 3);
+        assert_eq!(
+            state.apply_key("backspace", &word(), 3),
+            InputEffect::FlowQueryChanged
+        );
+        assert!(state.query.is_empty());
+    }
+
     #[test]
     fn query_and_mode_changes_clear_launch_errors() {
         let mut state = LauncherState::new();
         state.set_launch_error("failed".to_string());
 
         assert_eq!(
-            state.apply_key("x", false, false, false, false, 0),
+            state.apply_key("x", &mods(false, false, false, false), 0),
             InputEffect::QueryChanged
         );
         assert!(state.launch_error.is_none());
 
         state.set_launch_error("failed again".to_string());
         assert_eq!(
-            state.apply_key("tab", false, false, false, false, 0),
+            state.apply_key("tab", &mods(false, false, false, false), 0),
             InputEffect::QueryChanged
         );
         assert!(state.launch_error.is_none());
     }
 
     #[test]
-    fn control_arrow_right_boosts() {
-        let mut state = LauncherState::new();
-
-        assert_eq!(
-            state.apply_key("right", false, true, false, false, 0),
-            InputEffect::BoostUp
-        );
+    fn word_arrows_jump_words_and_shift_selects() {
+        let mut state = typed("qol memory");
+        assert_eq!(state.apply_key("left", &word(), 0), InputEffect::Navigate);
+        assert_eq!(state.cursor, 4);
+        state.apply_key("left", &word(), 0);
+        assert_eq!(state.cursor, 0);
+        state.apply_key("right", &word(), 0);
+        assert_eq!(state.cursor, 3);
+        let select_word = Modifiers {
+            shift: true,
+            ..word()
+        };
+        state.apply_key("right", &select_word, 0);
+        assert_eq!(state.cursor, 10);
+        assert_eq!(state.selected_range(), Some((3, 10)));
     }
 
     #[test]
-    fn secondary_arrow_right_boosts() {
+    fn word_arrows_jump_words_in_flow_mode() {
         let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        for key in ["a", "b", "space", "c"] {
+            state.apply_key(key, &mods(false, false, false, false), 3);
+        }
+        assert_eq!(state.apply_key("left", &word(), 3), InputEffect::Navigate);
+        assert_eq!(state.cursor, 3);
+        state.apply_key("left", &word(), 3);
+        assert_eq!(state.cursor, 0);
+    }
 
-        assert_eq!(
-            state.apply_key("right", true, false, false, false, 0),
-            InputEffect::BoostUp
-        );
+    fn boost_modifiers() -> Vec<Modifiers> {
+        [Modifiers::secondary_key(), Modifiers::alt()]
+            .into_iter()
+            .filter(|modifiers| text_edit::span(modifiers) == Span::Char)
+            .collect()
     }
 
     #[test]
-    fn alt_arrow_right_still_boosts() {
-        let mut state = LauncherState::new();
-
-        assert_eq!(
-            state.apply_key("right", false, false, false, true, 0),
-            InputEffect::BoostUp
-        );
+    fn arrows_boost_under_modifiers_the_text_field_does_not_claim() {
+        for modifiers in boost_modifiers() {
+            let mut state = LauncherState::new();
+            assert_eq!(
+                state.apply_key("right", &modifiers, 0),
+                InputEffect::BoostUp,
+                "{modifiers:?}"
+            );
+        }
     }
 
     #[test]
@@ -398,13 +510,13 @@ mod tests {
         let mut state = LauncherState::new();
 
         assert_eq!(
-            state.apply_key("down", false, false, false, false, 7),
+            state.apply_key("down", &mods(false, false, false, false), 7),
             InputEffect::Navigate
         );
         assert_eq!(state.scroll_list.selected, 1);
 
         assert_eq!(
-            state.apply_key("up", false, false, false, false, 7),
+            state.apply_key("up", &mods(false, false, false, false), 7),
             InputEffect::Ignore,
             "an up arriving within the phantom window must not move"
         );
@@ -419,12 +531,12 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let mut state = LauncherState::new();
-        state.apply_key("down", false, false, false, false, 7);
+        state.apply_key("down", &mods(false, false, false, false), 7);
         assert_eq!(state.scroll_list.selected, 1);
 
         state.last_nav_at = Some(Instant::now() - Duration::from_millis(250));
         assert_eq!(
-            state.apply_key("up", false, false, false, false, 7),
+            state.apply_key("up", &mods(false, false, false, false), 7),
             InputEffect::Navigate,
             "a human-paced reversal is real navigation"
         );
@@ -437,7 +549,7 @@ mod tests {
         let cases = [1usize, 2, 3, 4];
         for expected in cases {
             assert_eq!(
-                state.apply_key("down", false, false, false, false, 7),
+                state.apply_key("down", &mods(false, false, false, false), 7),
                 InputEffect::Navigate,
                 "down #{expected} must navigate"
             );
@@ -487,7 +599,7 @@ mod tests {
             "query should match multiple apps, got {result_count}"
         );
 
-        let effect = state.apply_key("down", false, false, false, false, result_count);
+        let effect = state.apply_key("down", &mods(false, false, false, false), result_count);
         assert_eq!(effect, InputEffect::Navigate);
         assert_eq!(
             state.scroll_list.selected, 1,
@@ -502,14 +614,14 @@ mod tests {
         state.cursor = 1;
 
         assert_eq!(
-            state.apply_key("a", true, false, false, false, 0),
+            state.apply_key("a", &mods(true, false, false, false), 0),
             InputEffect::Navigate
         );
         assert_eq!(state.selected_range(), Some((0, 3)));
 
         assert_eq!(state.fuzziness, Fuzziness::Balanced);
         assert_eq!(
-            state.apply_key("down", true, false, false, false, 0),
+            state.apply_key("down", &mods(true, false, false, false), 0),
             InputEffect::QueryChanged
         );
         assert_eq!(state.fuzziness, Fuzziness::Loose);
@@ -531,12 +643,12 @@ mod tests {
         state.enter_flow(flow_entry("qol memory"));
 
         assert_eq!(
-            state.apply_key("x", false, false, false, true, 3),
+            state.apply_key("x", &mods(false, false, false, true), 3),
             InputEffect::FlowDislike
         );
 
         assert_eq!(
-            state.apply_key("x", false, false, false, false, 3),
+            state.apply_key("x", &mods(false, false, false, false), 3),
             InputEffect::FlowQueryChanged
         );
         assert_eq!(state.query, "x");
@@ -548,13 +660,13 @@ mod tests {
         state.enter_flow(flow_entry("qol memory"));
 
         assert_eq!(
-            state.apply_key("escape", false, false, false, false, 3),
+            state.apply_key("escape", &mods(false, false, false, false), 3),
             InputEffect::FlowExit
         );
 
         state.enter_flow(flow_entry("qol memory"));
         assert_eq!(
-            state.apply_key("enter", false, false, false, false, 3),
+            state.apply_key("enter", &mods(false, false, false, false), 3),
             InputEffect::FlowDetail
         );
 
@@ -571,26 +683,26 @@ mod tests {
         assert!(state.open_flow_detail());
 
         assert_eq!(
-            state.apply_key("escape", false, false, false, false, 3),
+            state.apply_key("escape", &mods(false, false, false, false), 3),
             InputEffect::FlowDetailClose
         );
         assert_eq!(
-            state.apply_key("enter", false, false, false, false, 3),
+            state.apply_key("enter", &mods(false, false, false, false), 3),
             InputEffect::FlowActivate
         );
         assert_eq!(
-            state.apply_key("x", false, false, false, false, 3),
+            state.apply_key("x", &mods(false, false, false, false), 3),
             InputEffect::Ignore
         );
         assert_eq!(state.query, "seed");
         assert_eq!(state.cursor, 4);
 
         assert_eq!(
-            state.apply_key("down", false, false, false, false, 3),
+            state.apply_key("down", &mods(false, false, false, false), 3),
             InputEffect::FlowDetailScrollDown
         );
         assert_eq!(
-            state.apply_key("up", false, false, false, false, 3),
+            state.apply_key("up", &mods(false, false, false, false), 3),
             InputEffect::FlowDetailScrollUp
         );
         assert_eq!(
@@ -605,13 +717,16 @@ mod tests {
         state.enter_flow(flow_entry("qol memory"));
 
         assert_eq!(
-            state.apply_key("tab", false, false, false, false, 3),
+            state.apply_key("tab", &mods(false, false, false, false), 3),
             InputEffect::Ignore
         );
-        assert_eq!(
-            state.apply_key("right", true, false, false, false, 3),
-            InputEffect::Ignore
-        );
+        for modifiers in boost_modifiers() {
+            assert_eq!(
+                state.apply_key("right", &modifiers, 3),
+                InputEffect::Ignore,
+                "{modifiers:?}"
+            );
+        }
         assert_eq!(state.mode, SearchMode::Apps);
         assert_eq!(state.fuzziness, Fuzziness::Balanced);
     }
@@ -622,37 +737,37 @@ mod tests {
         state.enter_flow(flow_entry("qol memory"));
 
         assert_eq!(
-            state.apply_key("m", false, false, false, false, 3),
+            state.apply_key("m", &mods(false, false, false, false), 3),
             InputEffect::FlowQueryChanged
         );
         assert_eq!(state.query, "m");
 
         assert_eq!(
-            state.apply_key("space", false, false, false, false, 3),
+            state.apply_key("space", &mods(false, false, false, false), 3),
             InputEffect::FlowQueryChanged
         );
         assert_eq!(state.query, "m ");
 
         assert_eq!(
-            state.apply_key("backspace", false, false, false, false, 3),
+            state.apply_key("backspace", &mods(false, false, false, false), 3),
             InputEffect::FlowQueryChanged
         );
         assert_eq!(state.query, "m");
 
         assert_eq!(
-            state.apply_key("backspace", false, false, false, false, 3),
+            state.apply_key("backspace", &mods(false, false, false, false), 3),
             InputEffect::FlowQueryChanged
         );
         assert!(state.query.is_empty());
 
         assert_eq!(
-            state.apply_key("backspace", false, false, false, false, 3),
+            state.apply_key("backspace", &mods(false, false, false, false), 3),
             InputEffect::Navigate
         );
         assert!(state.query.is_empty());
 
         assert_eq!(
-            state.apply_key("up", false, false, false, false, 3),
+            state.apply_key("up", &mods(false, false, false, false), 3),
             InputEffect::Navigate
         );
         assert_eq!(state.scroll_list.selected, 0);

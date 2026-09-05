@@ -26,6 +26,7 @@ pub mod settings_panel;
 pub mod spinner;
 pub mod status_indicator;
 pub mod surface;
+pub mod text_edit;
 pub mod toast;
 pub mod trail;
 pub mod vertical_label;

@@ -25,9 +25,6 @@ impl LauncherView {
     ) {
         let key = event.keystroke.key.as_str();
         let secondary = event.keystroke.modifiers.secondary();
-        let control = event.keystroke.modifiers.control;
-        let shift = event.keystroke.modifiers.shift;
-        let alt = event.keystroke.modifiers.alt;
 
         if self.handle_clipboard_shortcut(key, secondary, cx) {
             return;
@@ -45,7 +42,7 @@ impl LauncherView {
         let selected_before = self.state.scroll_list.selected;
         let effect = self
             .state
-            .apply_key(key, secondary, control, shift, alt, result_count);
+            .apply_key(key, &event.keystroke.modifiers, result_count);
         trace::input(
             self,
             key,
