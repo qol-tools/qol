@@ -35,6 +35,13 @@ pub enum RowState {
 }
 
 #[derive(Clone, Copy)]
+pub enum WindowControlIcon {
+    Collapse,
+    Expand,
+    Close,
+}
+
+#[derive(Clone, Copy)]
 pub struct Kit {
     pub palette: SystemPalette,
     pub washes: WashPalette,
@@ -383,6 +390,41 @@ impl Kit {
             .child(label.into())
     }
 
+    pub fn hint_bar_compact(&self) -> Div {
+        self.hint_bar()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .bg(rgb(self.palette.surface_canvas))
+            .text_size(px(qol_theme::TEXT_NANO))
+            .text_color(rgb(self.palette.text_muted))
+    }
+
+    pub fn hint_label_first(
+        &self,
+        label: impl Into<SharedString>,
+        key: impl Into<SharedString>,
+    ) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_SNUG))
+            .child(label.into())
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(qol_theme::SPACE_PAD))
+                    .px(px(qol_theme::SPACE_STACK))
+                    .flex()
+                    .items_center()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .bg(rgba(self.washes.fill_resting.packed()))
+                    .font_family(SharedString::from(qol_theme::font_mono()))
+                    .text_size(px(qol_theme::TEXT_NANO))
+                    .text_color(rgb(self.palette.text_secondary))
+                    .child(key.into()),
+            )
+    }
+
     pub fn letter_tile(&self, name: &str) -> Div {
         let glyph = name
             .chars()
@@ -485,6 +527,78 @@ impl Kit {
             .bg(rgb(self.palette.surface_raised))
             .text_color(rgb(self.palette.text_secondary))
             .shadow(raised_shadow(self.palette.text_primary))
+    }
+
+    pub fn window_control(&self, icon: WindowControlIcon) -> Div {
+        let ink = rgb(self.palette.text_secondary);
+        let hover = rgba(self.washes.fill_hover.packed());
+        div()
+            .group("window-control")
+            .flex_none()
+            .size(px(qol_theme::HEIGHT_INLINE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .bg(rgba(0))
+            .child(
+                div()
+                    .size(px(qol_theme::SPACE_GUTTER))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .group_hover("window-control", move |style| style.bg(hover))
+                    .child(
+                        gpui::canvas(
+                            |_, _, _| (),
+                            move |bounds, _, window, _| {
+                                let mut path = gpui::PathBuilder::stroke(px(1.5));
+                                let left = bounds.left() + px(1.0);
+                                let right = bounds.right() - px(1.0);
+                                let top = bounds.top() + px(1.0);
+                                let bottom = bounds.bottom() - px(1.0);
+                                match icon {
+                                    WindowControlIcon::Collapse | WindowControlIcon::Expand => {
+                                        let center = bounds.center();
+                                        let offset = if matches!(icon, WindowControlIcon::Expand) {
+                                            px(-2.0)
+                                        } else {
+                                            px(2.0)
+                                        };
+                                        path.move_to(point(left, center.y + offset));
+                                        path.line_to(point(center.x, center.y - offset));
+                                        path.line_to(point(right, center.y + offset));
+                                    }
+                                    WindowControlIcon::Close => {
+                                        path.move_to(point(left, top));
+                                        path.line_to(point(right, bottom));
+                                        path.move_to(point(right, top));
+                                        path.line_to(point(left, bottom));
+                                    }
+                                }
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, ink);
+                                }
+                            },
+                        )
+                        .size(px(qol_theme::SPACE_CELL)),
+                    ),
+            )
+    }
+
+    pub fn status_pill(&self, text: impl Into<SharedString>, tone: u32) -> Div {
+        div()
+            .flex_none()
+            .h(px(qol_theme::SPACE_PAD))
+            .px(px(qol_theme::SPACE_SNUG))
+            .flex()
+            .items_center()
+            .rounded_full()
+            .bg(rgba(alpha(tone, 0x33)))
+            .text_size(px(qol_theme::TEXT_NANO))
+            .text_color(rgb(tone))
+            .child(text.into())
     }
 
     pub fn button_danger(&self, text: impl Into<SharedString>) -> Div {
