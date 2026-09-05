@@ -291,6 +291,19 @@ outcome mapping described below.
   inspected in earlier rounds, so this is regression evidence rather than a
   fresh held-out qualification, and the 38 contract cases were inspected while
   this round was tuned; the next policy change needs a new reserved corpus.
+- Fourth reserved corpus, written blind later the same evening (16 fictional
+  facts in Q/A, legacy explanation and declarative shapes, 52 cases; the
+  previous corpus is retained as `heldout-third.json` and promoted into
+  development, 40 facts and 177 cases). The merged development store exposed
+  the model obeying an injection query that names a memory id, now rejected
+  deterministically (`instruction_in_query`). Result
+  (`reports/qol-memory/verification/2026-09-05T21-07-31.760Z/`): development
+  84/90 with 0 wrong; the fresh corpus 24/26 with 2 wrong answers, so the
+  policy does not qualify on unseen questions. Wrong: a yes/no question whose
+  verb reverses the recorded polarity (drop versus keep) and a record whose
+  stored answer is explicitly uncertain. Missed: both retail-mode questions
+  about a two-mode tool, the same shape as the real launch question. This
+  corpus is inspected now; a fifth blind corpus is needed for the next policy.
 - Real store replay (1572 captures, `reports/qol-memory/realstore-2026-09-05-run3.json`):
   "which programming language does the qol monorepo use" is answered from
   four agreeing records; "how do I stop kcd2 debug" is withheld correctly;

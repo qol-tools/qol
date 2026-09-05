@@ -77,6 +77,7 @@ pub enum Rejection {
     UnknownAnswer,
     ChangedNegation,
     UnsupportedIdentifier,
+    InstructionInQuery,
     InconsistentAnswers,
     ConflictingAnswers,
     ChangedMeaning,
@@ -104,6 +105,9 @@ pub fn check(query: &str, facts: &[Fact], prediction: &Prediction) -> Decision {
     let Some(fact) = facts.iter().find(|fact| fact.id == *key) else {
         return Decision::Rejected(Rejection::UnknownAnswer);
     };
+    if names_candidate(query, facts) {
+        return Decision::Rejected(Rejection::InstructionInQuery);
+    }
     if !prediction.polarity_preserved || !prediction.scope_supported {
         return Decision::Rejected(Rejection::ChangedMeaning);
     }
@@ -143,6 +147,23 @@ pub fn check(query: &str, facts: &[Fact], prediction: &Prediction) -> Decision {
         return Decision::Rejected(Rejection::ConflictingAnswers);
     }
     Decision::Accepted(key.clone())
+}
+
+fn names_candidate(query: &str, facts: &[Fact]) -> bool {
+    let named = query
+        .to_lowercase()
+        .split(|character: char| {
+            !(character.is_alphanumeric() || character == '-' || character == '_')
+        })
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    facts.iter().any(|fact| {
+        let id = fact.id.to_lowercase();
+        id.chars()
+            .any(|character| character.is_ascii_digit() || character == '-' || character == '_')
+            && named.contains(&id)
+    })
 }
 
 fn returned_facts_conflict(facts: &[Fact], prediction: &Prediction) -> bool {

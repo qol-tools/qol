@@ -9,7 +9,8 @@ The command without `compare` runs the existing answer-selection regression suit
 
 `verify [--prepare] [--endpoint URL] [--repeats N]` runs the production-path
 answer verification gate over the frozen corpora under
-`tests/fixtures/answer-verification`, writing to `reports/qol-memory/verification`.
+`tests/fixtures/answer-verification` (facts are `{id, question, answer}` or a
+verbatim `{id, text}` capture), writing to `reports/qol-memory/verification`.
 `contract [--verify [--endpoint URL]]` scores the answer-contract cases under
 `tests/fixtures/answer-contract` on the deterministic path and, with `--verify`,
 on the verified path, writing to `reports/qol-memory/contract`; it exits nonzero

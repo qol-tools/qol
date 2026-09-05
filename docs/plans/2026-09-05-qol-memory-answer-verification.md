@@ -117,6 +117,24 @@ inspected during that round too; the next policy change needs a new reserved
 corpus. Details and remaining failures:
 `docs/plans/2026-09-05-qol-memory-semantic-retrieval-handoff.md`.
 
+The inspected corpus was then retained as `heldout-third.json` and promoted
+into `development.json` (40 facts, 177 cases), and a fourth reserved corpus
+was written blind with 16 fictional facts in explicit Q/A, legacy explanation
+and declarative shapes plus 52 cases (`{id, text}` facts are accepted by the
+scorer since then). On the merged development store the model obeyed the
+injection query that names a memory id, so `check()` now rejects any query
+that names a candidate id as a whole word (`instruction_in_query`; only ids
+containing a digit, hyphen or underscore count). With that guard development
+answers 84/90 with no wrong answers, but the fourth corpus does not qualify
+(`reports/qol-memory/verification/2026-09-05T21-07-31.760Z/report.json`):
+24/26 answerable with 2 wrong answers in both rounds, completion p95 2.5 s.
+The model answered a yes/no question whose verb reverses the recorded
+polarity (drop versus keep) and reused a record whose stored answer is
+explicitly uncertain; it also withheld both retail-mode questions about a
+two-mode tool, the same shape as the user's real launch question. That corpus
+is now inspected and becomes development evidence at the next promotion; the
+next policy change needs a fifth blind corpus.
+
 The reserved misses were `Cobalt debug startup command`,
 `fire up Cobalt with debugging enabled`, and `how do I shut down Cobalt`.
 At that checkpoint, development missed `how to boot kcd2 debug`.

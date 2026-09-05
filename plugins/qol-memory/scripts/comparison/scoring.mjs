@@ -8,7 +8,9 @@ export function validateDataset(dataset, split) {
   const cases = new Set(dataset.cases.map((entry) => entry.id));
   if (facts.size !== dataset.facts.length || cases.size !== dataset.cases.length) throw new Error("Duplicate IDs");
   for (const fact of dataset.facts) {
-    if (![fact.id, fact.question, fact.answer].every((value) => typeof value === "string" && value.trim())) throw new Error("Incomplete fact");
+    const hasQuestionAnswer = typeof fact.question === "string" && fact.question.trim() && typeof fact.answer === "string" && fact.answer.trim();
+    const hasText = typeof fact.text === "string" && fact.text.trim();
+    if (!(typeof fact.id === "string" && fact.id.trim() && (hasQuestionAnswer || hasText))) throw new Error("Incomplete fact");
   }
   for (const entry of dataset.cases) {
     if (!entry.query?.trim() || !entry.category || (entry.expected !== null && !facts.has(entry.expected))) throw new Error(`Invalid case ${entry.id}`);
@@ -17,10 +19,11 @@ export function validateDataset(dataset, split) {
 }
 
 export function validateSplitSeparation(development, heldout) {
-  for (const field of ["id", "question"]) {
-    const seen = new Set(development.facts.map((fact) => fact[field].toLowerCase().trim()));
-    if (heldout.facts.some((fact) => seen.has(fact[field].toLowerCase().trim()))) throw new Error(`Fact ${field} leaked across splits`);
-  }
+  const seenIds = new Set(development.facts.map((fact) => fact.id.toLowerCase().trim()));
+  if (heldout.facts.some((fact) => seenIds.has(fact.id.toLowerCase().trim()))) throw new Error("Fact id leaked across splits");
+  const key = (fact) => (fact.question ?? fact.text).toLowerCase().trim();
+  const seen = new Set(development.facts.map(key));
+  if (heldout.facts.some((fact) => seen.has(key(fact)))) throw new Error("Fact question leaked across splits");
   const queries = new Set(development.cases.map((entry) => entry.query.toLowerCase().trim()));
   if (heldout.cases.some((entry) => queries.has(entry.query.toLowerCase().trim()))) throw new Error("Query leaked across splits");
 }
@@ -29,7 +32,7 @@ export function workerInput(dataset, repeats, lexical = []) {
   const ranks = new Map(lexical.map((row) => [row.id, row.lexical]));
   return {
     repeats,
-    facts: dataset.facts.map(({ id, question, answer }) => ({ id, question, answer })),
+    facts: dataset.facts.map(({ id, question, answer, text }) => (text === undefined ? { id, question, answer } : { id, text })),
     queries: dataset.cases.map(({ id, query }) => ({ id, query, lexical: ranks.get(id) ?? [] })),
   };
 }
