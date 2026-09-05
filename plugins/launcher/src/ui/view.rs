@@ -56,7 +56,12 @@ pub fn search_bar(
     };
     let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
     let visible = visible_char_count(
-        WINDOW_WIDTH - 2.0 * qol_gpui::theme::SPACE_PAD - chevron_width - 2.0 * 10.0 - trailing,
+        WINDOW_WIDTH
+            - 2.0 * qol_gpui::theme::SPACE_PAD
+            - chevron_width
+            - 2.0 * 10.0
+            - trailing
+            - CARET_WIDTH,
         mono_advance,
     );
     div()
@@ -104,6 +109,7 @@ pub fn search_bar(
                             selection,
                             placeholder,
                             visible,
+                            mono_advance,
                         )),
                 )
                 .when_some(launch_error, |field, error| {
@@ -132,17 +138,33 @@ pub fn search_bar(
         })
 }
 
+const CARET_WIDTH: f32 = 2.0;
+
+fn caret(x: f32) -> Div {
+    div()
+        .absolute()
+        .left(px((x - 1.0).max(0.0)))
+        .top(px(1.0))
+        .w(px(CARET_WIDTH))
+        .h(px(16.0))
+        .rounded(px(1.0))
+        .bg(rgb(current_palette().highlight))
+}
+
 fn search_bar_content(
     query: &str,
     cursor: usize,
     selection: Option<(usize, usize)>,
     placeholder: &str,
     visible: usize,
+    advance: f32,
 ) -> AnyElement {
     if query.is_empty() {
         return div()
+            .relative()
             .text_color(rgb(current_palette().text_muted))
             .child(placeholder.to_owned())
+            .child(caret(0.0))
             .into_any_element();
     }
 
@@ -153,7 +175,6 @@ fn search_bar_content(
     let end_byte = char_to_byte(query, view_end);
     let visible = &query[start_byte..end_byte];
 
-    let mut display = visible.to_owned();
     let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
 
     if let Some((sel_start, sel_end)) = selection {
@@ -177,22 +198,16 @@ fn search_bar_content(
         }
     }
 
-    if selection.is_none() {
-        let adj_cursor = cursor
-            .saturating_sub(view_start)
-            .min(display.chars().count());
-        let caret_byte = char_to_byte(&display, adj_cursor);
-        display.insert(caret_byte, '|');
-        highlights.push((
-            caret_byte..caret_byte + 1,
-            HighlightStyle::color(rgb(current_palette().highlight).into()),
-        ));
-    }
-
-    let styled = StyledText::new(SharedString::from(display)).with_highlights(highlights);
+    let styled =
+        StyledText::new(SharedString::from(visible.to_owned())).with_highlights(highlights);
     div()
+        .relative()
         .text_color(rgb(current_palette().text))
         .child(styled)
+        .when(selection.is_none(), |field| {
+            let adj_cursor = cursor.saturating_sub(view_start).min(view_end - view_start);
+            field.child(caret(adj_cursor as f32 * advance))
+        })
         .into_any_element()
 }
 
