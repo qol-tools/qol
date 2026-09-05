@@ -19,7 +19,9 @@ use crate::store::{
 };
 use crate::text;
 
+mod question_match;
 pub mod rows;
+mod selection;
 
 const SNIPPET_WINDOW: usize = 240;
 const SKILL_CAP: usize = 2048;
@@ -213,14 +215,6 @@ impl NoteHit {
         let cut = family_tail_regex().replace_all(&stripped, "").to_string();
         let trimmed = cut.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
         format!("{}:{}", self.cls, text::utf16_slice(trimmed, 0, 60))
-    }
-}
-
-fn capture_restates_query(query: &str, kind: &str, text: &str) -> bool {
-    kind == crate::ingest::CAPTURE_KIND && {
-        let norm_query = crate::text::collapse_ws_lower(query);
-        let norm_text = crate::text::collapse_ws_lower(text);
-        !norm_query.is_empty() && norm_text.contains(&norm_query)
     }
 }
 
@@ -585,20 +579,47 @@ fn run_with_warm(
     let note_top: Option<&NoteHit> = top_notes.first();
     let disliked = crate::feedback::disliked_by_norm(store.root());
     let query_norm = retrieval_log::normalize_query(&req.query);
-    let unit_top: Option<UnitHit> = answer_ranked
-        .iter()
-        .find(|hit| {
-            disliked
-                .get(&query_norm)
-                .is_none_or(|keys| !keys.contains(&hit.key))
-        })
-        .cloned();
+    let capture_selection = selection::select(
+        &req.query,
+        answer_pool,
+        exclude_session.as_deref(),
+        disliked.get(&query_norm),
+    );
+    let selected_capture = capture_selection.winner.as_ref().map(|winner| UnitHit {
+        key: winner.unit.key.clone(),
+        score: answer_ranked
+            .iter()
+            .find(|hit| hit.key == winner.unit.key)
+            .map_or(0.0, |hit| hit.score),
+        kind: winner.unit.kind.clone(),
+        source: winner.unit.source.clone(),
+        session: winner.unit.session.clone(),
+        cwd: winner.unit.cwd.clone(),
+        ts: winner.unit.ts.clone(),
+        host: winner.unit.host.clone(),
+        text: winner.evidence.display.clone(),
+    });
+    let unit_top: Option<UnitHit> = selected_capture.or_else(|| {
+        answer_ranked
+            .iter()
+            .find(|hit| {
+                disliked
+                    .get(&query_norm)
+                    .is_none_or(|keys| !keys.contains(&hit.key))
+                    && (hit.kind != crate::ingest::CAPTURE_KIND
+                        || question_match::evidence(&hit.text).is_none())
+            })
+            .cloned()
+    });
     let raw_unit_margin = match &unit_top {
         Some(top) => {
-            let competitor = answer_ranked
-                .iter()
-                .skip(1)
-                .find(|hit| text::token_jaccard(&top.text, &hit.text) < AGREE_JACCARD);
+            let competitor = answer_ranked.iter().find(|hit| {
+                hit.key != top.key
+                    && disliked
+                        .get(&query_norm)
+                        .is_none_or(|keys| !keys.contains(&hit.key))
+                    && text::token_jaccard(&top.text, &hit.text) < AGREE_JACCARD
+            });
             match competitor {
                 Some(major) => top.score / major.score,
                 None => f64::INFINITY,
@@ -652,6 +673,7 @@ fn run_with_warm(
     let unit_cov = unit_top.as_ref().map_or(0.0, |top| {
         distinct_score(&qtokens, &top.text).0 as f64 / std::cmp::max(1, qtokens.len()) as f64
     });
+    let unit_question_match = capture_selection.winner.is_some();
 
     if let (Some(resolved), Some(idx)) = (&note_resolved, &notes_idx) {
         if weighted_note_cov(&qtokens, &resolved.text, &idx.idf) < gates.note_cov {
@@ -740,10 +762,15 @@ fn run_with_warm(
 
     let reason;
 
-    if (max_cov < gates.no_memory_cov && !has_recency_answer)
-        || (below_floor(note_top.map(|note| note.score))
-            && below_floor(unit_top.as_ref().map(|top| top.score))
-            && !has_recency_answer)
+    if capture_selection.conflicts > 0 {
+        verdict = "candidates".to_owned();
+        confidence = "low".to_owned();
+        reason = "matching captures contain conflicting answers".to_owned();
+    } else if !unit_question_match
+        && ((max_cov < gates.no_memory_cov && !has_recency_answer)
+            || (below_floor(note_top.map(|note| note.score))
+                && below_floor(unit_top.as_ref().map(|top| top.score))
+                && !has_recency_answer))
     {
         reason = format!(
             "no memory above the answer threshold (max_cov={}, floor={})",
@@ -775,24 +802,30 @@ fn run_with_warm(
                     || note_superseded.as_ref().is_some_and(|s| !s.is_empty()))
                 && note_covers_must_match(resolved, note_superseded.as_ref(), &must_match)
         });
-        let unit_winner = unit_top.as_ref().is_some_and(|top| {
-            unit_cov >= gates.unit_cov
-                && top.score >= gates.unit_score
-                && !is_boilerplate_unit_user(top)
-                && (capture_restates_query(&req.query, &top.kind, &top.text)
-                    || raw_unit_margin >= gates.unit_margin)
-        });
-        let capture_outranks_note = unit_winner
-            && unit_top
-                .as_ref()
-                .is_some_and(|top| top.kind == crate::ingest::CAPTURE_KIND)
-            && unit_cov
-                > phrased_coverage(
-                    &qtokens,
-                    note_resolved
-                        .as_ref()
-                        .map(|resolved| resolved.text.as_str()),
-                );
+        let unit_winner = unit_question_match
+            || unit_top.as_ref().is_some_and(|top| {
+                let literal_capture = top.kind == crate::ingest::CAPTURE_KIND
+                    && question_match::Question::parse(&req.query).is_none()
+                    && !req.query.trim().is_empty()
+                    && text::collapse_ws_lower(&top.text)
+                        .contains(&text::collapse_ws_lower(&req.query));
+                unit_cov >= gates.unit_cov
+                    && top.score >= gates.unit_score
+                    && !is_boilerplate_unit_user(top)
+                    && (literal_capture || raw_unit_margin >= gates.unit_margin)
+            });
+        let capture_outranks_note = unit_question_match
+            || unit_winner
+                && unit_top
+                    .as_ref()
+                    .is_some_and(|top| top.kind == crate::ingest::CAPTURE_KIND)
+                && unit_cov
+                    > phrased_coverage(
+                        &qtokens,
+                        note_resolved
+                            .as_ref()
+                            .map(|resolved| resolved.text.as_str()),
+                    );
 
         if note_winner && !capture_outranks_note {
             let resolved = note_resolved
@@ -822,6 +855,7 @@ fn run_with_warm(
                         })
                         .collect()
                 })),
+                supporting_keys: Vec::new(),
             });
             verdict = "answered".to_string();
             confidence = if high { "high" } else { "medium" }.to_string();
@@ -849,6 +883,7 @@ fn run_with_warm(
                 score: text::to_fixed2(top.score),
                 margin: None,
                 superseded: None,
+                supporting_keys: capture_selection.supporting_keys.clone(),
             });
             verdict = "answered".to_string();
             confidence = "medium".to_string();
@@ -971,6 +1006,9 @@ fn run_with_warm(
             }),
             note_token_coverage: text::to_fixed2(note_cov),
             unit_token_coverage: text::to_fixed2(unit_cov),
+            unit_question_match,
+            matching_captures: capture_selection.matching,
+            conflicting_captures: capture_selection.conflicts,
             max_token_coverage: text::to_fixed2(f64::max(note_cov, unit_cov)),
             notes_run_ts: notes_layer.run.clone(),
             snapshot_run_ts: units.run.clone(),
@@ -1469,6 +1507,8 @@ pub struct Answer {
     pub margin: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded: Option<Option<Vec<Superseded>>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -1508,6 +1548,12 @@ pub struct Signals {
     pub unit_margin: Option<f64>,
     pub note_token_coverage: f64,
     pub unit_token_coverage: f64,
+    #[serde(default)]
+    pub unit_question_match: bool,
+    #[serde(default)]
+    pub matching_captures: usize,
+    #[serde(default)]
+    pub conflicting_captures: usize,
     pub max_token_coverage: f64,
     pub notes_run_ts: Option<String>,
     pub snapshot_run_ts: String,
@@ -2544,6 +2590,59 @@ mod tests {
         assert_eq!(out.verdict, "answered");
         let answer = out.answer.expect("restating capture answers");
         assert_eq!(answer.key, short["key"].as_str().expect("short key"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn launch_question_paraphrases_produce_an_answer_row() {
+        let root = temp_root("launch-paraphrase");
+        let captures = [
+            "Run ./quartz-forge dev or ./quartz-forge -d. How to run Quartz in debug mode: quartz-forge dev launches the dev build with debug logging and arms the overlay.",
+            "./quartz-forge -d. How to start Quartz in debug mode: ./quartz-forge -d launches the dev build with debug logging and arms the overlay in the background.",
+        ];
+        let mut lines: Vec<String> = captures
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                json!({"key": format!("capture-{i}"), "kind": "capture", "text": text}).to_string()
+            })
+            .collect();
+        for i in 0..200 {
+            lines.push(json!({"key": format!("filler-{i}"), "kind": "user", "text": format!("mineral survey field report {i} about garnet pyrite mica slate beryl opal")}).to_string());
+        }
+        write_units(&root, &lines.join("\n"));
+        let store = Store::resolve(Some(&root)).unwrap();
+        for query in [
+            "how to open quartz debug",
+            "how do I launch quartz debug?",
+            "how to run quartz in debug mode",
+        ] {
+            let out = run_ask(&store, query, false);
+            assert_eq!(
+                out.verdict,
+                "answered",
+                "{query}: {} {}",
+                out.reason,
+                serde_json::to_string(&out.signals).unwrap()
+            );
+            assert!(out.signals.unit_question_match, "{query}");
+            let rows = rows::from_output(
+                &out,
+                &store.read_units().unwrap(),
+                &store.read_notes().unwrap(),
+            );
+            assert_eq!(rows[0].kind, "answer", "{query}");
+            assert!(rows[0].copy.contains("quartz-forge"), "{query}");
+        }
+        for query in [
+            "what is quartz forge",
+            "how to stop quartz debug",
+            "how to open quartz debug remotely",
+            "how to open quartz release",
+        ] {
+            let out = run_ask(&store, query, false);
+            assert!(out.answer.is_none(), "{query}: {}", out.reason);
+        }
         fs::remove_dir_all(&root).ok();
     }
 

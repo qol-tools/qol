@@ -118,14 +118,7 @@ fn handle_event(
                     if text.trim().is_empty() || is_refill_lane_unit(ASSISTANT_KIND, &text) {
                         return;
                     }
-                    units.push(transcript_unit(
-                        ASSISTANT_KIND,
-                        origin,
-                        &ts,
-                        &text,
-                        session,
-                        cwd,
-                    ));
+                    units.push(assistant_unit(origin, message, &ts, &text, session, cwd));
                 }
                 _ => {}
             }
@@ -208,14 +201,7 @@ fn handle_event(
             }
             update_context(event, session, cwd);
             let ts = to_iso(event.get("timestamp"));
-            units.push(transcript_unit(
-                ASSISTANT_KIND,
-                origin,
-                &ts,
-                &text,
-                session,
-                cwd,
-            ));
+            units.push(assistant_unit(origin, message, &ts, &text, session, cwd));
         }
         Some("summary") => {
             let text = redact(event.get("summary").and_then(Value::as_str).unwrap_or(""));
@@ -238,6 +224,35 @@ fn handle_event(
         }
         _ => {}
     }
+}
+
+fn assistant_unit(
+    origin: &Origin,
+    message: &Value,
+    ts: &Value,
+    text: &str,
+    session: &Option<String>,
+    cwd: &Option<String>,
+) -> Value {
+    let mut unit = transcript_unit(ASSISTANT_KIND, origin, ts, text, session, cwd);
+    let stop = message
+        .get("stopReason")
+        .or_else(|| message.get("stop_reason"))
+        .and_then(Value::as_str);
+    let has_tools = message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("tool_use" | "toolCall")
+                )
+            })
+        });
+    unit["assistant_final"] =
+        json!(!has_tools && stop.is_none_or(|reason| matches!(reason, "stop" | "end_turn")));
+    unit
 }
 
 fn transcript_unit(

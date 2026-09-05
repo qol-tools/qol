@@ -230,11 +230,18 @@ pub fn dedupe_user_units(units: &[Unit]) -> Vec<Unit> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(sorted.len());
     for unit in sorted {
-        if seen.insert(crate::text::collapse_ws_lower(&unit.text)) {
+        if seen.insert(dedupe_key(&unit)) {
             out.push(unit);
         }
     }
     out
+}
+
+pub(crate) fn dedupe_key(unit: &Unit) -> String {
+    if unit.kind == "capture" {
+        return format!("capture:{}", unit.key);
+    }
+    format!("text:{}", crate::text::collapse_ws_lower(&unit.text))
 }
 
 pub fn is_boilerplate_unit(unit: &Unit) -> bool {

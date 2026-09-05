@@ -9,7 +9,7 @@ use crate::aliases::AliasMap;
 use crate::ask::{doc_refs, notes_refs, visible_notes, WarmIndexes};
 use crate::retrieval::{build_index, cache, DocRef, Index};
 use crate::store::{
-    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
+    dedupe_key, dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
 };
 
 pub struct WarmState {
@@ -217,10 +217,7 @@ fn build_layers(store: &Store, fingerprint: LayerFingerprint) -> Result<CachedLa
         .cloned()
         .collect();
     let visible = visible_notes(&notes.items, &units.items, &caller, &registry);
-    let dedupe_seen: HashSet<String> = user_units
-        .iter()
-        .map(|unit| crate::text::collapse_ws_lower(&unit.text))
-        .collect();
+    let dedupe_seen: HashSet<String> = user_units.iter().map(dedupe_key).collect();
     let by_key: HashMap<String, usize> = user_units
         .iter()
         .enumerate()
@@ -256,9 +253,7 @@ fn extend_unit_indexes(
     for unit in units {
         if !crate::store::in_answer_pool(&unit.kind)
             || !crate::agent_home::visible(unit, &cache.caller, registry)
-            || !cache
-                .dedupe_seen
-                .insert(crate::text::collapse_ws_lower(&unit.text))
+            || !cache.dedupe_seen.insert(dedupe_key(unit))
             || !cache.indexed_keys.insert(unit.key.clone())
         {
             continue;

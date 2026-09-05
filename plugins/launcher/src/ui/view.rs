@@ -487,7 +487,7 @@ fn vague_fence(kit: &qol_gpui::kit::Kit) -> Div {
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .text_color(rgb(kit.palette.text_secondary))
                 .text_size(px(TEXT_NANO))
-                .child("nothing answers this - nearby memories".to_uppercase()),
+                .child("no confident answer - related memories".to_uppercase()),
         )
         .child(div().flex_1().h(px(1.0)).bg(rgb(kit.palette.border_subtle)))
 }

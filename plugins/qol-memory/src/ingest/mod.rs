@@ -136,7 +136,7 @@ fn units_fingerprint(store: &Store) -> (u64, u64) {
 
 pub const ASSISTANT_KIND: &str = "assistant";
 pub const COMPACTION_KIND: &str = "compaction";
-pub const PARSER_VERSION: u32 = 2;
+pub const PARSER_VERSION: u32 = 3;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct IngestReport {
@@ -353,9 +353,15 @@ pub fn ingest_paths(
             }
             None => transcript::ParseCursor::default(),
         };
+        let mut pending_question = persisted
+            .get(path)
+            .filter(|previous| {
+                previous.parser == PARSER_VERSION && cursor.offset == previous.offset
+            })
+            .and_then(|previous| previous.pending_question.clone());
         let parsed = transcript::parse_file(path, source, agent_home, cursor)?;
         let (appended, compactions) = append_units_inner(store, &parsed.units, keys)?;
-        let qa = qa::qa_units(&parsed.units);
+        let qa = qa::extend(&parsed.units, &mut pending_question);
         let qa_appended = if qa.is_empty() {
             0
         } else {
@@ -365,6 +371,11 @@ pub fn ingest_paths(
         if qa_appended > 0 {
             qol_runtime::probe!("QOL_MEMORY_INGEST", "event=qa_pairs appended={qa_appended}");
         }
+        let qa_pending = pending_question.is_some();
+        qol_runtime::probe!(
+            "QOL_MEMORY_INGEST",
+            "event=qa_checkpoint pending={qa_pending}"
+        );
         report.files += 1;
         report.appended += appended + qa_appended;
         report.compactions += compactions;
@@ -380,6 +391,7 @@ pub fn ingest_paths(
                 session: parsed.cursor.session,
                 cwd: parsed.cursor.cwd,
                 parser: PARSER_VERSION,
+                pending_question,
             },
         );
     }

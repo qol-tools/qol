@@ -19,6 +19,8 @@ pub struct FileState {
     pub cwd: Option<String>,
     #[serde(default)]
     pub parser: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<super::qa::Question>,
 }
 
 #[derive(Debug, Default)]

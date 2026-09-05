@@ -14,6 +14,14 @@ pub fn unit_home<'a>(unit: &'a Unit, registry: &'a Registry) -> &'a str {
 }
 
 pub fn visible(unit: &Unit, caller: &str, registry: &Registry) -> bool {
+    if unit.source.as_deref() == Some(crate::ingest::qa::QA_SOURCE)
+        && unit
+            .agent_home
+            .as_deref()
+            .is_none_or(|home| home.trim().is_empty())
+    {
+        return false;
+    }
     let home = unit_home(unit, registry);
     home == caller || registry.is_shared(home)
 }
@@ -111,5 +119,17 @@ mod tests {
             .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
         assert_eq!(slug, cache_slug("/home/user/.claude"));
         assert_ne!(slug, cache_slug("/home/user/.claude-work"));
+    }
+
+    #[test]
+    fn legacy_qa_without_source_home_never_inherits_the_default_home() {
+        let registry = registry();
+        let caller = &registry.default_for(Harness::Claude).id;
+        for home in [None, Some(""), Some(" ")] {
+            let legacy = unit(Some(crate::ingest::qa::QA_SOURCE), home);
+            assert!(!visible(&legacy, caller, &registry));
+        }
+        let scoped = unit(Some(crate::ingest::qa::QA_SOURCE), Some(caller));
+        assert!(visible(&scoped, caller, &registry));
     }
 }

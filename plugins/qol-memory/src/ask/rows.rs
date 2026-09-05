@@ -67,6 +67,7 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
     let restated = output
         .answer
         .as_ref()
+        .filter(|answer| answer.supporting_keys.is_empty())
         .and_then(|answer| restated_by(answer, output));
     if let Some(answer) = &output.answer {
         let shown = restated.as_ref();
@@ -117,13 +118,19 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
             kind: "answer".to_string(),
             lead: lead_of(text),
             host: host.map(str::to_string),
-            sources: Some(if shown.is_some() { 2 } else { 1 }),
+            sources: Some(
+                answer
+                    .supporting_keys
+                    .len()
+                    .max(if shown.is_some() { 2 } else { 1 }),
+            ),
             nearby: false,
             trail,
             detail,
         });
         used.insert(answer.key.clone());
         used.insert(key.to_string());
+        used.extend(answer.supporting_keys.iter().cloned());
     }
 
     let answer_text = output.answer.as_ref().map(|answer| answer.text.as_str());
@@ -134,7 +141,12 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
                 break;
             }
             if unit.kind == crate::ingest::CAPTURE_KIND && !used.contains(&unit.key) {
-                if answer_text.is_some_and(|text| jaccard(&unit.text, text) >= FOLD_JACCARD) {
+                if output
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| answer.supporting_keys.is_empty())
+                    && answer_text.is_some_and(|text| jaccard(&unit.text, text) >= FOLD_JACCARD)
+                {
                     used.insert(unit.key.clone());
                     folded += 1;
                     continue;
