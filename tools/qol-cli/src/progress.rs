@@ -240,23 +240,6 @@ impl LoopProgress {
         }
     }
 
-    pub(crate) fn step_inline(
-        &mut self,
-        verb: &str,
-        kind: StepKind,
-        target: &str,
-        command: &mut Command,
-        verbose: bool,
-    ) -> Result<()> {
-        let result = if self.active {
-            run_step_inline(verb, kind, target, command, verbose)
-        } else {
-            run_step(verb, kind, target, command, verbose)
-        };
-        self.tick(result.is_ok());
-        result
-    }
-
     pub(crate) fn step_silent(
         &mut self,
         verb: &str,
