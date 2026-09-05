@@ -46,6 +46,11 @@ switch (process.argv[2]) {
     await compare(process.argv.slice(3));
     break;
   }
+  case "verify": {
+    const { verify } = await import("./comparison/verify.mjs");
+    await verify(process.argv.slice(3));
+    break;
+  }
   default:
-    throw new Error("Usage: node plugins/qol-memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH]]");
+    throw new Error("Usage: node plugins/qol-memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH] | verify [--prepare] [--endpoint URL] [--repeats N]]");
 }

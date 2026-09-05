@@ -51,12 +51,14 @@ pub struct TrailFocus {
 }
 
 pub struct FlowSession {
+    pub epoch: u64,
     pub entry: FlowEntry,
     pub rows: Vec<FlowRow>,
     pub verdict: FlowVerdict,
     pub generation: u64,
     pub pending: bool,
     pub in_flight: bool,
+    pub verification_deadline: Option<Instant>,
     pub trail_from: f32,
     pub trail_from_index: usize,
     pub trail_to: usize,
@@ -83,6 +85,12 @@ pub struct LauncherState {
     pub flow: Option<FlowSession>,
 }
 
+impl FlowSession {
+    pub fn matches_request(&self, epoch: u64, generation: u64) -> bool {
+        self.epoch == epoch && self.generation == generation
+    }
+}
+
 impl LauncherState {
     pub fn new() -> Self {
         Self {
@@ -105,13 +113,16 @@ impl LauncherState {
     }
 
     pub fn enter_flow(&mut self, entry: FlowEntry) {
+        static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         self.flow = Some(FlowSession {
+            epoch: EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             entry,
             rows: Vec::new(),
             verdict: FlowVerdict::Answered,
             generation: 0,
             pending: false,
             in_flight: false,
+            verification_deadline: None,
             trail_from: 0.0,
             trail_from_index: 0,
             trail_to: 0,
@@ -521,6 +532,24 @@ mod tests {
         assert_eq!(state.cursor, 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
+    }
+
+    #[test]
+    fn stale_requests_cannot_match_changed_queries_or_reopened_flows() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        let flow = state.flow.as_mut().unwrap();
+        let epoch = flow.epoch;
+        assert!(flow.matches_request(epoch, 0));
+        flow.generation = 1;
+        assert!(!flow.matches_request(epoch, 0));
+        assert!(flow.matches_request(epoch, 1));
+        state.exit_flow();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(!state.flow.as_ref().unwrap().matches_request(epoch, 0));
+        state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(!state.flow.as_ref().unwrap().matches_request(epoch, 0));
     }
 
     fn trail_fields(focus: Option<TrailFocus>) -> (usize, usize, u64) {

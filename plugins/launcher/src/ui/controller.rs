@@ -235,6 +235,8 @@ impl LauncherView {
         };
         flow.generation += 1;
         flow.pending = true;
+        flow.verification_deadline = None;
+        let epoch = flow.epoch;
         let generation = flow.generation;
         if self.state.query.trim().is_empty() {
             flow.rows.clear();
@@ -249,9 +251,9 @@ impl LauncherView {
                 async_cx.background_executor().timer(FLOW_DEBOUNCE).await;
                 this.update(&mut async_cx, |view, cx| {
                     let current = view.state.flow.as_ref().is_some_and(|session| {
-                        session.generation == generation && !session.in_flight
+                        session.matches_request(epoch, generation) && !session.in_flight
                     });
-                    if current {
+                    if current && view.is_showing {
                         view.start_flow_fetch(cx);
                     }
                 })
@@ -262,6 +264,9 @@ impl LauncherView {
     }
 
     fn start_flow_fetch(&mut self, cx: &mut Context<Self>) {
+        if !self.is_showing {
+            return;
+        }
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
@@ -270,6 +275,7 @@ impl LauncherView {
             return;
         }
         let generation = flow.generation;
+        let epoch = flow.epoch;
         let entry = flow.entry.clone();
         flow.in_flight = true;
         trace::flow(self, "queried");
@@ -283,12 +289,15 @@ impl LauncherView {
                     let Some(session) = view.state.flow.as_mut() else {
                         return;
                     };
+                    if session.epoch != epoch || !view.is_showing {
+                        return;
+                    }
                     session.in_flight = false;
                     if session.generation != generation {
                         view.start_flow_fetch(cx);
                         return;
                     }
-                    let (rows, verdict, failure) = match outcome {
+                    let (rows, mut verdict, failure) = match outcome {
                         Ok(fetch) => (fetch.rows, fetch.verdict, None),
                         Err(message) => (
                             Vec::new(),
@@ -296,6 +305,14 @@ impl LauncherView {
                             Some(message),
                         ),
                     };
+                    if verdict == crate::flow::FlowVerdict::Checking {
+                        let deadline = session.verification_deadline.get_or_insert_with(|| {
+                            std::time::Instant::now() + std::time::Duration::from_secs(60)
+                        });
+                        if std::time::Instant::now() >= *deadline {
+                            verdict = crate::flow::FlowVerdict::Vague;
+                        }
+                    }
                     session.rows = rows;
                     session.verdict = verdict;
                     session.pending = false;
@@ -304,6 +321,33 @@ impl LauncherView {
                     }
                     trace::flow(view, "rows");
                     cx.notify();
+                    if verdict == crate::flow::FlowVerdict::Checking {
+                        view.refresh_pending_flow(epoch, generation, cx);
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn refresh_pending_flow(&mut self, epoch: u64, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                this.update(&mut async_cx, |view, cx| {
+                    let current = view.state.flow.as_ref().is_some_and(|session| {
+                        session.matches_request(epoch, generation)
+                            && !session.in_flight
+                            && session.verdict == crate::flow::FlowVerdict::Checking
+                    });
+                    if current && view.is_showing {
+                        view.start_flow_fetch(cx);
+                    }
                 })
                 .ok();
             }

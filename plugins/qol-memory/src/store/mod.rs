@@ -80,6 +80,13 @@ impl Store {
                 items: parse_units_text(&text),
             });
         }
+        if !self.snapshot_root().exists() {
+            return Ok(UnitsLayer {
+                run: "empty".to_owned(),
+                path: live,
+                items: Vec::new(),
+            });
+        }
         let run = newest_run_name(&self.snapshot_root())
             .ok_or_else(|| anyhow::anyhow!("no runs under {}", self.snapshot_root().display()))?;
         let path = self.snapshot_root().join(&run).join("snapshot.jsonl");
@@ -333,10 +340,10 @@ mod tests {
     }
 
     #[test]
-    fn read_units_uses_live_then_snapshot_and_errors_without_runs() {
+    fn read_units_uses_live_then_snapshot_and_starts_empty() {
         let store_dir = TempDir::new("units-live");
         let store = Store::resolve(Some(store_dir.0.as_path())).unwrap();
-        assert!(store.read_units().is_err());
+        assert!(store.read_units().unwrap().items.is_empty());
 
         std::fs::write(store.units_path(), "{\"key\":\"live-1\"}\n").unwrap();
         let live = store.read_units().unwrap();
@@ -360,11 +367,7 @@ mod tests {
         assert_eq!(snapped.items[0].key, "new");
 
         std::fs::remove_dir_all(store.snapshot_root()).unwrap();
-        let err = format!("{}", store.read_units().unwrap_err());
-        assert_eq!(
-            err,
-            format!("no runs under {}", store.snapshot_root().display())
-        );
+        assert!(store.read_units().unwrap().items.is_empty());
     }
 
     #[test]

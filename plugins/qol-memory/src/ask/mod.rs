@@ -22,6 +22,7 @@ use crate::text;
 mod question_match;
 pub mod rows;
 mod selection;
+pub(crate) mod semantic;
 
 const SNIPPET_WINDOW: usize = 240;
 const SKILL_CAP: usize = 2048;
@@ -361,7 +362,7 @@ pub fn run_with_layers(
     run_with_warm(store, aliases, req, units, notes_layer, None)
 }
 
-fn run_with_warm(
+pub(crate) fn run_with_warm(
     store: &Store,
     aliases: &AliasMap,
     req: &AskRequest,
@@ -982,6 +983,7 @@ fn run_with_warm(
         .collect();
 
     Ok(AskOutput {
+        verification: None,
         query: req.query.clone(),
         agent_home: caller,
         host: crate::host::current().to_string(),
@@ -1272,7 +1274,17 @@ pub fn run_and_log_with_layers(
     let started = Instant::now();
     let out = run_with_warm(store, aliases, req, units, notes, warm)?;
     let latency_ms = started.elapsed().as_millis() as u64;
+    log_output(store, req, log, &out, latency_ms);
+    Ok(out)
+}
 
+pub(crate) fn log_output(
+    store: &Store,
+    req: &AskRequest,
+    log: &LogOptions,
+    out: &AskOutput,
+    latency_ms: u64,
+) {
     if !log.no_log {
         let exclude_session: Option<String> = req
             .exclude_session
@@ -1312,8 +1324,6 @@ pub fn run_and_log_with_layers(
         };
         retrieval_log::append(store.root(), &event);
     }
-
-    Ok(out)
 }
 
 pub fn render_text(out: &AskOutput) -> String {
@@ -1324,6 +1334,11 @@ pub fn render_text(out: &AskOutput) -> String {
     let mut lines = Vec::new();
     lines.push(format!("verdict: {} ({})", out.verdict, out.confidence));
     lines.push(format!("reason: {}", out.reason));
+    match out.verification.as_ref() {
+        Some(crate::verification::service::Status::Pending) => lines.push("verification: checking the recorded answers in the background; repeat this question for the result".into()),
+        Some(crate::verification::service::Status::Unavailable) => lines.push("verification: local answer checking is unavailable; related memories are still shown".into()),
+        _ => {}
+    }
     if out.verdict == "answered" {
         if let Some(answer) = &out.answer {
             let cls = match &answer.cls {
@@ -1469,6 +1484,8 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
 
 #[derive(Serialize, Deserialize)]
 pub struct AskOutput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<crate::verification::service::Status>,
     pub query: String,
     #[serde(default)]
     pub agent_home: String,
@@ -1490,7 +1507,7 @@ pub struct AskOutput {
     pub notes: Vec<NoteOut>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Answer {
     pub text: String,
     pub layer: String,
@@ -1511,7 +1528,7 @@ pub struct Answer {
     pub supporting_keys: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Superseded {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]

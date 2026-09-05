@@ -1,29 +1,22 @@
 use std::path::Path;
+mod support;
+use qol_memory::verification::Fact;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use support::{call, fixture_store};
 
 use anyhow::{bail, Context, Result};
-use qol_memory::app::{request, warm::WarmState};
+use qol_memory::app::warm::WarmState;
 use qol_memory::ask::{self, AskRequest};
 use qol_memory::retrieval::{bm25_ranks, build_index, DocRef};
-use qol_memory::store::Store;
-use qol_plugin_daemon::daemon::ReadResult;
-use qol_runtime::protocol::DaemonRequest;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 #[derive(Deserialize)]
 struct Input {
     facts: Vec<Fact>,
     queries: Vec<Query>,
     repeats: usize,
-}
-
-#[derive(Deserialize)]
-struct Fact {
-    id: String,
-    question: String,
-    answer: String,
 }
 
 #[derive(Deserialize)]
@@ -107,35 +100,4 @@ fn main() -> Result<()> {
         serde_json::to_string(&json!({"setup_ms":setup_ms,"results":results}))?
     );
     Ok(())
-}
-
-fn fixture_store(root: &Path, facts: &[Fact], caller: &str) -> Result<Store> {
-    std::fs::create_dir(root).context("fixture store must not already exist")?;
-    let mut body = String::new();
-    for fact in facts {
-        let unit = json!({"key":fact.id,"kind":"capture","agent_home":caller,"cwd":"/fixture/comparison","session":"fixture","text":format!("Q: {} A: {}",fact.question,fact.answer)});
-        body.push_str(&serde_json::to_string(&unit)?);
-        body.push('\n');
-    }
-    qol_fs::atomic_write(&root.join("units.jsonl"), body.as_bytes())?;
-    Store::resolve(Some(root))
-}
-
-fn call(
-    state: &mut Arc<Mutex<WarmState>>,
-    action: &str,
-    query: &str,
-    caller: &str,
-) -> Result<Value> {
-    match request::handle(
-        state,
-        &DaemonRequest {
-            action: action.into(),
-            input: json!({"query":query,"agent_home":caller,"no_log":true}),
-        },
-    ) {
-        ReadResult::HandledWithData(value) => Ok(value),
-        ReadResult::Error(error) => bail!("{action}: {error}"),
-        _ => bail!("{action} returned no data"),
-    }
 }

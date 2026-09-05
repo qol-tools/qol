@@ -45,17 +45,19 @@ fn ask(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         no_log: bool_field(input, "no_log", "ask")?.unwrap_or(false),
     };
     let mut warm = lock_state(state);
+    let started = std::time::Instant::now();
     let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
     let (store, aliases, units, notes, indexes) = warm.ask_views(&caller)?;
-    let output = crate::ask::run_and_log_with_layers(
-        store,
-        aliases,
+    let mut output =
+        crate::ask::run_with_warm(store, aliases, &req, units, notes, indexes.as_ref())?;
+    warm.verify_answer(&req, &log.source, &mut output)?;
+    crate::ask::log_output(
+        warm.store(),
         &req,
         &log,
-        units,
-        notes,
-        indexes.as_ref(),
-    )?;
+        &output,
+        started.elapsed().as_millis() as u64,
+    );
     serde_json::to_value(output).context("failed to encode the qol-memory ask response")
 }
 
@@ -116,6 +118,7 @@ fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
 }
 
 fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
+    let started = std::time::Instant::now();
     let query = string_field(input, "query", "rows")?.trim().to_string();
     if query.is_empty() {
         anyhow::bail!("rows: input.query must not be empty");
@@ -131,25 +134,28 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         source: "launcher".to_string(),
         cwd: None,
         fact: None,
-        no_log: false,
+        no_log: bool_field(input, "no_log", "rows")?.unwrap_or(false),
     };
     let mut warm = lock_state(state);
     let caller = qol_agent_homes::Registry::load().resolve_caller(req.agent_home.as_deref());
     let (store, aliases, units, notes, indexes) = warm.ask_views(&caller)?;
-    let output = crate::ask::run_and_log_with_layers(
-        store,
-        aliases,
+    let mut output =
+        crate::ask::run_with_warm(store, aliases, &req, units, notes, indexes.as_ref())?;
+    warm.verify_answer(&req, &log.source, &mut output)?;
+    crate::ask::log_output(
+        warm.store(),
         &req,
         &log,
-        units,
-        notes,
-        indexes.as_ref(),
-    )?;
+        &output,
+        started.elapsed().as_millis() as u64,
+    );
+    let (units, notes) = warm.layers()?;
     let flow_rows = crate::ask::rows::from_output(&output, units, notes);
     Ok(json!({
         "verdict": output.verdict,
         "confidence": output.confidence,
         "rows": flow_rows,
+        "verification": output.verification,
     }))
 }
 
@@ -348,6 +354,36 @@ mod tests {
             matches!(result, ReadResult::Error(message) if message.contains("input.query")),
             "missing query must name the field"
         );
+    }
+
+    #[test]
+    fn first_capture_is_recallable_after_opening_a_missing_store() {
+        let parent = temp_store("first-capture");
+        let root = parent.join("new-store");
+        let store = Store::resolve(Some(&root)).unwrap();
+        let mut state = Arc::new(Mutex::new(
+            WarmState::open(store, crate::aliases::embedded()).unwrap(),
+        ));
+        let question = "How to run KCD2 in debug mode?";
+        let input = json!({"query":question,"no_log":true});
+        let ReadResult::HandledWithData(empty) = respond(&mut state, "ask", input.clone()) else {
+            panic!("a missing store must answer the request");
+        };
+        assert!(empty["answer"].is_null());
+        let ReadResult::HandledWithData(captured) = respond(
+            &mut state,
+            "capture",
+            json!({"text":format!("Q: {question} A: Run forge dev."),"cwd":"/fixture/project"}),
+        ) else {
+            panic!("first capture must create the store");
+        };
+        assert_eq!(captured["appended"], 1);
+        let ReadResult::HandledWithData(answer) = respond(&mut state, "ask", input) else {
+            panic!("the new capture must be visible to ask");
+        };
+        assert_eq!(answer["answer"]["text"], "Run forge dev.");
+        drop(state);
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]

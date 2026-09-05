@@ -1763,7 +1763,7 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 17] = [
     (
         "plugins/cli-sessions/src/ui/collapse.rs",
         "STRIP_HEIGHT",
-        32.0,
+        HEIGHT_SETTING_ROW,
     ),
     ("plugins/launcher/src/ui/layout.rs", "ROW_HEIGHT", 32.0),
     (
@@ -1786,7 +1786,11 @@ fn declared_f32(workspace: &Path, file: &str, name: &str) -> Option<f32> {
         if let Ok(parsed) = value.parse::<f32>() {
             return Some(parsed);
         }
-        return ladder_constant(value.trim_start_matches("qol_theme::"));
+        return ladder_constant(
+            value
+                .trim_start_matches("qol_theme::")
+                .trim_start_matches("qol_gpui::theme::"),
+        );
     }
     None
 }
@@ -1993,14 +1997,12 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
     );
 }
 
-const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 15] = [
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 13] = [
     ("libs/qol-gpui/src/toast.rs", 10.0),
     ("libs/qol-gpui/src/toast.rs", 3.0),
     ("plugins/alt-tab/src/app/render.rs", 26.0),
     ("plugins/alt-tab/src/app/render.rs", 18.0),
     ("plugins/cli-sessions/src/ui/render.rs", 24.0),
-    ("plugins/cli-sessions/src/ui/render.rs", 13.0),
-    ("plugins/cli-sessions/src/ui/render.rs", 10.0),
     ("plugins/launcher/src/ui/view.rs", 10.0),
     ("plugins/launcher/src/ui/view.rs", 5.0),
     ("plugins/launcher/src/ui/view.rs", 14.0),

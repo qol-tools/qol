@@ -62,6 +62,7 @@ fn row_date_key(row: &FlowRow) -> (bool, std::cmp::Reverse<&str>) {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FlowVerdict {
     Answered,
+    Checking,
     Vague,
     NoMemory,
 }
@@ -72,6 +73,9 @@ pub struct FlowFetch {
 }
 
 pub fn parse_verdict(payload: &serde_json::Value) -> FlowVerdict {
+    if payload["verdict"] != "answered" && payload["verification"]["status"] == "pending" {
+        return FlowVerdict::Checking;
+    }
     match payload.get("verdict").and_then(|value| value.as_str()) {
         Some("candidates") => FlowVerdict::Vague,
         Some("no-memory") => {
@@ -335,6 +339,19 @@ mod tests {
 
     #[test]
     fn parse_verdict_maps_the_wire_values() {
+        for (status, verdict, expected) in [
+            ("pending", "candidates", FlowVerdict::Checking),
+            ("pending", "answered", FlowVerdict::Answered),
+            ("ready", "candidates", FlowVerdict::Vague),
+            ("unavailable", "candidates", FlowVerdict::Vague),
+        ] {
+            assert_eq!(
+                parse_verdict(
+                    &serde_json::json!({"verdict":verdict,"verification":{"status":status}})
+                ),
+                expected
+            );
+        }
         assert_eq!(
             parse_verdict(&serde_json::json!({ "verdict": "answered", "rows": [] })),
             FlowVerdict::Answered

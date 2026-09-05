@@ -71,7 +71,9 @@ export function evaluate(dataset, results, threshold = null) {
     misses: count("miss"),
     precision: correct + wrong ? correct / (correct + wrong) : null,
     answer_coverage: correct / Math.max(1, answerable.length),
-    retrieval_recall: answerable.filter((row) => row.retrieved.includes(row.expected)).length / Math.max(1, answerable.length),
+    retrieval_recall: results.every(row => Array.isArray(row.retrieved ?? row.lexical))
+      ? answerable.filter((row) => row.retrieved.includes(row.expected)).length / Math.max(1, answerable.length)
+      : null,
     warm_p50_ms: percentile(rows.flatMap((row) => row.samples_ms), 0.5),
     warm_p95_ms: percentile(rows.flatMap((row) => row.samples_ms), 0.95),
   };

@@ -1,0 +1,21 @@
+schema_version = 1
+title = "QoL Memory"
+description = "Recall recorded answers across different question wordings."
+
+[section.answers]
+label = "Answers"
+
+[field.verify_answers]
+type = "boolean"
+label = "Understand question variations (experimental)"
+description = "Check unfamiliar wording locally while memories appear immediately. Some valid variations may still be missed. Install Ollama, then run ollama pull qwen3:8b. Takes effect after restarting Memory."
+section = "answers"
+default = false
+
+[field.verifier_endpoint]
+type = "string"
+label = "Local model server"
+description = "Leave empty to start a private Ollama server when needed, or use an existing loopback server. Takes effect after restarting Memory."
+section = "answers"
+placeholder = "http://127.0.0.1:11434"
+default = ""

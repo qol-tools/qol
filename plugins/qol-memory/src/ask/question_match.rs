@@ -145,6 +145,8 @@ fn typo_matches(query: &str, stored: &str) -> bool {
 #[derive(Clone, Debug)]
 pub(super) struct Evidence {
     pub question: Question,
+    pub recorded_question: String,
+    pub recorded_answer: String,
     pub answer: String,
     pub display: String,
 }
@@ -154,6 +156,8 @@ pub(super) fn evidence(text: &str) -> Option<Evidence> {
         let (question, answer) = question_answer.split_once(" A:")?;
         return Some(Evidence {
             question: Question::parse(question)?,
+            recorded_question: question.trim().to_owned(),
+            recorded_answer: answer.trim().to_owned(),
             answer: canonical_answer(answer),
             display: answer.trim().to_owned(),
         })
@@ -176,6 +180,8 @@ pub(super) fn evidence(text: &str) -> Option<Evidence> {
     }
     Some(Evidence {
         question: Question::parse(question.as_str())?,
+        recorded_question: question.as_str().to_owned(),
+        recorded_answer: answer.to_owned(),
         answer: canonical_answer(answer),
         display: text.to_owned(),
     })

@@ -295,7 +295,7 @@ pub fn trail_body(
     focus: TrailFocus,
     verdict: FlowVerdict,
 ) -> AnyElement {
-    let vague = verdict == FlowVerdict::Vague;
+    let vague = matches!(verdict, FlowVerdict::Vague | FlowVerdict::Checking);
     if let Some(row) = answer_lead(vague, rows) {
         return answer_trail(kit, row, rows, focus);
     }
@@ -324,7 +324,7 @@ pub fn trail_body(
         div()
             .flex()
             .flex_col()
-            .child(vague_fence(kit))
+            .child(vague_fence(kit, verdict == FlowVerdict::Checking))
             .child(trail)
             .into_any_element()
     } else {
@@ -473,7 +473,7 @@ fn explanation_of(copy: &str, lead: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_string())
 }
 
-fn vague_fence(kit: &qol_gpui::kit::Kit) -> Div {
+fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
     div()
         .flex_none()
         .h(px(FLOW_ROW_HEIGHT))
@@ -487,7 +487,11 @@ fn vague_fence(kit: &qol_gpui::kit::Kit) -> Div {
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .text_color(rgb(kit.palette.text_secondary))
                 .text_size(px(TEXT_NANO))
-                .child("no confident answer - related memories".to_uppercase()),
+                .child(if checking {
+                    "CHECKING ANSWER · RELATED MEMORIES"
+                } else {
+                    "NO CONFIDENT ANSWER · RELATED MEMORIES"
+                }),
         )
         .child(div().flex_1().h(px(1.0)).bg(rgb(kit.palette.border_subtle)))
 }

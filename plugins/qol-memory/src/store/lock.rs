@@ -13,6 +13,7 @@ pub struct DistillLock {
 
 impl DistillLock {
     pub fn acquire(store: &Store, mode: &str) -> anyhow::Result<Option<DistillLock>> {
+        std::fs::create_dir_all(store.root())?;
         let path = store.distill_lock_path();
         for _ in 0..2 {
             match std::fs::OpenOptions::new()

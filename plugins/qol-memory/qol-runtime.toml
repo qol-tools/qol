@@ -4,7 +4,7 @@ schema_version = 1
 description = "Answer a question from the settled agent session history"
 poll_interval_ms = 60000
 agent_tool = true
-tool_description = "Retrieve settled facts from the user's agent session history. Ask in plain words; the answer names the matching prior sessions and skills."
+tool_description = "Retrieve settled facts from the user's agent session history. Ask in plain words; the answer names the matching prior sessions and skills. If verification.status is pending, related memories are available immediately; repeat the same query after a short delay to retrieve the checked answer."
 input = { query = "question in plain words", cwd = "optional working directory for scoping", exclude_session = "optional session id to exclude", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [query.status]

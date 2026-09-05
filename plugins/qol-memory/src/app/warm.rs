@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::aliases::AliasMap;
 use crate::ask::{doc_refs, notes_refs, visible_notes, WarmIndexes};
@@ -13,6 +14,7 @@ use crate::store::{
 };
 
 pub struct WarmState {
+    verification: Option<crate::verification::service::Service>,
     store: Store,
     aliases: AliasMap,
     keys: crate::ingest::KeySet,
@@ -20,6 +22,7 @@ pub struct WarmState {
 }
 
 struct CachedLayers {
+    units_digest: Option<[u8; 32]>,
     fingerprint: LayerFingerprint,
     caller: String,
     units: UnitsLayer,
@@ -39,7 +42,7 @@ struct CachedLayers {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LayerFingerprint {
     units_len: u64,
-    units_mtime_ms: u64,
+    units_mtime_ns: u128,
     notes_run: Option<String>,
 }
 
@@ -47,6 +50,7 @@ impl WarmState {
     pub fn open(store: Store, aliases: AliasMap) -> Result<WarmState> {
         let keys = crate::ingest::KeySet::load(&store)?;
         Ok(WarmState {
+            verification: None,
             store,
             aliases,
             keys,
@@ -56,6 +60,41 @@ impl WarmState {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn enable_verification(
+        &mut self,
+        verifier: impl crate::verification::service::Verifier,
+    ) -> Result<()> {
+        self.verification = Some(crate::verification::service::Service::start(
+            self.store.root().join("answer-bindings"),
+            verifier,
+        )?);
+        Ok(())
+    }
+
+    pub(crate) fn verify_answer(
+        &mut self,
+        request: &crate::ask::AskRequest,
+        source: &str,
+        output: &mut crate::ask::AskOutput,
+    ) -> Result<()> {
+        if self.verification.is_none()
+            || output.answer.is_some()
+            || output.signals.conflicting_captures > 0
+        {
+            return Ok(());
+        }
+        self.refresh_layers()?;
+        let Some(layers) = &self.layers_cache else {
+            return Ok(());
+        };
+        let snapshot =
+            crate::ask::semantic::Snapshot::prepare(&self.store, request, &layers.units, source);
+        if let (Some(snapshot), Some(service)) = (snapshot, &self.verification) {
+            snapshot.apply(service, output);
+        }
+        Ok(())
     }
 
     pub fn aliases(&self) -> &AliasMap {
@@ -109,6 +148,14 @@ impl WarmState {
     }
 
     pub fn push_units(&mut self, units: &[serde_json::Value]) {
+        if self
+            .layers_cache
+            .as_ref()
+            .is_some_and(|cache| cache.units.run != "live")
+        {
+            self.invalidate_layers();
+            return;
+        }
         if self.layers_cache.is_none() {
             return;
         }
@@ -128,7 +175,8 @@ impl WarmState {
             cache.units.items.extend(parsed);
             let fresh = layer_fingerprint(&self.store);
             cache.fingerprint.units_len = fresh.units_len;
-            cache.fingerprint.units_mtime_ms = fresh.units_mtime_ms;
+            cache.fingerprint.units_mtime_ns = fresh.units_mtime_ns;
+            cache.units_digest = prefix_digest(&self.store.units_path(), fresh.units_len);
         }
     }
 
@@ -157,14 +205,18 @@ impl WarmState {
         let prev = cache.fingerprint.clone();
         let notes_changed = cache.notes_dirty || prev.notes_run != fingerprint.notes_run;
         let caller = cache.caller.clone();
-        let appended = if cache.units.run == "live" && fingerprint.units_len > prev.units_len {
+        let appended = if cache.units.run == "live"
+            && fingerprint.units_len > prev.units_len
+            && cache.units_digest.is_some()
+            && prefix_digest(&self.store.units_path(), prev.units_len) == cache.units_digest
+        {
             read_units_tail(&self.store.units_path(), prev.units_len).ok()
         } else {
             None
         };
         if appended.is_none()
             && (fingerprint.units_len != prev.units_len
-                || fingerprint.units_mtime_ms != prev.units_mtime_ms)
+                || fingerprint.units_mtime_ns != prev.units_mtime_ns)
         {
             self.layers_cache = Some(build_layers(&self.store, fingerprint)?);
             return Ok(());
@@ -177,7 +229,8 @@ impl WarmState {
             extend_unit_indexes(cache, &units, &registry);
             cache.units.items.extend(units);
             cache.fingerprint.units_len = prev.units_len + consumed;
-            cache.fingerprint.units_mtime_ms = fingerprint.units_mtime_ms;
+            cache.fingerprint.units_mtime_ns = fingerprint.units_mtime_ns;
+            cache.units_digest = prefix_digest(&self.store.units_path(), prev.units_len + consumed);
         }
         if notes_changed {
             let notes = self.store.read_notes()?;
@@ -228,6 +281,7 @@ fn build_layers(store: &Store, fingerprint: LayerFingerprint) -> Result<CachedLa
     let all_index = build_index(&doc_refs(&user_units));
     let notes_index = build_index(&notes_refs(&visible));
     Ok(CachedLayers {
+        units_digest: prefix_digest(&store.units_path(), fingerprint.units_len),
         fingerprint,
         caller,
         units,
@@ -290,14 +344,14 @@ fn read_units_tail(path: &Path, from: u64) -> Result<(Vec<Unit>, u64)> {
 }
 
 fn layer_fingerprint(store: &Store) -> LayerFingerprint {
-    let (units_len, units_mtime_ms) = store
+    let (units_len, units_mtime_ns) = store
         .units_path()
         .metadata()
-        .map(|meta| (meta.len(), mtime_millis(&meta)))
+        .map(|meta| (meta.len(), mtime_nanos(&meta)))
         .unwrap_or((0, 0));
     LayerFingerprint {
         units_len,
-        units_mtime_ms,
+        units_mtime_ns,
         notes_run: newest_notes_run(store),
     }
 }
@@ -325,12 +379,27 @@ fn is_run_dir_name(name: &str) -> bool {
         && bytes[10] == b'T'
 }
 
-fn mtime_millis(meta: &std::fs::Metadata) -> u64 {
+fn mtime_nanos(meta: &std::fs::Metadata) -> u128 {
     meta.modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as u64)
+        .map(|duration| duration.as_nanos())
         .unwrap_or(0)
+}
+
+fn prefix_digest(path: &Path, length: u64) -> Option<[u8; 32]> {
+    let mut file = std::fs::File::open(path).ok()?.take(length);
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    let mut read = 0;
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 {
+            return (read == length).then(|| digest.finalize().into());
+        }
+        read += count as u64;
+        digest.update(&buffer[..count]);
+    }
 }
 
 pub fn reindex(store: &Store) -> Result<Vec<String>> {

@@ -12,6 +12,9 @@ use crate::store::Store;
 pub mod request;
 pub mod warm;
 
+#[cfg(test)]
+mod verification_tests;
+
 pub const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
@@ -20,7 +23,19 @@ pub const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 pub fn run_daemon() -> Result<()> {
     let store = Store::resolve(None)?;
     let aliases = crate::aliases::embedded();
-    let state = Arc::new(Mutex::new(WarmState::open(store, aliases)?));
+    let config = crate::config::load();
+    let mut warm = WarmState::open(store, aliases)?;
+    if config.verify_answers {
+        let enabled = crate::verification::ollama::Ollama::new(
+            warm.store().root().join("verification"),
+            &config.verifier_endpoint,
+        )
+        .and_then(|provider| warm.enable_verification(provider));
+        if let Err(error) = enabled {
+            eprintln!("qol-memory: answer verification unavailable: {error:#}");
+        }
+    }
+    let state = Arc::new(Mutex::new(warm));
     let watch_handle = match crate::watch::spawn(IngestRoots::resolve(), Arc::clone(&state)) {
         Ok(handle) => Some(handle),
         Err(error) => {

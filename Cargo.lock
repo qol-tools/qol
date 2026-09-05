@@ -6647,6 +6647,7 @@ dependencies = [
  "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "qol-watch",
  "regex",
@@ -6654,6 +6655,7 @@ dependencies = [
  "serde_json",
  "sha1 0.10.6",
  "sha2",
+ "ureq",
  "workspace-hack",
 ]
 

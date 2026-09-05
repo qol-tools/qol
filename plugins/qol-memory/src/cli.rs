@@ -1061,7 +1061,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use qol_headless::{DoctorReport, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
     use serde_json::json;
 
     use super::*;
@@ -1339,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_store_status_and_ask_exit_one_with_the_store_error() {
+    fn empty_store_status_and_ask_report_no_memories() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -1352,13 +1352,8 @@ mod tests {
             "--store".to_string(),
             store_dir.display().to_string(),
         ]);
-        assert_eq!(status_run.exit_code, EXIT_RUNTIME_ERROR);
-        assert!(
-            status_run.stderr.contains("no runs under"),
-            "stderr: {}",
-            status_run.stderr
-        );
-        assert!(status_run.stdout.is_empty());
+        assert_eq!(status_run.exit_code, 0);
+        assert!(status_run.stderr.is_empty());
 
         let ask_run = app().execute([
             "ask".to_string(),
@@ -1367,8 +1362,9 @@ mod tests {
             "--no-log".to_string(),
             "x".to_string(),
         ]);
-        assert_eq!(ask_run.exit_code, EXIT_RUNTIME_ERROR);
-        assert!(ask_run.stdout.is_empty());
+        assert_eq!(ask_run.exit_code, 0);
+        assert!(ask_run.stderr.is_empty());
+        assert!(ask_run.stdout.contains("no-memory"));
 
         std::fs::remove_dir_all(&store_dir).ok();
     }
