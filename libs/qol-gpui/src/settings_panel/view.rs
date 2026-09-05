@@ -255,7 +255,6 @@ pub(super) struct SettingsPanelView {
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
-    custom_focus_pending: bool,
 }
 
 pub(super) struct SettingsPanelState {
@@ -390,7 +389,6 @@ impl SettingsPanelView {
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
-            custom_focus_pending: false,
         };
         let parent = cx.weak_entity();
         view.custom_views = view
@@ -433,7 +431,6 @@ impl SettingsPanelView {
         if view.panel_names_a_source() {
             view.set_source_menu(false);
             view.open_selected_section();
-            view.custom_focus_pending = view.current_source_is_custom();
         }
         view.resume_runtime_poll(cx);
         view
@@ -598,6 +595,26 @@ impl SettingsPanelView {
         focus_level(self.source_menu, self.sources.len())
     }
 
+    /// Where keyboard focus belongs, decided from panel state alone: the custom body while a core
+    /// tool page is open, otherwise the panel itself (rail or contract body).
+    fn focus_target(&self) -> FocusHandle {
+        if self.body_has_focus() && self.current_source_is_custom() {
+            if let Some(custom) = self.custom_view() {
+                return custom.focus_handle.clone();
+            }
+        }
+        self.focus_handle.clone()
+    }
+
+    /// The only place settings scope moves gpui focus. Runs after every transition and on every
+    /// render: when focus is inside the panel but not on the target, move it there.
+    fn reconcile_focus(&self, window: &mut Window, cx: &App) {
+        let target = self.focus_target();
+        if !target.is_focused(window) && self.focus_handle.contains_focused(window, cx) {
+            window.focus(&target);
+        }
+    }
+
     fn can_ascend(&self) -> bool {
         !matches!(self.focus_level(), PanelFocus::Sources) && self.sources.len() > 1
     }
@@ -680,10 +697,7 @@ impl SettingsPanelView {
         self.materialize_source(cx);
         if self.current_source_is_custom() {
             self.set_source_menu(false);
-            self.custom_focus_pending = true;
-            if let Some(custom) = self.custom_view() {
-                (custom.focus)(window, cx);
-            }
+            self.reconcile_focus(window, cx);
             cx.notify();
             return true;
         }
@@ -701,6 +715,7 @@ impl SettingsPanelView {
             self.set_source_menu(self.sources.len() > 1);
         }
         self.sync_scroll();
+        self.reconcile_focus(window, cx);
         cx.notify();
         true
     }
@@ -731,7 +746,7 @@ impl SettingsPanelView {
         }
         self.pause_runtime_poll();
         self.set_source_menu(true);
-        window.focus(&self.focus_handle);
+        self.reconcile_focus(window, cx);
         cx.notify();
     }
 
@@ -852,12 +867,7 @@ impl SettingsPanelView {
         self.resume_runtime_poll(cx);
         self.set_source_menu(false);
         self.open_selected_section();
-        if self.current_source_is_custom() {
-            self.custom_focus_pending = false;
-            if let Some(custom) = self.custom_view() {
-                (custom.focus)(window, cx);
-            }
-        }
+        self.reconcile_focus(window, cx);
     }
 
     fn set_source_menu(&mut self, open: bool) {
@@ -4153,9 +4163,11 @@ fn theme_override_values(values: &serde_json::Value) -> (Option<&str>, Option<&s
     )
 }
 
+// The surface and the host focus this handle on open, replace and reveal; it names whichever
+// body the panel has decided should hold focus.
 impl Focusable for SettingsPanelView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+        self.focus_target()
     }
 }
 
@@ -4172,12 +4184,7 @@ impl Render for SettingsPanelView {
             self.pump_frame_paced_samples(window, cx);
         }
         self.fit_lists();
-        if self.custom_focus_pending {
-            if let Some(custom) = self.custom_view() {
-                (custom.focus)(window, cx);
-            }
-            self.custom_focus_pending = false;
-        }
+        self.reconcile_focus(window, cx);
         let rail: Vec<AnyElement> = if self.rail_is_open() {
             let mut rail = vec![rail_caption("QoL Settings")
                 .id("settings-rail-core-caption")

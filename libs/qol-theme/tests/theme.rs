@@ -2307,3 +2307,32 @@ recipe; only kit.rs and settings_panel/components.rs may read kit.palette.\n{}",
         problems.join("\n")
     );
 }
+
+#[test]
+fn settings_surfaces_have_one_focus_owner() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut calls = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if !in_settings_scope(&relative) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            if compact_line(line).contains("window.focus(") {
+                calls.push(format!("{relative}:{}", index + 1));
+            }
+        }
+    }
+    assert_eq!(
+        calls.len(),
+        1,
+        "Focus in settings scope has one owner, SettingsPanelView::reconcile_focus; every other \
+         file states where focus belongs and lets the panel resolve it.\n{}",
+        calls.join("\n")
+    );
+    assert!(
+        calls[0].starts_with("libs/qol-gpui/src/settings_panel/view.rs:"),
+        "the one window.focus call lives in settings_panel/view.rs, found {}",
+        calls[0]
+    );
+}

@@ -108,7 +108,7 @@ pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 pub struct CustomPanelView {
     pub view: AnyView,
-    pub focus: CustomPanelCallback,
+    pub focus_handle: gpui::FocusHandle,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -383,9 +383,7 @@ impl SettingsWindowHost {
                     cx,
                 )
             });
-            let focus = inner.read(cx).focus_handle(cx);
             root.inner = inner;
-            window.focus(&focus);
             if visible {
                 window.activate_window();
             }
