@@ -606,3 +606,34 @@ fn session() -> SessionFacts {
         spawn_identity: None,
     }
 }
+
+#[test]
+fn status_panel_with_empty_composer_is_ready_and_keeps_stronger_signals() {
+    let strategy = CodexStrategy::default();
+    let facts = session();
+    let screen = "/status\n>_ OpenAI Codex (v0.153.4)\nModel: gpt-6-astra\nPermissions: Full Access\nSession: example\nWeekly limit: 41% left\n› Ask Codex to do anything\ngpt-6-astra high";
+    for (suffix, runtime) in [
+        ("", CliRuntimeState::Ready),
+        ("\nesc to interrupt", CliRuntimeState::Working),
+        (
+            "\n1) Allow\n2) Deny\nenter to accept",
+            CliRuntimeState::NeedsInput,
+        ),
+    ] {
+        let screen = format!("{screen}{suffix}");
+        assert_eq!(
+            strategy.classify_screen(&facts, &screen),
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime,
+            }
+        );
+        assert!(strategy.ui_rendered(&screen));
+    }
+    assert_ne!(
+        strategy
+            .classify_screen(&facts, "Example: › Ask Codex to do anything")
+            .runtime,
+        CliRuntimeState::Ready
+    );
+}

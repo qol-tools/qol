@@ -41,12 +41,12 @@ impl Status {
     pub const ALL: [Self; 8] = [
         Self::NeedsYou,
         Self::YourTurn,
-        Self::Working,
-        Self::Coordinating,
         Self::AwaitingReview,
+        Self::Coordinating,
+        Self::Working,
         Self::Service,
-        Self::Acknowledged,
         Self::Unknown,
+        Self::Acknowledged,
     ];
 
     pub fn definition(self) -> StateDefinition {
@@ -57,7 +57,7 @@ impl Status {
             Self::YourTurn => StateDefinition::new("your turn", 1, true, false, |p| {
                 (p.your_turn, p.your_turn_tint_rgba)
             }),
-            Self::Working => StateDefinition::new("working", 2, false, false, |p| {
+            Self::Working => StateDefinition::new("working", 4, false, false, |p| {
                 (p.working, p.working_tint_rgba)
             }),
             Self::Coordinating => {
@@ -66,28 +66,24 @@ impl Status {
                 })
             }
             Self::AwaitingReview => {
-                StateDefinition::new("awaiting agent review", 4, false, false, |p| {
+                StateDefinition::new("awaiting agent review", 2, false, false, |p| {
                     (p.bridged, p.bridged_tint_rgba)
                 })
             }
             Self::Service => StateDefinition::new("live", 5, false, false, |p| {
                 (p.service, p.service_tint_rgba)
             }),
-            Self::Acknowledged => StateDefinition::new("acknowledged", 6, false, true, |p| {
+            Self::Acknowledged => StateDefinition::new("acknowledged", 7, false, true, |p| {
                 (p.unknown, p.transparent_rgba)
             }),
             Self::Unknown => {
-                StateDefinition::new("idle", 7, false, true, |p| (p.unknown, p.transparent_rgba))
+                StateDefinition::new("idle", 6, false, true, |p| (p.unknown, p.transparent_rgba))
             }
         }
     }
 
-    pub fn priority(self, bridged: bool) -> u8 {
-        let priority = self.definition().priority;
-        if bridged {
-            return priority.min(Self::AwaitingReview.definition().priority);
-        }
-        priority
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Working | Self::Coordinating | Self::Service)
     }
 
     pub fn is_attention(self) -> bool {

@@ -99,7 +99,7 @@ fn sorted_orders_red_yellow_green_unknown_ack() {
 }
 
 #[test]
-fn bridge_lifts_idle_rows_to_below_working_only() {
+fn bridge_membership_does_not_override_displayed_state_priority() {
     let mut r = Registry::default();
     r.upsert(state(10, Status::Working, 1));
     let mut bridged_idle = state(11, Status::Unknown, 1);
@@ -117,7 +117,7 @@ fn bridge_lifts_idle_rows_to_below_working_only() {
         .into_iter()
         .map(|s| s.id.native().parse::<u64>().unwrap())
         .collect();
-    assert_eq!(ids, vec![13, 10, 12, 11, 16, 15, 14]);
+    assert_eq!(ids, vec![13, 10, 12, 16, 11, 14, 15]);
 }
 
 #[test]
@@ -210,4 +210,38 @@ fn settle_timers_are_never_serialized() {
         restored.last_activity, 100,
         "the wall display timestamp survives"
     );
+}
+
+#[test]
+fn every_state_reorders_live_without_changing_selected_session() {
+    use plugin_cli_sessions::selection::Selection;
+
+    let expected = [
+        Status::NeedsYou,
+        Status::YourTurn,
+        Status::AwaitingReview,
+        Status::Coordinating,
+        Status::Working,
+        Status::Service,
+        Status::Unknown,
+        Status::Acknowledged,
+    ];
+    let mut registry = Registry::default();
+    for (index, status) in expected.into_iter().enumerate().rev() {
+        registry.upsert(state(index as u64, status, 1));
+    }
+    let rows = registry.sorted();
+    assert_eq!(
+        rows.iter().map(|row| row.status).collect::<Vec<_>>(),
+        expected
+    );
+    let mut selection = Selection::default();
+    selection.select(kitty_session_id(4));
+    registry.upsert(state(7, Status::NeedsYou, 2));
+    registry.upsert(state(0, Status::Acknowledged, 2));
+    let order: Vec<_> = registry.sorted().into_iter().map(|row| row.id).collect();
+    assert_eq!(order.first(), Some(&kitty_session_id(7)));
+    assert_eq!(order.last(), Some(&kitty_session_id(0)));
+    assert_eq!(selection.resolved(&order), Some(kitty_session_id(4)));
+    assert_eq!(selection.highlight_index(&order), Some(4));
 }

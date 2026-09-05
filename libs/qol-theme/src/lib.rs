@@ -17,6 +17,7 @@ pub const PROD_ACCENT_KEY: &str = "amber";
 
 pub const THEME_COLOR_SENTINEL: &str = "theme";
 
+pub const TEXT_IDENTITY: f32 = 10.5;
 pub const TEXT_NANO: f32 = 11.5;
 pub const TEXT_MICRO: f32 = 12.5;
 pub const TEXT_CAPTION: f32 = 13.5;
@@ -24,7 +25,8 @@ pub const TEXT_BODY: f32 = 15.0;
 pub const TEXT_TITLE: f32 = 18.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
 
-pub const TEXT_SCALE: [f32; 6] = [
+pub const TEXT_SCALE: [f32; 7] = [
+    TEXT_IDENTITY,
     TEXT_NANO,
     TEXT_MICRO,
     TEXT_CAPTION,
@@ -869,6 +871,23 @@ impl CssRgba {
     pub const fn packed(self) -> u32 {
         let alpha = (self.alpha_milli as u32 * 255 + 500) / 1000;
         (self.rgb << 8) | alpha
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TintedRowPalette {
+    pub resting: CssRgba,
+    pub hover: CssRgba,
+    pub selected: CssRgba,
+    pub selected_edge: CssRgba,
+}
+
+pub fn tinted_row_palette(tone: u32, palette: SystemPalette) -> TintedRowPalette {
+    TintedRowPalette {
+        resting: css_rgba_milli(tone, 45),
+        hover: css_rgba_milli(tone, 80),
+        selected: css_rgba_milli(tone, 110),
+        selected_edge: css_rgba_milli(mix_rgb(tone, palette.text_primary, 0.45), 850),
     }
 }
 

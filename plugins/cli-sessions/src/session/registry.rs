@@ -105,6 +105,6 @@ impl Registry {
 }
 
 fn rank(state: &SessionState) -> (u8, u8) {
-    let status = state.status.priority(state.bridged);
+    let status = state.status.definition().priority;
     (status, u8::from(is_generic(&state.tool)))
 }

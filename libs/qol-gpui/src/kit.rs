@@ -8,7 +8,7 @@ use qol_theme::{SystemPalette, ThemeMode, WashPalette};
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
 pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
 
-const DISABLED_OPACITY: f32 = 0.4;
+pub const DISABLED_OPACITY: f32 = 0.4;
 
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
@@ -17,6 +17,8 @@ pub const ROW_DESCRIBED_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
 pub const ROW_TIGHT_HEIGHT: f32 = 32.0;
 pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
 pub const LAMP_SIZE: f32 = 10.0;
+pub const ROW_METADATA_WIDTH: f32 = 48.0;
+pub const ROW_BORDER_WIDTH: f32 = 1.0;
 
 pub const FOCUS_RING_EDGE: f32 = 1.5;
 pub const FOCUS_RING_HALO: f32 = 4.0;
@@ -115,6 +117,13 @@ impl Kit {
         self.row_of_height(ROW_DESCRIBED_HEIGHT)
     }
 
+    pub fn row_compact_described(&self) -> Div {
+        self.row_of_height(qol_theme::LIST_ENTRY_HEIGHTS[1])
+            .h(px(qol_theme::LIST_ENTRY_HEIGHTS[1]))
+            .py(px(qol_theme::SPACE_TIGHT))
+            .line_height(gpui::relative(1.0))
+    }
+
     pub fn row_tight(&self) -> Div {
         self.row_of_height(ROW_TIGHT_HEIGHT)
     }
@@ -140,6 +149,50 @@ impl Kit {
             } else {
                 RowState::Resting
             },
+        )
+    }
+
+    pub fn row_selected_tinted<E: Styled + ParentElement>(
+        &self,
+        row: E,
+        selected: bool,
+        tone: u32,
+    ) -> E {
+        self.row_selected_tinted_after(row, selected, tone, 0.0)
+    }
+
+    pub fn row_selected_tinted_after<E: Styled + ParentElement>(
+        &self,
+        row: E,
+        selected: bool,
+        tone: u32,
+        leading_width: f32,
+    ) -> E {
+        let colors = qol_theme::tinted_row_palette(tone, self.palette);
+        let row = row
+            .relative()
+            .border(px(ROW_BORDER_WIDTH))
+            .border_color(rgba(0))
+            .bg(rgba(
+                if selected {
+                    colors.selected
+                } else {
+                    colors.resting
+                }
+                .packed(),
+            ));
+        if !selected {
+            return row;
+        }
+        row.child(
+            div()
+                .absolute()
+                .left(px(leading_width - ROW_BORDER_WIDTH))
+                .right(px(-ROW_BORDER_WIDTH))
+                .top(px(-ROW_BORDER_WIDTH))
+                .bottom(px(-ROW_BORDER_WIDTH))
+                .border(px(ROW_BORDER_WIDTH))
+                .border_color(rgba(colors.selected_edge.packed())),
         )
     }
 
@@ -242,6 +295,21 @@ impl Kit {
                 blur_radius: px(0.0),
                 spread_radius: px(3.0),
             }])
+    }
+
+    pub fn animated_status_dot(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        tone: u32,
+        halo: u32,
+        pulsing: bool,
+    ) -> gpui::AnyElement {
+        let dot = self.status_dot(tone, halo).size(px(LAMP_SIZE));
+        if pulsing {
+            crate::status_indicator::radiating_dot(dot, id.into(), tone)
+        } else {
+            dot.into_any_element()
+        }
     }
 
     pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
@@ -347,6 +415,53 @@ impl Kit {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(tone))
             .child(text.into())
+    }
+
+    pub fn vertical_identity_tab(&self, text: impl Into<SharedString>, tone: u32) -> Div {
+        div()
+            .absolute()
+            .left(px(-ROW_BORDER_WIDTH))
+            .top(px(-ROW_BORDER_WIDTH))
+            .bottom(px(-ROW_BORDER_WIDTH))
+            .w(px(crate::vertical_label::WIDTH))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(tone))
+            .child(crate::vertical_label::VerticalLabel::new(text))
+    }
+
+    pub fn row_metadata(&self) -> Div {
+        div()
+            .flex_none()
+            .w(px(ROW_METADATA_WIDTH))
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(qol_theme::SPACE_STACK))
+    }
+
+    pub fn count_button(&self, count: usize) -> Div {
+        let label = if count > 99 {
+            "99+".to_owned()
+        } else {
+            count.to_string()
+        };
+        self.button_ghost(label)
+            .size(px(qol_theme::HEIGHT_INLINE))
+            .p(px(qol_theme::SPACE_STACK))
+            .justify_center()
+            .text_size(px(qol_theme::TEXT_NANO))
+    }
+
+    pub fn row_separator(&self) -> Div {
+        div()
+            .absolute()
+            .bottom_0()
+            .left(px(qol_theme::SPACE_PAD))
+            .right(px(qol_theme::SPACE_PAD))
+            .h(px(1.0))
+            .bg(rgba(self.washes.separator.packed()))
     }
 
     pub fn lamp(&self, tone: u32) -> Div {

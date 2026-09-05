@@ -10,14 +10,6 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
         let expected = [
             (Status::NeedsYou, "needs you", system.danger, true, false),
             (Status::YourTurn, "your turn", system.warning, true, false),
-            (Status::Working, "working", system.success, false, false),
-            (
-                Status::Coordinating,
-                "coordinating agents",
-                system.info,
-                false,
-                false,
-            ),
             (
                 Status::AwaitingReview,
                 "awaiting agent review",
@@ -25,7 +17,16 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
                 false,
                 false,
             ),
+            (
+                Status::Coordinating,
+                "coordinating agents",
+                system.info,
+                false,
+                false,
+            ),
+            (Status::Working, "working", system.success, false, false),
             (Status::Service, "live", system.info, false, false),
+            (Status::Unknown, "idle", system.text_faint, false, true),
             (
                 Status::Acknowledged,
                 "acknowledged",
@@ -33,7 +34,6 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
                 false,
                 true,
             ),
-            (Status::Unknown, "idle", system.text_faint, false, true),
         ];
         assert_eq!(Status::ALL, expected.map(|row| row.0));
         for (priority, (status, label, color, attention, idle)) in expected.into_iter().enumerate()
@@ -50,5 +50,19 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
                 assert_eq!(halo >> 8, foreground);
             }
         }
+    }
+}
+
+#[test]
+fn only_active_states_animate() {
+    for status in Status::ALL {
+        assert_eq!(
+            status.is_active(),
+            matches!(
+                status,
+                Status::Working | Status::Coordinating | Status::Service
+            )
+        );
+        assert!(!(status.is_active() && status.is_attention()));
     }
 }

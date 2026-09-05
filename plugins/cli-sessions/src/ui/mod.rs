@@ -36,7 +36,6 @@ pub struct SessionsView {
     key_hold: KeyHold,
     nav_guard: qol_gpui::phantom_nav::PhantomNavGuard,
     list_scroll: qol_gpui::scroll_list::SelectionScroll,
-    pinned: std::cell::RefCell<qol_gpui::pinned_order::PinnedOrder<SessionId>>,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -53,7 +52,6 @@ impl SessionsView {
             host,
             selection: Selection::default(),
             list_scroll: qol_gpui::scroll_list::SelectionScroll::new(),
-            pinned: std::cell::RefCell::new(qol_gpui::pinned_order::PinnedOrder::new()),
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
             drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
@@ -65,13 +63,7 @@ impl SessionsView {
     }
 
     pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {
-        let sorted = self.registry.lock().map(|r| r.sorted()).unwrap_or_default();
-        let ids: Vec<SessionId> = sorted.iter().map(|row| row.id.clone()).collect();
-        let pinned = self.pinned.borrow_mut().apply(&ids);
-        pinned
-            .into_iter()
-            .filter_map(|id| sorted.iter().find(|row| row.id == id).cloned())
-            .collect()
+        self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
     }
 
     pub fn is_showing(&self) -> bool {
@@ -79,9 +71,6 @@ impl SessionsView {
     }
 
     pub fn set_showing(&mut self, showing: bool) {
-        if showing && !self.is_showing {
-            self.pinned.borrow_mut().reset();
-        }
         self.is_showing = showing;
     }
 
@@ -229,15 +218,24 @@ impl SessionsView {
         .detach();
     }
 
-    pub fn acknowledge(&self, id: &SessionId) {
+    pub fn acknowledge(&mut self, id: &SessionId) {
         if let Ok(mut reg) = self.registry.lock() {
             if let Some(s) = reg.get_mut(id) {
+                let previous = s.status;
                 s.acknowledge();
+                if previous != s.status {
+                    self.selection.select(id.clone());
+                    qol_runtime::probe!(
+                        "CLI_SESSIONS_ACK",
+                        "id={id} previous={previous:?} status={:?}",
+                        s.status
+                    );
+                }
             }
         }
     }
 
-    pub fn acknowledge_selected(&self) {
+    pub fn acknowledge_selected(&mut self) {
         let order = self.order();
         if let Some(id) = self.selection.resolved(&order) {
             self.acknowledge(&id);
@@ -378,12 +376,14 @@ mod tests {
 
     #[test]
     fn key_hold_accepts_fresh_presses_and_denies_repeats_until_release() {
-        let mut hold = KeyHold::default();
-        assert!(hold.press("enter"));
-        assert!(!hold.press("enter"));
-        assert!(!hold.press("enter"));
-        hold.release("enter");
-        assert!(hold.press("enter"));
+        for key in ["enter", "a"] {
+            let mut hold = KeyHold::default();
+            assert!(hold.press(key));
+            assert!(!hold.press(key));
+            assert!(!hold.press(key));
+            hold.release(key);
+            assert!(hold.press(key));
+        }
     }
 
     #[test]

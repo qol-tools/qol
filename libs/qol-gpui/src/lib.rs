@@ -1,3 +1,4 @@
+pub mod activity_animation;
 pub mod artifact;
 pub mod color_wheel;
 pub mod command_loop;
@@ -27,6 +28,7 @@ pub mod status_indicator;
 pub mod surface;
 pub mod toast;
 pub mod trail;
+pub mod vertical_label;
 pub mod window;
 
 pub use format::format_bytes;

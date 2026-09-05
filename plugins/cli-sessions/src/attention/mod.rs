@@ -283,6 +283,15 @@ mod tests {
     }
 
     #[test]
+    fn ready_composer_clears_a_dismissed_input_request_after_settling() {
+        let ready = evidence(RT::Unknown, RT::Ready, VP::Live, None, false);
+        let settled = reduce(&att(Status::NeedsYou), &ready, 100);
+        let idle = reduce(&settled.attention, &ready, 100 + GRACE_SECS);
+        assert_eq!(idle.attention.status, Status::Unknown);
+        assert_eq!(idle.phase, Phase::Idle);
+    }
+
+    #[test]
     fn strong_working_beats_scrolled_and_historical_content() {
         let cases = [
             evidence(RT::Working, RT::Unknown, VP::Historical, Some(true), true),

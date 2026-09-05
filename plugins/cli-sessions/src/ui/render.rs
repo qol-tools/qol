@@ -48,9 +48,13 @@ fn is_idle(status: Status) -> bool {
     status.definition().idle
 }
 
-fn status_dot_el(kit: &qol_gpui::kit::Kit, status: Status) -> gpui::Div {
+fn status_dot_el(
+    kit: &qol_gpui::kit::Kit,
+    status: Status,
+    id: impl Into<gpui::ElementId>,
+) -> AnyElement {
     let (tone, halo) = (status.definition().colors)(&current_palette());
-    kit.status_dot(tone, halo)
+    kit.animated_status_dot(id, tone, halo, status.is_active())
 }
 
 fn live_count(rows: &[SessionState]) -> usize {
@@ -63,7 +67,7 @@ fn waiting_count(rows: &[SessionState]) -> usize {
 
 fn worst_status(rows: &[SessionState]) -> Status {
     rows.iter()
-        .min_by_key(|row| row.status.priority(row.bridged))
+        .min_by_key(|row| row.status.definition().priority)
         .map(|row| row.status)
         .unwrap_or(Status::Unknown)
 }
@@ -122,22 +126,28 @@ fn chord(input: &str) -> String {
     qol_hotkeys::chord::label_for(input).unwrap_or_default()
 }
 
-fn footer() -> impl IntoElement {
+fn footer(can_acknowledge: bool, cx: &mut Context<SessionsView>) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     kit.hint_bar()
         .child(kit.hint(chord("enter"), "focus"))
-        .child(kit.hint(chord("platform+w"), "close"))
+        .child(
+            kit.hint("A", "ack")
+                .id("acknowledge-session")
+                .when(!can_acknowledge, |hint| {
+                    hint.opacity(qol_gpui::kit::DISABLED_OPACITY)
+                })
+                .when(can_acknowledge, |hint| {
+                    hint.cursor(CursorStyle::PointingHand)
+                        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.acknowledge_selected();
+                            cx.notify();
+                            cx.stop_propagation();
+                        }))
+                }),
+        )
         .child(div().flex_1())
         .child(kit.hint(chord("alt+s"), "collapse"))
-}
-
-fn subtitle_text(s: &SessionState) -> String {
-    let elapsed = format_elapsed(s.last_activity);
-    [s.summary.trim(), elapsed.as_str()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" \u{00B7} ")
 }
 
 fn text_line(text: String, size: f32, weight: FontWeight, color: u32) -> gpui::Div {
@@ -160,7 +170,7 @@ fn agent_chip(
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     let driver = session.id.clone();
-    kit.count_chip(session.driving.len(), "agents")
+    kit.count_button(session.driving.len())
         .id(("cycle-agents", index))
         .cursor(CursorStyle::PointingHand)
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -178,80 +188,97 @@ fn session_row(
     let id = s.id.clone();
     let kit = qol_gpui::kit::kit();
     let idle = is_idle(s.status);
+    let (tone, _) = (s.status.definition().colors)(&current_palette());
+    let tint = qol_gpui::theme::tinted_row_palette(tone, kit.palette);
     let name = meaningful_name(s.name.as_deref())
         .or_else(|| meaningful_name(Some(&s.project)))
         .unwrap_or(&s.tool.label)
         .to_owned();
-    let row = div()
-        .id(("session-row", index))
+    let row = kit
+        .row_compact_described()
+        .id(SharedString::from(format!("session-row-{}", s.id)))
+        .group("session-row")
         .flex_none()
-        .w_full()
-        .h(px(qol_gpui::theme::HEIGHT_RULE_ROW))
-        .px(px(qol_gpui::theme::SPACE_PAD))
+        .pl(px(
+            qol_gpui::vertical_label::WIDTH + qol_gpui::theme::SPACE_INSET
+        ))
+        .pr(px(qol_gpui::theme::SPACE_PAD))
         .overflow_hidden()
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
+        .gap(px(qol_gpui::theme::SPACE_CELL))
         .cursor(CursorStyle::PointingHand)
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-        .child(status_dot_el(&kit, s.status))
+        .hover(move |style| {
+            style.bg(rgba(
+                if selected { tint.selected } else { tint.hover }.packed(),
+            ))
+        })
+        .child(kit.vertical_identity_tab(s.tool.label.clone(), s.tool.accent.rgb24()))
+        .child(status_dot_el(
+            &kit,
+            s.status,
+            SharedString::from(format!("session-status-{}", s.id)),
+        ))
         .child(
             div()
                 .flex_1()
-                .min_w(px(0.0))
+                .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
+                .gap(px(qol_gpui::theme::SPACE_STACK))
+                .child(
+                    text_line(
+                        name,
+                        qol_gpui::theme::TEXT_CAPTION,
+                        FontWeight::SEMIBOLD,
+                        if idle {
+                            kit.palette.text_secondary
+                        } else {
+                            kit.palette.text_primary
+                        },
+                    )
+                    .h(px(qol_gpui::theme::SPACE_PAD)),
+                )
                 .child(text_line(
-                    name,
-                    qol_gpui::theme::TEXT_CAPTION,
-                    if selected {
-                        FontWeight::SEMIBOLD
+                    if s.bridged && s.driving.is_empty() {
+                        format!("{} · delegated", s.summary)
                     } else {
-                        FontWeight::MEDIUM
+                        s.summary.clone()
                     },
-                    if idle {
-                        kit.palette.text_secondary
-                    } else {
-                        kit.palette.text_primary
-                    },
-                ))
+                    qol_gpui::theme::TEXT_NANO,
+                    FontWeight::NORMAL,
+                    kit.palette.text_muted,
+                )),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(qol_gpui::theme::HEIGHT_INLINE))
+                .when(!s.driving.is_empty(), |slot| {
+                    slot.child(agent_chip(s, index, cx))
+                }),
+        )
+        .child(
+            kit.row_metadata()
+                .child(div().h(px(qol_gpui::theme::SPACE_PAD)))
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(px(qol_gpui::theme::SPACE_MARK))
-                        .when(!crate::session::tool::is_generic(&s.tool), |line| {
-                            line.child(kit.chip(s.tool.label.clone(), s.tool.accent.rgb24()))
-                        })
-                        .child(text_line(
-                            subtitle_text(s),
-                            if idle {
-                                qol_gpui::theme::TEXT_NANO
-                            } else {
-                                qol_gpui::theme::TEXT_MICRO
-                            },
-                            FontWeight::NORMAL,
-                            if idle {
-                                kit.palette.text_muted
-                            } else {
-                                kit.palette.text_secondary
-                            },
-                        )),
+                        .flex_none()
+                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                        .text_size(px(qol_gpui::theme::TEXT_NANO))
+                        .text_color(rgb(kit.palette.text_muted))
+                        .child(format_elapsed(s.last_activity)),
                 ),
         )
-        .when(!s.driving.is_empty(), |row| {
-            row.child(agent_chip(s, index, cx))
-        })
-        .when(s.bridged && s.driving.is_empty(), |row| {
-            row.child(kit.chip("delegated", kit.palette.text_secondary))
+        .when(!selected, |row| {
+            row.child(
+                kit.row_separator()
+                    .group_hover("session-row", |style| style.opacity(0.0)),
+            )
         })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }));
-    kit.row_selected(row, selected)
+    kit.row_selected_tinted_after(row, selected, tone, qol_gpui::vertical_label::WIDTH)
 }
 
 enum StripAction {
@@ -291,8 +318,7 @@ fn strip_label(rows: &[SessionState]) -> String {
 }
 
 impl SessionsView {
-    fn render_strip(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = self.rows();
+    fn render_strip(&self, rows: &[SessionState], cx: &mut Context<Self>) -> AnyElement {
         let palette = current_palette();
         div()
             .id("cli-sessions-strip")
@@ -342,7 +368,11 @@ impl SessionsView {
             .on_key_up(cx.listener(|this, ev: &KeyUpEvent, _window, _cx| {
                 this.key_released(&ev.keystroke.key);
             }))
-            .child(status_dot_el(&qol_gpui::kit::kit(), worst_status(&rows)))
+            .child(status_dot_el(
+                &qol_gpui::kit::kit(),
+                worst_status(rows),
+                "strip-status",
+            ))
             .child(
                 div()
                     .flex_1()
@@ -350,7 +380,7 @@ impl SessionsView {
                     .truncate()
                     .text_color(rgb(palette.text_secondary))
                     .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                    .child(strip_label(&rows)),
+                    .child(strip_label(rows)),
             )
             .child(
                 div()
@@ -362,8 +392,7 @@ impl SessionsView {
             .into_any_element()
     }
 
-    fn render_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = self.rows();
+    fn render_panel(&self, rows: &[SessionState], cx: &mut Context<Self>) -> AnyElement {
         let palette = current_palette();
         let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
         let highlight = self.selection().highlight_index(&order);
@@ -418,8 +447,12 @@ impl SessionsView {
                         }
                     }
                     "a" => {
-                        this.acknowledge_selected();
-                        cx.notify();
+                        if ev.keystroke.modifiers == Modifiers::default()
+                            && this.key_repeat_guard("a")
+                        {
+                            this.acknowledge_selected();
+                            cx.notify();
+                        }
                     }
                     "w" if ev.keystroke.modifiers.platform => {
                         this.dismiss_with_reason(CLOSE_KEY_REASON);
@@ -437,7 +470,7 @@ impl SessionsView {
             .on_key_up(cx.listener(|this, ev: &KeyUpEvent, _window, _cx| {
                 this.key_released(&ev.keystroke.key);
             }))
-            .child(header(&rows, cx))
+            .child(header(rows, cx))
             .child(
                 div()
                     .id("cli-sessions-list")
@@ -448,23 +481,38 @@ impl SessionsView {
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .py(px(6.0))
-                    .px(px(8.0))
                     .when(is_empty, |d| d.child(empty_state()))
                     .children(row_els),
             )
-            .child(footer())
+            .child(footer(
+                highlight
+                    .and_then(|index| rows.get(index))
+                    .is_some_and(|row| row.status == Status::YourTurn),
+                cx,
+            ))
             .into_any_element()
     }
 }
 
 impl Render for SessionsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.is_collapsed() {
-            self.render_strip(cx)
+        let rows = self.rows();
+        let (content, active) = if self.is_collapsed() {
+            (
+                self.render_strip(&rows, cx),
+                worst_status(&rows).is_active(),
+            )
         } else {
-            self.render_panel(cx)
-        }
+            (
+                self.render_panel(&rows, cx),
+                rows.iter().any(|row| row.status.is_active()),
+            )
+        };
+        qol_gpui::activity_animation::ActivityAnimation::new(
+            "sessions-activity-animation",
+            self.is_showing() && active,
+            content,
+        )
     }
 }
 

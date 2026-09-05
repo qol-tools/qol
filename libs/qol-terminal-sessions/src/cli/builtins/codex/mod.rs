@@ -85,6 +85,11 @@ impl CliSessionStrategy for CodexStrategy {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::NeedsInput,
             }
+        } else if empty_composer(screen) {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::Ready,
+            }
         } else if banner {
             CliScreenEvidence {
                 viewport: CliViewportState::Historical,
@@ -97,6 +102,7 @@ impl CliSessionStrategy for CodexStrategy {
 
     fn ui_rendered(&self, screen: &str) -> bool {
         crate::cli::screen::has_interrupt_hint(screen)
+            || empty_composer(screen)
             || crate::cli::screen::has_numbered_choice(screen)
             || crate::cli::screen::contains_any(
                 screen,
@@ -126,4 +132,17 @@ impl CliSessionStrategy for CodexStrategy {
     fn subscription_dir(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
         self.metadata.subscription_dir(session)
     }
+}
+
+fn empty_composer(screen: &str) -> bool {
+    screen
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .any(|line| {
+            line.trim()
+                .strip_prefix('›')
+                .is_some_and(|text| text.trim() == "Ask Codex to do anything")
+        })
 }

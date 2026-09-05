@@ -68,12 +68,7 @@ impl RenderOnce for StatusIndicator {
             .text_color(self.color)
             .child("●");
         let dot: AnyElement = if self.pulsing {
-            dot.with_animation(
-                self.id,
-                Animation::new(PULSE_DURATION).repeat(),
-                |dot, progress| dot.opacity(pulse_opacity(progress)),
-            )
-            .into_any_element()
+            pulse_dot(dot, self.id)
         } else {
             dot.into_any_element()
         };
@@ -87,6 +82,38 @@ impl RenderOnce for StatusIndicator {
             .child(dot)
             .child(self.label)
     }
+}
+
+pub(crate) fn pulse_dot(dot: gpui::Div, id: ElementId) -> AnyElement {
+    dot.with_animation(
+        id,
+        Animation::new(PULSE_DURATION).repeat(),
+        |dot, progress| dot.opacity(pulse_opacity(progress)),
+    )
+    .into_any_element()
+}
+
+pub(crate) fn radiating_dot(dot: gpui::Div, id: ElementId, tone: u32) -> AnyElement {
+    let size = crate::kit::LAMP_SIZE;
+    let progress = crate::activity_animation::progress();
+    let spread = qol_theme::SPACE_INSET * progress;
+    let ring = div()
+        .id(id)
+        .absolute()
+        .rounded_full()
+        .border_1()
+        .border_color(gpui::rgb(tone))
+        .size(px(size + spread))
+        .left(px(-spread / 2.0))
+        .top(px(-spread / 2.0))
+        .opacity(0.5 * (1.0 - progress));
+    div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(dot)
+        .child(ring)
+        .into_any_element()
 }
 
 fn pulse_opacity(progress: f32) -> f32 {

@@ -7,6 +7,7 @@ use qol_terminal_sessions::cli::{
 };
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
+use super::screen_analysis::ScreenAnalysis;
 use crate::attention::{reduce_with_policy, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
@@ -14,7 +15,6 @@ use crate::session::registry::{meaningful_name, summary_for, Registry, SessionSt
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
 use crate::session::tool::{completion_policy, from_cli_session, is_generic, Tool};
-use crate::signal::screen::{screen_hash, stable_screen};
 use crate::storage::{paths, persist};
 use crate::ui::notify::{self, Notice};
 
@@ -30,7 +30,7 @@ pub struct ReconcileCaches {
 
 struct ScreenCache {
     identity: ScreenIdentity,
-    text: Option<String>,
+    analysis: Option<Arc<ScreenAnalysis>>,
     last_read: u64,
     dirty: Arc<AtomicBool>,
     subscription: Option<CliSessionSubscription>,
@@ -124,9 +124,7 @@ pub fn tick_with_caches(
             caches.screens.remove(&pane.id);
             None
         };
-        let new_hash = screen
-            .as_deref()
-            .map(|text| screen_hash(stable_screen(text, &tool).as_ref()));
+        let new_hash = screen.as_ref().map(|screen| screen.hash);
 
         let screen_changed = match (new_hash, prev_hash) {
             (Some(new_hash), Some(prev_hash)) => new_hash != prev_hash,
@@ -137,7 +135,7 @@ pub fn tick_with_caches(
         let is_service = is_generic(&tool) && !pane.at_prompt && service_probe.is_service(pane);
         let screen_evidence = screen
             .as_deref()
-            .map(|text| cli_interpreter.classify_screen(pane, text))
+            .map(|screen| screen.evidence)
             .unwrap_or_default();
         let evidence = Evidence {
             descriptor_runtime: cli_session.evidence.runtime,
@@ -214,7 +212,7 @@ pub fn tick_with_caches(
                 pane.id.clone(),
                 wall_now,
                 &pane.title,
-                screen.as_deref(),
+                screen.as_ref().map(|screen| screen.text.as_str()),
                 reduction.phase,
                 status,
             );
@@ -279,7 +277,7 @@ fn cached_screen(
     refresh_active: bool,
     now: u64,
     caches: &mut ReconcileCaches,
-) -> Option<String> {
+) -> Option<Arc<ScreenAnalysis>> {
     let id = pane.id.clone();
     let identity = ScreenIdentity::new(pane, cli_session);
     let replace = caches
@@ -291,7 +289,7 @@ fn cached_screen(
             id.clone(),
             ScreenCache {
                 identity,
-                text: None,
+                analysis: None,
                 last_read: 0,
                 dirty: Arc::new(AtomicBool::new(true)),
                 subscription: None,
@@ -319,7 +317,14 @@ fn cached_screen(
     let signaled = entry.dirty.swap(false, Ordering::AcqRel);
     let reason = refresh_active
         .then_some("active")
-        .or_else(|| entry.text.is_none().then_some("initial"))
+        .or_else(|| entry.analysis.is_none().then_some("initial"))
+        .or_else(|| {
+            entry
+                .analysis
+                .as_ref()
+                .is_some_and(|screen| screen.pane != *pane)
+                .then_some("pane_changed")
+        })
         .or_else(|| entry.subscription.is_none().then_some("unsubscribed"))
         .or_else(|| signaled.then_some("signal"))
         .or_else(|| {
@@ -331,7 +336,7 @@ fn cached_screen(
             "phase=screen id={id} source=cache age_secs={} subscription=active",
             now.saturating_sub(entry.last_read)
         );
-        return entry.text.clone();
+        return entry.analysis.clone();
     };
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
@@ -344,18 +349,30 @@ fn cached_screen(
     #[cfg(not(debug_assertions))]
     let elapsed_ms = 0_u128;
     if let Some(text) = fresh {
-        entry.text = Some(text);
+        let analysis = ScreenAnalysis::refresh(
+            entry.analysis.as_ref(),
+            text,
+            pane,
+            &cli_session.tool,
+            cli_interpreter,
+        );
+        #[cfg(debug_assertions)]
+        let reused = entry
+            .analysis
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, &analysis));
+        entry.analysis = Some(analysis);
         entry.last_read = now;
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} subscription={}",
+            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} analysis_reused={reused} subscription={}",
             if entry.subscription.is_some() {
                 "active"
             } else {
                 "unsupported"
             }
         );
-        return entry.text.clone();
+        return entry.analysis.clone();
     }
     entry.dirty.store(true, Ordering::Release);
     qol_runtime::probe!(
