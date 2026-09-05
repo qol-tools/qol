@@ -327,6 +327,52 @@ fn contradictory_captures_abstain_even_if_one_repeats_the_exact_question() {
 }
 
 #[test]
+fn agreement_checks_the_complete_recorded_answer() {
+    for (left, right) in [
+        (
+            "Yes. Only text edits are saved; images are discarded.",
+            "Yes. Text edits are discarded; only images are saved.",
+        ),
+        (
+            "Rust. Version 2 uses Python.",
+            "Rust. Version 2 uses JavaScript.",
+        ),
+        (
+            "Run ./finch save or ./finch -s. Images are discarded.",
+            "Run ./finch save or ./finch -s. Images are preserved.",
+        ),
+    ] {
+        let fixture = Fixture::new(&[
+            capture(
+                "detail-a",
+                &format!("Q: What is the Finch behavior? A: {left}"),
+            ),
+            capture(
+                "detail-b",
+                &format!("Q: What is the Finch behavior? A: {right}"),
+            ),
+        ]);
+        let result = fixture.ask("What is the Finch behavior?", 5);
+        assert!(result["answer"].is_null(), "{result}");
+        assert_eq!(result["signals"]["conflicting_captures"], 2, "{result}");
+    }
+    let fixture = Fixture::new(&[
+        capture(
+            "detail-a",
+            "Q: What is the Finch behavior? A: Yes. Only text edits are saved.",
+        ),
+        capture(
+            "detail-b",
+            "Q: What is the Finch behavior? A: Yes.  Only text edits are saved.",
+        ),
+    ]);
+    assert_eq!(
+        fixture.ask("What is the Finch behavior?", 5)["verdict"],
+        "answered"
+    );
+}
+
+#[test]
 fn path_case_differences_remain_conflicting_answers() {
     let fixture = Fixture::new(&[capture(
         "config-case",

@@ -229,12 +229,7 @@ pub(super) fn evidence(text: &str) -> Option<Evidence> {
 }
 
 fn canonical_answer(answer: &str) -> String {
-    let sentence = answer
-        .trim()
-        .split(". ")
-        .next()
-        .unwrap_or(answer)
-        .trim_end_matches(['.', '?', '!']);
+    let sentence = answer.trim().trim_end_matches(['.', '?', '!']);
     if sentence.contains(['/', '\\', '`']) {
         crate::text::collapse_ws(sentence)
     } else {
@@ -245,6 +240,9 @@ fn canonical_answer(answer: &str) -> String {
 pub(super) fn agree(left: &str, right: &str) -> bool {
     if left == right {
         return true;
+    }
+    if left.contains(". ") || right.contains(". ") {
+        return false;
     }
     fn commands(text: &str) -> HashSet<String> {
         static ALTERNATIVE: OnceLock<Regex> = OnceLock::new();
