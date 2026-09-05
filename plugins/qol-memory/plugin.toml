@@ -3,7 +3,7 @@ id = "qol-memory"
 uid = "a2d9cb99-1d62-4f73-ab8e-51de1fa7ac63"
 name = "QoL Memory"
 description = "Long-context memory: retrieve settled facts from your agent session history"
-version = "0.3.0"
+version = "0.4.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
