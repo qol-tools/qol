@@ -93,6 +93,19 @@ fn cli_sessions_palette_derives_from_system_roles() {
     assert_eq!(palette.your_turn, DARK_SYSTEM.warning);
     assert_eq!(palette.working, DARK_SYSTEM.success);
     assert_eq!(palette.service, DARK_SYSTEM.info);
+    assert_eq!(palette.bridged, DARK_SYSTEM.info);
+    assert_eq!(
+        palette.bridged_tint_rgba,
+        with_alpha(DARK_SYSTEM.info, 0x1e)
+    );
+    assert_eq!(
+        palette.bridged_badge_rgba,
+        with_alpha(DARK_SYSTEM.info, 0x33)
+    );
+    assert_eq!(
+        palette.bridged_hover_rgba,
+        with_alpha(DARK_SYSTEM.info, 0x55)
+    );
     assert_eq!(palette.unknown, DARK_SYSTEM.text_faint);
     assert_eq!(
         palette.needs_you_tint_rgba,

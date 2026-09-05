@@ -1,0 +1,8 @@
+Final verification sweep:
+$ cargo check
+── ∷ Working ────────────────────
+
+─────────────────────────────────
+/work/project (main)
+135k 8.1k $0.025 6.8%/1.0M (auto)
+MCP: 4 servers enabled

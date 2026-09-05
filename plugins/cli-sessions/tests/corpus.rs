@@ -3,10 +3,10 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
+use plugin_cli_sessions::attention::{reduce_with_policy, Attention, Evidence, GRACE_SECS};
 use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::tool::{from_cli_session, is_generic};
+use plugin_cli_sessions::tool::{completion_policy, from_cli_session, is_generic};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 #[derive(Deserialize)]
@@ -71,7 +71,9 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         is_generic: is_generic(&tool),
         is_service: false,
     };
-    reduce(&prev, &evidence, GRACE_SECS + 1).attention.status
+    reduce_with_policy(&prev, &evidence, GRACE_SECS + 1, completion_policy(&tool))
+        .attention
+        .status
 }
 
 #[test]

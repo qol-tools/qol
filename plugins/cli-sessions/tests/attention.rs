@@ -692,3 +692,41 @@ fn descriptor_needs_input_stays_immediate_from_working() {
     );
     assert_eq!(out.transition.unwrap().reason, Reason::StrongNeedsInput);
 }
+
+#[test]
+fn supported_harnesses_require_completion_and_live_work_overrides_old_ready_records() {
+    use plugin_cli_sessions::attention::reduce_with_policy;
+    use plugin_cli_sessions::tool::completion_policy;
+    use qol_terminal_sessions::cli::{claude_tool, codex_tool, pi_tool};
+    for tool in [claude_tool(), codex_tool(), pi_tool()] {
+        let policy = completion_policy(&tool);
+        for descriptor in [RT::Ready, RT::Unknown] {
+            for fresh in [Some(true), Some(false), None] {
+                let ev = evidence(descriptor, RT::Working, VP::Live, fresh, false);
+                for status in EVERY_STATUS {
+                    let mut previous = working(status, 0);
+                    for now in [10, 16, 120, 1200] {
+                        let out = reduce_with_policy(&previous, &ev, now, policy);
+                        assert_eq!(out.attention.status, Status::Working, "{} {ev:?}", tool.id);
+                        previous = out.attention;
+                    }
+                }
+            }
+        }
+        let unknown = evidence(RT::Unknown, RT::Unknown, VP::Unknown, None, false);
+        let previous = working(Status::Working, 0);
+        assert_eq!(
+            reduce_with_policy(&previous, &unknown, 1200, policy)
+                .attention
+                .status,
+            Status::Working
+        );
+        let ready = evidence(RT::Ready, RT::Unknown, VP::Unknown, Some(false), false);
+        assert_eq!(
+            reduce_with_policy(&previous, &ready, 1200, policy)
+                .attention
+                .status,
+            Status::YourTurn
+        );
+    }
+}

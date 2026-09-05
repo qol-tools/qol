@@ -4,24 +4,47 @@ use std::path::Path;
 
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
 
-pub(super) struct CompleteLine {
-    pub end: u64,
-    pub bytes: Vec<u8>,
-}
-
-pub(super) fn last_complete_line(path: &Path) -> Option<CompleteLine> {
+pub(super) fn complete_length(path: &Path) -> Option<u64> {
     let mut file = fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
-    let last_newline = last_byte_position(&mut file, length, b'\n')?;
-    let start = last_byte_position(&mut file, last_newline, b'\n').map_or(0, |newline| newline + 1);
-    let size = usize::try_from(last_newline - start).ok()?;
-    let mut bytes = vec![0; size];
-    file.seek(SeekFrom::Start(start)).ok()?;
-    file.read_exact(&mut bytes).ok()?;
-    Some(CompleteLine {
-        end: last_newline + 1,
-        bytes,
-    })
+    last_byte_position(&mut file, length, b'\n').map(|position| position + 1)
+}
+
+pub(super) fn latest_runtime(
+    path: &Path,
+    classify: impl Fn(&serde_json::Value) -> Option<super::CliRuntimeState>,
+) -> super::CliRuntimeState {
+    runtime_from_complete_lines(path, classify).unwrap_or_default()
+}
+
+fn runtime_from_complete_lines(
+    path: &Path,
+    classify: impl Fn(&serde_json::Value) -> Option<super::CliRuntimeState>,
+) -> Option<super::CliRuntimeState> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut cursor = last_byte_position(&mut file, length, b'\n')?;
+    let mut suffix = Vec::new();
+    while cursor > 0 {
+        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
+        let mut chunk = vec![0; usize::try_from(cursor - start).ok()?];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&suffix);
+        let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        for line in lines[usize::from(start > 0)..].iter().rev() {
+            if line.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let value = serde_json::from_slice(line).ok()?;
+            if let Some(runtime) = classify(&value) {
+                return Some(runtime);
+            }
+        }
+        suffix = lines.first().copied().unwrap_or_default().to_vec();
+        cursor = start;
+    }
+    None
 }
 
 fn last_byte_position(file: &mut fs::File, end: u64, needle: u8) -> Option<u64> {
@@ -46,10 +69,10 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::last_complete_line;
+    use super::complete_length;
 
-    fn read(path: &std::path::Path) -> Option<(u64, Vec<u8>)> {
-        last_complete_line(path).map(|line| (line.end, line.bytes))
+    fn read(path: &std::path::Path) -> Option<u64> {
+        complete_length(path)
     }
 
     #[test]
@@ -73,7 +96,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let path = root.path().join("mixed.jsonl");
         std::fs::write(&path, "complete\nhalf-written entry").unwrap();
-        assert_eq!(read(&path), Some((9, b"complete".to_vec())));
+        assert_eq!(read(&path), Some(9));
     }
 
     #[test]
@@ -84,7 +107,7 @@ mod tests {
         file.write_all(b"ok\n").unwrap();
         let long_tail = vec![b'x'; 5 * 1024 * 1024];
         file.write_all(&long_tail).unwrap();
-        assert_eq!(read(&path), Some((3, b"ok".to_vec())));
+        assert_eq!(read(&path), Some(3));
     }
 
     #[test]
@@ -92,9 +115,9 @@ mod tests {
         let root = TempDir::new().unwrap();
         let path = root.path().join("blank.jsonl");
         std::fs::write(&path, "a\n\n").unwrap();
-        assert_eq!(read(&path), Some((3, Vec::new())));
+        assert_eq!(read(&path), Some(3));
         std::fs::write(&path, "\n").unwrap();
-        assert_eq!(read(&path), Some((1, Vec::new())));
+        assert_eq!(read(&path), Some(1));
     }
 
     #[test]
@@ -102,6 +125,21 @@ mod tests {
         let root = TempDir::new().unwrap();
         let path = root.path().join("ends.jsonl");
         std::fs::write(&path, "one\ntwo\n").unwrap();
-        assert_eq!(read(&path), Some((8, b"two".to_vec())));
+        assert_eq!(read(&path), Some(8));
+    }
+    #[test]
+    fn runtime_scan_crosses_chunk_boundaries_and_ignores_partial_records() {
+        use crate::cli::CliRuntimeState;
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("runtime.jsonl");
+        for size in [0, 65530, 65536, 131072] {
+            let metadata = serde_json::json!({"padding": "x".repeat(size)});
+            let text = format!("{{\"ready\":true}}\n{metadata}\n{{\"working\":true");
+            std::fs::write(&path, text).unwrap();
+            let actual = super::latest_runtime(&path, |value| {
+                value.get("ready").map(|_| CliRuntimeState::Ready)
+            });
+            assert_eq!(actual, CliRuntimeState::Ready, "padding={size}");
+        }
     }
 }

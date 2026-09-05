@@ -224,7 +224,7 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
             let (name, message) = scan_appended(path, entry.scanned_length);
             let facts = CachedFacts {
                 signature,
-                scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
+                scanned_length: tail::complete_length(path).unwrap_or(0),
                 session_name: name.or_else(|| entry.session_name.clone()),
                 has_message: entry.has_message || message,
             };
@@ -234,7 +234,7 @@ fn cached_facts(path: &Path, cache: &mut PiCache) -> Option<CachedFacts> {
     }
     let facts = CachedFacts {
         signature,
-        scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
+        scanned_length: tail::complete_length(path).unwrap_or(0),
         session_name: latest_session_name(path),
         has_message: any_message(path),
     };
@@ -380,7 +380,7 @@ fn assistant_text_marker(line: &[u8], marker: &str) -> Option<bool> {
     let terminal = message
         .get("stopReason")
         .and_then(Value::as_str)
-        .is_some_and(|reason| reason != "toolUse");
+        .is_some_and(terminal_stop_reason);
     let text = message
         .get("content")
         .and_then(Value::as_array)
@@ -458,7 +458,7 @@ fn terminal_assistant(line: &[u8]) -> Option<TerminalAssistant> {
     let terminal = message
         .get("stopReason")
         .and_then(Value::as_str)
-        .is_some_and(|reason| reason != "toolUse");
+        .is_some_and(terminal_stop_reason);
     if !terminal {
         return None;
     }
@@ -599,27 +599,26 @@ pub(super) fn transcript_runtime(
 }
 
 pub(super) fn tail_runtime(path: &Path) -> CliRuntimeState {
-    let Some(line) = tail::last_complete_line(path) else {
-        return CliRuntimeState::Ready;
-    };
-    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
-        return CliRuntimeState::Working;
-    };
-    let terminal = value.get("type").and_then(Value::as_str) == Some("message")
-        && value
-            .get("message")
-            .and_then(|message| message.get("role"))
-            .and_then(Value::as_str)
-            == Some("assistant")
-        && value
-            .get("message")
-            .and_then(|message| message.get("stopReason"))
-            .and_then(Value::as_str)
-            .is_some_and(|reason| reason != "toolUse");
-    if terminal {
-        CliRuntimeState::Ready
-    } else {
-        CliRuntimeState::Working
+    tail::latest_runtime(path, runtime_entry)
+}
+
+fn terminal_stop_reason(reason: &str) -> bool {
+    matches!(reason, "stop" | "end_turn" | "length" | "error" | "aborted")
+}
+
+fn runtime_entry(value: &Value) -> Option<CliRuntimeState> {
+    if value.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let message = value.get("message")?;
+    match message.get("role").and_then(Value::as_str) {
+        Some("assistant") => Some(match message.get("stopReason").and_then(Value::as_str) {
+            Some(reason) if terminal_stop_reason(reason) => CliRuntimeState::Ready,
+            Some("toolUse") | None => CliRuntimeState::Working,
+            Some(_) => CliRuntimeState::Unknown,
+        }),
+        Some("user" | "tool" | "toolResult") => Some(CliRuntimeState::Working),
+        _ => Some(CliRuntimeState::Unknown),
     }
 }
 
@@ -1130,6 +1129,66 @@ mod tests {
             transcript_runtime(&paths, "QOL_BRIDGE_DONE_own"),
             Some(CliRuntimeState::Working),
             "the runtime must follow the lane's own tail, not the ready sibling"
+        );
+    }
+}
+
+#[cfg(test)]
+mod runtime_regressions {
+    use super::tail_runtime;
+    use crate::cli::CliRuntimeState;
+
+    #[test]
+    fn metadata_preserves_the_latest_lifecycle_transition() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let working = r#"{"type":"message","message":{"role":"user"}}"#;
+        let ready = r#"{"type":"message","message":{"role":"assistant","stopReason":"stop"}}"#;
+        let metadata = [
+            r#"{"type":"session_info"}"#,
+            r#"{"type":"model_change"}"#,
+            r#"{"type":"thinking_level_change"}"#,
+        ];
+        for entry in metadata {
+            for (events, expected) in [
+                (format!("{working}\n"), CliRuntimeState::Working),
+                (format!("{working}\n{ready}\n"), CliRuntimeState::Ready),
+                (format!("{ready}\n{working}\n"), CliRuntimeState::Working),
+                (String::new(), CliRuntimeState::Unknown),
+            ] {
+                std::fs::write(&path, format!("{events}{entry}\n\n{{partial")).unwrap();
+                assert_eq!(tail_runtime(&path), expected, "{events}{entry}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_empty_partial_and_invalid_transcripts_do_not_prove_readiness() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown);
+        for text in ["", "{partial", "invalid\n", "\n\n"] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown, "{text}");
+        }
+    }
+    #[test]
+    fn unknown_stop_reasons_never_complete_a_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let value = serde_json::json!({
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "stopReason": "future_reason",
+                "content": [{"type": "text", "text": "QOL_BRIDGE_DONE_test"}]
+            }
+        });
+        std::fs::write(&path, format!("{value}\n")).unwrap();
+        assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown);
+        assert_eq!(
+            super::marker_in_terminal_assistant_text(&path, "QOL_BRIDGE_DONE_test"),
+            Some(false)
         );
     }
 }

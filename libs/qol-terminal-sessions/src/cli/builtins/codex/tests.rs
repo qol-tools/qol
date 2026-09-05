@@ -355,7 +355,7 @@ fn turn_aborted_is_terminal_and_response_items_are_not() {
 }
 
 #[test]
-fn a_zero_line_rollout_reads_ready() {
+fn a_zero_line_rollout_reads_unknown() {
     let root = TempDir::new().unwrap();
     let id = "019f9dd4-ef90-7a43-9ae0-ca1c2b5d8d6a";
     let rollout = root.path().join(format!("rollout-{id}.jsonl"));
@@ -367,7 +367,7 @@ fn a_zero_line_rollout_reads_ready() {
     facts.title = "qol-tts | Working | fix the queue".to_owned();
     assert_eq!(
         strategy.describe(&facts).evidence.runtime,
-        CliRuntimeState::Ready
+        CliRuntimeState::Unknown
     );
 }
 
@@ -437,8 +437,8 @@ fn metadata_attachment_never_proves_live_and_weak_evidence_stays_out_of_runtime(
     assert_eq!(descriptor.external_id.as_deref(), Some(id));
     assert_eq!(
         descriptor.evidence.runtime,
-        CliRuntimeState::Working,
-        "the non-json tail is not a terminal event, so it reads busy"
+        CliRuntimeState::Unknown,
+        "invalid transcript data does not prove runtime state"
     );
 
     let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
@@ -452,7 +452,7 @@ fn metadata_attachment_never_proves_live_and_weak_evidence_stays_out_of_runtime(
     assert_eq!(evidence.activity.file_fresh, Some(false));
     assert_eq!(evidence.activity.file_has_work, Some(true));
     assert_eq!(evidence.activity.combined(), Some(false));
-    assert_eq!(evidence.runtime, CliRuntimeState::Working);
+    assert_eq!(evidence.runtime, CliRuntimeState::Unknown);
 }
 
 #[test]

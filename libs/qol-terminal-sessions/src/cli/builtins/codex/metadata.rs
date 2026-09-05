@@ -208,12 +208,10 @@ fn load_index(path: PathBuf, signature: FileSignature) -> Option<SessionIndex> {
 }
 
 fn tail_runtime(path: &Path) -> CliRuntimeState {
-    let Some(line) = tail::last_complete_line(path) else {
-        return CliRuntimeState::Ready;
-    };
-    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
-        return CliRuntimeState::Working;
-    };
+    tail::latest_runtime(path, runtime_entry)
+}
+
+fn runtime_entry(value: &Value) -> Option<CliRuntimeState> {
     let entry_type = value.get("type").and_then(Value::as_str);
     let event_type = match entry_type {
         Some("event_msg") => value
@@ -223,8 +221,11 @@ fn tail_runtime(path: &Path) -> CliRuntimeState {
         other => other,
     };
     match event_type {
-        Some("task_complete" | "turn_aborted") => CliRuntimeState::Ready,
-        _ => CliRuntimeState::Working,
+        Some("task_complete" | "turn_aborted") => Some(CliRuntimeState::Ready),
+        Some(
+            "task_started" | "user_message" | "agent_message" | "agent_reasoning" | "response_item",
+        ) => Some(CliRuntimeState::Working),
+        _ => None,
     }
 }
 
@@ -307,4 +308,45 @@ fn rollout_has_work(path: &Path) -> bool {
         .take(2)
         .count()
         > 1
+}
+
+#[cfg(test)]
+mod runtime_regressions {
+    use super::tail_runtime;
+    use crate::cli::CliRuntimeState;
+
+    #[test]
+    fn metadata_preserves_the_latest_lifecycle_transition() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let working = r#"{"type":"event_msg","payload":{"type":"task_started"}}"#;
+        let ready = r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#;
+        let metadata = [
+            r#"{"type":"event_msg","payload":{"type":"token_count"}}"#,
+            r#"{"type":"session_meta"}"#,
+            r#"{"type":"turn_context"}"#,
+        ];
+        for entry in metadata {
+            for (events, expected) in [
+                (format!("{working}\n"), CliRuntimeState::Working),
+                (format!("{working}\n{ready}\n"), CliRuntimeState::Ready),
+                (format!("{ready}\n{working}\n"), CliRuntimeState::Working),
+                (String::new(), CliRuntimeState::Unknown),
+            ] {
+                std::fs::write(&path, format!("{events}{entry}\n\n{{partial")).unwrap();
+                assert_eq!(tail_runtime(&path), expected, "{events}{entry}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_empty_partial_and_invalid_transcripts_do_not_prove_readiness() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown);
+        for text in ["", "{partial", "invalid\n", "\n\n"] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown, "{text}");
+        }
+    }
 }

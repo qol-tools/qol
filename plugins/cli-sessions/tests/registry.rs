@@ -48,6 +48,7 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }
 }
 

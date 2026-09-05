@@ -142,7 +142,7 @@ impl CliSessionStrategy for PiStrategy {
         if !crate::cli::screen::pi_live(screen) {
             return CliScreenEvidence::default();
         }
-        if crate::cli::screen::has_braille_spinner(screen) {
+        if crate::cli::screen::pi_working(screen) {
             CliScreenEvidence {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::Working,

@@ -69,9 +69,12 @@ impl CliSessionInterpreter {
         descriptor.display_name = normalize_display_name(descriptor.display_name);
         qol_runtime::probe!(
             "CLI_SESSION_INTERPRETATION",
-            "event=described tool={} terminal_backend={}",
+            "event=described tool={} terminal_backend={} runtime={:?} file_fresh={:?} file_has_work={:?}",
             descriptor.tool.id,
-            session.id.backend()
+            session.id.backend(),
+            descriptor.evidence.runtime,
+            descriptor.evidence.activity.file_fresh,
+            descriptor.evidence.activity.file_has_work
         );
         descriptor
     }

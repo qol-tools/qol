@@ -46,6 +46,35 @@ pub(super) fn has_braille_spinner(text: &str) -> bool {
     })
 }
 
+pub(super) fn pi_working(text: &str) -> bool {
+    if has_braille_spinner(text) {
+        return true;
+    }
+    let lines = text.lines().collect::<Vec<_>>();
+    let Some(bottom) = lines.iter().rposition(|line| is_rule_line(line)) else {
+        return false;
+    };
+    let Some(border) = lines[..bottom]
+        .iter()
+        .rev()
+        .find(|line| line.trim_start().starts_with('─'))
+    else {
+        return false;
+    };
+    let status = border.trim().trim_matches('─').trim();
+    let Some((indicator, message)) = status.split_once(' ') else {
+        return false;
+    };
+    !indicator.is_empty()
+        && indicator
+            .chars()
+            .all(|character| !character.is_alphanumeric())
+        && (message == "Working"
+            || message.starts_with("Working ")
+            || message.starts_with("Working…")
+            || message.starts_with("Working..."))
+}
+
 pub(super) fn has_choice_hint(text: &str) -> bool {
     let region = chrome_region(text).unwrap_or_else(|| tail(text, STATUS_TAIL));
     region.iter().any(|line| {

@@ -1072,7 +1072,7 @@ impl CliSessionsPalette {
             your_turn: system.warning,
             working: system.success,
             service: system.info,
-            bridged: system.accent_ink,
+            bridged: system.info,
             unknown: system.text_faint,
             needs_you_tint_rgba: with_alpha(system.danger, 0x22),
             your_turn_tint_rgba: with_alpha(system.warning, 0x22),
@@ -1080,9 +1080,9 @@ impl CliSessionsPalette {
             your_turn_hover_rgba: with_alpha(system.warning, 0x55),
             working_tint_rgba: with_alpha(system.success, 0x1e),
             service_tint_rgba: with_alpha(system.info, 0x14),
-            bridged_tint_rgba: with_alpha(system.accent, 0x1e),
-            bridged_badge_rgba: with_alpha(system.accent, 0x33),
-            bridged_hover_rgba: with_alpha(system.accent, 0x55),
+            bridged_tint_rgba: with_alpha(system.info, 0x1e),
+            bridged_badge_rgba: with_alpha(system.info, 0x33),
+            bridged_hover_rgba: with_alpha(system.info, 0x55),
             transparent_rgba: 0x00000000,
         }
     }

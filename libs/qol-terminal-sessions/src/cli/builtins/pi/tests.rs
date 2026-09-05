@@ -211,9 +211,9 @@ fn transcript_tail_drives_the_runtime() {
         ),
         (
             "{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"t\",\"cwd\":\"/work/proj\"}".to_owned(),
-            CliRuntimeState::Working,
+            CliRuntimeState::Unknown,
         ),
-        ("pi wrote a plain line".to_owned(), CliRuntimeState::Working),
+        ("pi wrote a plain line".to_owned(), CliRuntimeState::Unknown),
     ];
     for (content, runtime) in cases {
         std::fs::write(&file, format!("{content}\n")).unwrap();
@@ -226,7 +226,7 @@ fn transcript_tail_drives_the_runtime() {
 }
 
 #[test]
-fn an_empty_transcript_reads_ready() {
+fn an_empty_transcript_reads_unknown() {
     let root = TempDir::new().unwrap();
     let file = root
         .path()
@@ -236,7 +236,7 @@ fn an_empty_transcript_reads_ready() {
 
     assert_eq!(
         strategy.describe(&session()).evidence.runtime,
-        CliRuntimeState::Ready
+        CliRuntimeState::Unknown
     );
 }
 
@@ -758,5 +758,24 @@ fn session() -> SessionFacts {
         foreground_pids: vec![22],
         capabilities: SessionCapabilities::ALL,
         spawn_identity: None,
+    }
+}
+
+#[test]
+fn embedded_working_status_is_live_only_in_the_current_editor_border() {
+    let strategy = PiStrategy::default();
+    for glyph in ["∷", "⠋", "∙"] {
+        let screen = format!("result\n── {glyph} Working ─────────\n\n────────────────────────\n/work/project\nMCP: 4 servers enabled");
+        assert_eq!(
+            strategy.classify_screen(&session(), &screen).runtime,
+            CliRuntimeState::Working
+        );
+        let historical = format!(
+            "{screen}\n────────────────────────\n\n────────────────────────\n/work/project"
+        );
+        assert_ne!(
+            strategy.classify_screen(&session(), &historical).runtime,
+            CliRuntimeState::Working
+        );
     }
 }

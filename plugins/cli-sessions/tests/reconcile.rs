@@ -224,6 +224,7 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }
 }
 
@@ -784,7 +785,7 @@ fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
 }
 
 #[test]
-fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
+fn tick_codex_requires_ready_evidence_even_when_answer_ends_in_numbered_list() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let mut host = FakeHost {
         panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
@@ -806,9 +807,13 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
     }
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
-        Status::YourTurn,
-        "a codex answer is your-turn once the grace window closes"
+        Status::Working,
+        "a quiet answer is not proof of completion"
     );
+
+    host.panes[0].title = "project | Ready | finished".into();
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 108, 108);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
 }
 
 #[test]
@@ -1060,6 +1065,7 @@ fn tick_refreshes_restored_identity_fields() {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }]);
     let host = FakeHost {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
@@ -1274,6 +1280,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }]);
     let mut caches = ReconcileCaches::default();
 
@@ -1319,4 +1326,31 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         Status::YourTurn,
         "the restart observes a full fresh grace before completing"
     );
+}
+
+#[test]
+fn pi_embedded_working_recovers_and_stays_busy_across_quiet_ticks() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(1, "sl-skill", false, &["pi"], "pi")],
+        screen: include_str!("fixtures/corpus/pi_embedded_working.txt").into(),
+    };
+    let mut caches = ReconcileCaches::default();
+    let interpreter = CliSessionInterpreter::system();
+    for now in [100, 101, 106, 160, 700] {
+        tick_with_caches(
+            &reg,
+            &host,
+            &interpreter,
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+        assert_eq!(
+            reg.lock().unwrap().sorted()[0].status,
+            Status::Working,
+            "time={now}"
+        );
+    }
 }

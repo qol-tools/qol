@@ -179,7 +179,7 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
             let has_message = entry.has_message || any_message_since(path, entry.scanned_length);
             let facts = CachedFacts {
                 signature,
-                scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
+                scanned_length: tail::complete_length(path).unwrap_or(0),
                 title,
                 has_message,
             };
@@ -189,7 +189,7 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
     }
     let facts = CachedFacts {
         signature,
-        scanned_length: tail::last_complete_line(path).map_or(0, |line| line.end),
+        scanned_length: tail::complete_length(path).unwrap_or(0),
         title: latest_custom_title(path),
         has_message: any_message(path),
     };
@@ -283,23 +283,27 @@ fn latest_custom_title_since(path: &Path, offset: u64) -> Option<String> {
 }
 
 fn tail_runtime(path: &Path) -> CliRuntimeState {
-    let Some(line) = tail::last_complete_line(path) else {
-        return CliRuntimeState::Ready;
-    };
-    let Ok(value) = serde_json::from_slice::<Value>(&line.bytes) else {
-        return CliRuntimeState::Working;
-    };
+    tail::latest_runtime(path, runtime_entry)
+}
+
+fn runtime_entry(value: &Value) -> Option<CliRuntimeState> {
     match value.get("type").and_then(Value::as_str) {
-        Some("system" | "last-prompt" | "mode" | "permission-mode") => CliRuntimeState::Ready,
-        Some("user") if is_interrupt_note(&value) => CliRuntimeState::Ready,
-        Some(
-            "ai-title"
-            | "atis-latch"
-            | "cost-state"
-            | "artifact-comment-monitor"
-            | "worktree-state",
-        ) => CliRuntimeState::Ready,
-        _ => CliRuntimeState::Working,
+        Some("system") if value.get("subtype").and_then(Value::as_str) == Some("turn_duration") => {
+            Some(CliRuntimeState::Ready)
+        }
+        Some("user") if is_interrupt_note(value) => Some(CliRuntimeState::Ready),
+        Some("assistant") => {
+            let stop = value
+                .get("message")
+                .and_then(|message| message.get("stop_reason"))
+                .and_then(Value::as_str);
+            Some(match stop {
+                Some("end_turn" | "stop_sequence" | "max_tokens") => CliRuntimeState::Ready,
+                _ => CliRuntimeState::Working,
+            })
+        }
+        Some("user" | "attachment") => Some(CliRuntimeState::Working),
+        _ => None,
     }
 }
 
@@ -330,4 +334,45 @@ fn custom_title(line: &[u8]) -> Option<String> {
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod runtime_regressions {
+    use super::tail_runtime;
+    use crate::cli::CliRuntimeState;
+
+    #[test]
+    fn metadata_preserves_the_latest_lifecycle_transition() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let working = r#"{"type":"user"}"#;
+        let ready = r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        let metadata = [
+            r#"{"type":"cost-state"}"#,
+            r#"{"type":"system","subtype":"other"}"#,
+            r#"{"type":"custom-title"}"#,
+        ];
+        for entry in metadata {
+            for (events, expected) in [
+                (format!("{working}\n"), CliRuntimeState::Working),
+                (format!("{working}\n{ready}\n"), CliRuntimeState::Ready),
+                (format!("{ready}\n{working}\n"), CliRuntimeState::Working),
+                (String::new(), CliRuntimeState::Unknown),
+            ] {
+                std::fs::write(&path, format!("{events}{entry}\n\n{{partial")).unwrap();
+                assert_eq!(tail_runtime(&path), expected, "{events}{entry}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_empty_partial_and_invalid_transcripts_do_not_prove_readiness() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown);
+        for text in ["", "{partial", "invalid\n", "\n\n"] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown, "{text}");
+        }
+    }
 }

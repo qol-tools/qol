@@ -55,7 +55,23 @@ pub struct Reduction {
     pub transition: Option<Transition>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompletionPolicy {
+    Explicit,
+    Quiescent,
+}
+
 pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
+    reduce_with_policy(prev, ev, now, CompletionPolicy::Quiescent)
+}
+
+pub fn reduce_with_policy(
+    prev: &Attention,
+    ev: &Evidence,
+    now: u64,
+    policy: CompletionPolicy,
+) -> Reduction {
+    let explicit = policy == CompletionPolicy::Explicit;
     let working_since = prev.working_since;
     let settled_since = prev.settled_since;
     if !timestamps_are_monotonic(working_since, settled_since, now) {
@@ -85,8 +101,8 @@ pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
     };
     let grace_elapsed =
         next_settled_since.is_some_and(|start| now.saturating_sub(start) >= GRACE_SECS);
-    let screen_working =
-        ev.screen_runtime == CliRuntimeState::Working && next_settled_since.is_none();
+    let screen_working = ev.screen_runtime == CliRuntimeState::Working
+        && (next_settled_since.is_none() || (explicit && ev.viewport == CliViewportState::Live));
     if ev.descriptor_runtime == CliRuntimeState::Working || screen_working {
         return Reduction {
             attention: Attention {
@@ -188,7 +204,10 @@ pub fn reduce(prev: &Attention, ev: &Evidence, now: u64) -> Reduction {
             transition: transition(prev.status, Status::Unknown, Reason::QuickIdle),
         };
     }
-    if prev.status == Status::Working && settled && grace_elapsed {
+    let completion = !explicit
+        || ev.descriptor_runtime == CliRuntimeState::Ready
+        || ev.screen_runtime == CliRuntimeState::Ready;
+    if prev.status == Status::Working && settled && grace_elapsed && completion {
         return Reduction {
             attention: Attention {
                 status: Status::YourTurn,

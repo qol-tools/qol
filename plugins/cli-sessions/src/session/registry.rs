@@ -28,6 +28,8 @@ pub struct SessionState {
     pub bridged: bool,
     #[serde(default, skip)]
     pub driving: Vec<SessionId>,
+    #[serde(default, skip)]
+    pub runtime_status: Option<Status>,
 }
 
 impl SessionState {
@@ -38,7 +40,8 @@ impl SessionState {
     pub fn acknowledge(&mut self) {
         if self.status == Status::YourTurn {
             self.status = Status::Acknowledged;
-            self.summary = "acknowledged".into();
+            self.runtime_status = Some(Status::Acknowledged);
+            self.summary = self.status.definition().label.into();
         }
     }
 }
@@ -52,21 +55,10 @@ pub fn meaningful_name(value: Option<&str>) -> Option<&str> {
 }
 
 pub fn summary_for(status: Status, tool: &Tool) -> String {
-    match status {
-        Status::Working => {
-            if is_generic(tool) {
-                "running"
-            } else {
-                "working"
-            }
-        }
-        Status::Service => "live",
-        Status::YourTurn => "your turn",
-        Status::NeedsYou => "needs you",
-        Status::Unknown => "idle",
-        Status::Acknowledged => "acknowledged",
+    if status == Status::Working && is_generic(tool) {
+        return "running".into();
     }
-    .to_string()
+    status.definition().label.into()
 }
 
 #[derive(Default)]
@@ -113,14 +105,6 @@ impl Registry {
 }
 
 fn rank(state: &SessionState) -> (u8, u8) {
-    let status = match state.status {
-        Status::NeedsYou => 0,
-        Status::YourTurn => 1,
-        Status::Working => 2,
-        Status::Service => 4,
-        Status::Acknowledged => 5,
-        Status::Unknown => 6,
-    };
-    let status = if state.bridged { status.min(3) } else { status };
+    let status = state.status.priority(state.bridged);
     (status, u8::from(is_generic(&state.tool)))
 }

@@ -45,21 +45,11 @@ fn format_elapsed(since: u64) -> String {
 }
 
 fn is_idle(status: Status) -> bool {
-    matches!(status, Status::Unknown | Status::Acknowledged)
+    status.definition().idle
 }
 
 fn status_dot_el(kit: &qol_gpui::kit::Kit, status: Status) -> gpui::Div {
-    let (tone, halo) = match status {
-        Status::NeedsYou | Status::YourTurn => {
-            (kit.palette.warning, kit.washes.halo_attention.packed())
-        }
-        Status::Working | Status::Service => {
-            (kit.palette.success, kit.washes.halo_success.packed())
-        }
-        Status::Unknown | Status::Acknowledged => {
-            (kit.palette.text_muted, kit.washes.fill_resting.packed())
-        }
-    };
+    let (tone, halo) = (status.definition().colors)(&current_palette());
     kit.status_dot(tone, halo)
 }
 
@@ -68,22 +58,13 @@ fn live_count(rows: &[SessionState]) -> usize {
 }
 
 fn waiting_count(rows: &[SessionState]) -> usize {
-    rows.iter()
-        .filter(|row| matches!(row.status, Status::NeedsYou | Status::YourTurn))
-        .count()
+    rows.iter().filter(|row| row.status.is_attention()).count()
 }
 
 fn worst_status(rows: &[SessionState]) -> Status {
     rows.iter()
+        .min_by_key(|row| row.status.priority(row.bridged))
         .map(|row| row.status)
-        .min_by_key(|status| match status {
-            Status::NeedsYou => 0,
-            Status::YourTurn => 1,
-            Status::Working => 2,
-            Status::Service => 3,
-            Status::Acknowledged => 4,
-            Status::Unknown => 5,
-        })
         .unwrap_or(Status::Unknown)
 }
 
@@ -152,16 +133,15 @@ fn footer() -> impl IntoElement {
 
 fn subtitle_text(s: &SessionState) -> String {
     let elapsed = format_elapsed(s.last_activity);
-    let summary = s.summary.trim();
-    if summary.is_empty() {
-        elapsed
-    } else {
-        format!("{summary} \u{00B7} {elapsed}")
-    }
+    [s.summary.trim(), elapsed.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" \u{00B7} ")
 }
 
 fn text_line(text: String, size: f32, weight: FontWeight, color: u32) -> gpui::Div {
-    div().flex().w_full().overflow_hidden().child(
+    div().flex().w_full().min_w_0().overflow_hidden().child(
         div()
             .flex_1()
             .min_w_0()
@@ -171,6 +151,22 @@ fn text_line(text: String, size: f32, weight: FontWeight, color: u32) -> gpui::D
             .text_color(rgb(color))
             .child(text),
     )
+}
+
+fn agent_chip(
+    session: &SessionState,
+    index: usize,
+    cx: &mut Context<SessionsView>,
+) -> impl IntoElement {
+    let kit = qol_gpui::kit::kit();
+    let driver = session.id.clone();
+    kit.count_chip(session.driving.len(), "agents")
+        .id(("cycle-agents", index))
+        .cursor(CursorStyle::PointingHand)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.cycle_implementers_of(&driver, true, cx);
+            cx.stop_propagation();
+        }))
 }
 
 fn session_row(
@@ -221,21 +217,36 @@ fn session_row(
                         kit.palette.text_primary
                     },
                 ))
-                .child(text_line(
-                    subtitle_text(s),
-                    if idle {
-                        qol_gpui::theme::TEXT_NANO
-                    } else {
-                        qol_gpui::theme::TEXT_MICRO
-                    },
-                    FontWeight::NORMAL,
-                    if idle {
-                        kit.palette.text_muted
-                    } else {
-                        kit.palette.text_secondary
-                    },
-                )),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(qol_gpui::theme::SPACE_MARK))
+                        .when(!crate::session::tool::is_generic(&s.tool), |line| {
+                            line.child(kit.chip(s.tool.label.clone(), s.tool.accent.rgb24()))
+                        })
+                        .child(text_line(
+                            subtitle_text(s),
+                            if idle {
+                                qol_gpui::theme::TEXT_NANO
+                            } else {
+                                qol_gpui::theme::TEXT_MICRO
+                            },
+                            FontWeight::NORMAL,
+                            if idle {
+                                kit.palette.text_muted
+                            } else {
+                                kit.palette.text_secondary
+                            },
+                        )),
+                ),
         )
+        .when(!s.driving.is_empty(), |row| {
+            row.child(agent_chip(s, index, cx))
+        })
+        .when(s.bridged && s.driving.is_empty(), |row| {
+            row.child(kit.chip("delegated", kit.palette.text_secondary))
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
@@ -607,6 +618,7 @@ mod tests {
             settled_since: None,
             bridged: false,
             driving: Vec::new(),
+            runtime_status: None,
         }
     }
 
