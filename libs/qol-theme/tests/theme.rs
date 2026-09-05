@@ -2336,3 +2336,112 @@ fn settings_surfaces_have_one_focus_owner() {
         calls[0]
     );
 }
+
+fn string_literals(line: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let mut end = None;
+        let mut characters = after.char_indices();
+        while let Some((at, character)) = characters.next() {
+            if character == '\\' {
+                characters.next();
+                continue;
+            }
+            if character == '"' {
+                end = Some(at);
+                break;
+            }
+        }
+        let Some(end) = end else {
+            break;
+        };
+        found.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    found
+}
+
+fn running_phrase_ends_in_an_ellipsis(literal: &str) -> bool {
+    let ellipsis = literal.ends_with('\u{2026}') || literal.ends_with("...");
+    if !ellipsis {
+        return false;
+    }
+    let text = literal.trim_start_matches(|character: char| !character.is_alphabetic());
+    text.split_whitespace().next().is_some_and(|first_word| {
+        first_word
+            .to_lowercase()
+            .trim_end_matches(['.', '\u{2026}'])
+            .ends_with("ing")
+    })
+}
+
+#[test]
+fn gpui_surfaces_draw_progress_with_the_spinner() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut flagged = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let compact = compact_line(line);
+            const LOGGED_MARKERS: [&str; 8] = [
+                "log::",
+                "println!(",
+                "eprintln!(",
+                "probe!(",
+                "bail!(",
+                "anyhow!(",
+                "panic!(",
+                "assert",
+            ];
+            if LOGGED_MARKERS.iter().any(|marker| compact.contains(marker)) {
+                continue;
+            }
+            for literal in string_literals(line) {
+                if running_phrase_ends_in_an_ellipsis(literal) {
+                    flagged.push(format!("{relative}:{} draws {literal:?}", index + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        flagged.is_empty(),
+        "Progress is drawn by qol_gpui::Spinner (Busy pairs it with a caption); text never animates, \
+         so a running phrase does not end in an ellipsis.\n{}",
+        flagged.join("\n")
+    );
+}
+
+#[test]
+fn settings_surfaces_build_spinners_through_components() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut calls = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        if !in_settings_scope(&relative) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            if compact.contains("Spinner::new(") || compact.contains("Busy::new(") {
+                calls.push(format!("{relative}:{}", index + 1));
+            }
+        }
+    }
+
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.starts_with("libs/qol-gpui/src/settings_panel/components.rs:")),
+        "Settings surfaces build spinners through the components recipes, so Spinner::new and \
+         Busy::new live only in settings_panel/components.rs:\n{}",
+        calls.join("\n")
+    );
+}

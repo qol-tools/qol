@@ -9,7 +9,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::kit::float_shadow;
 use qol_gpui::theme::{
-    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_BODY, TEXT_CAPTION, TEXT_NANO,
+    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_CAPTION, TEXT_NANO,
 };
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
@@ -325,12 +325,11 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
             .py(px(18.0))
             .gap_4()
             .when(windows.is_empty(), |s| {
-                s.items_center().justify_center().child(
-                    div()
-                        .text_size(px(TEXT_BODY))
-                        .text_color(rgb(context.snap.palette.grid_empty_text))
-                        .child("Scanning windows\u{2026}"),
-                )
+                s.items_center().justify_center().child(qol_gpui::Busy::new(
+                    "alt-tab-scanning",
+                    "Scanning windows",
+                    rgb(context.snap.palette.grid_empty_text),
+                ))
             })
             .children(
                 windows

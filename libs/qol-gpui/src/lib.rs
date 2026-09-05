@@ -32,7 +32,7 @@ pub mod vertical_label;
 pub mod window;
 
 pub use format::format_bytes;
-pub use spinner::Spinner;
+pub use spinner::{Busy, Spinner};
 pub use status_indicator::StatusIndicator;
 pub use trail::Trail;
 

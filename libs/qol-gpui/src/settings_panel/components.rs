@@ -6,6 +6,7 @@ use gpui::{
 
 use crate::dropdown::DropdownStyle;
 use crate::kit::{alpha, kit};
+use crate::spinner::{Busy, Spinner};
 use crate::theme::SettingsPanelPalette;
 
 pub const DIMMED_OPACITY: f32 = 0.5;
@@ -551,16 +552,43 @@ pub fn settings_message(
     danger: bool,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
+    settings_message_frame(if danger {
+        palette.status_danger
+    } else {
+        palette.status_muted
+    })
+    .child(text.into())
+}
+
+fn settings_message_frame(color: u32) -> gpui::Div {
     div()
         .flex_1()
         .flex()
         .items_center()
         .justify_center()
         .text_size(px(qol_theme::TEXT_BODY))
-        .text_color(rgb(if danger {
-            palette.status_danger
-        } else {
-            palette.status_muted
-        }))
-        .child(text.into())
+        .text_color(rgb(color))
+}
+
+/// Spinner recipe for a query-backed value that has not answered yet.
+pub fn settings_query_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
+    Spinner::new(id, rgb(palette.status_muted))
+}
+
+/// Spinner recipe for a pending action inside a settings surface.
+pub fn settings_action_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
+    Spinner::new(id, rgb(palette.state_on))
+}
+
+/// Busy recipe sharing the settings_message frame for in-progress work.
+pub fn settings_busy_message(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    settings_message_frame(palette.status_muted).child(Busy::new(
+        id,
+        text,
+        rgb(palette.status_muted),
+    ))
 }

@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Animation, AnimationExt as _, App, ElementId, Hsla, Pixels, RenderOnce, Window,
+    div, px, Animation, AnimationExt as _, App, ElementId, Hsla, Pixels, RenderOnce, SharedString,
+    Window,
 };
 
 const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
@@ -46,6 +47,42 @@ impl RenderOnce for Spinner {
                 Animation::new(ROTATION_DURATION).repeat(),
                 |spinner, progress| spinner.child(FRAMES[frame_index(progress)]),
             )
+    }
+}
+
+/// Pairs the braille spinner with a caption describing the work in progress.
+#[derive(IntoElement)]
+pub struct Busy {
+    id: ElementId,
+    label: SharedString,
+    color: Hsla,
+}
+
+impl Busy {
+    /// Builds a busy row from an element id, a caption and a text colour.
+    pub fn new(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        color: impl Into<Hsla>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            color: color.into(),
+        }
+    }
+}
+
+impl RenderOnce for Busy {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET))
+            .text_color(self.color)
+            .child(Spinner::new(self.id, self.color))
+            .child(self.label)
     }
 }
 

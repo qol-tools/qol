@@ -552,12 +552,12 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
         "kill" => ReadResult::Command(DaemonCommand::Kill),
         "enable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
         "disable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing..."),
-        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting..."),
+        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing"),
+        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting"),
         "disconnect_device" => {
-            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting...")
+            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
         }
-        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing..."),
+        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing"),
         "trust_device" | "untrust_device" => ReadResult::Error(TRUST_UNSUPPORTED.into()),
         "start_search" => ReadResult::Command(DaemonCommand::StartSearch),
         "stop_search" => match mark_search_stopped() {

@@ -195,7 +195,18 @@ impl Render for EditorView {
                             } else {
                                 palette.label_text
                             }))
-                            .child(status),
+                            .child(
+                                if self.output_error.is_none() && self.output_pending.is_some() {
+                                    qol_gpui::Busy::new(
+                                        "shot-editor-pending",
+                                        status,
+                                        rgb(palette.label_text),
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    status.into_any_element()
+                                },
+                            ),
                     ),
             )
     }

@@ -164,6 +164,7 @@ pub struct Toast {
     preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
     preview_action: Option<Activation>,
     live: bool,
+    busy: bool,
 }
 
 impl Toast {
@@ -186,6 +187,7 @@ impl Toast {
             preview: None,
             preview_action: None,
             live: false,
+            busy: false,
         }
     }
 
@@ -232,6 +234,12 @@ impl Toast {
 
     pub fn live(mut self) -> Self {
         self.live = true;
+        self
+    }
+
+    /// Pairs the toast title with the shared braille spinner while work runs.
+    pub fn busy(mut self) -> Self {
+        self.busy = true;
         self
     }
 
@@ -1125,11 +1133,26 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
         .child(
             div()
                 .w_full()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.text_primary))
-                .child(row.toast.title.clone()),
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(qol_theme::SPACE_TIGHT))
+                .children(row.toast.busy.then(|| {
+                    crate::spinner::Spinner::new(
+                        ("toast-busy", row.id.0),
+                        rgb(palette.text_secondary),
+                    )
+                }))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(qol_theme::TEXT_CAPTION))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette.text_primary))
+                        .child(row.toast.title.clone()),
+                ),
         );
     if row.toast.message.is_empty() {
         return column;

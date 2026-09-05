@@ -8,9 +8,10 @@ use qol_gpui::deck;
 use qol_gpui::dropdown::{Dropdown, DropdownEvent};
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
-    settings_description, settings_dropdown_style, settings_label, settings_label_group,
-    settings_message, settings_page, settings_value_group, SettingsGroupHeader,
-    SettingsKeyCombination, SettingsRow, SettingsSelectValue, SettingsTextField, SettingsToggle,
+    settings_action_spinner, settings_busy_message, settings_description, settings_dropdown_style,
+    settings_label, settings_label_group, settings_message, settings_page, settings_value_group,
+    SettingsGroupHeader, SettingsKeyCombination, SettingsRow, SettingsSelectValue,
+    SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier};
 use qol_gpui::surface::SurfaceDismisser;
@@ -729,7 +730,12 @@ impl NativeToolsView {
 
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.loading {
-            return self.render_message("Loading shortcuts and hotkeys…", false);
+            return settings_busy_message(
+                "native-tools-loading",
+                "Loading shortcuts and hotkeys",
+                settings_panel_runtime(),
+            )
+            .into_any_element();
         }
         let editor = match &self.mode {
             Mode::List => return self.page(self.render_list(cx)).into_any_element(),
@@ -1089,14 +1095,14 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(
-                if self.pending {
-                    "Saving\u{2026}"
-                } else {
-                    "Save"
-                },
+                if self.pending { "Saving" } else { "Save" },
                 palette,
             ))
-            .child(qol_gpui::kit::kit().keycap("\u{21b5}"))
+            .child(if self.pending {
+                settings_action_spinner("native-tools-save-spinner", palette).into_any_element()
+            } else {
+                qol_gpui::kit::kit().keycap("\u{21b5}").into_any_element()
+            })
             .into_any_element()
     }
 

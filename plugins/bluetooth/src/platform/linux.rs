@@ -1367,27 +1367,25 @@ fn dispatch_daemon_action(
         DaemonAction::Kill => ReadResult::Command(DaemonCommand::Kill),
         DaemonAction::EnableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
         DaemonAction::DisableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        DaemonAction::PairDevice => {
-            device_daemon_command(request, DaemonCommand::Pair, "Pairing...")
-        }
+        DaemonAction::PairDevice => device_daemon_command(request, DaemonCommand::Pair, "Pairing"),
         DaemonAction::TrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, true),
-            "Trusting...",
+            "Trusting",
         ),
         DaemonAction::UntrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, false),
-            "Removing trust...",
+            "Removing trust",
         ),
         DaemonAction::ConnectDevice => {
-            device_daemon_command(request, DaemonCommand::Connect, "Connecting...")
+            device_daemon_command(request, DaemonCommand::Connect, "Connecting")
         }
         DaemonAction::DisconnectDevice => {
-            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting...")
+            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
         }
         DaemonAction::RemoveDevice => {
-            device_daemon_command(request, DaemonCommand::Remove, "Removing...")
+            device_daemon_command(request, DaemonCommand::Remove, "Removing")
         }
         DaemonAction::StartSearch => ReadResult::Command(DaemonCommand::StartSearch),
         DaemonAction::StopSearch => match mark_search_stopped() {
@@ -2896,7 +2894,7 @@ mod tests {
     #[test]
     fn explicit_device_action_deadline_clears_the_pending_state_with_an_error() {
         let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
-        begin_device_action(address, "Connecting...").unwrap();
+        begin_device_action(address, "Connecting").unwrap();
         let result = runtime().unwrap().block_on(complete_device_action_within(
             "Connect",
             Duration::ZERO,

@@ -13,6 +13,7 @@ pub(crate) struct CaptureStatus {
     timeout: Option<Duration>,
     layout: ToastLayout,
     saved_file: Option<PathBuf>,
+    busy: bool,
 }
 
 impl CaptureStatus {
@@ -31,6 +32,7 @@ impl CaptureStatus {
             timeout: None,
             layout: ToastLayout::status(),
             saved_file: None,
+            busy: false,
         }
     }
 
@@ -58,11 +60,17 @@ impl CaptureStatus {
         self
     }
 
+    pub(crate) fn busy(mut self) -> Self {
+        self.busy = true;
+        self
+    }
+
     fn into_toast(self) -> Toast {
         let toast = Toast::new(self.title, self.subtitle, self.layout)
             .tone(self.tone)
             .group("qol-shot")
             .key(self.context);
+        let toast = if self.busy { toast.busy() } else { toast };
         let toast = match self.saved_file {
             Some(path) => toast.artifact(path),
             None => toast,

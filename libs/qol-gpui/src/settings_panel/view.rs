@@ -7,8 +7,9 @@ use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
 use super::components::{
-    paint_settings_selection, rail_caption, settings_label, settings_label_group, settings_page,
-    SettingsFeedback, SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
+    paint_settings_selection, rail_caption, settings_action_spinner, settings_label,
+    settings_label_group, settings_page, settings_query_spinner, SettingsFeedback,
+    SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
 };
 use super::object_array_row::{
     shared_key_chip, Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome,
@@ -31,7 +32,6 @@ use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
-use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
@@ -2689,7 +2689,10 @@ impl SettingsPanelView {
                 if error.is_some() {
                     "unavailable".into()
                 } else {
-                    label.clone().unwrap_or_else(|| "loading\u{2026}".into())
+                    label
+                        .clone()
+                        .or_else(|| self.level().rows[index].placeholder.clone())
+                        .unwrap_or_else(|| "\u{2013}".into())
                 }
             }
             RowControl::List {
@@ -2798,12 +2801,9 @@ impl SettingsPanelView {
     }
 
     /// Replaces a query-backed value with a spinner or an unavailable marker
-    /// while its plugin has not answered. Status rows are excluded: they carry
-    /// their own tone and error text.
+    /// while its plugin has not answered. Status rows keep their own tone and
+    /// error text once unavailable, but draw the same loading spinner.
     fn render_query_state_cell(&self, index: usize) -> Option<Div> {
-        if matches!(self.level().rows[index].control, RowControl::Status { .. }) {
-            return None;
-        }
         let cell = || {
             div()
                 .flex()
@@ -2815,19 +2815,23 @@ impl SettingsPanelView {
                 .justify_end()
         };
         match self.row_query_state(index) {
-            RowQueryState::Loading { .. } => Some(cell().child(Spinner::new(
+            RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
                 ("settings-query-spinner", index),
-                rgb(self.palette.status_muted),
+                self.palette,
             ))),
-            RowQueryState::Unavailable(_) => Some(
-                cell().child(
-                    div()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .text_color(rgb(self.palette.status_muted))
-                        .child("unavailable"),
-                ),
-            ),
-            RowQueryState::Idle | RowQueryState::Ready => None,
+            RowQueryState::Unavailable(_)
+                if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
+            {
+                Some(
+                    cell().child(
+                        div()
+                            .text_size(px(qol_theme::TEXT_CAPTION))
+                            .text_color(rgb(self.palette.status_muted))
+                            .child("unavailable"),
+                    ),
+                )
+            }
+            RowQueryState::Idle | RowQueryState::Ready | RowQueryState::Unavailable(_) => None,
         }
     }
 
@@ -2885,9 +2889,9 @@ impl SettingsPanelView {
             ));
         }
         if self.action_is_busy(index) {
-            cell = cell.child(Spinner::new(
+            cell = cell.child(settings_action_spinner(
                 ("settings-action-spinner", index),
-                rgb(self.palette.state_on),
+                self.palette,
             ));
         }
         if let Some(color) = self.swatch_color(index) {
@@ -3011,11 +3015,8 @@ impl SettingsPanelView {
             .gap(px(qol_theme::SPACE_TIGHT));
         if self.action_is_busy(index) {
             control = control.child(
-                Spinner::new(
-                    ("settings-action-spinner", index),
-                    rgb(self.palette.state_on),
-                )
-                .size(px(12.)),
+                settings_action_spinner(("settings-action-spinner", index), self.palette)
+                    .size(px(12.)),
             );
         }
         control
@@ -3484,19 +3485,27 @@ impl SettingsPanelView {
                 grid
             }
             None => {
-                let placeholder = row
-                    .placeholder
-                    .clone()
-                    .unwrap_or_else(|| "Waiting\u{2026}".into());
-                div()
+                let frame = div()
                     .flex()
                     .flex_none()
                     .items_center()
                     .justify_center()
-                    .h(px(super::PANEL_QR_CODE_HEIGHT))
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(self.palette.label_text))
-                    .child(placeholder)
+                    .h(px(super::PANEL_QR_CODE_HEIGHT));
+                if let RowQueryState::Loading { .. } = self.row_query_state(index) {
+                    frame.child(settings_query_spinner(
+                        ("settings-qr-spinner", index),
+                        self.palette,
+                    ))
+                } else {
+                    let placeholder = row
+                        .placeholder
+                        .clone()
+                        .unwrap_or_else(|| "unavailable".into());
+                    frame
+                        .text_size(px(qol_theme::TEXT_BODY))
+                        .text_color(rgb(self.palette.label_text))
+                        .child(placeholder)
+                }
             }
         };
         container = container.child(code_block);
@@ -4072,9 +4081,9 @@ impl SettingsPanelView {
             .items_center()
             .gap(px(qol_theme::SPACE_INSET));
         if item.pending {
-            cell = cell.child(Spinner::new(
+            cell = cell.child(settings_action_spinner(
                 ("settings-list-card-spinner", index),
-                rgb(self.palette.state_on),
+                self.palette,
             ));
         }
         let Some(action) = primary_list_item_action(actions, item) else {
@@ -5011,7 +5020,7 @@ fn action_value_label(
     state_labels: &std::collections::BTreeMap<String, String>,
 ) -> String {
     if pending {
-        return "working\u{2026}".into();
+        return "Working".into();
     }
     if failed {
         return "failed".into();
@@ -6431,7 +6440,7 @@ default = "visible"
         let no_labels = std::collections::BTreeMap::new();
         let cases = [
             (false, false, false, false, false, "Run"),
-            (false, true, false, false, false, "working\u{2026}"),
+            (false, true, false, false, false, "Working"),
             (false, false, true, false, false, "failed"),
             (false, false, false, true, true, "Run"),
             (true, false, false, true, true, "Stop"),

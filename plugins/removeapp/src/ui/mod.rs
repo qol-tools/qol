@@ -429,9 +429,16 @@ impl RemoveAppView {
         if core::is_protected(app) {
             return None;
         }
-        let subtitle = match self.app_size(app) {
-            Some(size) => format!("App bundle \u{00B7} {}", qol_gpui::format_bytes(size)),
-            None => "measuring size\u{2026}".to_string(),
+        let subtitle: AnyElement = match self.app_size(app) {
+            Some(size) => {
+                format!("App bundle \u{00B7} {}", qol_gpui::format_bytes(size)).into_any_element()
+            }
+            None => qol_gpui::Busy::new(
+                "removeapp-size",
+                "measuring size",
+                rgb(kit.palette.text_secondary),
+            )
+            .into_any_element(),
         };
         Some(
             div()
@@ -657,11 +664,7 @@ impl RemoveAppView {
     fn guard_banner(&self) -> Option<AnyElement> {
         let palette = current_palette();
         let Some(g) = self.guards.as_ref() else {
-            return Some(banner_container(vec![banner_line(
-                palette.text_muted,
-                "Checking package manager\u{2026}",
-            )
-            .into_any_element()]));
+            return Some(banner_container(vec![banner_busy(palette.text_muted)]));
         };
         let mut lines: Vec<AnyElement> = Vec::new();
         if g.running {
@@ -947,11 +950,24 @@ fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-fn banner_line(color: u32, text: &str) -> impl IntoElement {
+fn banner_frame(color: u32) -> gpui::Div {
     div()
         .text_size(px(qol_gpui::theme::TEXT_CAPTION))
         .text_color(rgb(color))
-        .child(text.to_string())
+}
+
+fn banner_line(color: u32, text: &str) -> impl IntoElement {
+    banner_frame(color).child(text.to_string())
+}
+
+fn banner_busy(color: u32) -> AnyElement {
+    banner_frame(color)
+        .child(qol_gpui::Busy::new(
+            "removeapp-guards-busy",
+            "Checking package manager",
+            rgb(color),
+        ))
+        .into_any_element()
 }
 
 #[cfg(test)]

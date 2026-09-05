@@ -114,10 +114,10 @@ impl EditorOutput {
 
     fn pending_message(self) -> &'static str {
         match self {
-            Self::Save => "Saving…",
-            Self::Action(ShotAction::Copy) => "Copying edited screenshot…",
-            Self::Action(ShotAction::CopyPath) => "Copying screenshot path…",
-            Self::Action(ShotAction::OpenFolder) => "Opening screenshot folder…",
+            Self::Save => "Saving",
+            Self::Action(ShotAction::Copy) => "Copying edited screenshot",
+            Self::Action(ShotAction::CopyPath) => "Copying screenshot path",
+            Self::Action(ShotAction::OpenFolder) => "Opening screenshot folder",
         }
     }
 

@@ -5,6 +5,7 @@ mod stream;
 mod view;
 
 pub mod components;
+pub use components::{settings_action_spinner, settings_busy_message, settings_query_spinner};
 
 use std::rc::Rc;
 use std::sync::Arc;

@@ -557,12 +557,12 @@ mod tests {
         discovery.record("AA:BB:CC:DD:EE:03");
         let action = DeviceActionState {
             address: "AA:BB:CC:DD:EE:03".into(),
-            status: "Connecting...".into(),
+            status: "Connecting".into(),
             pending: true,
         };
         let payload = devices_payload(&devices, &[], &discovery, Some(&action), TRUST_CAPABLE);
         let item = &payload["items"][0];
-        assert_eq!(item["status"], "Connecting...");
+        assert_eq!(item["status"], "Connecting");
         assert_eq!(item["action_pending"], true);
         assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_pair"], true);

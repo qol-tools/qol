@@ -156,7 +156,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
     show_status_overlay(
         "Recording stopped",
-        "Opening Videos\u{2026}",
+        "Opening Videos",
         1800,
         StatusOverlayLifecycle::ExitAfterHide,
     );
@@ -668,15 +668,15 @@ fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
     if !conversion_needed {
         show_status_overlay(
             "Recording stopped",
-            "Saving recording\u{2026}",
+            "Saving recording",
             1800,
             StatusOverlayLifecycle::KeepAlive,
         );
-        show_notification("Recording stopped", "Saving recording\u{2026}", 1600);
+        show_notification("Recording stopped", "Saving recording", 1600);
         return;
     }
 
-    let message = format!("Converting to {}\u{2026}", output_format_label(output_file));
+    let message = format!("Converting to {}", output_format_label(output_file));
     show_status_overlay(
         "Recording stopped",
         &message,
