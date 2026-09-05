@@ -1,8 +1,12 @@
+mod git;
+mod storage;
+
+use self::git::{command_output, command_success, git_stdout, git_stdout_allow_empty, output_text};
+use self::storage::{StagedStorage, StorageLock};
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions, TryLockError};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 
 const GIT_ROUTING_ENV: [&str; 7] = [
     "GIT_INDEX_FILE",
@@ -14,7 +18,7 @@ const GIT_ROUTING_ENV: [&str; 7] = [
     "GIT_PREFIX",
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SourceState {
     pub(super) head: String,
     pub(super) index_tree: String,
@@ -29,6 +33,21 @@ impl SourceState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Materialization {
+    Created,
+    Reused,
+    Recreated,
+}
+
+#[derive(PartialEq, Eq)]
+enum WorktreeState {
+    Absent,
+    Active,
+    Retained,
+}
+
 pub(super) struct StagedSnapshot {
     source_root: PathBuf,
     source_state: SourceState,
@@ -37,8 +56,9 @@ pub(super) struct StagedSnapshot {
     hooks_root: PathBuf,
     cargo_target: PathBuf,
     _hooks_directory: tempfile::TempDir,
-    _storage_lock: File,
-    registered: bool,
+    _storage_lock: StorageLock,
+    state: WorktreeState,
+    materialization: Materialization,
 }
 
 impl StagedSnapshot {
@@ -59,13 +79,12 @@ impl StagedSnapshot {
             cargo_target: storage.cargo_target,
             _hooks_directory: hooks_directory,
             _storage_lock: storage.lock,
-            registered: false,
+            state: WorktreeState::Absent,
+            materialization: Materialization::Created,
         };
-        let result = snapshot.prepare_root().and_then(|()| {
-            snapshot.add_worktree()?;
-            snapshot.registered = true;
-            snapshot.verify_snapshot()
-        });
+        let result = snapshot
+            .prepare_root()
+            .and_then(|()| snapshot.verify_snapshot());
         if result.is_ok() {
             return Ok(snapshot);
         }
@@ -80,6 +99,10 @@ impl StagedSnapshot {
 
     pub(super) fn commit(&self) -> &str {
         &self.commit
+    }
+
+    pub(super) fn materialization(&self) -> Materialization {
+        self.materialization
     }
 
     pub(super) fn cargo_target(&self) -> &Path {
@@ -98,24 +121,25 @@ impl StagedSnapshot {
     }
 
     pub(super) fn cleanup(&mut self) -> Result<()> {
-        if !self.registered {
+        if self.state == WorktreeState::Absent {
             return Ok(());
         }
-        let mut command = Command::new("git");
-        command
-            .current_dir(&self.source_root)
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.root);
-        sanitize_git_environment(&mut command);
-        command_success(&mut command, "removing staged check worktree")?;
-        self.registered = false;
+        remove_worktree(&self.source_root, &self.root)?;
+        self.state = WorktreeState::Absent;
         Ok(())
     }
 
-    fn add_worktree(&self) -> Result<()> {
+    pub(super) fn retain(&mut self) -> Result<()> {
+        self.clean_generated_files()?;
+        self.verify_snapshot()?;
+        self.state = WorktreeState::Retained;
+        Ok(())
+    }
+
+    fn checkout_command(&self, root: &Path) -> Command {
         let mut command = Command::new("git");
         command
-            .current_dir(&self.source_root)
+            .current_dir(root)
             .arg("-c")
             .arg(format!("core.hooksPath={}", self.hooks_root.display()))
             .args([
@@ -125,41 +149,63 @@ impl StagedSnapshot {
                 "core.sparseCheckoutCone=false",
                 "-c",
                 "index.sparse=false",
-            ])
+            ]);
+        sanitize_git_environment(&mut command);
+        command
+    }
+
+    fn add_worktree(&mut self) -> Result<()> {
+        let mut command = self.checkout_command(&self.source_root);
+        command
             .args(["worktree", "add", "--detach"])
             .arg(&self.root)
             .arg(&self.commit);
-        sanitize_git_environment(&mut command);
-        command_success(&mut command, "creating staged check worktree")
-    }
-
-    fn prepare_root(&self) -> Result<()> {
-        let worktrees = git_stdout_allow_empty(
-            &self.source_root,
-            ["worktree", "list", "--porcelain"],
-            "listing staged check worktrees",
-        )?;
-        let registered = worktrees
-            .lines()
-            .filter_map(|line| line.strip_prefix("worktree "))
-            .any(|path| Path::new(path) == self.root);
-        if registered {
-            return remove_worktree(&self.source_root, &self.root);
-        }
-        if self
-            .root
-            .try_exists()
-            .context("inspecting staged check root")?
-        {
-            bail!(
-                "staged check root {} exists without Git ownership; inspect and remove it before retrying",
-                self.root.display()
-            );
-        }
+        command_success(&mut command, "creating staged check worktree")?;
+        self.state = WorktreeState::Active;
         Ok(())
     }
 
+    fn prepare_root(&mut self) -> Result<()> {
+        if !storage::owned_worktree_exists(&self.source_root, &self.root)? {
+            return self.add_worktree();
+        }
+        self.state = WorktreeState::Active;
+        if !self.has_plain_index()? {
+            self.cleanup()?;
+            self.materialization = Materialization::Recreated;
+            return self.add_worktree();
+        }
+        let mut command = self.checkout_command(&self.root);
+        command
+            .args(["checkout", "--detach", "--force"])
+            .arg(&self.commit);
+        command_success(&mut command, "updating staged check worktree")?;
+        self.clean_generated_files()?;
+        self.materialization = Materialization::Reused;
+        Ok(())
+    }
+
+    fn has_plain_index(&self) -> Result<bool> {
+        let mut command = self.checkout_command(&self.root);
+        command.args(["ls-files", "-v", "-z"]);
+        let output = command_output(&mut command, "inspecting staged index flags")?;
+        Ok(output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .all(|entry| entry.starts_with(b"H ")))
+    }
+
+    fn clean_generated_files(&self) -> Result<()> {
+        let mut command = self.checkout_command(&self.root);
+        command.args(["clean", "-ffdx", "--quiet"]);
+        command_success(&mut command, "cleaning staged check generated files")
+    }
+
     pub(super) fn verify_snapshot(&self) -> Result<()> {
+        if !self.has_plain_index()? {
+            bail!("staged check index flags were modified");
+        }
         let state = SourceState::capture(&self.root)?;
         if state.head != self.commit || state.index_tree != self.source_state.index_tree {
             bail!("staged check worktree does not match the captured index");
@@ -173,69 +219,6 @@ impl StagedSnapshot {
             bail!("staged check worktree was modified");
         }
         Ok(())
-    }
-}
-
-struct StagedStorage {
-    root: PathBuf,
-    cargo_target: PathBuf,
-    lock: File,
-}
-
-impl StagedStorage {
-    fn acquire(source_root: &Path) -> Result<Self> {
-        let source_storage = source_root.join("target/qol-check/staged");
-        std::fs::create_dir_all(&source_storage).with_context(|| {
-            format!("creating staged check storage {}", source_storage.display())
-        })?;
-        let lock = open_storage_lock(&source_storage.join("run.lock"))?;
-        Ok(Self {
-            root: isolated_worktree_root(source_root)?,
-            cargo_target: source_storage.join("cargo-target"),
-            lock,
-        })
-    }
-}
-
-fn isolated_worktree_root(source_root: &Path) -> Result<PathBuf> {
-    let source = source_root
-        .canonicalize()
-        .with_context(|| format!("canonicalizing source root {}", source_root.display()))?;
-    let cache = dirs::cache_dir()
-        .context("locating the user cache directory for staged checks")?
-        .join("qol-check/staged-worktrees");
-    std::fs::create_dir_all(&cache)
-        .with_context(|| format!("creating staged worktree storage {}", cache.display()))?;
-    let cache = cache
-        .canonicalize()
-        .with_context(|| format!("canonicalizing staged worktree storage {}", cache.display()))?;
-    let identity = Sha256::digest(source.as_os_str().as_encoded_bytes());
-    let root = cache.join(format!("{identity:x}"));
-    if root.starts_with(&source) {
-        bail!(
-            "staged worktree storage {} is inside the source repository",
-            root.display()
-        );
-    }
-    Ok(root)
-}
-
-fn open_storage_lock(path: &Path) -> Result<File> {
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .with_context(|| format!("opening staged check lock {}", path.display()))?;
-    match lock.try_lock() {
-        Ok(()) => Ok(lock),
-        Err(TryLockError::WouldBlock) => {
-            bail!("another `qol check --staged` is already using this repository")
-        }
-        Err(TryLockError::Error(error)) => {
-            Err(error).with_context(|| format!("locking staged check storage {}", path.display()))
-        }
     }
 }
 
@@ -263,11 +246,19 @@ fn ensure_no_gitlinks(root: &Path, commit: &str) -> Result<()> {
 
 impl Drop for StagedSnapshot {
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        if self.state == WorktreeState::Active {
+            let _ = self.cleanup();
+        }
     }
 }
 
 fn create_snapshot_commit(root: &Path, source_state: &SourceState) -> Result<String> {
+    let timestamp = git_stdout(
+        root,
+        ["show", "--no-patch", "--format=%ct", &source_state.head],
+        "reading source commit timestamp",
+    )?;
+    let date = format!("{timestamp} +0000");
     let mut command = Command::new("git");
     command
         .current_dir(root)
@@ -276,8 +267,10 @@ fn create_snapshot_commit(root: &Path, source_state: &SourceState) -> Result<Str
         .args(["-p", &source_state.head, "-m", "qol check staged snapshot"])
         .env("GIT_AUTHOR_NAME", "qol check")
         .env("GIT_AUTHOR_EMAIL", "qol-check@localhost")
+        .env("GIT_AUTHOR_DATE", &date)
         .env("GIT_COMMITTER_NAME", "qol check")
-        .env("GIT_COMMITTER_EMAIL", "qol-check@localhost");
+        .env("GIT_COMMITTER_EMAIL", "qol-check@localhost")
+        .env("GIT_COMMITTER_DATE", &date);
     sanitize_git_environment(&mut command);
     output_text(
         command_output(&mut command, "creating staged check commit")?,
@@ -285,49 +278,10 @@ fn create_snapshot_commit(root: &Path, source_state: &SourceState) -> Result<Str
     )
 }
 
-fn git_stdout<const N: usize>(root: &Path, args: [&str; N], action: &str) -> Result<String> {
-    let value = git_stdout_allow_empty(root, args, action)?;
-    if value.is_empty() {
-        bail!("git returned an empty {action}");
-    }
-    Ok(value)
-}
-
-fn git_stdout_allow_empty<const N: usize>(
-    root: &Path,
-    args: [&str; N],
-    action: &str,
-) -> Result<String> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
-    sanitize_git_environment(&mut command);
-    output_text(command_output(&mut command, action)?, action)
-}
-
 pub(super) fn sanitize_git_environment(command: &mut Command) {
     for variable in GIT_ROUTING_ENV {
         command.env_remove(variable);
     }
-}
-
-fn command_success(command: &mut Command, action: &str) -> Result<()> {
-    command_output(command, action).map(|_| ())
-}
-
-fn command_output(command: &mut Command, action: &str) -> Result<Output> {
-    let output = command
-        .output()
-        .with_context(|| format!("{action}: failed to spawn git"))?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    bail!("{action} failed with {}: {}", output.status, stderr.trim())
-}
-
-fn output_text(output: Output, label: &str) -> Result<String> {
-    let value = String::from_utf8(output.stdout).with_context(|| format!("invalid {label}"))?;
-    Ok(value.trim().to_string())
 }
 
 fn combine_failure(primary: anyhow::Error, cleanup: Option<anyhow::Error>) -> anyhow::Error {
@@ -338,268 +292,4 @@ fn combine_failure(primary: anyhow::Error, cleanup: Option<anyhow::Error>) -> an
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn staged_snapshot_contains_only_the_captured_index() {
-        let repository = repository();
-        let file = repository.path().join("tracked.txt");
-        fs::write(&file, "index\n").unwrap();
-        git(repository.path(), ["add", "tracked.txt"]);
-        fs::write(&file, "worktree\n").unwrap();
-        fs::write(repository.path().join("untracked.txt"), "untracked\n").unwrap();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(snapshot.root().join("tracked.txt")).unwrap(),
-            "index\n"
-        );
-        assert!(!snapshot.root().join("untracked.txt").exists());
-        assert_eq!(
-            git_stdout(snapshot.root(), ["rev-parse", "HEAD"], "reading snapshot",).unwrap(),
-            snapshot.commit()
-        );
-        snapshot.cleanup().unwrap();
-        assert!(!snapshot.root().exists());
-        assert_eq!(fs::read_to_string(&file).unwrap(), "worktree\n");
-    }
-
-    #[test]
-    fn staged_snapshot_rejects_source_index_drift() {
-        let repository = repository();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-        fs::write(repository.path().join("other.txt"), "other\n").unwrap();
-        git(repository.path(), ["add", "other.txt"]);
-
-        let error = snapshot.verify_source_unchanged().unwrap_err().to_string();
-        assert!(error.contains("source index changed"), "got: {error}");
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_rejects_source_head_drift() {
-        let repository = repository();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-        fs::write(repository.path().join("other.txt"), "other\n").unwrap();
-        git(repository.path(), ["add", "other.txt"]);
-        git(repository.path(), ["commit", "--quiet", "-m", "other"]);
-
-        let error = snapshot.verify_source_unchanged().unwrap_err().to_string();
-        assert!(error.contains("source HEAD changed"), "got: {error}");
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_drop_removes_the_registered_worktree() {
-        let repository = repository();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-        let root = snapshot.root().to_path_buf();
-
-        drop(snapshot);
-
-        assert!(!root.exists());
-        let worktrees = git_stdout(
-            repository.path(),
-            ["worktree", "list", "--porcelain"],
-            "listing worktrees",
-        )
-        .unwrap();
-        let root = root.to_string_lossy();
-        assert!(!worktrees.contains(root.as_ref()));
-    }
-
-    #[test]
-    fn staged_snapshot_serializes_access_to_its_stable_build_cache() {
-        let repository = repository();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-        let target = snapshot.cargo_target().to_path_buf();
-        let second_state = SourceState::capture(repository.path()).unwrap();
-
-        let error = StagedSnapshot::materialize(repository.path(), second_state)
-            .err()
-            .unwrap()
-            .to_string();
-
-        assert!(
-            error.contains("already using this repository"),
-            "got: {error}"
-        );
-        assert!(target.starts_with(repository.path().join("target/qol-check/staged")));
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_excludes_unstaged_source_ancestor_config() {
-        let repository = repository();
-        let cargo = repository.path().join(".cargo");
-        fs::create_dir(&cargo).unwrap();
-        let source_config = cargo.join("config.toml");
-        fs::write(&source_config, "[build]\nrustflags = ['--invalid']\n").unwrap();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-
-        let discovers_source_config = snapshot
-            .root()
-            .ancestors()
-            .map(|ancestor| ancestor.join(".cargo/config.toml"))
-            .any(|candidate| candidate == source_config);
-
-        assert!(!discovers_source_config);
-        assert!(!snapshot.root().starts_with(repository.path()));
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_rejects_changes_made_by_checks() {
-        let repository = repository();
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-        fs::write(snapshot.root().join("tracked.txt"), "mutated\n").unwrap();
-
-        let error = snapshot.verify_snapshot().unwrap_err().to_string();
-
-        assert!(error.contains("worktree was modified"), "got: {error}");
-        snapshot.cleanup().unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn staged_snapshot_disables_checkout_hooks() {
-        let repository = repository();
-        let hooks = repository.path().join("hooks");
-        let marker = repository.path().join("hook-ran");
-        fs::create_dir(&hooks).unwrap();
-        let hook = hooks.join("post-checkout");
-        fs::write(
-            &hook,
-            format!(
-                "#!/bin/sh\nprintf hook > tracked.txt\nprintf hook > '{}'\n",
-                marker.display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-        git_config_path(repository.path(), "core.hooksPath", &hooks);
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-
-        assert!(!marker.exists());
-        assert_eq!(
-            fs::read_to_string(snapshot.root().join("tracked.txt")).unwrap(),
-            "base\n"
-        );
-        snapshot.verify_snapshot().unwrap();
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_materializes_a_full_tree_from_a_sparse_source() {
-        let repository = repository();
-        fs::create_dir(repository.path().join("included")).unwrap();
-        fs::create_dir(repository.path().join("excluded")).unwrap();
-        fs::write(repository.path().join("included/a.txt"), "included\n").unwrap();
-        fs::write(repository.path().join("excluded/b.txt"), "excluded\n").unwrap();
-        git(repository.path(), ["add", "included", "excluded"]);
-        git(repository.path(), ["commit", "--quiet", "-m", "tree"]);
-        git(repository.path(), ["sparse-checkout", "init", "--cone"]);
-        git(repository.path(), ["sparse-checkout", "set", "included"]);
-        let state = SourceState::capture(repository.path()).unwrap();
-        let mut snapshot = StagedSnapshot::materialize(repository.path(), state).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(snapshot.root().join("excluded/b.txt")).unwrap(),
-            "excluded\n"
-        );
-        snapshot.verify_snapshot().unwrap();
-        snapshot.cleanup().unwrap();
-    }
-
-    #[test]
-    fn staged_snapshot_fails_closed_for_gitlinks() {
-        let repository = repository();
-        let head = git_stdout(repository.path(), ["rev-parse", "HEAD"], "reading head").unwrap();
-        let cacheinfo = format!("160000,{head},nested");
-        git_dynamic(
-            repository.path(),
-            ["update-index", "--add", "--cacheinfo", &cacheinfo],
-        );
-        let state = SourceState::capture(repository.path()).unwrap();
-
-        let error = StagedSnapshot::materialize(repository.path(), state)
-            .err()
-            .unwrap()
-            .to_string();
-
-        assert!(error.contains("do not support gitlinks"), "got: {error}");
-    }
-
-    #[test]
-    fn staged_git_commands_clear_inherited_repository_routing() {
-        let mut command = Command::new("git");
-        sanitize_git_environment(&mut command);
-        let environment = command
-            .get_envs()
-            .collect::<std::collections::BTreeMap<_, _>>();
-
-        for variable in GIT_ROUTING_ENV {
-            assert_eq!(
-                environment.get(std::ffi::OsStr::new(variable)),
-                Some(&None),
-                "variable: {variable}"
-            );
-        }
-    }
-
-    fn repository() -> tempfile::TempDir {
-        let repository = tempfile::tempdir().unwrap();
-        git(repository.path(), ["init", "--quiet"]);
-        git(repository.path(), ["config", "user.name", "Test User"]);
-        git(
-            repository.path(),
-            ["config", "user.email", "test@example.invalid"],
-        );
-        git(repository.path(), ["config", "core.autocrlf", "false"]);
-        fs::write(repository.path().join("tracked.txt"), "base\n").unwrap();
-        git(repository.path(), ["add", "tracked.txt"]);
-        git(repository.path(), ["commit", "--quiet", "-m", "base"]);
-        repository
-    }
-
-    fn git<const N: usize>(root: &Path, args: [&str; N]) {
-        git_dynamic(root, args);
-    }
-
-    fn git_dynamic<I, S>(root: &Path, args: I)
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
-    {
-        let status = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    #[cfg(unix)]
-    fn git_config_path(root: &Path, name: &str, value: &Path) {
-        git_dynamic(
-            root,
-            [
-                std::ffi::OsStr::new("config"),
-                std::ffi::OsStr::new(name),
-                value.as_os_str(),
-            ],
-        );
-    }
-}
+mod tests;

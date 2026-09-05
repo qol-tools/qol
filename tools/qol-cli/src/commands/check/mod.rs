@@ -2,6 +2,7 @@ mod affected;
 mod command;
 mod report;
 mod snapshot;
+mod testing;
 
 use self::affected::{CargoPlan, Platform};
 use self::report::{relative_path, CheckReport};
@@ -15,6 +16,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     let mode = CheckMode::parse(args)?;
@@ -215,7 +217,9 @@ fn run_staged_checks(
     report: &mut CheckReport,
 ) -> Result<()> {
     step_label("snapshot", StepKind::Pending, "staged index");
+    let started = Instant::now();
     let mut snapshot = StagedSnapshot::materialize(execution.source_root, source_state)?;
+    report.set_snapshot(snapshot.materialization(), started.elapsed());
     report.set_head(snapshot.commit());
     let context = execution.context(
         snapshot.root(),
@@ -227,7 +231,11 @@ fn run_staged_checks(
     let checks = run_checks(&context, report);
     let snapshot_unchanged = snapshot.verify_snapshot();
     let unchanged = snapshot.verify_source_unchanged();
-    let cleanup = snapshot.cleanup();
+    let cleanup = if snapshot_unchanged.is_ok() {
+        snapshot.retain()
+    } else {
+        snapshot.cleanup()
+    };
     combine_results([checks, snapshot_unchanged, unchanged, cleanup])
 }
 
@@ -345,15 +353,14 @@ fn run_rust_checks(
         return Ok(());
     }
 
-    let mut build = cargo_command(context, "build", &cargo.clippy_args);
+    let mut build = cargo_command(context, &["build"], &cargo.clippy_args);
     context.run(report, "rust-build", "build", "affected crates", &mut build)?;
 
-    let mut clippy = cargo_command(context, "clippy", &cargo.clippy_args);
+    let mut clippy = cargo_command(context, &["clippy"], &cargo.clippy_args);
     clippy.args(["--", "-D", "warnings"]);
     context.run(report, "clippy", "clippy", "affected crates", &mut clippy)?;
 
-    let mut tests = cargo_command(context, "test", &cargo.test_args);
-    context.run(report, "rust-tests", "test", "affected crates", &mut tests)
+    testing::run(context, &cargo.test_args, cargo.doctest, report)
 }
 
 fn run_lint_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()> {
@@ -375,16 +382,16 @@ fn run_lint_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Resu
         report.skip("clippy", "no affected crates");
         return Ok(());
     }
-    let mut clippy = cargo_command(context, "clippy", &cargo.clippy_args);
+    let mut clippy = cargo_command(context, &["clippy"], &cargo.clippy_args);
     clippy.args(["--", "-D", "warnings"]);
     context.run(report, "clippy", "clippy", "affected crates", &mut clippy)
 }
 
-fn cargo_command(context: &CheckContext<'_>, verb: &str, args: &[OsString]) -> Command {
+fn cargo_command(context: &CheckContext<'_>, verbs: &[&str], args: &[OsString]) -> Command {
     let mut command = context.command("cargo");
     command
         .env("CARGO_TARGET_DIR", &context.cargo_target)
-        .arg(verb)
+        .args(verbs)
         .arg("--locked")
         .args(args);
     command
@@ -501,7 +508,7 @@ mod tests {
         let affected = directory.path().join("affected.json");
         let cancellation = CancellationToken::new();
         let context = test_context(directory.path(), &affected, &cancellation, true);
-        let mut cargo = cargo_command(&context, "build", &[OsString::from("-p"), "qol".into()]);
+        let mut cargo = cargo_command(&context, &["build"], &[OsString::from("-p"), "qol".into()]);
         context.prepare(&mut cargo);
         let environment = cargo
             .get_envs()
@@ -530,7 +537,7 @@ mod tests {
         assert!(!environment.contains_key(std::ffi::OsStr::new("GIT_DIR")));
     }
 
-    fn test_context<'a>(
+    pub(super) fn test_context<'a>(
         root: &'a Path,
         affected_path: &'a Path,
         cancellation: &'a CancellationToken,

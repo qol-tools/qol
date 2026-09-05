@@ -35,6 +35,7 @@ impl Platform {
 pub(super) struct CargoPlan {
     pub(super) clippy_args: Vec<OsString>,
     pub(super) test_args: Vec<OsString>,
+    pub(super) doctest: bool,
     pub(super) skip: bool,
 }
 
@@ -42,10 +43,20 @@ pub(super) struct CargoPlan {
 struct AffectedPlan {
     ubuntu_clippy: String,
     ubuntu_test: String,
+    #[serde(
+        default = "default_doctest",
+        deserialize_with = "deserialize_plan_bool"
+    )]
+    ubuntu_doctest: bool,
     #[serde(deserialize_with = "deserialize_plan_bool")]
     ubuntu_skip: bool,
     macos_clippy: String,
     macos_test: String,
+    #[serde(
+        default = "default_doctest",
+        deserialize_with = "deserialize_plan_bool"
+    )]
+    macos_doctest: bool,
     #[serde(deserialize_with = "deserialize_plan_bool")]
     macos_skip: bool,
 }
@@ -55,6 +66,10 @@ struct AffectedPlan {
 enum PlanBool {
     Bool(bool),
     Text(String),
+}
+
+fn default_doctest() -> bool {
+    true
 }
 
 fn deserialize_plan_bool<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
@@ -71,13 +86,24 @@ where
 
 impl AffectedPlan {
     fn cargo_plan(self, platform: Platform) -> CargoPlan {
-        let (clippy, test, skip) = match platform {
-            Platform::Linux => (self.ubuntu_clippy, self.ubuntu_test, self.ubuntu_skip),
-            Platform::Macos => (self.macos_clippy, self.macos_test, self.macos_skip),
+        let (clippy, test, doctest, skip) = match platform {
+            Platform::Linux => (
+                self.ubuntu_clippy,
+                self.ubuntu_test,
+                self.ubuntu_doctest,
+                self.ubuntu_skip,
+            ),
+            Platform::Macos => (
+                self.macos_clippy,
+                self.macos_test,
+                self.macos_doctest,
+                self.macos_skip,
+            ),
         };
         CargoPlan {
             clippy_args: split_args(&clippy),
             test_args: split_args(&test),
+            doctest,
             skip,
         }
     }
@@ -173,19 +199,23 @@ mod tests {
         let plan = || AffectedPlan {
             ubuntu_clippy: "-p linux --all-targets".to_string(),
             ubuntu_test: "-p linux".to_string(),
+            ubuntu_doctest: false,
             ubuntu_skip: false,
             macos_clippy: "".to_string(),
             macos_test: "".to_string(),
+            macos_doctest: true,
             macos_skip: true,
         };
 
         let linux = plan().cargo_plan(Platform::Linux);
         assert_eq!(linux.clippy_args, ["-p", "linux", "--all-targets"]);
         assert!(!linux.skip);
+        assert!(!linux.doctest);
         let macos = plan().cargo_plan(Platform::Macos);
         assert!(macos.clippy_args.is_empty());
         assert!(macos.test_args.is_empty());
         assert!(macos.skip);
+        assert!(macos.doctest);
     }
 
     #[test]
@@ -203,6 +233,7 @@ mod tests {
         .unwrap();
 
         assert!(!plan.ubuntu_skip);
+        assert!(plan.ubuntu_doctest);
         assert!(plan.macos_skip);
     }
 

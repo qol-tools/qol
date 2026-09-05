@@ -1,4 +1,5 @@
 use super::command as command_runner;
+use super::snapshot::Materialization;
 use crate::progress::{step_label, StepKind};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -7,7 +8,7 @@ use serde::Serialize;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Serialize)]
 pub(super) struct CheckReport {
@@ -18,8 +19,15 @@ pub(super) struct CheckReport {
     error: Option<String>,
     inputs: CheckInputs,
     artifacts: CheckArtifacts,
+    snapshot: Option<SnapshotReport>,
     commands: Vec<CommandReport>,
     next: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct SnapshotReport {
+    materialization: Materialization,
+    duration_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -76,6 +84,7 @@ impl CheckReport {
                 report: relative_path(root, report_path),
                 affected_plan: None,
             },
+            snapshot: None,
             commands: Vec::new(),
             next: Vec::new(),
         }
@@ -88,6 +97,13 @@ impl CheckReport {
 
     pub(super) fn set_head(&mut self, head: &str) {
         self.inputs.head = head.to_string();
+    }
+
+    pub(super) fn set_snapshot(&mut self, materialization: Materialization, duration: Duration) {
+        self.snapshot = Some(SnapshotReport {
+            materialization,
+            duration_ms: duration.as_millis().min(u128::from(u64::MAX)) as u64,
+        });
     }
 
     pub(super) fn set_base_sha(&mut self, base_sha: Option<&str>) {

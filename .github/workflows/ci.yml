@@ -26,10 +26,12 @@ jobs:
       ubuntu_clippy: ${{ steps.affected.outputs.ubuntu_clippy }}
       ubuntu_build: ${{ steps.affected.outputs.ubuntu_build }}
       ubuntu_test: ${{ steps.affected.outputs.ubuntu_test }}
+      ubuntu_doctest: ${{ steps.affected.outputs.ubuntu_doctest }}
       ubuntu_skip: ${{ steps.affected.outputs.ubuntu_skip }}
       macos_clippy: ${{ steps.affected.outputs.macos_clippy }}
       macos_build: ${{ steps.affected.outputs.macos_build }}
       macos_test: ${{ steps.affected.outputs.macos_test }}
+      macos_doctest: ${{ steps.affected.outputs.macos_doctest }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
       windows_process: ${{ steps.affected.outputs.windows_process }}
       windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
@@ -84,11 +86,13 @@ jobs:
             clippy_args: ${{ needs.plan.outputs.ubuntu_clippy }}
             build_args: ${{ needs.plan.outputs.ubuntu_build }}
             test_args: ${{ needs.plan.outputs.ubuntu_test }}
+            doctest: ${{ needs.plan.outputs.ubuntu_doctest }}
             skip: ${{ needs.plan.outputs.ubuntu_skip }}
           - os: macos-latest
             clippy_args: ${{ needs.plan.outputs.macos_clippy }}
             build_args: ${{ needs.plan.outputs.macos_build }}
             test_args: ${{ needs.plan.outputs.macos_test }}
+            doctest: ${{ needs.plan.outputs.macos_doctest }}
             skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -113,6 +117,12 @@ jobs:
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
         with:
           tool: cargo-hakari
+
+      - name: Install cargo-nextest
+        if: matrix.skip != 'true'
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest@0.9.143
 
       # The workspace-hack crate pins every third-party dependency to the
       # workspace-wide feature union so package-scoped builds share artifacts
@@ -160,6 +170,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
+          DOCTEST: ${{ matrix.doctest }}
         run: |
           cgroup_mount=/sys/fs/cgroup
           [[ $(stat -fc '%T' "$cgroup_mount") == cgroup2fs ]] || {
@@ -215,13 +226,21 @@ jobs:
           printf '%s\n' "$$" | sudo tee "$cgroup_root/cgroup.procs" >/dev/null
           export QOL_PROCESS_CGROUP_ROOT="$cgroup_root"
           export QOL_PROCESS_CGROUP_JOURNAL_ROOT="$journal_root"
-          cargo test --locked $TEST_ARGS
+          cargo nextest run --locked $TEST_ARGS --no-fail-fast --retries 0 --no-tests=pass --ignore-default-filter
+          if [ "$DOCTEST" = "true" ]; then
+            cargo test --locked $TEST_ARGS --doc
+          fi
 
       - name: Test
         if: runner.os == 'macOS' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
-        run: cargo test --locked $TEST_ARGS
+          DOCTEST: ${{ matrix.doctest }}
+        run: |
+          cargo nextest run --locked $TEST_ARGS --no-fail-fast --retries 0 --no-tests=pass --ignore-default-filter
+          if [ "$DOCTEST" = "true" ]; then
+            cargo test --locked $TEST_ARGS --doc
+          fi
 
   process-windows:
     name: sandbox lifecycle (windows)

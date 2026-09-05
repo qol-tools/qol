@@ -111,6 +111,8 @@ class LocalPlannerContract(unittest.TestCase):
                     planner("test")
 
                     self.assertIs(emit.call_args.args[0]["full"], expected)
+                    self.assertIs(emit.call_args.args[0]["ubuntu_doctest"], expected)
+                    self.assertIs(emit.call_args.args[0]["macos_doctest"], expected)
                     self.assertIs(
                         emit.call_args.args[0]["windows_process"], expected
                     )
@@ -159,14 +161,15 @@ class LocalPlannerContract(unittest.TestCase):
     @patch.object(ac, "changed_files")
     def test_windows_targets_track_affected_packages(self, changed_files, graph, emit):
         graph.return_value = {
-            "foundation": {"dir": "libs/foundation", "deps": set()},
-            "qol-process": {"dir": "libs/qol-process", "deps": {"foundation"}},
+            "foundation": {"dir": "libs/foundation", "deps": set(), "doctest": True},
+            "qol-process": {"dir": "libs/qol-process", "deps": {"foundation"}, "doctest": True},
             "qol-dev-build": {
                 "dir": "libs/qol-dev-build",
                 "deps": {"qol-process"},
+                "doctest": True,
             },
-            "qol": {"dir": "tools/qol-cli", "deps": {"qol-dev-build"}},
-            "unrelated": {"dir": "libs/unrelated", "deps": set()},
+            "qol": {"dir": "tools/qol-cli", "deps": {"qol-dev-build"}, "doctest": False},
+            "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
             ("libs/qol-process/src/lib.rs", True, True, True),
@@ -194,6 +197,38 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(
                         emit.call_args.args[0]["windows_qol"], qol_expected
                     )
+                    self.assertIs(
+                        emit.call_args.args[0]["ubuntu_doctest"],
+                        path != "tools/qol-cli/src/main.rs",
+                    )
+
+    def test_documentation_targets_follow_cargo_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers=["binary", "library", "disabled"]\nresolver="2"\n'
+            )
+            for name in ["binary", "library", "disabled"]:
+                package = root / name
+                (package / "src").mkdir(parents=True)
+                manifest = f'[package]\nname="{name}"\nversion="0.1.0"\nedition="2021"\n'
+                if name == "disabled":
+                    manifest += '[lib]\ndoctest=false\n'
+                (package / "Cargo.toml").write_text(manifest)
+                source = "main.rs" if name == "binary" else "lib.rs"
+                (package / "src" / source).write_text("fn main() {}" if name == "binary" else "")
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline"], cwd=root, check=True,
+                capture_output=True,
+            )
+            with patch.object(ac, "run", side_effect=lambda argv: subprocess.run(
+                argv, cwd=root, capture_output=True, text=True,
+            )):
+                graph = ac.workspace_graph()
+            self.assertEqual(
+                {name: package["doctest"] for name, package in graph.items()},
+                {"binary": False, "library": True, "disabled": False},
+            )
 
 
 if __name__ == "__main__":

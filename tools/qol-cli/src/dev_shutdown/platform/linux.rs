@@ -147,17 +147,17 @@ mod tests {
             .parse::<u32>()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while qol_process::is_pid_alive(child_pid)
-            && !qol_process::is_pid_zombie(child_pid)
-            && Instant::now() < deadline
-        {
+        loop {
+            if qol_process::is_pid_gone(child_pid) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
-        let alive = qol_process::is_pid_alive(child_pid) && !qol_process::is_pid_zombie(child_pid);
-        if alive {
-            qol_process::terminate_pid(child_pid, Duration::from_millis(100));
-        }
-        assert!(!alive, "tray child {child_pid} survived its qol dev parent");
+        qol_process::terminate_pid(child_pid, Duration::from_millis(100));
+        panic!("tray child {child_pid} survived its qol dev parent");
     }
 
     #[test]

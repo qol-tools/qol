@@ -109,10 +109,12 @@ def full_workspace(reason):
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
+            "ubuntu_doctest": True,
             "ubuntu_skip": False,
             "macos_clippy": f"--workspace{exclude_flags(MACOS_EXCLUDE)} --all-targets{workspace_feature_flags(MACOS_EXCLUDE)}",
             "macos_build": f"--workspace{exclude_flags(MACOS_EXCLUDE)}{workspace_feature_flags(MACOS_EXCLUDE)}",
             "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}{workspace_feature_flags(MACOS_EXCLUDE)}",
+            "macos_doctest": True,
             "macos_skip": False,
         }
     )
@@ -129,10 +131,12 @@ def skip_all(reason):
             "ubuntu_clippy": "",
             "ubuntu_build": "",
             "ubuntu_test": "",
+            "ubuntu_doctest": False,
             "ubuntu_skip": True,
             "macos_clippy": "",
             "macos_build": "",
             "macos_test": "",
+            "macos_doctest": False,
             "macos_skip": True,
         }
     )
@@ -176,7 +180,11 @@ def workspace_graph():
             continue
         rel = os.path.relpath(os.path.dirname(pkg["manifest_path"]), root)
         rel = "" if rel == "." else rel.replace(os.sep, "/")
-        pkgs[pkg["name"]] = {"dir": rel, "deps": set()}
+        pkgs[pkg["name"]] = {
+            "dir": rel,
+            "deps": set(),
+            "doctest": any(target["doctest"] for target in pkg["targets"]),
+        }
     names = set(pkgs)
     for pkg in data["packages"]:
         if pkg["name"] not in pkgs:
@@ -259,10 +267,12 @@ def main():
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_build": args(ubuntu, False),
             "ubuntu_test": args(ubuntu, False),
+            "ubuntu_doctest": any(pkgs[name]["doctest"] for name in ubuntu),
             "ubuntu_skip": not ubuntu,
             "macos_clippy": args(macos, True),
             "macos_build": args(macos, False),
             "macos_test": args(macos, False),
+            "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
             "macos_skip": not macos,
         }
     )
