@@ -8,9 +8,9 @@ use qol_gpui::deck;
 use qol_gpui::dropdown::{Dropdown, DropdownEvent};
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
-    settings_description, settings_dropdown_style, settings_label, settings_value_group,
-    SettingsGroupHeader, SettingsKeyCombination, SettingsRow, SettingsSelectValue,
-    SettingsTextField, SettingsToggle,
+    settings_description, settings_dropdown_style, settings_label, settings_label_group,
+    settings_message, settings_page, settings_value_group, SettingsGroupHeader,
+    SettingsKeyCombination, SettingsRow, SettingsSelectValue, SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier};
 use qol_gpui::surface::SurfaceDismisser;
@@ -769,31 +769,11 @@ impl NativeToolsView {
     }
 
     fn page(&self, body: AnyElement) -> Div {
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .px(px(qol_theme::SPACE_PAD))
-            .pb_4()
-            .child(body)
+        settings_page().child(body)
     }
 
     fn render_message(&self, message: &str, danger: bool) -> AnyElement {
-        let kit = qol_gpui::kit::kit();
-        div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(qol_gpui::theme::TEXT_BODY))
-            .text_color(rgb(if danger {
-                kit.palette.danger
-            } else {
-                kit.palette.text_muted
-            }))
-            .child(message.to_string())
-            .into_any_element()
+        settings_message(message.to_string(), danger, settings_panel_runtime()).into_any_element()
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -803,7 +783,7 @@ impl NativeToolsView {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .child(SettingsGroupHeader::new(
                 self.list_title(),
                 count,
@@ -836,7 +816,7 @@ impl NativeToolsView {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, ROW_HEIGHT);
@@ -907,16 +887,11 @@ impl NativeToolsView {
                 this.activate_selected();
                 cx.notify();
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(settings_label(shortcut.name.clone(), palette))
-                    .child(settings_description(shortcut_summary(shortcut), palette)),
-            )
+            .child(settings_label_group(
+                shortcut.name.clone(),
+                Some(shortcut_summary(shortcut).into()),
+                palette,
+            ))
             .child(settings_value_group().child(kit.value(kind)))
             .into_any_element()
     }
@@ -942,16 +917,11 @@ impl NativeToolsView {
                 this.activate_selected();
                 cx.notify();
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(settings_label(plugin_name, palette))
-                    .child(settings_description(action, palette)),
-            )
+            .child(settings_label_group(
+                plugin_name,
+                Some(action.into()),
+                palette,
+            ))
             .child(
                 settings_value_group()
                     .children(self.registration_chip(&hotkey.key))
@@ -971,7 +941,10 @@ impl NativeToolsView {
             .iter()
             .find(|error| error.key == key)?;
         let kit = qol_gpui::kit::kit();
-        Some(kit.chip(failure.error.clone(), kit.palette.warning))
+        Some(kit.chip(
+            failure.error.clone(),
+            settings_panel_runtime().status_warning,
+        ))
     }
 
     fn editor_title(&self) -> &'static str {
@@ -1115,22 +1088,15 @@ impl NativeToolsView {
                 this.save_current(cx);
                 cx.notify();
             }))
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(palette.state_on))
-                    .child(if self.pending {
-                        "Saving\u{2026}"
-                    } else {
-                        "Save"
-                    }),
-            )
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(palette.label_text))
-                    .child("enter"),
-            )
+            .child(settings_label(
+                if self.pending {
+                    "Saving\u{2026}"
+                } else {
+                    "Save"
+                },
+                palette,
+            ))
+            .child(qol_gpui::kit::kit().keycap("\u{21b5}"))
             .into_any_element()
     }
 
@@ -1162,7 +1128,7 @@ impl NativeToolsView {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .child(SettingsGroupHeader::new(
                 self.editor_title(),
                 count,
@@ -1512,7 +1478,6 @@ impl Render for NativeToolsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_lists();
         self.body_focused = self.focus_handle.is_focused(window);
-        let kit = qol_gpui::kit::kit();
         div()
             .id("qol-native-shortcuts-hotkeys-body")
             .track_focus(&self.focus_handle)
@@ -1520,7 +1485,6 @@ impl Render for NativeToolsView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .text_color(rgb(kit.palette.text_primary))
             .on_key_down(
                 cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     this.on_key(event, window, cx)

@@ -91,7 +91,7 @@ fn header(rows: &[SessionState], _cx: &mut Context<SessionsView>) -> impl IntoEl
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("Sessions"),
         )
-        .child(kit.count_chip(live_count(rows), "live"))
+        .child(kit.count_chip_small(live_count(rows), "live"))
 }
 
 fn empty_state() -> impl IntoElement {

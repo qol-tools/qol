@@ -17,14 +17,14 @@ pub fn gamepad_panel(
         .flex_row()
         .items_start()
         .justify_between()
-        .gap_3()
+        .gap(px(qol_theme::SPACE_CELL))
         .child(
             div()
                 .flex()
                 .min_w_0()
                 .flex_1()
                 .flex_col()
-                .gap_1()
+                .gap(px(qol_theme::SPACE_TIGHT))
                 .child(
                     div()
                         .text_size(px(qol_theme::TEXT_BODY))
@@ -48,10 +48,10 @@ pub fn gamepad_panel(
     div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(px(qol_theme::SPACE_INSET))
         .h_full()
         .overflow_hidden()
-        .p_3()
+        .p(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
         .border_color(rgba(alpha(palette.accent, 0x42)))
@@ -70,7 +70,7 @@ fn controller_content(
         .min_h_0()
         .flex_1()
         .flex_col()
-        .gap_2()
+        .gap(px(qol_theme::SPACE_INSET))
         .child(device_header(controller, monitor, palette))
         .child(
             div()
@@ -82,7 +82,7 @@ fn controller_content(
         )
         .children(controller.profile().device_note().map(|note| {
             div()
-                .px_2()
+                .px(px(qol_theme::SPACE_INSET))
                 .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_muted))
                 .child(note)
@@ -106,7 +106,11 @@ fn device_header(
     } else {
         "Live native input".into()
     };
-    let mut metadata = div().flex().flex_row().items_center().gap_2();
+    let mut metadata = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_INSET));
     if let Some(connection) = controller.connection_badge() {
         metadata = metadata.child(connection_badge(connection, palette));
     }
@@ -121,9 +125,9 @@ fn device_header(
         .flex_row()
         .items_center()
         .justify_between()
-        .gap_3()
-        .px_2()
-        .py_1()
+        .gap(px(qol_theme::SPACE_CELL))
+        .px(px(qol_theme::SPACE_INSET))
+        .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
         .border_color(rgba(alpha(palette.accent, 0x2e)))
@@ -159,7 +163,7 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
             .flex()
             .h(px(12.0))
             .items_end()
-            .gap(px(2.0))
+            .gap(px(qol_theme::SPACE_STACK))
             .children((1..=4).map(|bar| {
                 div()
                     .w(px(2.0))
@@ -176,9 +180,9 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(2.0))
+        .gap(px(qol_theme::SPACE_TIGHT))
+        .px(px(qol_theme::SPACE_INSET))
+        .py(px(qol_theme::SPACE_STACK))
         .rounded_none()
         .border_1()
         .border_color(rgba(alpha(tone, 0x58)))
@@ -201,7 +205,7 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
 
 fn metadata_chip(label: &str, palette: GamepadPalette) -> Div {
     div()
-        .px_1()
+        .px(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .bg(rgba(alpha(palette.raised, 0xc8)))
         .text_size(px(qol_theme::TEXT_MICRO))
@@ -220,9 +224,9 @@ fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Di
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
-        .px_2()
-        .py_1()
+        .gap(px(qol_theme::SPACE_INSET))
+        .px(px(qol_theme::SPACE_INSET))
+        .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .bg(rgba(alpha(palette.raised, 0x9a)))
         .child(
@@ -253,7 +257,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
         .w_full()
         .flex_row()
         .flex_wrap()
-        .gap_1()
+        .gap(px(qol_theme::SPACE_TIGHT))
         .children(controller.axes.iter().map(|axis| {
             let position = (axis.display + 1.0) / 2.0;
             div()
@@ -261,7 +265,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                 .w(relative(0.495))
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap(px(qol_theme::SPACE_INSET))
                 .child(
                     div()
                         .w(px(46.0))
@@ -281,7 +285,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                             div()
                                 .absolute()
                                 .top(px(-2.0))
-                                .ml(px(-4.0))
+                                .ml(px(-qol_theme::SPACE_TIGHT))
                                 .left(relative(position))
                                 .w(px(8.0))
                                 .h(px(9.0))
@@ -310,7 +314,7 @@ fn button_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> D
         .w_full()
         .flex_wrap()
         .content_start()
-        .gap_1()
+        .gap(px(qol_theme::SPACE_TIGHT))
         .children(
             controller
                 .buttons
@@ -327,7 +331,7 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
         .h(px(22.0))
         .items_center()
         .justify_between()
-        .px_1()
+        .px(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
         .border_color(if active {
@@ -384,7 +388,7 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_3()
+        .gap(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
         .border_color(rgba(alpha(color, 0x42)))
@@ -436,8 +440,8 @@ fn status_badge(status: MonitorStatus, palette: GamepadPalette) -> Div {
     };
     div()
         .flex_none()
-        .px_2()
-        .py_1()
+        .px(px(qol_theme::SPACE_INSET))
+        .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
         .border_color(rgba(alpha(color, 0x70)))

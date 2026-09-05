@@ -65,9 +65,24 @@ pub const RADIUS_WINDOW: f32 = 12.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 
-pub const SPACE_GUTTER: f32 = 20.0;
+pub const SPACE_STACK: f32 = 2.0;
+pub const SPACE_TIGHT: f32 = 4.0;
+pub const SPACE_SNUG: f32 = 6.0;
+pub const SPACE_INSET: f32 = 8.0;
+pub const SPACE_CELL: f32 = 12.0;
 pub const SPACE_PAD: f32 = 16.0;
+pub const SPACE_GUTTER: f32 = 20.0;
 pub const SPACE_MARK: f32 = 3.0;
+
+pub const SPACE_LADDER: [f32; 7] = [
+    SPACE_STACK,
+    SPACE_TIGHT,
+    SPACE_SNUG,
+    SPACE_INSET,
+    SPACE_CELL,
+    SPACE_PAD,
+    SPACE_GUTTER,
+];
 
 pub fn font_ui() -> &'static str {
     if cfg!(target_os = "macos") {

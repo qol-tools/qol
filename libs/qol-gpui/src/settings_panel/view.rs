@@ -7,8 +7,8 @@ use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 use qol_config::object_array::pretty_label;
 
 use super::components::{
-    paint_settings_selection, rail_caption, settings_description, settings_label, SettingsFeedback,
-    SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
+    paint_settings_selection, rail_caption, settings_label, settings_label_group, settings_page,
+    SettingsFeedback, SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
 };
 use super::object_array_row::{
     shared_key_chip, Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome,
@@ -40,7 +40,7 @@ type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + 20.0;
+const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 /// How long the rail selection must hold still before its source starts polling.
 const QUERY_SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
@@ -49,7 +49,6 @@ const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_milli
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
-const CRUMB_SEPARATOR_GUTTER: f32 = 8.0;
 const CRUMB_MAX_WIDTH: f32 = 200.0;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2800,7 +2799,7 @@ impl SettingsPanelView {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap(px(qol_theme::SPACE_INSET))
                 .flex_none()
                 .w(px(value_cell_width(&self.level().rows[index].control)))
                 .justify_end()
@@ -2845,7 +2844,9 @@ impl SettingsPanelView {
             }
             RowControl::Action { .. } => return self.render_action_value(index),
             RowControl::TextList(values) => {
-                return self.render_count_chip(values.len(), plural(values.len(), "item"));
+                return self
+                    .kit
+                    .count_chip(values.len(), plural(values.len(), "item"));
             }
             RowControl::Unsupported { reason, .. } => {
                 return div()
@@ -2861,7 +2862,11 @@ impl SettingsPanelView {
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. } => {}
         }
-        let mut cell = div().flex().flex_row().items_center().gap_2();
+        let mut cell = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET));
         if let RowControl::Status { tone, .. } = self.level().rows[index].control {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
@@ -2919,7 +2924,11 @@ impl SettingsPanelView {
         max: Option<f64>,
         step: Option<f64>,
     ) -> Div {
-        let mut cell = div().flex().flex_row().items_center().gap_2();
+        let mut cell = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET));
         if self.level().rows[index].variant.as_deref() == Some("slider") {
             let edit = if index == self.level().selected {
                 match &self.level().active_control {
@@ -2956,9 +2965,9 @@ impl SettingsPanelView {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_1()
-                .px_2()
-                .py_1()
+                .gap(px(qol_theme::SPACE_TIGHT))
+                .px(px(qol_theme::SPACE_INSET))
+                .py(px(qol_theme::SPACE_TIGHT))
                 .rounded(px(qol_theme::RADIUS_CONTROL))
                 .bg(rgb(self.palette.dropdown_bg))
                 .text_size(px(qol_theme::TEXT_BODY))
@@ -2985,7 +2994,11 @@ impl SettingsPanelView {
                 (rgb(self.palette.row_bg_selected), self.palette.section_text)
             }
         };
-        let mut control = div().flex().flex_row().items_center().gap_1();
+        let mut control = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_TIGHT));
         if self.action_is_busy(index) {
             control = control.child(
                 Spinner::new(
@@ -2996,8 +3009,8 @@ impl SettingsPanelView {
             );
         }
         control
-            .px_2()
-            .py_1()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .when(variant == Some("ghost"), |control| {
                 control.shadow(crate::kit::raised_shadow(self.palette.section_text))
@@ -3040,7 +3053,7 @@ impl SettingsPanelView {
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.level().rows[index];
-        let mut container = div().flex().flex_col().gap_1();
+        let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
 
         if self.level().list_card {
             return container.child(self.render_list_card_item(index, cx));
@@ -3072,20 +3085,15 @@ impl SettingsPanelView {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_1()
+                .gap(px(qol_theme::SPACE_TIGHT))
                 .min_w_0()
                 .flex_1()
                 .child(self.render_chip_row(chip_row_parts(&chips))),
-            None => div()
-                .flex()
-                .min_w_0()
-                .flex_1()
-                .flex_col()
-                .gap_0p5()
-                .child(settings_label(label, self.palette))
-                .when_some(row.description.clone(), |group, description| {
-                    group.child(settings_description(description, self.palette))
-                }),
+            None => settings_label_group(
+                label,
+                row.description.clone().map(SharedString::from),
+                self.palette,
+            ),
         };
         let selected = index == self.level().selected;
         let mut value_cell = if has_chips {
@@ -3194,7 +3202,7 @@ impl SettingsPanelView {
         if let Some(error) = error {
             container = container.child(
                 div()
-                    .px_2()
+                    .px(px(qol_theme::SPACE_INSET))
                     .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.state_off))
                     .child(error.clone()),
@@ -3261,7 +3269,7 @@ impl SettingsPanelView {
             .items_center()
             .w_full()
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
-            .px_3()
+            .px(px(qol_theme::SPACE_CELL))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .child(
                 div()
@@ -3305,7 +3313,7 @@ impl SettingsPanelView {
         else {
             return div();
         };
-        let mut header_status = div().flex().items_center().gap_2();
+        let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
         if *runtime_active {
             header_status = header_status.child(
                 StatusIndicator::new(
@@ -3325,12 +3333,12 @@ impl SettingsPanelView {
             .flex()
             .flex_col()
             .flex_none()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .h(px(row_body_height(row, false)))
             .justify_center()
             .overflow_hidden()
-            .px_2()
-            .py_1()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
@@ -3343,7 +3351,7 @@ impl SettingsPanelView {
                 .items_center()
                 .h(px(list_header_height(row)))
                 .justify_between()
-                .gap_3()
+                .gap(px(qol_theme::SPACE_CELL))
                 .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
@@ -3392,11 +3400,11 @@ impl SettingsPanelView {
             .flex()
             .flex_col()
             .flex_none()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .h(px(row_body_height(row, true)))
             .overflow_hidden()
-            .px_2()
-            .py_1()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
@@ -3408,7 +3416,7 @@ impl SettingsPanelView {
                 .flex_row()
                 .items_center()
                 .h(px(list_header_height(row)))
-                .gap_3()
+                .gap(px(qol_theme::SPACE_CELL))
                 .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
@@ -3527,7 +3535,7 @@ impl SettingsPanelView {
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .min_w_0()
             .overflow_hidden();
         for part in parts {
@@ -3539,7 +3547,7 @@ impl SettingsPanelView {
                     .child("\u{2192}"),
                 ChipRowPart::Chip(chip) => match chip.tone {
                     ChipTone::Modifier | ChipTone::Key => self.kit.keycap(chip.label),
-                    ChipTone::Plain => self.kit.chip(chip.label, self.kit.palette.text_secondary),
+                    ChipTone::Plain => self.kit.chip(chip.label, self.palette.label_text),
                 },
             });
         }
@@ -3552,7 +3560,7 @@ impl SettingsPanelView {
         }
         let state = self.level().object_array.as_ref()?;
         let draft = state.draft.as_ref()?;
-        let mut container = div().flex().flex_col().gap_1();
+        let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
         let index = self.level().selected;
         for (field_index, field) in draft.fields.iter().enumerate() {
             container = container.child(self.render_draft_field(index, field_index, field, cx));
@@ -3572,12 +3580,12 @@ impl SettingsPanelView {
             .flex()
             .flex_col()
             .flex_none()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .h(px(row_body_height(row, false)))
             .justify_center()
             .overflow_hidden()
-            .px_2()
-            .py_1()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_CARD));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
@@ -3600,7 +3608,7 @@ impl SettingsPanelView {
                 .items_center()
                 .h(px(list_header_height(row)))
                 .justify_between()
-                .gap_3()
+                .gap(px(qol_theme::SPACE_CELL))
                 .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
@@ -3706,7 +3714,7 @@ impl SettingsPanelView {
             .flex_row()
             .items_center()
             .justify_end()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .flex_1()
             .min_w_0()
             .overflow_hidden();
@@ -3761,7 +3769,7 @@ impl SettingsPanelView {
         div()
             .id(("settings-mod-chip", slot.id()))
             .flex_none()
-            .px_1p5()
+            .px(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_TIGHT))
             .shadow(vec![BoxShadow {
                 color: rgba(qol_color::with_alpha(
@@ -3884,7 +3892,7 @@ impl SettingsPanelView {
             .flex_none()
             .flex_row()
             .items_center()
-            .gap_2()
+            .gap(px(qol_theme::SPACE_INSET))
             .cursor(CursorStyle::PointingHand)
             .child(
                 div()
@@ -4047,7 +4055,12 @@ impl SettingsPanelView {
         else {
             return div();
         };
-        let mut cell = div().flex().flex_none().flex_row().items_center().gap_2();
+        let mut cell = div()
+            .flex()
+            .flex_none()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET));
         if item.pending {
             cell = cell.child(Spinner::new(
                 ("settings-list-card-spinner", index),
@@ -4061,7 +4074,7 @@ impl SettingsPanelView {
         let label = list_action_affordance(&action.label, action_count);
         let mut affordance = div()
             .id(("settings-list-card-action", index))
-            .px_1()
+            .px(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(if selected {
                 rgb(self.palette.row_bg_selected)
@@ -4227,6 +4240,7 @@ impl Render for SettingsPanelView {
             .rounded_none()
             .shadow(crate::kit::float_shadow(self.palette.section_text))
             .bg(rgb(self.palette.window_bg))
+            .text_color(rgb(self.palette.section_text))
             .child(self.render_band())
             .child(self.render_content(
                 window.viewport_size().width.to_f64() as f32,
@@ -4251,25 +4265,24 @@ impl SettingsPanelView {
     ) -> Div {
         let front = level_index + 1 == self.stack.len();
         let has_custom_view = custom_view.is_some();
-        let mut body = div()
-            .id(("settings-panel-body", level_index))
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_1();
-        if let Some(custom_view) = custom_view {
-            body = body.child(custom_view);
+        let body = if let Some(custom_view) = custom_view {
+            div()
+                .id(("settings-panel-body", level_index))
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_TIGHT))
+                .child(custom_view)
         } else {
-            body = body
+            settings_page()
+                .id(("settings-panel-body", level_index))
                 .track_scroll(self.stack[level_index].body_scroll.handle())
                 .overflow_y_scroll()
-                .px(px(qol_theme::SPACE_PAD))
-                .pb_4()
                 .when(front && self.filter_open, |body| {
                     body.pt(px(FILTER_OVERLAY_HEIGHT))
                 })
-                .children(items);
-        }
+                .children(items)
+        };
         div().flex_1().min_w_0().h_full().flex().flex_col().child(
             div()
                 .relative()
@@ -4341,7 +4354,7 @@ impl SettingsPanelView {
             .flex_col()
             .h_full()
             .w(px(super::PANEL_RAIL_WIDTH))
-            .p_2()
+            .p(px(qol_theme::SPACE_INSET))
             .children(rail);
         let scrim = div()
             .absolute()
@@ -4454,14 +4467,14 @@ impl SettingsPanelView {
     /// separator only ever sits between two crumbs.
     fn crumb_elements(&self, trail: Vec<String>) -> Vec<Div> {
         let last = trail.len().saturating_sub(1);
-        let separator = rgba(crate::kit::alpha(self.kit.palette.text_muted, 0x70));
+        let separator = rgba(crate::kit::alpha(self.palette.status_muted, 0x70));
         let mut crumbs = Vec::with_capacity(trail.len() * 2);
         for (index, label) in trail.into_iter().enumerate() {
             if index > 0 {
                 crumbs.push(
                     div()
                         .flex_none()
-                        .px(px(CRUMB_SEPARATOR_GUTTER))
+                        .px(px(qol_theme::SPACE_INSET))
                         .text_color(separator)
                         .child("\u{203A}"),
                 );
@@ -4473,7 +4486,7 @@ impl SettingsPanelView {
             } else {
                 div()
                     .max_w(px(CRUMB_MAX_WIDTH))
-                    .text_color(rgb(self.kit.palette.text_muted))
+                    .text_color(rgb(self.palette.status_muted))
             };
             crumbs.push(crumb.truncate().child(label));
         }
@@ -4502,7 +4515,7 @@ impl SettingsPanelView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap_0p5()
+                    .gap(px(qol_theme::SPACE_STACK))
                     .child(
                         div()
                             .min_w_0()
@@ -4518,37 +4531,14 @@ impl SettingsPanelView {
                             div()
                                 .truncate()
                                 .text_size(px(qol_theme::TEXT_MICRO))
-                                .text_color(rgb(self.kit.palette.text_muted))
+                                .text_color(rgb(self.palette.status_muted))
                                 .child(subtitle)
                         }))
                     }),
             )
             .when(!self.current_source_is_custom(), |band| {
-                band.child(self.render_count_chip(total, plural(total, "setting")))
+                band.child(self.kit.count_chip(total, plural(total, "setting")))
             })
-    }
-
-    fn render_count_chip(&self, count: usize, noun: String) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_1p5()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .px(px(10.))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .border(px(1.))
-            .border_color(self.hairline())
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.section_text))
-                    .child(count.to_string()),
-            )
-            .child(div().text_color(rgb(self.palette.label_text)).child(noun))
     }
 
     fn render_filter_field(&self) -> Div {
@@ -4563,7 +4553,7 @@ impl SettingsPanelView {
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
+            .gap(px(qol_theme::SPACE_INSET))
             .h(px(super::PANEL_FILTER_HEIGHT))
             .px(px(qol_theme::SPACE_PAD))
             .rounded(px(qol_theme::RADIUS_WELL))
@@ -4577,7 +4567,7 @@ impl SettingsPanelView {
                     .truncate()
                     .text_size(px(qol_theme::TEXT_BODY))
                     .text_color(rgb(if empty {
-                        self.kit.palette.text_muted
+                        self.palette.status_muted
                     } else {
                         self.palette.section_text
                     }))
@@ -4604,9 +4594,9 @@ impl SettingsPanelView {
             .top_0()
             .left_0()
             .right_0()
-            .px_4()
-            .pt_3()
-            .pb_2()
+            .px(px(qol_theme::SPACE_PAD))
+            .pt(px(qol_theme::SPACE_CELL))
+            .pb(px(qol_theme::SPACE_INSET))
             .bg(rgb(self.palette.window_bg))
             .child(self.render_filter_field())
     }
@@ -4708,70 +4698,38 @@ impl SettingsPanelView {
 
     fn render_hint_bar(&self) -> Div {
         if self.current_source_is_custom() && self.body_has_focus() {
-            return div()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_4()
-                .h(px(super::PANEL_HINT_BAR_HEIGHT))
-                .px(px(qol_theme::SPACE_GUTTER))
-                .border_t(px(1.))
-                .border_color(self.hairline())
-                .bg(rgba(self.kit.washes.fill_resting.packed()))
-                .child(self.render_hint("\u{2191}\u{2193}", "move"))
-                .child(self.render_hint("\u{21b5}", "open"))
-                .child(self.render_hint("A", "add"))
-                .child(self.render_hint("\u{232b}", "delete"))
+            return self
+                .kit
+                .hint_bar()
+                .child(self.kit.hint("\u{2191}\u{2193}", "move"))
+                .child(self.kit.hint("\u{21b5}", "open"))
+                .child(self.kit.hint("A", "add"))
+                .child(self.kit.hint("\u{232b}", "delete"))
                 .when(self.custom_tool_is_shortcuts(), |bar| {
-                    bar.child(self.render_hint("R", "run"))
+                    bar.child(self.kit.hint("R", "run"))
                 })
                 .child(div().flex_1())
-                .child(self.render_hint("esc", "back"));
+                .child(self.kit.hint("esc", "back"));
         }
-        let mut bar = div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_4()
-            .h(px(super::PANEL_HINT_BAR_HEIGHT))
-            .px(px(qol_theme::SPACE_GUTTER))
-            .border_t(px(1.))
-            .border_color(self.hairline())
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
+        let mut bar = self
+            .kit
+            .hint_bar()
             .children(
                 self.enter_hint()
-                    .map(|label| self.render_hint("\u{21b5}", label)),
+                    .map(|label| self.kit.hint("\u{21b5}", label)),
             )
-            .child(self.render_hint("\u{2191}\u{2193}", "move"));
+            .child(self.kit.hint("\u{2191}\u{2193}", "move"));
         if self.filtering() {
             bar = bar
-                .child(self.render_hint("esc", "back to plugins"))
+                .child(self.kit.hint("esc", "back to plugins"))
                 .child(div().flex_1());
         } else {
             bar = bar
-                .child(self.render_hint("type", "search every plugin"))
+                .child(self.kit.hint("type", "search every plugin"))
                 .child(div().flex_1())
-                .child(self.render_hint("esc", "close"));
+                .child(self.kit.hint("esc", "close"));
         }
         bar
-    }
-
-    fn render_hint(&self, key: &str, label: &str) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_1p5()
-            .child(self.kit.keycap(key.to_string()))
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_MICRO))
-                    .text_color(rgb(self.palette.label_text))
-                    .child(label.to_string()),
-            )
     }
 
     fn custom_tool_is_shortcuts(&self) -> bool {

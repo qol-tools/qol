@@ -66,7 +66,7 @@ impl Kit {
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
+            .gap(px(qol_theme::SPACE_INSET))
             .h(px(HEADER_HEIGHT))
             .px(px(GUTTER))
             .child(
@@ -89,7 +89,7 @@ impl Kit {
             .w_full()
             .h(px(SECTION_HEIGHT))
             .px(px(GUTTER))
-            .gap_1p5()
+            .gap(px(qol_theme::SPACE_SNUG))
             .child(
                 div()
                     .flex_none()
@@ -125,7 +125,7 @@ impl Kit {
             .flex_row()
             .items_center()
             .justify_between()
-            .gap_3()
+            .gap(px(qol_theme::SPACE_CELL))
             .w_full()
             .min_h(px(height))
             .px(px(GUTTER))
@@ -218,8 +218,8 @@ impl Kit {
     pub fn keycap(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
-            .px(px(5.0))
-            .py(px(1.0))
+            .px(px(qol_theme::SPACE_SNUG))
+            .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
             .border(px(1.0))
             .border_color(rgba(self.washes.hairline_strong.packed()))
@@ -245,18 +245,37 @@ impl Kit {
     }
 
     pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
+        self.count_chip_of_height(
+            count,
+            label,
+            qol_theme::HEIGHT_INLINE,
+            qol_theme::TEXT_MICRO,
+        )
+    }
+
+    pub fn count_chip_small(&self, count: usize, label: impl Into<SharedString>) -> Div {
+        self.count_chip_of_height(count, label, 22.0, qol_theme::TEXT_NANO)
+    }
+
+    fn count_chip_of_height(
+        &self,
+        count: usize,
+        label: impl Into<SharedString>,
+        height: f32,
+        text_size: f32,
+    ) -> Div {
         div()
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(5.0))
-            .h(px(22.0))
-            .px(px(8.0))
+            .gap(px(qol_theme::SPACE_SNUG))
+            .h(px(height))
+            .px(px(qol_theme::SPACE_INSET))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .border(px(1.0))
             .border_color(rgba(self.washes.hairline.packed()))
-            .bg(rgba(self.washes.fill_hover.packed()))
-            .text_size(px(qol_theme::TEXT_NANO))
+            .bg(rgba(self.washes.fill_resting.packed()))
+            .text_size(px(text_size))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -291,7 +310,7 @@ impl Kit {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(qol_theme::SPACE_SNUG))
             .child(self.keycap(key))
             .child(label.into())
     }
@@ -320,8 +339,8 @@ impl Kit {
     pub fn chip(&self, text: impl Into<SharedString>, tone: u32) -> Div {
         div()
             .flex_none()
-            .px_1p5()
-            .py_0p5()
+            .px(px(qol_theme::SPACE_SNUG))
+            .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(rgba(alpha(tone, 0x33)))
             .text_size(px(qol_theme::TEXT_MICRO))
@@ -364,8 +383,8 @@ impl Kit {
             .flex_none()
             .flex()
             .items_center()
-            .px_3()
-            .py_1p5()
+            .px(px(qol_theme::SPACE_CELL))
+            .py(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .text_size(px(qol_theme::TEXT_CAPTION))
             .font_weight(FontWeight::SEMIBOLD)
@@ -427,15 +446,15 @@ impl Kit {
             .flex_none()
             .flex()
             .flex_row()
-            .gap_0p5()
-            .p_0p5()
+            .gap(px(qol_theme::SPACE_STACK))
+            .p(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.surface_hovered));
         for (index, option) in options.iter().enumerate() {
             let active = index == selected;
             let mut segment = div()
-                .px_3()
-                .py_0p5()
+                .px(px(qol_theme::SPACE_CELL))
+                .py(px(qol_theme::SPACE_STACK))
                 .rounded(px(qol_theme::RADIUS_TIGHT))
                 .text_size(px(qol_theme::TEXT_CAPTION))
                 .font_weight(FontWeight::SEMIBOLD)

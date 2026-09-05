@@ -1,9 +1,6 @@
-use qol_theme::{SPACE_GUTTER, SPACE_PAD, TEXT_KEYCAP, TEXT_MICRO};
+use qol_theme::{SPACE_GUTTER, SPACE_PAD, SPACE_SNUG, TEXT_KEYCAP, TEXT_MICRO};
 
-const KEYCAP_PAD_X: f32 = 5.0;
 const KEYCAP_BORDER: f32 = 1.0;
-const KEY_LABEL_GAP: f32 = 6.0;
-const CHIP_PAD_X: f32 = 6.0;
 const LABEL_ADVANCE_PER_CHAR: f32 = 0.62;
 const KEYCAP_ADVANCE_PER_CHAR: f32 = 0.62;
 
@@ -62,14 +59,14 @@ pub fn estimated_bar_width(items: &[BarItem]) -> f32 {
 }
 
 pub fn estimated_chip_width(label: &str) -> f32 {
-    estimated_label_width(label) + 2.0 * CHIP_PAD_X
+    estimated_label_width(label) + 2.0 * SPACE_SNUG
 }
 
 fn estimated_item_width(item: &BarItem) -> f32 {
     match item {
         BarItem::Hint(descriptor) => {
             estimated_keycap_width(descriptor.key)
-                + KEY_LABEL_GAP
+                + SPACE_SNUG
                 + estimated_label_width(descriptor.label)
         }
         BarItem::FixedWidth(width) => *width,
@@ -79,7 +76,7 @@ fn estimated_item_width(item: &BarItem) -> f32 {
 
 fn estimated_keycap_width(text: &str) -> f32 {
     text.chars().count() as f32 * KEYCAP_ADVANCE_PER_CHAR * TEXT_KEYCAP
-        + 2.0 * KEYCAP_PAD_X
+        + 2.0 * SPACE_SNUG
         + 2.0 * KEYCAP_BORDER
 }
 

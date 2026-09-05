@@ -8,9 +8,6 @@ pub const DROPDOWN_MAX_VISIBLE: usize = 10;
 pub const ROW_H: f32 = 26.0;
 const MENU_ID: &str = "dropdown-menu";
 const MENU_MIN_WIDTH: f32 = 214.0;
-const MENU_PAD: f32 = 5.0;
-const ITEM_GAP: f32 = 10.0;
-const ITEM_PAD_X: f32 = 10.0;
 const SWATCH_SIZE: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -151,8 +148,8 @@ impl Dropdown {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(ITEM_GAP))
-                    .px(px(ITEM_PAD_X))
+                    .gap(px(qol_theme::SPACE_INSET))
+                    .px(px(qol_theme::SPACE_INSET))
                     .rounded(px(qol_theme::RADIUS_TIGHT))
                     .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(if selected {
@@ -208,7 +205,7 @@ impl Dropdown {
                         .flex()
                         .flex_col()
                         .min_w(px(MENU_MIN_WIDTH))
-                        .p(px(MENU_PAD))
+                        .p(px(qol_theme::SPACE_SNUG))
                         .rounded(px(qol_theme::RADIUS_CARD))
                         .border_1()
                         .border_color(rgb(style.border))

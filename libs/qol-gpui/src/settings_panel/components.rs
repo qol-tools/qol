@@ -8,11 +8,9 @@ use crate::dropdown::DropdownStyle;
 use crate::kit::{alpha, kit};
 use crate::theme::SettingsPanelPalette;
 
-const ROW_INSET: f32 = 8.0;
 pub const DIMMED_OPACITY: f32 = 0.5;
 const TOGGLE_TRACK_WIDTH: f32 = 40.0;
 const TOGGLE_TRACK_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - 4.0;
-const TOGGLE_KNOB_INSET: f32 = 2.0;
 const FIELD_MIN_WIDTH: f32 = 180.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
 
@@ -107,11 +105,11 @@ impl RenderOnce for SettingsRow {
             .flex_row()
             .items_center()
             .justify_between()
-            .gap_3()
+            .gap(px(qol_theme::SPACE_CELL))
             .w_full()
             .h(px(height))
-            .px_2()
-            .py_1()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded_none()
             .children(self.children);
         if self.kind == RowKind::Rule {
@@ -140,7 +138,7 @@ pub fn paint_settings_selection<E: Styled + ParentElement>(
     let shared = kit();
     row.relative()
         .ml(px(-qol_theme::SPACE_PAD))
-        .pl(px(qol_theme::SPACE_PAD + ROW_INSET))
+        .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
         .rounded_r(px(qol_theme::RADIUS_CARD))
         .bg(rgba(shared.washes.wash_selected.packed()))
@@ -192,13 +190,13 @@ impl RenderOnce for SettingsGroupHeader {
             .flex_row()
             .items_end()
             .justify_between()
-            .gap_3()
+            .gap(px(qol_theme::SPACE_CELL))
             .h(px(qol_theme::HEIGHT_CONTROL))
             .ml(px(-qol_theme::SPACE_PAD))
             .mr(px(-qol_theme::SPACE_PAD))
-            .pl(px(ROW_INSET))
+            .pl(px(qol_theme::SPACE_INSET))
             .pr(px(qol_theme::SPACE_PAD))
-            .pb_1p5()
+            .pb(px(qol_theme::SPACE_SNUG))
             .border_b(px(1.0))
             .border_color(rgba(shared.washes.hairline.packed()))
             .bg(rgba(shared.washes.fill_resting.packed()))
@@ -211,16 +209,7 @@ impl RenderOnce for SettingsGroupHeader {
                     .text_color(rgb(self.palette.label_text))
                     .child(self.title.to_string().to_uppercase()),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .px_2()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgba(shared.washes.fill_resting.packed()))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .text_color(rgb(shared.palette.text_muted))
-                    .child(format!("{} {}", self.count, self.noun)),
-            )
+            .child(kit().count_chip_small(self.count, self.noun))
     }
 }
 
@@ -246,7 +235,7 @@ impl RenderOnce for SettingsToggle {
                 .when(!self.active, |track| track.justify_start())
                 .w(px(TOGGLE_TRACK_WIDTH))
                 .h(px(TOGGLE_TRACK_HEIGHT))
-                .p(px(TOGGLE_KNOB_INSET))
+                .p(px(qol_theme::SPACE_STACK))
                 .rounded_full()
                 .bg(rgb(if self.active {
                     self.palette.state_on
@@ -255,8 +244,8 @@ impl RenderOnce for SettingsToggle {
                 }))
                 .child(
                     div()
-                        .w(px(TOGGLE_TRACK_HEIGHT - 2.0 * TOGGLE_KNOB_INSET))
-                        .h(px(TOGGLE_TRACK_HEIGHT - 2.0 * TOGGLE_KNOB_INSET))
+                        .w(px(TOGGLE_TRACK_HEIGHT - 2.0 * qol_theme::SPACE_STACK))
+                        .h(px(TOGGLE_TRACK_HEIGHT - 2.0 * qol_theme::SPACE_STACK))
                         .rounded_full()
                         .bg(rgb(if self.active {
                             self.palette.window_bg
@@ -296,9 +285,9 @@ impl RenderOnce for SettingsSelectValue {
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
+            .gap(px(qol_theme::SPACE_INSET))
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.dropdown_bg))
             .text_size(px(qol_theme::TEXT_BODY))
@@ -350,7 +339,7 @@ impl RenderOnce for SettingsTextField {
             .min_w(px(FIELD_MIN_WIDTH))
             .max_w(px(FIELD_MAX_WIDTH))
             .h(px(qol_theme::HEIGHT_CONTROL))
-            .px_3()
+            .px(px(qol_theme::SPACE_CELL))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .border(px(1.0))
             .border_color(rgb(if self.focused {
@@ -404,7 +393,7 @@ impl RenderOnce for SettingsKeyCombination {
             .flex()
             .items_center()
             .h(px(qol_theme::HEIGHT_INLINE))
-            .px_2()
+            .px(px(qol_theme::SPACE_INSET))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .border(px(1.0))
             .border_color(rgb(if self.focused || self.recording {
@@ -475,7 +464,7 @@ impl RenderOnce for SettingsFeedback {
                     .flex()
                     .items_center()
                     .px(px(qol_theme::SPACE_GUTTER))
-                    .py_2()
+                    .py(px(qol_theme::SPACE_INSET))
                     .text_size(px(qol_theme::TEXT_MICRO))
                     .text_color(rgb(self.tone))
                     .child(self.message),
@@ -510,7 +499,7 @@ pub fn settings_value_group() -> gpui::Div {
         .flex_row()
         .items_center()
         .justify_end()
-        .gap_2()
+        .gap(px(qol_theme::SPACE_INSET))
 }
 
 pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
@@ -525,5 +514,53 @@ pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
 }
 
 pub fn rail_caption(label: impl Into<SharedString>) -> gpui::Div {
-    kit().section(label).h(px(qol_theme::HEIGHT_CONTROL)).px_3()
+    kit()
+        .section(label)
+        .h(px(qol_theme::HEIGHT_CONTROL))
+        .px(px(qol_theme::SPACE_CELL))
+}
+
+pub fn settings_page() -> gpui::Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .px(px(qol_theme::SPACE_PAD))
+        .pb(px(qol_theme::SPACE_PAD))
+        .gap(px(qol_theme::SPACE_TIGHT))
+}
+
+pub fn settings_label_group(
+    label: impl Into<SharedString>,
+    description: Option<SharedString>,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(qol_theme::SPACE_STACK))
+        .child(settings_label(label, palette))
+        .children(description.map(|text| settings_description(text, palette)))
+}
+
+pub fn settings_message(
+    text: impl Into<SharedString>,
+    danger: bool,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(qol_theme::TEXT_BODY))
+        .text_color(rgb(if danger {
+            palette.status_danger
+        } else {
+            palette.status_muted
+        }))
+        .child(text.into())
 }

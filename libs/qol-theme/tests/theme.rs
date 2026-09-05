@@ -5,7 +5,7 @@ use qol_theme::{
     SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
     DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
     HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
-    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SPACE_GUTTER, TEXT_SCALE,
+    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SPACE_GUTTER, SPACE_LADDER, TEXT_SCALE,
     THEME_COLOR_SENTINEL,
 };
 use std::{
@@ -1713,7 +1713,7 @@ preset has to carry it. A preset below the floor has no visible focus indicator.
     );
 }
 
-const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 18] = [
+const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 17] = [
     ("libs/qol-gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
     ("libs/qol-gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
     ("libs/qol-gpui/src/kit.rs", "ROW_HEIGHT", HEIGHT_SETTING_ROW),
@@ -1738,11 +1738,6 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 18] = [
     (
         "libs/qol-gpui/src/settings_panel/mod.rs",
         "PANEL_LIST_ITEM_HEIGHT",
-        HEIGHT_RULE_ROW,
-    ),
-    (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
-        "PANEL_OBJECT_ROW_HEIGHT",
         HEIGHT_RULE_ROW,
     ),
     (
@@ -1861,4 +1856,454 @@ fn rust_sources(dir: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     found
+}
+
+const SETTINGS_SCOPE: [&str; 7] = [
+    "libs/qol-gpui/src/settings_panel/",
+    "libs/qol-gpui/src/gamepad/",
+    "libs/qol-gpui/src/kit.rs",
+    "libs/qol-gpui/src/dropdown.rs",
+    "libs/qol-gpui/src/hint_bar.rs",
+    "libs/qol-gpui/src/deck.rs",
+    "apps/qol-tray/src/settings_surface/",
+];
+
+fn in_settings_scope(relative: &str) -> bool {
+    SETTINGS_SCOPE
+        .iter()
+        .any(|prefix| relative.starts_with(prefix))
+}
+
+const RECIPE_OWNERS: [&str; 5] = [
+    "libs/qol-gpui/src/kit.rs",
+    "libs/qol-gpui/src/settings_panel/components.rs",
+    "libs/qol-gpui/src/dropdown.rs",
+    "libs/qol-gpui/src/deck.rs",
+    "libs/qol-gpui/src/hint_bar.rs",
+];
+
+fn compact_line(line: &str) -> String {
+    line.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+const SPACE_METHODS: [&str; 15] = [
+    "gap", "p", "px", "py", "pt", "pb", "pl", "pr", "m", "mx", "my", "mt", "mb", "ml", "mr",
+];
+
+fn rem_spacing_helpers(compact: &str) -> usize {
+    rem_spacing_helper_calls(compact).len()
+}
+
+fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
+    let bytes = compact.as_bytes();
+    let mut found = Vec::new();
+    for at in 0..compact.len() {
+        if bytes[at] != b'.' {
+            continue;
+        }
+        for helper in SPACE_METHODS {
+            let name_end = at + 1 + helper.len();
+            if !compact[at + 1..].starts_with(helper) || bytes.get(name_end) != Some(&b'_') {
+                continue;
+            }
+            let mut cursor = name_end + 1;
+            while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) {
+                cursor += 1;
+            }
+            if cursor == name_end + 1 {
+                continue;
+            }
+            if bytes.get(cursor) == Some(&b'p')
+                && bytes
+                    .get(cursor + 1)
+                    .is_some_and(|byte| byte.is_ascii_digit())
+            {
+                cursor += 2;
+            }
+            if bytes.get(cursor) == Some(&b'(') && bytes.get(cursor + 1) == Some(&b')') {
+                found.push(compact[at..cursor + 2].to_string());
+                break;
+            }
+        }
+    }
+    found
+}
+
+const REM_SPACING_HELPER_DEBT: [(&str, usize); 4] = [
+    ("libs/qol-gpui/src/status_indicator.rs", 1),
+    ("libs/qol-gpui/src/toast.rs", 4),
+    ("plugins/alt-tab/src/app/render.rs", 4),
+    ("plugins/qol-shot/src/ui/editor/render.rs", 3),
+];
+
+#[test]
+fn gpui_surfaces_do_not_use_rem_spacing_helpers() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    let mut counts: Vec<(String, usize)> = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            let calls = rem_spacing_helper_calls(&compact);
+            if calls.is_empty() {
+                continue;
+            }
+            if in_settings_scope(&relative) {
+                for call in calls {
+                    problems.push(format!("{relative}:{} uses {call}", index + 1));
+                }
+            } else {
+                counts.push((relative.clone(), rem_spacing_helpers(&compact)));
+            }
+        }
+    }
+
+    for (file, expected) in REM_SPACING_HELPER_DEBT {
+        let actual = counts
+            .iter()
+            .filter(|(found, _)| found == file)
+            .map(|(_, count)| count)
+            .sum::<usize>();
+        if actual != expected {
+            problems.push(format!(
+                "{file} draws {actual} rem spacing helpers but REM_SPACING_HELPER_DEBT records {expected}; update the entry"
+            ));
+        }
+    }
+    for (file, count) in &counts {
+        if !REM_SPACING_HELPER_DEBT
+            .iter()
+            .any(|(debt_file, _)| *debt_file == *file)
+        {
+            problems.push(format!(
+                "{file} draws {count} rem spacing helpers; migrate them to px(qol_theme::SPACE_*) or record the count in REM_SPACING_HELPER_DEBT"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Settings spacing is px(qol_theme::SPACE_*), never a gpui rem helper like .gap_2(). \
+Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT until they migrate.\n{}",
+        problems.join("\n")
+    );
+}
+
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 15] = [
+    ("libs/qol-gpui/src/toast.rs", 10.0),
+    ("libs/qol-gpui/src/toast.rs", 3.0),
+    ("plugins/alt-tab/src/app/render.rs", 26.0),
+    ("plugins/alt-tab/src/app/render.rs", 18.0),
+    ("plugins/cli-sessions/src/ui/render.rs", 24.0),
+    ("plugins/cli-sessions/src/ui/render.rs", 13.0),
+    ("plugins/cli-sessions/src/ui/render.rs", 10.0),
+    ("plugins/launcher/src/ui/view.rs", 10.0),
+    ("plugins/launcher/src/ui/view.rs", 5.0),
+    ("plugins/launcher/src/ui/view.rs", 14.0),
+    ("plugins/removeapp/src/ui/mod.rs", 10.0),
+    ("plugins/removeapp/src/ui/mod.rs", 5.0),
+    ("plugins/removeapp/src/ui/mod.rs", 1.0),
+    ("plugins/removeapp/src/ui/mod.rs", 24.0),
+    ("plugins/removeapp/src/ui/mod.rs", 3.0),
+];
+
+#[test]
+fn gpui_spacing_literals_stay_on_the_space_ladder() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    let mut seen: Vec<(String, f32)> = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            for method in SPACE_METHODS {
+                for value in px_arguments(&compact, method) {
+                    if SPACE_LADDER.contains(&value.abs()) {
+                        continue;
+                    }
+                    if in_settings_scope(&relative) {
+                        problems.push(format!("{relative}:{} sets {method} to {value}", index + 1));
+                    } else {
+                        seen.push((relative.clone(), value));
+                    }
+                }
+            }
+        }
+    }
+
+    for (file, value) in &seen {
+        let recorded = OFF_LADDER_SPACING_LITERAL_DEBT
+            .iter()
+            .any(|(debt_file, debt_value)| *debt_file == *file && *debt_value == *value);
+        if !recorded {
+            problems.push(format!(
+                "{file} draws a {value} spacing literal off the space ladder; fix it or record it in OFF_LADDER_SPACING_LITERAL_DEBT"
+            ));
+        }
+    }
+    for (file, value) in OFF_LADDER_SPACING_LITERAL_DEBT {
+        let still_there = seen
+            .iter()
+            .any(|(found, found_value)| *found == file && *found_value == value);
+        if !still_there {
+            problems.push(format!(
+                "{file} no longer draws a {value} spacing literal, so drop it from OFF_LADDER_SPACING_LITERAL_DEBT"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Spacing literals must come from the qol-theme space ladder {SPACE_LADDER:?}. \
+Files outside settings scope keep their exact off-ladder values in OFF_LADDER_SPACING_LITERAL_DEBT until they migrate.\n{}",
+        problems.join("\n")
+    );
+}
+
+fn declared_local_numeric_f32(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    let trimmed = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+    let rest = trimmed.strip_prefix("const ")?;
+    let (name, rest) = rest.split_once(':')?;
+    let rest = rest.strip_prefix("f32")?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let (value, _) = rest.split_once(';')?;
+    value.parse::<f32>().ok()?;
+    Some((name.trim(), value.trim()))
+}
+
+fn is_spacing_constant_name(name: &str) -> bool {
+    ["PAD", "GAP", "INSET", "GUTTER", "MARGIN"]
+        .iter()
+        .any(|token| name.contains(token))
+}
+
+fn is_geometry_name(name: &str) -> bool {
+    ["WIDTH", "HEIGHT", "SIZE"]
+        .iter()
+        .any(|token| name.contains(token))
+}
+
+#[test]
+fn settings_surfaces_declare_no_local_spacing_constants() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        if !in_settings_scope(&relative) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let Some((name, value)) = declared_local_numeric_f32(line) else {
+                continue;
+            };
+            if !is_spacing_constant_name(name) || is_geometry_name(name) {
+                continue;
+            }
+            problems.push(format!(
+                "{relative}:{} declares local spacing constant {name} = {value}; reference qol_theme::SPACE_* directly",
+                index + 1
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Settings spacing is referenced as qol_theme::SPACE_*; a local numeric constant whose \
+name carries PAD, GAP, INSET, GUTTER or MARGIN is a private recipe. WIDTH, HEIGHT and SIZE \
+names are geometry, not spacing, so they stay.\n{}",
+        problems.join("\n")
+    );
+}
+
+const LEAF_METHODS: [&str; 9] = [
+    ".text_size(",
+    ".text_color(",
+    ".font_weight(",
+    ".font_family(",
+    ".bg(",
+    ".border(",
+    ".border_color(",
+    ".rounded(",
+    ".shadow(",
+];
+
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
+    ("libs/qol-gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        ".border_color(",
+        8,
+    ),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        ".font_weight(",
+        3,
+    ),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        ".shadow(",
+        2,
+    ),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        ".text_color(",
+        3,
+    ),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        ".text_size(",
+        3,
+    ),
+    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
+    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
+    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".shadow(", 1),
+    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/top.rs",
+        ".border_color(",
+        1,
+    ),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/top.rs",
+        ".font_weight(",
+        1,
+    ),
+    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
+    (
+        "libs/qol-gpui/src/gamepad/diagram/top.rs",
+        ".text_color(",
+        1,
+    ),
+    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".bg(", 11),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".border_color(", 8),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".font_weight(", 7),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".shadow(", 1),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".text_color(", 17),
+    ("libs/qol-gpui/src/gamepad/view.rs", ".text_size(", 17),
+    ("libs/qol-gpui/src/settings_panel/view.rs", ".bg(", 20),
+    ("libs/qol-gpui/src/settings_panel/view.rs", ".border(", 1),
+    (
+        "libs/qol-gpui/src/settings_panel/view.rs",
+        ".border_color(",
+        5,
+    ),
+    (
+        "libs/qol-gpui/src/settings_panel/view.rs",
+        ".font_weight(",
+        6,
+    ),
+    ("libs/qol-gpui/src/settings_panel/view.rs", ".rounded(", 11),
+    ("libs/qol-gpui/src/settings_panel/view.rs", ".shadow(", 5),
+    (
+        "libs/qol-gpui/src/settings_panel/view.rs",
+        ".text_color(",
+        33,
+    ),
+    (
+        "libs/qol-gpui/src/settings_panel/view.rs",
+        ".text_size(",
+        28,
+    ),
+];
+
+#[test]
+fn settings_surfaces_compose_shared_components() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    let mut actuals: Vec<((String, &str), usize)> = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        if !in_settings_scope(&relative) || RECIPE_OWNERS.contains(&relative.as_str()) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for method in LEAF_METHODS {
+            let count = contents
+                .lines()
+                .map(|line| compact_line(line).matches(method).count())
+                .sum::<usize>();
+            if count > 0 {
+                actuals.push(((relative.clone(), method), count));
+            }
+        }
+    }
+
+    for ((file, method), actual) in &actuals {
+        match LEAF_STYLING_DEBT
+            .iter()
+            .find(|(debt_file, debt_method, _)| *debt_file == *file && *debt_method == *method)
+        {
+            Some((_, _, recorded)) if *recorded != *actual => problems.push(format!(
+                "{file} uses {method} {actual} times but LEAF_STYLING_DEBT records {recorded}; update the entry"
+            )),
+            None => problems.push(format!(
+                "{file} uses {method} {actual} times; compose a shared recipe instead or record the count in LEAF_STYLING_DEBT"
+            )),
+            _ => {}
+        }
+    }
+    for (file, method, recorded) in LEAF_STYLING_DEBT {
+        let actual = actuals
+            .iter()
+            .find(|((found, found_method), _)| *found == file && *found_method == method)
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        if actual == 0 {
+            problems.push(format!(
+                "{file} no longer uses {method}, so drop its LEAF_STYLING_DEBT entry (recorded {recorded})"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Settings surfaces compose recipes from kit.rs and settings_panel/components.rs; \
+leaf styling stays with the recipe owners. apps/qol-tray/src/settings_surface/ must be at zero, \
+every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}",
+        problems.join("\n")
+    );
+}
+
+const PALETTE_PREFIXES: [&str; 3] = ["kit.palette.", "kit().palette", "shared.palette."];
+
+#[test]
+fn settings_surfaces_take_colour_from_the_settings_palette() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+
+    for (relative, path) in surface_sources(&workspace) {
+        if !in_settings_scope(&relative)
+            || relative == "libs/qol-gpui/src/kit.rs"
+            || relative == "libs/qol-gpui/src/settings_panel/components.rs"
+        {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            for prefix in PALETTE_PREFIXES {
+                if compact.contains(prefix) {
+                    problems.push(format!(
+                        "{relative}:{} reads {prefix}; take the colour from a SettingsPanelPalette field, a kit wash or a kit recipe",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Colour in settings scope comes from SettingsPanelPalette fields, kit.washes or a kit \
+recipe; only kit.rs and settings_panel/components.rs may read kit.palette.\n{}",
+        problems.join("\n")
+    );
 }
