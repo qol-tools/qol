@@ -17,6 +17,8 @@ pub use qol_conventions::STATE_SOCKET_PATH;
 thread_local! {
     static TEST_PATH_ROOTS: std::cell::RefCell<Vec<PathBuf>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static TEST_RUNTIME_ROOT: tempfile::TempDir =
+        tempfile::tempdir().expect("create isolated test runtime root");
 }
 
 #[cfg(test)]
@@ -261,6 +263,10 @@ pub fn runtime_dir() -> PathBuf {
             .join("runtime");
     }
 
+    #[cfg(test)]
+    return TEST_RUNTIME_ROOT.with(|root| root.path().join(qol_config::NAMESPACE).join("runtime"));
+
+    #[cfg(not(test))]
     qol_config::runtime_dir().unwrap_or_else(|| PathBuf::from(qol_conventions::RUNTIME_DIR_PATH))
 }
 
@@ -382,6 +388,21 @@ mod tests {
     fn runtime_dir_is_user_scoped() {
         let dir = runtime_dir();
         assert!(dir.ends_with("qol-tray/runtime"));
+    }
+
+    #[test]
+    fn default_test_runtime_never_targets_the_resident_host() {
+        let runtime = runtime_dir();
+        assert_ne!(Some(runtime.clone()), qol_config::runtime_dir());
+        assert_eq!(runtime, runtime_dir());
+        let other = std::thread::spawn(runtime_dir).join().unwrap();
+        assert_ne!(runtime, other);
+        let root = tempfile::tempdir().unwrap();
+        {
+            let _guard = push_test_path_root(root.path());
+            assert_eq!(runtime_dir(), root.path().join("data/qol-tray/runtime"));
+        }
+        assert_eq!(runtime_dir(), runtime);
     }
 
     #[test]

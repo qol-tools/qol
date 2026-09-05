@@ -216,6 +216,11 @@ pub(in crate::settings_surface) fn apply_theme(native: &str, accent: &str) -> bo
 
 pub(in crate::settings_surface) fn stop() -> bool {
     let config = config();
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin=none phase=stop-request test_process={}",
+        cfg!(test)
+    );
     let stopped = core_daemon::send_kill(&config);
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
     while stopped && core_daemon::send_ping(&config) && std::time::Instant::now() < deadline {
@@ -400,7 +405,13 @@ fn spawn_command_loop(
                     let _ = cx.update(|cx| cx.refresh_windows());
                     LoopFlow::Continue
                 }
-                Command::Kill => LoopFlow::Stop,
+                Command::Kill => {
+                    qol_runtime::probe!(
+                        "SURFACE_ACTIVATION",
+                        "plugin=none phase=host outcome=stop_requested"
+                    );
+                    LoopFlow::Stop
+                }
             }
         }
     });
@@ -944,6 +955,35 @@ mod tests {
     use qol_runtime::protocol::DaemonRequest;
 
     use super::{config, parse_request, spawn_replacement_after_handover, Command};
+
+    #[test]
+    fn manager_shutdown_contacts_only_the_isolated_settings_host() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::net::UnixListener;
+
+        let super::SocketSource::Path(path) = config().socket else {
+            panic!("settings host must have an explicit socket");
+        };
+        assert!(!path.starts_with(qol_config::runtime_dir().unwrap()));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let listener = UnixListener::bind(path).unwrap();
+        let responder = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            drop(listener);
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&stream)
+                .read_line(&mut line)
+                .unwrap();
+            let request: DaemonRequest = serde_json::from_str(&line).unwrap();
+            assert_eq!(request.action, "kill");
+            stream.write_all(b"{\"status\":\"handled\"}\n").unwrap();
+        });
+        crate::plugins::PluginManager::new().shutdown();
+        responder.join().unwrap();
+    }
 
     #[test]
     fn core_panel_carries_every_wired_field_in_a_valid_contract() {
