@@ -208,8 +208,9 @@ jobs:
                 sudo rmdir "$cgroup" || removed=1
               done < <(sudo find "$cgroup_root" -depth -type d -print)
               sudo test ! -d "$cgroup_root" || removed=1
-              rm -f "$journal_root/registry.guard" || journal_removed=1
-              rmdir "$journal_root" || journal_removed=1
+              if ((killed == 0 && removed == 0)); then
+                python3 .github/scripts/cleanup_cgroup_journal.py "$journal_root" "$cgroup_root" || journal_removed=1
+              fi
             fi
             if ((status == 0 && (restored != 0 || killed != 0 || removed != 0 || journal_removed != 0))); then
               status=1
