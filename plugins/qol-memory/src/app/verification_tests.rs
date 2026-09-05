@@ -13,7 +13,7 @@ use crate::store::Store;
 use crate::verification::service::Verifier;
 use crate::verification::{Fact, Prediction};
 
-const QUERY: &str = "how to boot KCD2 debug";
+const QUERY: &str = "how do I fire up KCD2 debug";
 const CALLER: &str = "/fixture/verification-private-a";
 
 struct Fixture {

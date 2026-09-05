@@ -151,6 +151,14 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     );
     let (units, notes) = warm.layers()?;
     let flow_rows = crate::ask::rows::from_output(&output, units, notes);
+    qol_runtime::probe!(
+        "QOL_MEMORY_DAEMON",
+        "event=rows_result verdict={} matching={} conflicts={} verification={:?}",
+        output.verdict,
+        output.signals.matching_captures,
+        output.signals.conflicting_captures,
+        output.verification
+    );
     Ok(json!({
         "verdict": output.verdict,
         "confidence": output.confidence,

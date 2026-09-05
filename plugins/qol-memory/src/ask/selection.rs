@@ -22,7 +22,7 @@ pub(super) fn select<'a>(
     excluded_session: Option<&str>,
     disliked: Option<&HashSet<String>>,
 ) -> Selection<'a> {
-    let Some(query) = Question::parse(query) else {
+    let Some(query) = Question::parse(query).or_else(|| Question::shorthand(query)) else {
         return Selection::default();
     };
     let candidates = units

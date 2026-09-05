@@ -5,6 +5,7 @@ use regex::Regex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Intent {
+    Topic,
     Fact,
     Definition,
     Method,
@@ -23,7 +24,7 @@ pub(super) struct Question {
 
 impl Question {
     pub(super) fn parse(text: &str) -> Option<Self> {
-        let normalized = crate::retrieval_log::normalize_query(text);
+        let normalized = normalize_question(text);
         let mut words: Vec<&str> = normalized.split_whitespace().collect();
         let mut intent = words
             .iter()
@@ -59,6 +60,15 @@ impl Question {
         {
             intent = Intent::Definition;
         }
+        Self::from_words(intent, words)
+    }
+
+    pub(super) fn shorthand(text: &str) -> Option<Self> {
+        let normalized = normalize_question(text);
+        Self::from_words(Intent::Topic, normalized.split_whitespace().collect())
+    }
+
+    fn from_words(intent: Intent, words: Vec<&str>) -> Option<Self> {
         let terms = words
             .into_iter()
             .filter(|word| !super::stopword_set().contains(*word))
@@ -68,17 +78,33 @@ impl Question {
                     || !matches!(*word, "find" | "stored" | "located" | "location")
             })
             .map(|word| match (intent, word) {
-                (Intent::Method, "open" | "start" | "run" | "launch") => "launch".to_owned(),
+                (Intent::Method | Intent::Topic, "open" | "start" | "run" | "launch" | "boot") => {
+                    "launch".to_owned()
+                }
                 _ => crate::text::normalize(word),
             })
             .collect::<Vec<_>>();
+        if intent == Intent::Topic
+            && terms
+                .iter()
+                .filter(|term| term.as_str() != "launch")
+                .collect::<HashSet<_>>()
+                .len()
+                < 2
+        {
+            return None;
+        }
         (terms.len() >= 2).then_some(Self { intent, terms })
     }
 
     pub(super) fn covers(&self, query: &Self) -> bool {
-        if self.intent != query.intent
-            || (self.intent == Intent::Definition && self.terms.len() != query.terms.len())
+        let topic = query.intent == Intent::Topic;
+        if (!topic && self.intent != query.intent)
+            || (!topic
+                && self.intent == Intent::Definition
+                && self.terms.len() != query.terms.len())
             || (self.intent == Intent::Method
+                && !topic
                 && query.terms.len() < 3
                 && self.terms.len() != query.terms.len())
         {
@@ -96,6 +122,13 @@ impl Question {
         {
             return false;
         }
+        if topic && self.intent != Intent::Method {
+            return query.terms.iter().all(|term| {
+                self.terms
+                    .iter()
+                    .any(|candidate| candidate == term || typo_matches(term, candidate))
+            });
+        }
         let mut stored = self.terms.iter();
         query
             .terms
@@ -106,6 +139,14 @@ impl Question {
     pub(super) fn same_subject(&self, other: &Self) -> bool {
         self.covers(other) || other.covers(self)
     }
+}
+
+fn normalize_question(text: &str) -> String {
+    text.to_lowercase()
+        .split(|character: char| !character.is_alphanumeric() && !matches!(character, '+' | '#'))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn typo_matches(query: &str, stored: &str) -> bool {
@@ -205,7 +246,27 @@ pub(super) fn agree(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
-    fn commands(text: &str) -> HashSet<&str> {
+    fn commands(text: &str) -> HashSet<String> {
+        static ALTERNATIVE: OnceLock<Regex> = OnceLock::new();
+        let text = text.trim();
+        let text = text
+            .get(..4)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("run "))
+            .map_or(text, |_| &text[4..]);
+        if let Some(parts) = ALTERNATIVE
+            .get_or_init(|| {
+                Regex::new(r"^(\./[^\s()]+) ([A-Za-z0-9_-]+) \(or ([A-Za-z0-9_-]+)\)$")
+                    .expect("command alternative regex")
+            })
+            .captures(text.trim_matches('`'))
+        {
+            return [
+                format!("{} {}", &parts[1], &parts[2]),
+                format!("{} {}", &parts[1], &parts[3]),
+            ]
+            .into_iter()
+            .collect();
+        }
         text.split(" or ")
             .map(|part| {
                 let part = part.trim();
@@ -220,6 +281,7 @@ pub(super) fn agree(left: &str, right: &str) -> bool {
                 command.trim_matches('`')
             })
             .filter(|part| part.starts_with("./"))
+            .map(str::to_owned)
             .collect::<HashSet<_>>()
     }
     let a = commands(left);

@@ -101,7 +101,7 @@ The workflow now reports that rejection as failed.
 
 The reserved misses were `Cobalt debug startup command`,
 `fire up Cobalt with debugging enabled`, and `how do I shut down Cobalt`.
-Development still misses the user's exact `how to boot kcd2 debug` wording.
+At that checkpoint, development missed `how to boot kcd2 debug`.
 A subsequent development-only prompt probe recovered `boot` but regressed
 `does Fern lose offline edits after restarting` to the stored positive answer
 about retaining edits. That prompt was rejected and is not the shipped policy.
@@ -136,3 +136,35 @@ binding reuse without inference, missing-store capture, edits, deletion,
 conflicting evidence, negative feedback, caller visibility, session exclusion,
 and changing evidence while inference is running. Launcher tests reject old
 query generations and prior flow epochs.
+
+## Default shorthand retrieval
+
+The deterministic selector now accepts shorthand containing at least two
+distinct content terms, such as `kcd2 debug` and `qol monorepo language`.
+Every query term must match a recorded question, and all matching answers must
+agree. Negation, project identifiers, symbolic names and command direction
+remain significant. A single topic or conflicting modes still yields choices.
+The existing launch vocabulary also includes `boot`. This path needs neither
+the experimental setting nor a model and returns the existing launcher answer
+card immediately.
+
+Recorded alternatives such as `./tool dev (or -d)` agree with their explicitly
+written commands. Other annotations, different arguments and differently cased
+paths remain distinct. This resolves the false conflict between three captures
+in the user's actual store without changing those memories.
+
+The shorthand report at
+`reports/qol-memory/shorthand/2026-09-05T17-12-14.979Z/report.json` compares frozen
+before and after workers on 38 questions with five warm repetitions each.
+Correct answers increased from 2/18 to 18/18; all 20 negative cases remained
+unanswered. Warm rows p95 changed from 0.162 ms to 0.208 ms on the nine-fact
+fixture. These timings exclude launcher debounce, IPC and full-store loading.
+An isolated copy of the user's store returned the same capture for `kcd2 debug`,
+`how to run kcd2 debug` and `how to boot kcd2 debug`, also answered the language
+shorthand, and withheld the launch answer for `stop kcd2 debug`.
+
+The existing `QOL_MEMORY_DAEMON` probe now records rows verdict, match count,
+conflict count and verification state without query or memory text. Integration
+tests exercise both CLI selection and daemon rows with model verification off,
+including noisy stores, conflicting questions, command aliases, direction,
+negation, C++/C# identity and Unicode names.

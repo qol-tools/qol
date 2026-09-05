@@ -38,6 +38,7 @@ impl Fixture {
             capture("config", "Q: Where is the quartz configuration stored? A: /fixture/quartz/settings.toml"),
             capture("launch-a", "Run ./quartz-forge dev or ./quartz-forge -d. How to run Quartz in debug mode: dev and -d launch the instrumented build."),
             capture("launch-b", "./quartz-forge -d. How to start Quartz in debug mode: the same as dev, with debug logging enabled."),
+            capture("launch-c", "./quartz-forge dev (or -d). What command is Quartz debug mode: dev and -d launch the instrumented build."),
             capture("version", "v3.2. What version of the topaz protocol is current: the current wire format."),
             capture("restart", "Yes. Does the quartz clipboard survive restarts: history is persisted."),
         ];
@@ -99,7 +100,17 @@ fn cases() -> Vec<(&'static str, &'static str)> {
         ("where is quartz configuration stored", "config"),
         ("where can I find the quartz configuration?", "config"),
         ("how to open quartz debug", "launch-a"),
+        ("how to boot quartz debug", "launch-a"),
         ("how do I launch quartz in debug mode?", "launch-a"),
+        ("quartz debug", "launch-a"),
+        ("QUARTZ DEBUG?", "launch-a"),
+        ("run quartz debug", "launch-a"),
+        ("quartz in debug mode", "launch-a"),
+        ("quartz monorepo language", "language-a"),
+        ("quartz monorepo langauge", "language-a"),
+        ("quartz configuration", "config"),
+        ("configuration quartz", "config"),
+        ("topaz protocol version", "version"),
         ("what version is the topaz protocol", "version"),
         ("does quartz clipboard survive restarts?", "restart"),
     ]
@@ -158,6 +169,10 @@ fn meaning_changes_do_not_reuse_a_nearby_answer() {
             "launch-negative",
             "./topaz-forge release. How to run Topaz without debug mode: launches the release build.",
         ),
+        capture(
+            "cpp-docs",
+            "Q: Where is C++ documentation stored? A: /fixture/cpp/docs",
+        ),
     ]);
     for query in [
         "what language is the topaz monorepo",
@@ -173,9 +188,91 @@ fn meaning_changes_do_not_reuse_a_nearby_answer() {
         "how to copy beta to alpha",
         "how to open quartz",
         "how to open topaz debug",
+        "quartz debug remotely",
+        "quartz without debug",
+        "stop quartz debug",
+        "restart quartz debug",
+        "topaz2 protocol version",
+        "quartz monorepo license",
+        "quartz configuration on macos",
+        "copy beta to alpha",
+        "quartz clipboard not survive restarts",
+        "C# documentation",
+        "C documentation",
+        "run quartz",
+        "quartz quartz",
     ] {
         let result = fixture.ask(query, 5);
         assert!(result["answer"].is_null(), "{query}: {result}");
+    }
+}
+
+#[test]
+fn shorthand_preserves_symbols_and_unicode_in_project_names() {
+    let fixture = Fixture::new(&[
+        capture(
+            "cpp",
+            "Q: Where is C++ documentation stored? A: /fixture/cpp/docs",
+        ),
+        capture(
+            "csharp",
+            "Q: Where is C# documentation stored? A: /fixture/csharp/docs",
+        ),
+        capture(
+            "foehn",
+            "Q: Where is Føhn configuration stored? A: /fixture/foehn/settings",
+        ),
+    ]);
+    for (query, key) in [
+        ("C++ documentation", "cpp"),
+        ("C# documentation", "csharp"),
+        ("Føhn configuration", "foehn"),
+    ] {
+        assert_eq!(fixture.ask(query, 1)["answer"]["key"], key, "{query}");
+    }
+    assert!(fixture.ask("C documentation", 1)["answer"].is_null());
+}
+
+#[test]
+fn shorthand_keeps_conflicting_modes_and_questions_as_choices() {
+    for extra in [
+        capture(
+            "normal",
+            "Q: How to run Quartz in normal mode? A: Run ./quartz-forge play.",
+        ),
+        capture(
+            "debug-reason",
+            "Q: Why does Quartz debug fail? A: The graphics driver is incompatible.",
+        ),
+    ] {
+        let query = if extra["key"] == "normal" {
+            "quartz mode"
+        } else {
+            "quartz debug"
+        };
+        let fixture = Fixture::new(&[extra]);
+        let result = fixture.ask(query, 1);
+        assert!(result["answer"].is_null(), "{query}: {result}");
+        assert_eq!(result["verdict"], "candidates", "{query}: {result}");
+        assert!(result["signals"]["conflicting_captures"].as_u64().unwrap() >= 2);
+    }
+}
+
+#[test]
+fn command_annotations_do_not_hide_different_arguments() {
+    for answer in [
+        "./quartz-forge dev (without -d)",
+        "./quartz-forge release (or -r)",
+        "./quartz-forge dev --remote",
+        "./Quartz-forge dev (or -d)",
+    ] {
+        let fixture = Fixture::new(&[capture(
+            "different-command",
+            &format!("Q: What command is Quartz debug mode? A: {answer}"),
+        )]);
+        let result = fixture.ask("quartz debug", 1);
+        assert_eq!(result["verdict"], "candidates", "{answer}: {result}");
+        assert!(result["answer"].is_null());
     }
 }
 
