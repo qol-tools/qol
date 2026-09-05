@@ -19,3 +19,8 @@ use windows as active;
 pub(super) fn os_bucket() -> &'static str {
     active::os_bucket()
 }
+
+#[cfg(test)]
+pub(super) fn test_runtime_root() -> std::io::Result<tempfile::TempDir> {
+    active::test_runtime_root()
+}

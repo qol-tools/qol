@@ -106,14 +106,15 @@ mod tests {
             .parse()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline
-            && !(qol_process::is_pid_gone(root_pid) && qol_process::is_pid_gone(child_pid))
-        {
+        loop {
+            if qol_process::is_pid_gone(root_pid) && qol_process::is_pid_gone(child_pid) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "neither the privileged root nor its descendant may survive the timeout kill"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(
-            qol_process::is_pid_gone(root_pid) && qol_process::is_pid_gone(child_pid),
-            "neither the privileged root nor its descendant may survive the timeout kill"
-        );
     }
 }

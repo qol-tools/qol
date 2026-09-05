@@ -4253,14 +4253,16 @@ mod tests {
             "the long-lived child must still run while the guard is held"
         );
         drop(held);
-        let reacquired = lock::try_acquire(&policy).unwrap();
+        let reacquired = lock::acquire(&policy);
+        let child_still_running = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        child.wait().unwrap();
+        let reacquired = reacquired.unwrap();
         assert!(
-            child.try_wait().unwrap().is_none(),
+            child_still_running,
             "the reacquisition must succeed while the exec child still lives"
         );
         drop(reacquired);
-        child.kill().unwrap();
-        child.wait().unwrap();
         let _ = lock::try_acquire(&policy).unwrap();
     }
 

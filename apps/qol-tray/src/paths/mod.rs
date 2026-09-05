@@ -18,7 +18,7 @@ thread_local! {
     static TEST_PATH_ROOTS: std::cell::RefCell<Vec<PathBuf>> =
         const { std::cell::RefCell::new(Vec::new()) };
     static TEST_RUNTIME_ROOT: tempfile::TempDir =
-        tempfile::tempdir().expect("create isolated test runtime root");
+        platform::test_runtime_root().expect("create isolated test runtime root");
 }
 
 #[cfg(test)]

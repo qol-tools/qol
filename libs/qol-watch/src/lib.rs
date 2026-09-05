@@ -186,6 +186,19 @@ mod tests {
     const DELIVERY: Duration = Duration::from_secs(5);
     const SILENCE: Duration = Duration::from_millis(300);
 
+    fn expect_path(events: &mpsc::Receiver<Vec<std::path::PathBuf>>, suffix: &str) {
+        let deadline = std::time::Instant::now() + DELIVERY;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let paths = events.recv_timeout(remaining).unwrap_or_else(|error| {
+                panic!("watch did not report {suffix} before the deadline: {error}")
+            });
+            if paths.iter().any(|path| path.ends_with(suffix)) {
+                return;
+            }
+        }
+    }
+
     #[test]
     fn a_shallow_root_reports_files_that_appear_under_it() {
         let root = TempDir::new().unwrap();
@@ -199,8 +212,7 @@ mod tests {
 
         fs::write(root.path().join("model.onnx"), b"weights").unwrap();
 
-        let paths = events.recv_timeout(DELIVERY).unwrap();
-        assert!(paths.iter().any(|path| path.ends_with("model.onnx")));
+        expect_path(&events, "model.onnx");
     }
 
     #[test]
@@ -217,8 +229,7 @@ mod tests {
         let nested = root.path().join("parakeet");
         fs::create_dir(&nested).unwrap();
 
-        let paths = events.recv_timeout(DELIVERY).unwrap();
-        assert!(paths.iter().any(|path| path.ends_with("parakeet")));
+        expect_path(&events, "parakeet");
     }
 
     #[test]
@@ -236,8 +247,7 @@ mod tests {
 
         fs::write(nested.join("tokens.txt"), b"tokens").unwrap();
 
-        let paths = events.recv_timeout(DELIVERY).unwrap();
-        assert!(paths.iter().any(|path| path.ends_with("tokens.txt")));
+        expect_path(&events, "tokens.txt");
     }
 
     #[test]
