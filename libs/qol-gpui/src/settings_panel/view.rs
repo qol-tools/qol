@@ -4801,9 +4801,17 @@ impl SettingsPanelView {
     fn resize_canvas(&mut self) -> impl IntoElement {
         let dismisser = self.dismisser.clone();
         let target = self.window_height();
+        #[cfg(debug_assertions)]
+        let built = std::time::Instant::now();
         canvas(
             |_, _, _| (),
             move |_bounds, _, window, cx| {
+                #[cfg(debug_assertions)]
+                qol_runtime::probe!(
+                    "SETTINGS_FRAME",
+                    "phase=painted elapsed_us={}",
+                    built.elapsed().as_micros()
+                );
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
                     return;
