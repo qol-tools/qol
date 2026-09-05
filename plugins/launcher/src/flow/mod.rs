@@ -76,15 +76,24 @@ pub fn parse_verdict(payload: &serde_json::Value) -> FlowVerdict {
     if payload["verdict"] != "answered" && payload["verification"]["status"] == "pending" {
         return FlowVerdict::Checking;
     }
+    if let Some(outcome) = payload.get("outcome").and_then(|value| value.as_str()) {
+        match outcome {
+            "supported" => return FlowVerdict::Answered,
+            "ambiguous" | "conflicting" => return FlowVerdict::Vague,
+            "unsupported" => {
+                return if rows_count(payload) > 0 {
+                    FlowVerdict::Vague
+                } else {
+                    FlowVerdict::NoMemory
+                };
+            }
+            _ => {}
+        }
+    }
     match payload.get("verdict").and_then(|value| value.as_str()) {
         Some("candidates") => FlowVerdict::Vague,
         Some("no-memory") => {
-            let rows = payload
-                .get("rows")
-                .and_then(|rows| rows.as_array())
-                .map(|rows| rows.len())
-                .unwrap_or(0);
-            if rows > 0 {
+            if rows_count(payload) > 0 {
                 FlowVerdict::Vague
             } else {
                 FlowVerdict::NoMemory
@@ -92,6 +101,14 @@ pub fn parse_verdict(payload: &serde_json::Value) -> FlowVerdict {
         }
         _ => FlowVerdict::Answered,
     }
+}
+
+fn rows_count(payload: &serde_json::Value) -> usize {
+    payload
+        .get("rows")
+        .and_then(|rows| rows.as_array())
+        .map(|rows| rows.len())
+        .unwrap_or(0)
 }
 
 pub struct TrailNode {
@@ -389,6 +406,62 @@ mod tests {
         );
         assert_eq!(
             parse_verdict(&serde_json::json!({ "verdict": 7 })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "supported",
+                "verdict": "candidates",
+                "rows": []
+            })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "ambiguous",
+                "verdict": "answered",
+                "rows": []
+            })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "conflicting",
+                "verdict": "answered",
+                "rows": [{ "title": "nearby" }]
+            })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "unsupported",
+                "verdict": "no-memory",
+                "rows": []
+            })),
+            FlowVerdict::NoMemory
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "unsupported",
+                "verdict": "no-memory",
+                "rows": [{ "title": "nearby" }]
+            })),
+            FlowVerdict::Vague
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({
+                "outcome": "qualified",
+                "verdict": "answered",
+                "rows": []
+            })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "outcome": 7, "verdict": "answered" })),
+            FlowVerdict::Answered
+        );
+        assert_eq!(
+            parse_verdict(&serde_json::json!({ "verdict": "answered" })),
             FlowVerdict::Answered
         );
     }

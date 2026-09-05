@@ -51,6 +51,11 @@ switch (process.argv[2]) {
     await verify(process.argv.slice(3));
     break;
   }
+  case "contract": {
+    const { contract } = await import("./comparison/contract.mjs");
+    await contract(process.argv.slice(3));
+    break;
+  }
   default:
-    throw new Error("Usage: node plugins/qol-memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH] | verify [--prepare] [--endpoint URL] [--repeats N]]");
+    throw new Error("Usage: node plugins/qol-memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH] | verify [--prepare] [--endpoint URL] [--repeats N] | contract [--verify [--endpoint URL]]");
 }

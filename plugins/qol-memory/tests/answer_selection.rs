@@ -440,3 +440,34 @@ fn daemon_call(state: &mut Arc<Mutex<WarmState>>, action: &str, input: Value) ->
     };
     result
 }
+
+#[test]
+fn conflicting_captures_report_conflicting_outcome_and_reason_code() {
+    let fixture = Fixture::new(&[capture(
+        "language-conflict",
+        "Python. What language is the quartz monorepo: Python is used throughout.",
+    )]);
+    let result = fixture.ask("what language is quartz monorepo", 5);
+    assert_eq!(result["verdict"], "candidates", "{result}");
+    assert_eq!(result["outcome"], "conflicting", "{result}");
+    assert_eq!(result["reason_code"], "conflicting_captures", "{result}");
+}
+
+#[test]
+fn supported_capture_answer_reports_supported_outcome_and_capture_reason_code() {
+    let fixture = Fixture::new(&[]);
+    let result = fixture.ask("where is quartz configuration stored", 5);
+    assert_eq!(result["verdict"], "answered", "{result}");
+    assert_eq!(result["answer"]["key"], "config", "{result}");
+    assert_eq!(result["outcome"], "supported", "{result}");
+    assert_eq!(result["reason_code"], "capture_answer", "{result}");
+}
+
+#[test]
+fn query_without_memory_reports_unsupported_outcome_and_threshold_reason_code() {
+    let fixture = Fixture::new(&[]);
+    let result = fixture.ask("zzzqqqwubblewobble", 5);
+    assert_eq!(result["verdict"], "no-memory", "{result}");
+    assert_eq!(result["outcome"], "unsupported", "{result}");
+    assert_eq!(result["reason_code"], "below_threshold", "{result}");
+}

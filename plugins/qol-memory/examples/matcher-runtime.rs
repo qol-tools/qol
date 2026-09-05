@@ -11,6 +11,8 @@ use serde_json::json;
 
 mod support;
 
+use support::FixtureMemory;
+
 struct Recorded {
     provider: Ollama,
     observations: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -32,7 +34,7 @@ impl Verifier for Recorded {
 
 #[derive(Deserialize)]
 struct Input {
-    facts: Vec<Fact>,
+    facts: Vec<FixtureMemory>,
     queries: Vec<Query>,
     repeats: usize,
 }

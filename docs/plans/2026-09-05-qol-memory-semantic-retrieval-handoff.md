@@ -245,6 +245,80 @@ does not prove the user sees the appropriate qualification.
 - Give the user a short delivery statement: what improved, exact evidence,
   default enablement, performance limits, and unresolved cases.
 
+## Progress against the next steps (2026-09-05, evening)
+
+Landed on main from the `memory-semantic` worktree as one commit. The verifier
+remains opt-in (`verify_answers` defaults to false) and needs a local Ollama
+with the pinned qwen3:8b digest; the default launcher flow only gains the
+outcome mapping described below.
+
+### What landed
+
+- Step 1, answer contract: `AskOutput` carries `outcome` (supported, qualified,
+  ambiguous, conflicting, unsupported) and `reason_code` (conflicting_captures,
+  below_threshold, notes_answer, capture_answer, transcript_answer,
+  no_decisive_answer, verified_answer). The ask and rows payloads expose both,
+  and the launcher's `parse_verdict` maps `outcome` before the legacy verdict.
+  Diagnostic workflow: `node plugins/qol-memory/scripts/evaluate.mjs contract [--verify]`
+  over 38 frozen cases in `tests/fixtures/answer-contract/cases.json` (the 24
+  baseline cases plus legacy, declarative, scope, lineage, freshness and
+  multi-record cases); the report scores the deterministic path and, with
+  `--verify`, the verified path, exit 1 unless a stage qualifies.
+- Step 2, complete evidence: legacy captures keep the answer prefix and the
+  explanation as `recorded_answer` (the canonical answer stays the answer
+  part), declarative units without an extractable question enter candidate
+  preparation as facts with an empty question, the bm25 document is question
+  plus recorded answer, candidates fill the prompt up to `context_byte_limit`
+  (3800 to 7000 bytes), and a conflicting candidate group no longer aborts the
+  snapshot. Fixture memories accept `{id, text}` so real captures replay
+  through `examples/matcher-runtime`.
+- Step 3, agreement through the verifier boundary: policy
+  `answer-verification-v2` keeps the v1 instruction text and adds one
+  `consistent` boolean; several returned IDs are accepted only when the model
+  marks them consistent (smallest id wins), declarative facts take part in the
+  negation and conflict guards, and `returned_facts_conflict` rejects records
+  that share a question but differ in answer. A fully reworded instruction was
+  tried and reverted: it answered the reserved prompt-injection query and
+  flipped the Fern lose/retain polarity.
+
+### Measured
+
+- Contract (`reports/qol-memory/contract/2026-09-05T18-53-50.178Z/`):
+  deterministic 18/28 binary matches, verified 22/28, 0 wrong answers in both.
+  Baseline before this round: 10/17 on the 24 original cases.
+- Frozen corpora (`node plugins/qol-memory/scripts/evaluate.mjs verify`, two
+  repeats, `reports/qol-memory/verification/2026-09-05T19-58-37.583Z/`): development 63/66 answerable and reserved 23/24 in both rounds, 0 wrong answers, 26/26 negatives withheld, cached answer p95 2.5 ms, verification completion p95 2.6 s; the gate qualifies. Both corpora had been
+  inspected in earlier rounds, so this is regression evidence rather than a
+  fresh held-out qualification, and the 38 contract cases were inspected while
+  this round was tuned; the next policy change needs a new reserved corpus.
+- Real store replay (1572 captures, `reports/qol-memory/realstore-2026-09-05-run3.json`):
+  "which programming language does the qol monorepo use" is answered from
+  four agreeing records; "how do I stop kcd2 debug" is withheld correctly;
+  "how to launch kcd2 retail" is still unanswered because qwen3:8b returns the
+  two retail records but marks them inconsistent against dev records it did
+  not return, and "how do I start kcd2 in retail mode" returns no IDs.
+  Candidate preparation rebuilds its index per query: 125 to 145 ms warm,
+  336 ms cold.
+- Gate hygiene: two ollama stages run back to back race on VRAM; the second
+  server saw 2.7 GiB free, offloaded the model to CPU and completion p95 rose
+  from 2 s to 25 s with unchanged accuracy. Wait for the previous model to
+  release before starting the next stage.
+
+### Still broken
+
+- Cedar `evidence-in-explanation`: a Q/A record whose answer sits in its
+  explanation is withheld by the verifier.
+- `vague-topic` and `unknown-platform`: the deterministic path answers where a
+  clarification is due.
+- `equivalent-answers-different-wording`: two records that agree in different
+  words still read as a conflict on both paths.
+- `exact-unit-conversion` and `explanation-negates` are withheld by the verifier.
+- The real "how to launch kcd2 retail" question (above).
+- Step 4 is not delivered: verification is not on by default, the launcher
+  mapping is unit-tested only (no guest run), and the per-query index rebuild
+  needs a cache before default activation.
+- Automatic capture and coalescing are untouched.
+
 ## Operational notes
 
 Work in the main clone on main for ordinary scoped fixes; no PR or push was

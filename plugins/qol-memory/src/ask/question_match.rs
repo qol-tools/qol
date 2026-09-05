@@ -215,15 +215,27 @@ pub(super) fn evidence(text: &str) -> Option<Evidence> {
     let question = captures.get(1)?;
     let prefix = text[..captures.get(0)?.start()].trim();
     let suffix = text[captures.get(0)?.end()..].trim();
-    let answer = if prefix.is_empty() { suffix } else { prefix };
-    if answer.is_empty() || answer.chars().count() > 700 {
+    let answer_part = if prefix.is_empty() { suffix } else { prefix };
+    if answer_part.is_empty() || answer_part.chars().count() > 700 {
         return None;
     }
+    let recorded_answer = match (prefix.is_empty(), suffix.is_empty()) {
+        (true, _) => crate::text::collapse_ws(suffix),
+        (_, true) => crate::text::collapse_ws(prefix),
+        (false, false) => {
+            let separator = if prefix.ends_with(['.', '!', '?']) {
+                " "
+            } else {
+                ". "
+            };
+            crate::text::collapse_ws(&format!("{prefix}{separator}{suffix}"))
+        }
+    };
     Some(Evidence {
         question: Question::parse(question.as_str())?,
         recorded_question: question.as_str().to_owned(),
-        recorded_answer: answer.to_owned(),
-        answer: canonical_answer(answer),
+        recorded_answer,
+        answer: canonical_answer(answer_part),
         display: text.to_owned(),
     })
 }
@@ -285,4 +297,51 @@ pub(super) fn agree(left: &str, right: &str) -> bool {
     let a = commands(left);
     let b = commands(right);
     !a.is_empty() && !b.is_empty() && !a.is_disjoint(&b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_evidence_keeps_prefix_and_suffix_in_order() {
+        let found = evidence("Setup note. How do I launch KCD2 retail? Use the retail flag.")
+            .expect("legacy evidence");
+        assert_eq!(found.recorded_question, "How do I launch KCD2 retail");
+        assert_eq!(found.recorded_answer, "Setup note. Use the retail flag.");
+        assert_eq!(found.answer, "setup note");
+        assert_eq!(
+            found.display,
+            "Setup note. How do I launch KCD2 retail? Use the retail flag."
+        );
+    }
+
+    #[test]
+    fn legacy_evidence_keeps_a_prefix_without_suffix() {
+        let found = evidence("Setup note. How do I launch KCD2 retail?").expect("legacy evidence");
+        assert_eq!(found.recorded_answer, "Setup note");
+        assert_eq!(found.answer, "setup note");
+        assert_eq!(found.display, "Setup note. How do I launch KCD2 retail?");
+    }
+
+    #[test]
+    fn legacy_evidence_keeps_a_suffix_without_prefix() {
+        let found =
+            evidence("How do I launch KCD2 retail? Use the retail flag.").expect("legacy evidence");
+        assert_eq!(found.recorded_answer, "Use the retail flag.");
+        assert_eq!(found.answer, "use the retail flag");
+        assert_eq!(
+            found.display,
+            "How do I launch KCD2 retail? Use the retail flag."
+        );
+    }
+
+    #[test]
+    fn explicit_question_answers_keep_their_recorded_evidence() {
+        let found =
+            evidence("Q: how to launch KCD2? A: run kcd2.exe --retail").expect("Q/A evidence");
+        assert_eq!(found.recorded_question, "how to launch KCD2?");
+        assert_eq!(found.recorded_answer, "run kcd2.exe --retail");
+        assert_eq!(found.display, "run kcd2.exe --retail");
+    }
 }

@@ -41,11 +41,16 @@ and the launcher behavior in a disposable guest.
 ## Implemented boundary
 
 The daemon keeps deterministic retrieval first. If it has no answer and no known
-capture conflict, it prepares up to eight visible recorded question/answer
-candidates and queues local verification. The worker returns only a stored ID;
-the original capture supplies the answer and provenance. Model agreement in
-both candidate orders, meaning checks, identifier checks and conflict checks
-are required. Accepted answers have medium confidence.
+capture conflict, it prepares up to eight visible candidates by lexical rank,
+as many as fit the prompt byte budget in `profile.json`, and queues local
+verification. Candidates carry the complete recorded evidence: explicit Q/A
+records, legacy captures with their explanation, and declarative captures
+without an extractable question. The worker returns stored IDs only; the
+original capture supplies the answer and provenance. Model agreement in both
+candidate orders, meaning checks, identifier checks and conflict checks are
+required, and several returned IDs are accepted only when the model marks them
+consistent (policy `answer-verification-v2`). Accepted answers have medium
+confidence.
 
 One sleeping worker owns inference, with four queued requests and 256 derived
 bindings. A newer launcher query replaces queued work for that launcher lane.
@@ -55,8 +60,10 @@ without invoking the provider. The warm store verifies the old file prefix
 before treating a larger file as an append, preventing rewritten evidence from
 leaving stale answers in memory. First capture now creates a missing store.
 
-The existing ask and rows protocol adds `verification.status`. Agents repeat
-an ask when it is pending. The launcher displays related memories immediately,
+The existing ask and rows protocol adds `verification.status`, plus `outcome`
+(supported, qualified, ambiguous, conflicting, unsupported) and `reason_code`,
+which the launcher maps before the verdict string. Agents repeat an ask when
+verification is pending. The launcher displays related memories immediately,
 then refreshes every 500 ms while that query remains visible, for at most 60
 seconds. Query generations and flow epochs discard stale responses after
 typing, leaving the flow, closing, or reopening the launcher.
@@ -98,6 +105,17 @@ p95 at most 2.20 seconds. **The 87.5% reserved coverage fails qualification.**
 The historical report's `decision.qualified` is authoritative; its old `status`
 field recorded successful workflow execution even for a rejected candidate.
 The workflow now reports that rejection as failed.
+
+Later on 2026-09-05 the v2 policy qualified the same workflow at two repeats:
+`reports/qol-memory/verification/2026-09-05T19-58-37.583Z/report.json`,
+development 63/66 and reserved 23/24 with no wrong answers, 26/26 negatives
+withheld, cached answer p95 2.5 ms and completion p95 2.6 s. Both corpora had
+been inspected by then, so this is regression evidence, not a fresh held-out
+qualification. The additional frozen cases live in
+`tests/fixtures/answer-contract/cases.json` (`evaluate.mjs contract`) and were
+inspected during that round too; the next policy change needs a new reserved
+corpus. Details and remaining failures:
+`docs/plans/2026-09-05-qol-memory-semantic-retrieval-handoff.md`.
 
 The reserved misses were `Cobalt debug startup command`,
 `fire up Cobalt with debugging enabled`, and `how do I shut down Cobalt`.

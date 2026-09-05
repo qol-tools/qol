@@ -1,9 +1,8 @@
 use std::path::Path;
 mod support;
-use qol_memory::verification::Fact;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use support::{call, fixture_store};
+use support::{call, fixture_store, FixtureMemory};
 
 use anyhow::{bail, Context, Result};
 use qol_memory::app::warm::WarmState;
@@ -14,7 +13,7 @@ use serde_json::json;
 
 #[derive(Deserialize)]
 struct Input {
-    facts: Vec<Fact>,
+    facts: Vec<FixtureMemory>,
     queries: Vec<Query>,
     repeats: usize,
 }
@@ -46,8 +45,11 @@ fn main() -> Result<()> {
         .facts
         .iter()
         .map(|fact| DocRef {
-            key: &fact.id,
-            text: &fact.question,
+            key: fact.id(),
+            text: match fact {
+                FixtureMemory::QuestionAnswer { question, .. } => question,
+                FixtureMemory::Text { text, .. } => text,
+            },
         })
         .collect::<Vec<_>>();
     let index = build_index(&docs);
@@ -71,12 +73,16 @@ fn main() -> Result<()> {
             },
         )?;
         let answer = cold.answer.as_ref().map(|answer| answer.key.as_str());
+        let mut answer_rows = 0usize;
         let mut samples = Vec::new();
         for _ in 0..input.repeats {
             let warm = call(&mut state, "ask", &query.query, &caller)?;
             let start = Instant::now();
             let rows = call(&mut state, "rows", &query.query, &caller)?;
             samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            answer_rows = rows["rows"].as_array().map_or(0, |rows| {
+                rows.iter().filter(|row| row["kind"] == "answer").count()
+            });
             let shown = rows["rows"]
                 .as_array()
                 .context("missing rows")?
@@ -93,7 +99,7 @@ fn main() -> Result<()> {
                 );
             }
         }
-        results.push(json!({"id":query.id,"answer":answer,"samples_ms":samples,"lexical":lexical,"lexical_ms":lexical_ms,"verdict":cold.verdict,"reason":cold.reason}));
+        results.push(json!({"id":query.id,"answer":answer,"samples_ms":samples,"lexical":lexical,"lexical_ms":lexical_ms,"verdict":cold.verdict,"outcome":cold.outcome.as_str(),"reason":cold.reason,"reason_code":cold.reason_code.as_str(),"answer_rows":answer_rows}));
     }
     println!(
         "{}",

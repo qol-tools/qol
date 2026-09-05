@@ -173,6 +173,7 @@ fn run(shared: Arc<Shared>, root: PathBuf, mut verifier: impl Verifier) {
                         &Prediction {
                             polarity_preserved: true,
                             scope_supported: true,
+                            consistent: true,
                             comparison: String::new(),
                             answers: vec![key],
                         },

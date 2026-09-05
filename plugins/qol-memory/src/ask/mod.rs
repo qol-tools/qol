@@ -757,6 +757,8 @@ pub(crate) fn run_with_warm(
 
     let mut verdict = "no-memory".to_string();
     let mut confidence = "none".to_string();
+    let mut outcome = Outcome::Unsupported;
+    let mut reason_code = Reason::BelowThreshold;
     let mut answer: Option<Answer> = None;
 
     let below_floor = |score: Option<f64>| score.unwrap_or(0.0) < gates.floor;
@@ -766,6 +768,8 @@ pub(crate) fn run_with_warm(
     if capture_selection.conflicts > 0 {
         verdict = "candidates".to_owned();
         confidence = "low".to_owned();
+        outcome = Outcome::Conflicting;
+        reason_code = Reason::ConflictingCaptures;
         reason = "matching captures contain conflicting answers".to_owned();
     } else if !unit_question_match
         && ((max_cov < gates.no_memory_cov && !has_recency_answer)
@@ -860,6 +864,8 @@ pub(crate) fn run_with_warm(
             });
             verdict = "answered".to_string();
             confidence = if high { "high" } else { "medium" }.to_string();
+            outcome = Outcome::Supported;
+            reason_code = Reason::NotesAnswer;
             reason = format!(
                 "notes layer {} answer, margin {}x{}",
                 resolved.cls,
@@ -888,6 +894,12 @@ pub(crate) fn run_with_warm(
             });
             verdict = "answered".to_string();
             confidence = "medium".to_string();
+            outcome = Outcome::Supported;
+            reason_code = if top.kind == crate::ingest::CAPTURE_KIND {
+                Reason::CaptureAnswer
+            } else {
+                Reason::TranscriptAnswer
+            };
             reason = if top.kind == crate::ingest::CAPTURE_KIND {
                 "units layer answer (agent capture), confidence capped medium".to_string()
             } else if top.kind == crate::ingest::ASSISTANT_KIND {
@@ -898,6 +910,8 @@ pub(crate) fn run_with_warm(
         } else {
             verdict = "candidates".to_string();
             confidence = "low".to_string();
+            outcome = Outcome::Ambiguous;
+            reason_code = Reason::NoDecisiveAnswer;
             reason = format!(
                 "no decisive answer: note_cov={} unit_cov={}",
                 fixed2_string(note_cov_r),
@@ -990,6 +1004,8 @@ pub(crate) fn run_with_warm(
         verdict,
         confidence,
         reason,
+        outcome,
+        reason_code,
         gates,
         non_default_gates: !gates.is_default(),
         answer,
@@ -1482,6 +1498,54 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
     }))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Supported,
+    Qualified,
+    Ambiguous,
+    Conflicting,
+    Unsupported,
+}
+
+impl Outcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Outcome::Supported => "supported",
+            Outcome::Qualified => "qualified",
+            Outcome::Ambiguous => "ambiguous",
+            Outcome::Conflicting => "conflicting",
+            Outcome::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reason {
+    ConflictingCaptures,
+    BelowThreshold,
+    NotesAnswer,
+    CaptureAnswer,
+    TranscriptAnswer,
+    NoDecisiveAnswer,
+    VerifiedAnswer,
+}
+
+impl Reason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Reason::ConflictingCaptures => "conflicting_captures",
+            Reason::BelowThreshold => "below_threshold",
+            Reason::NotesAnswer => "notes_answer",
+            Reason::CaptureAnswer => "capture_answer",
+            Reason::TranscriptAnswer => "transcript_answer",
+            Reason::NoDecisiveAnswer => "no_decisive_answer",
+            Reason::VerifiedAnswer => "verified_answer",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AskOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1494,6 +1558,8 @@ pub struct AskOutput {
     pub verdict: String,
     pub confidence: String,
     pub reason: String,
+    pub outcome: Outcome,
+    pub reason_code: Reason,
     pub gates: Gates,
     pub non_default_gates: bool,
     pub answer: Option<Answer>,
@@ -3136,6 +3202,8 @@ mod tests {
             "verdict": "answered",
             "confidence": "high",
             "reason": "notes layer decision answer, margin 9x",
+            "outcome": "supported",
+            "reason_code": "notes_answer",
             "gates": {
                 "NO_MEMORY_COV": 0.5,
                 "FLOOR": 6.0,

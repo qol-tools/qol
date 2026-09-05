@@ -18,7 +18,7 @@ qol-memory doctor [--json]
 
 ## About
 
-Answers `qol-memory ask "<query>"` from the local memory store with verdicts, evidence, and coverage signals that match the research scripts result for result. The Node tooling in `docs/research/qol-memory` stays the write path while the plugin owns the read path, `status`, and `doctor`.
+Answers `qol-memory ask "<query>"` from the local memory store with a verdict, an outcome (supported, qualified, ambiguous, conflicting, unsupported) with its reason code, evidence, and coverage signals that match the research scripts result for result. The Node tooling in `docs/research/qol-memory` stays the write path while the plugin owns the read path, `status`, and `doctor`.
 
 ## License
 

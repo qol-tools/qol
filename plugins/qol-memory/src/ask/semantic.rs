@@ -49,42 +49,79 @@ impl Snapshot {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let evidence = visible
+        let mut evidence = Vec::new();
+        let mut declarative = Vec::new();
+        for unit in &visible {
+            match question_match::evidence(&unit.text) {
+                Some(found) => evidence.push((unit, found)),
+                None if unit.text.chars().count() <= 700 => declarative.push(unit),
+                None => {}
+            }
+        }
+        let mut docs = evidence
             .iter()
-            .filter_map(|unit| {
-                question_match::evidence(&unit.text).map(|evidence| (unit, evidence))
+            .map(|(unit, found)| {
+                (
+                    unit.key.as_str(),
+                    format!("{} {}", found.recorded_question, found.recorded_answer),
+                )
             })
             .collect::<Vec<_>>();
-        let docs = evidence
+        docs.extend(
+            declarative
+                .iter()
+                .map(|unit| (unit.key.as_str(), unit.text.clone())),
+        );
+        let doc_refs = docs
             .iter()
-            .map(|(unit, evidence)| DocRef {
-                key: &unit.key,
-                text: &evidence.recorded_question,
-            })
+            .map(|(key, text)| DocRef { key, text })
             .collect::<Vec<_>>();
-        let ranks = bm25_ranks(&terms.join(" "), &build_index(&docs), CANDIDATE_LIMIT);
+        let ranks = bm25_ranks(&terms.join(" "), &build_index(&doc_refs), CANDIDATE_LIMIT);
         let mut facts = BTreeMap::new();
+        let mut kept = Vec::new();
         let mut answers = HashMap::new();
         for ranked in ranks {
-            let (_, record) = evidence.iter().find(|(unit, _)| unit.key == ranked.key)?;
-            let group = selection::select(&record.recorded_question, &visible, None, None);
-            if group.conflicts > 0 {
-                return None;
-            }
-            let winner = group.winner?;
-            let key = winner.unit.key.clone();
-            facts.insert(
-                key.clone(),
-                Fact {
+            let (key, fact, entry) = if let Some((_, found)) =
+                evidence.iter().find(|(unit, _)| unit.key == ranked.key)
+            {
+                let group = selection::select(&found.recorded_question, &visible, None, None);
+                if group.conflicts > 0 {
+                    continue;
+                }
+                let Some(winner) = group.winner else {
+                    continue;
+                };
+                let key = winner.unit.key.clone();
+                let fact = Fact {
                     id: key.clone(),
                     question: winner.evidence.recorded_question,
                     answer: winner.evidence.recorded_answer,
-                },
-            );
-            answers.insert(
-                key,
-                answer(winner.unit, winner.evidence.display, group.supporting_keys),
-            );
+                };
+                let entry = answer(winner.unit, winner.evidence.display, group.supporting_keys);
+                (key, fact, entry)
+            } else {
+                let unit = declarative.iter().find(|unit| unit.key == ranked.key)?;
+                let key = unit.key.clone();
+                let fact = Fact {
+                    id: key.clone(),
+                    question: String::new(),
+                    answer: unit.text.trim().to_owned(),
+                };
+                let entry = answer(unit, unit.text.to_owned(), Vec::new());
+                (key, fact, entry)
+            };
+            kept.push(fact.clone());
+            if prompt_bytes(&request.query, &kept)
+                > crate::verification::profile().context_byte_limit
+            {
+                kept.pop();
+                if kept.is_empty() {
+                    return None;
+                }
+                break;
+            }
+            facts.insert(key.clone(), fact);
+            answers.insert(key, entry);
         }
         if facts.is_empty() {
             return None;
@@ -122,6 +159,8 @@ impl Snapshot {
                 output.answer = Some(answer.clone());
                 output.verdict = "answered".to_owned();
                 output.confidence = "medium".to_owned();
+                output.outcome = super::Outcome::Supported;
+                output.reason_code = super::Reason::VerifiedAnswer;
                 output.reason =
                     "recorded answer verified against the question; confidence capped medium"
                         .to_owned();
@@ -129,6 +168,12 @@ impl Snapshot {
         }
         output.verification = Some(status);
     }
+}
+
+fn prompt_bytes(query: &str, facts: &[Fact]) -> usize {
+    crate::verification::request(&crate::verification::profile().model, query, facts)["prompt"]
+        .as_str()
+        .map_or(0, str::len)
 }
 
 fn answer(unit: &Unit, text: String, supporting_keys: Vec<String>) -> Answer {

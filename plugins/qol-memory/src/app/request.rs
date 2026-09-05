@@ -164,6 +164,8 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         "confidence": output.confidence,
         "rows": flow_rows,
         "verification": output.verification,
+        "outcome": output.outcome,
+        "reason_code": output.reason_code,
     }))
 }
 

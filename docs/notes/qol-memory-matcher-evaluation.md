@@ -7,6 +7,16 @@ target directory, builds the workers, and writes an isolated run under
 `--model-cache PATH` changes that cache; `--repeats N` controls timed repetitions.
 The command without `compare` runs the existing answer-selection regression suite.
 
+`verify [--prepare] [--endpoint URL] [--repeats N]` runs the production-path
+answer verification gate over the frozen corpora under
+`tests/fixtures/answer-verification`, writing to `reports/qol-memory/verification`.
+`contract [--verify [--endpoint URL]]` scores the answer-contract cases under
+`tests/fixtures/answer-contract` on the deterministic path and, with `--verify`,
+on the verified path, writing to `reports/qol-memory/contract`; it exits nonzero
+unless a stage qualifies. Both need a local Ollama with the pinned `qwen3:8b`
+digest and a free GPU: two provider stages run back to back can leave the model
+on the CPU and inflate completion latency tenfold.
+
 The model registry beside the orchestrator owns repositories, revisions, and
 SHA-256 digests. Downloaded weights are data; inference runs locally. Each run
 records dataset and source hashes, compiler-reported executable paths, copied

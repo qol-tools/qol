@@ -70,6 +70,19 @@ impl Fixture {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+
+    fn rows(&mut self) -> Value {
+        match request::handle(
+            &mut self.state,
+            &DaemonRequest {
+                action: "rows".into(),
+                input: json!({"query":QUERY,"agent_home":CALLER,"no_log":true}),
+            },
+        ) {
+            ReadResult::HandledWithData(value) => value,
+            _ => panic!("rows response required"),
+        }
+    }
 }
 
 impl Drop for Fixture {
@@ -101,6 +114,7 @@ impl Verifier for Immediate {
     fn verify(&mut self, _: &str, _: &[Fact]) -> Result<Prediction> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Ok(Prediction {
+            consistent: true,
             polarity_preserved: true,
             scope_supported: true,
             comparison: String::new(),
@@ -118,6 +132,10 @@ fn edited_deleted_conflicting_and_disliked_evidence_cannot_reuse_a_binding() {
         assert_eq!(fixture.answer()["answer"]["text"], "original command");
         assert_eq!(fixture.answer()["answer"]["text"], "original command");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let accepted = fixture.ask(json!({}));
+        assert_eq!(accepted["outcome"], "supported");
+        assert_eq!(accepted["reason_code"], "verified_answer");
+        assert_eq!(fixture.rows()["outcome"], "supported");
         assert!(
             fixture.ask(json!({"agent_home":"/fixture/verification-private-b"}))["answer"]
                 .is_null()
@@ -173,6 +191,7 @@ impl Verifier for Controlled {
         self.started.send(facts[0].answer.clone())?;
         self.released.recv()?;
         Ok(Prediction {
+            consistent: true,
             polarity_preserved: true,
             scope_supported: true,
             comparison: String::new(),

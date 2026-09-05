@@ -1,18 +1,49 @@
 use anyhow::{bail, Context, Result};
 use qol_memory::app::{request, warm::WarmState};
 use qol_memory::store::Store;
-use qol_memory::verification::Fact;
 use qol_plugin_daemon::daemon::ReadResult;
 use qol_runtime::protocol::DaemonRequest;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub fn fixture_store(root: &Path, facts: &[Fact], caller: &str) -> Result<Store> {
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum FixtureMemory {
+    QuestionAnswer {
+        id: String,
+        question: String,
+        answer: String,
+    },
+    Text {
+        id: String,
+        text: String,
+    },
+}
+
+impl FixtureMemory {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::QuestionAnswer { id, .. } | Self::Text { id, .. } => id,
+        }
+    }
+
+    pub fn capture_text(&self) -> String {
+        match self {
+            Self::QuestionAnswer {
+                question, answer, ..
+            } => format!("Q: {question} A: {answer}"),
+            Self::Text { text, .. } => text.clone(),
+        }
+    }
+}
+
+pub fn fixture_store(root: &Path, memories: &[FixtureMemory], caller: &str) -> Result<Store> {
     std::fs::create_dir(root).context("fixture store must not already exist")?;
     let mut body = String::new();
-    for fact in facts {
-        let unit = json!({"key":fact.id,"kind":"capture","agent_home":caller,"cwd":"/fixture/comparison","session":"fixture","text":format!("Q: {} A: {}",fact.question,fact.answer)});
+    for memory in memories {
+        let unit = json!({"key":memory.id(),"kind":"capture","agent_home":caller,"cwd":"/fixture/comparison","session":"fixture","text":memory.capture_text()});
         body.push_str(&serde_json::to_string(&unit)?);
         body.push('\n');
     }

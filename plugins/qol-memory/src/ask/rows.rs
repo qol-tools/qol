@@ -94,6 +94,14 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         let mut detail = Vec::new();
         detail.extend(detail_field("verdict", Some(output.verdict.clone())));
         detail.extend(detail_field("confidence", Some(output.confidence.clone())));
+        detail.extend(detail_field(
+            "outcome",
+            Some(output.outcome.as_str().to_string()),
+        ));
+        detail.extend(detail_field(
+            "reason_code",
+            Some(output.reason_code.as_str().to_string()),
+        ));
         detail.extend(detail_field("layer", Some(answer.layer.clone())));
         detail.extend(detail_field("class", answer.cls.clone()));
         detail.extend(detail_field("source", Some(answer.source_kind.clone())));
@@ -414,6 +422,8 @@ mod tests {
             "verdict": "answered",
             "confidence": "high",
             "reason": "notes layer decision answer",
+            "outcome": "supported",
+            "reason_code": "notes_answer",
             "gates": {
                 "NO_MEMORY_COV": 0.5,
                 "FLOOR": 6.0,
@@ -681,6 +691,8 @@ mod tests {
             vec![
                 "verdict",
                 "confidence",
+                "outcome",
+                "reason_code",
                 "layer",
                 "class",
                 "source",
@@ -692,7 +704,9 @@ mod tests {
         );
         assert_eq!(rows[0].detail[0].value, "answered");
         assert_eq!(rows[0].detail[1].value, "high");
-        assert_eq!(rows[0].detail[8].value, "n-ans");
+        assert_eq!(rows[0].detail[2].value, "supported");
+        assert_eq!(rows[0].detail[3].value, "notes_answer");
+        assert_eq!(rows[0].detail[10].value, "n-ans");
         assert_eq!(
             rows[0]
                 .detail

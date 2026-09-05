@@ -14,6 +14,7 @@ impl Verifier for Controlled {
         self.started.send(())?;
         self.finish.recv()?;
         Ok(Prediction {
+            consistent: true,
             polarity_preserved: true,
             scope_supported: true,
             comparison: "fixture".into(),
