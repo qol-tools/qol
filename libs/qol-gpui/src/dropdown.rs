@@ -97,11 +97,11 @@ impl Dropdown {
             .cloned()
             .map(DropdownItem::plain)
             .collect::<Vec<_>>();
-        self.render_items_with_click(&items, style, None)
+        self.render_items_with_click(&items, style, None, None)
     }
 
     pub fn render_items(&self, items: &[DropdownItem], style: DropdownStyle) -> impl IntoElement {
-        self.render_items_with_click(items, style, None)
+        self.render_items_with_click(items, style, None, None)
     }
 
     pub fn render_clickable(
@@ -110,13 +110,14 @@ impl Dropdown {
         labels: &[String],
         style: DropdownStyle,
         on_click: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+        on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         let items = labels
             .iter()
             .cloned()
             .map(DropdownItem::plain)
             .collect::<Vec<_>>();
-        self.render_items_clickable(id, &items, style, on_click)
+        self.render_items_clickable(id, &items, style, on_click, on_dismiss)
     }
 
     pub fn render_items_clickable(
@@ -125,8 +126,14 @@ impl Dropdown {
         items: &[DropdownItem],
         style: DropdownStyle,
         on_click: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+        on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        self.render_items_with_click(items, style, Some((id.into(), Rc::new(on_click))))
+        self.render_items_with_click(
+            items,
+            style,
+            Some((id.into(), Rc::new(on_click))),
+            Some(Rc::new(on_dismiss)),
+        )
     }
 
     fn render_items_with_click(
@@ -134,6 +141,7 @@ impl Dropdown {
         items: &[DropdownItem],
         style: DropdownStyle,
         on_click: Option<(SharedString, Rc<DropdownClick>)>,
+        dismiss: Option<Rc<DropdownDismiss>>,
     ) -> impl IntoElement {
         let list = self.list.borrow();
         let rows: Vec<AnyElement> = items
@@ -194,30 +202,32 @@ impl Dropdown {
         let menu_list = Rc::clone(&self.list);
         let count = items.len();
         drop(list);
+        let mut menu = div()
+            .id(MENU_ID)
+            .flex()
+            .flex_col()
+            .min_w(px(MENU_MIN_WIDTH))
+            .p(px(qol_theme::SPACE_SNUG))
+            .rounded(px(qol_theme::RADIUS_CARD))
+            .border_1()
+            .border_color(rgb(style.border))
+            .shadow(crate::kit::float_shadow(style.text))
+            .bg(rgb(style.bg))
+            .on_scroll_wheel(move |event, window, _cx| {
+                let mut list = menu_list.borrow_mut();
+                list.wheel_by(wheel_rows(&event.delta, ROW_H), count);
+                window.refresh();
+            })
+            .children(rows);
+        if let Some(on_dismiss) = dismiss {
+            menu = menu.on_mouse_down_out(move |_event, window, cx| on_dismiss(window, cx));
+        }
         deferred(
             anchored()
                 .anchor(Corner::TopLeft)
                 .offset(menu_drop_offset())
                 .snap_to_window_with_margin(px(8.0))
-                .child(
-                    div()
-                        .id(MENU_ID)
-                        .flex()
-                        .flex_col()
-                        .min_w(px(MENU_MIN_WIDTH))
-                        .p(px(qol_theme::SPACE_SNUG))
-                        .rounded(px(qol_theme::RADIUS_CARD))
-                        .border_1()
-                        .border_color(rgb(style.border))
-                        .shadow(crate::kit::float_shadow(style.text))
-                        .bg(rgb(style.bg))
-                        .on_scroll_wheel(move |event, window, _cx| {
-                            let mut list = menu_list.borrow_mut();
-                            list.wheel_by(wheel_rows(&event.delta, ROW_H), count);
-                            window.refresh();
-                        })
-                        .children(rows),
-                ),
+                .child(menu),
         )
     }
 }
@@ -227,6 +237,7 @@ fn menu_drop_offset() -> Point<Pixels> {
 }
 
 type DropdownClick = dyn Fn(usize, &ClickEvent, &mut Window, &mut App);
+type DropdownDismiss = dyn Fn(&mut Window, &mut App);
 
 #[cfg(test)]
 mod tests {

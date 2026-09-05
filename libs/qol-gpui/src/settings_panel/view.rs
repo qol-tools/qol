@@ -3147,6 +3147,7 @@ impl SettingsPanelView {
                 };
                 if let Some(items) = items {
                     let view = cx.weak_entity();
+                    let dismiss_view = cx.weak_entity();
                     let menu = dropdown.render_items_clickable(
                         format!("settings-options-{index}"),
                         &items,
@@ -3162,6 +3163,17 @@ impl SettingsPanelView {
                                     this.pick_dropdown_option(selected);
                                     cx.notify();
                                 });
+                            });
+                        },
+                        move |_, cx| {
+                            let _ = dismiss_view.update(cx, |this, cx| {
+                                if matches!(
+                                    this.level().active_control,
+                                    Some(ActiveControl::Dropdown(_))
+                                ) {
+                                    this.level_mut().active_control = None;
+                                    cx.notify();
+                                }
                             });
                         },
                     );
@@ -4138,6 +4150,7 @@ impl SettingsPanelView {
                     .map(|action| action.label.clone())
                     .collect::<Vec<_>>();
                 let view = cx.weak_entity();
+                let dismiss_view = cx.weak_entity();
                 Some(menu.dropdown.render_clickable(
                     format!("settings-list-card-actions-{index}"),
                     &labels,
@@ -4149,6 +4162,12 @@ impl SettingsPanelView {
                         cx.stop_propagation();
                         let _ = view.update(cx, |this, cx| {
                             this.dispatch_list_menu_action(selected, cx);
+                            cx.notify();
+                        });
+                    },
+                    move |_, cx| {
+                        let _ = dismiss_view.update(cx, |this, cx| {
+                            this.close_list_actions_menu();
                             cx.notify();
                         });
                     },
@@ -4259,6 +4278,7 @@ impl Render for SettingsPanelView {
             .text_color(rgb(self.palette.section_text))
             .child(self.render_band())
             .child(self.render_content(
+                cx,
                 window.viewport_size().width.to_f64() as f32,
                 rail,
                 items,
@@ -4321,13 +4341,25 @@ impl SettingsPanelView {
 
     fn render_content(
         &self,
+        cx: &mut Context<Self>,
         width: f32,
         rail: Vec<AnyElement>,
         items: Vec<AnyElement>,
         custom_view: Option<AnyView>,
     ) -> Div {
         let depth = self.stack.len() - 1;
-        let card = self.render_card(self.stack.len() - 1, items, custom_view);
+        let card = self
+            .render_card(self.stack.len() - 1, items, custom_view)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if this.rail_has_key_focus() {
+                        this.set_source_menu(false);
+                        this.reconcile_focus(window, cx);
+                        cx.notify();
+                    }
+                }),
+            );
         let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
         if !self.rail_is_open() {
             let slide = if self.deck_transition.snapped {

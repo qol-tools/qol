@@ -1211,6 +1211,7 @@ impl NativeToolsView {
         let open = self.menu.as_ref().filter(|open| open.field == index)?;
         let labels = self.select_labels(self.select_field_at(index)?);
         let view = cx.weak_entity();
+        let dismiss_view = cx.weak_entity();
         Some(
             open.menu
                 .render_clickable(
@@ -1228,6 +1229,12 @@ impl NativeToolsView {
                                 this.pick_menu(choice);
                                 cx.notify();
                             });
+                        });
+                    },
+                    move |_, cx| {
+                        let _ = dismiss_view.update(cx, |this, cx| {
+                            this.menu = None;
+                            cx.notify();
                         });
                     },
                 )
