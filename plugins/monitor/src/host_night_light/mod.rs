@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use crate::session::RestoreMode;
 
-#[cfg(target_os = "linux")]
-mod linux;
+mod platform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TakeoverOutcome {
@@ -51,6 +50,15 @@ impl fmt::Display for HostNightLightError {
 impl std::error::Error for HostNightLightError {}
 
 pub trait HostNightLight: Send + Sync {
+    fn native_supported(&self) -> bool {
+        false
+    }
+    fn strategy(&self) -> &'static str {
+        "gamma"
+    }
+    fn apply_native(&self, _active: bool, _kelvin: u16) -> Result<bool, HostNightLightError> {
+        Ok(false)
+    }
     fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError>;
     fn release(&self, mode: RestoreMode) -> Result<(), HostNightLightError>;
     fn mark_handoff(&self, successor: Option<&str>);
@@ -81,14 +89,27 @@ impl HostNightLight for NoopHostNightLight {
     }
 }
 
+pub struct UnavailableHostNightLight(pub &'static str);
+
+impl HostNightLight for UnavailableHostNightLight {
+    fn apply_native(&self, _active: bool, _kelvin: u16) -> Result<bool, HostNightLightError> {
+        Err(HostNightLightError::Unsupported(self.0.into()))
+    }
+    fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
+        Ok(TakeoverOutcome::Unsupported)
+    }
+    fn release(&self, _mode: RestoreMode) -> Result<(), HostNightLightError> {
+        Ok(())
+    }
+    fn mark_handoff(&self, _successor: Option<&str>) {}
+    fn is_taken_over(&self) -> bool {
+        false
+    }
+    fn status(&self) -> HostNightLightStatus {
+        HostNightLightStatus::Unsupported
+    }
+}
+
 pub fn control(config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::control(config_root)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = config_root;
-        Arc::new(NoopHostNightLight)
-    }
+    platform::control(config_root)
 }

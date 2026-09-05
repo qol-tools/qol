@@ -211,7 +211,7 @@ pub fn decide(schedule: &Schedule, state: &NightState, now: Now) -> Decision {
         && state
             .override_until_unix
             .map(|until| now.unix < until)
-            .unwrap_or(true);
+            .unwrap_or(schedule.mode == ScheduleMode::Off);
     if override_is_live {
         return Decision {
             active: state.override_active.unwrap_or(false),
@@ -247,7 +247,7 @@ pub fn set_active(schedule: &Schedule, _state: &NightState, now: Now, active: bo
 pub fn unix_of_next_transition(schedule: &Schedule, now: Now) -> Option<i64> {
     let transition = schedule.next_transition(now.minute)?;
     let delta = (i64::from(transition.0) - i64::from(now.minute.0)).rem_euclid(24 * 60);
-    Some(now.unix + delta * 60)
+    Some(now.unix - now.unix.rem_euclid(60) + delta * 60)
 }
 
 #[cfg(test)]
@@ -343,6 +343,41 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_mode_ignores_an_indefinite_override_from_manual_mode() {
+        let schedule = daily("21:00", "06:00");
+        let state = NightState {
+            override_active: Some(true),
+            override_until_unix: None,
+        };
+        let decision = decide(
+            &schedule,
+            &state,
+            Now {
+                unix: 43_200,
+                minute: minute("12:00"),
+            },
+        );
+        assert!(!decision.active);
+        assert_eq!(decision.reason, Reason::Schedule);
+    }
+
+    #[test]
+    fn transition_deadline_is_at_the_start_of_the_minute() {
+        let schedule = daily("21:00", "06:00");
+        for second in [0, 1, 29, 59] {
+            let now = Now {
+                unix: 75_540 + second,
+                minute: minute("20:59"),
+            };
+            assert_eq!(
+                unix_of_next_transition(&schedule, now),
+                Some(75_600),
+                "second: {second}"
+            );
+        }
+    }
+
+    #[test]
     fn daily_manual_override_expires_at_the_next_transition() {
         let schedule = daily("20:00", "06:00");
         let now = Now {
@@ -350,7 +385,7 @@ mod tests {
             minute: minute("22:00"),
         };
         let state = toggled(&schedule, &NightState::default(), now);
-        let until = 10_000 + 8 * 60 * 60;
+        let until = 9_960 + 8 * 60 * 60;
         assert_eq!(state.override_active, Some(false));
         assert_eq!(state.override_until_unix, Some(until));
         assert!(!decide(&schedule, &state, now).active);

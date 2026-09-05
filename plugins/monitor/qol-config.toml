@@ -47,8 +47,8 @@ label = "Night mode status"
 section = "night"
 query = "night_mode"
 value_from = "state"
-label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "Cinnamon night light could not be taken over; it will fight qol night mode", invalid_schedule = "Schedule times are invalid" }
-tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", invalid_schedule = "danger" }
+label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid" }
+tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
 
 [field.night_toggle]
 type = "action"

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use qol_windowing::display::DisplayHandle;
 
 use crate::monitor::night::Tint;
-use crate::monitor::{BrightnessSource, DisplayControl, GammaTable, MonitorError};
+use crate::monitor::{BrightnessSource, BrightnessState, DisplayControl, GammaTable, MonitorError};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 pub const EVICTION_GENERATION: &str = "socket-eviction";
@@ -299,11 +299,18 @@ impl SessionStore {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DisplayAdjustment {
+    brightness: BrightnessState,
+    tint: Tint,
+}
+
 pub struct Session<C: ?Sized> {
     control: Arc<C>,
     store: SessionStore,
     lut: Arc<dyn LutProvider>,
     snapshotted: Mutex<HashSet<String>>,
+    adjustments: Mutex<BTreeMap<String, DisplayAdjustment>>,
     adoption_generation: Option<String>,
 }
 
@@ -315,6 +322,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             store,
             lut,
             snapshotted: Mutex::new(HashSet::new()),
+            adjustments: Mutex::new(BTreeMap::new()),
             adoption_generation,
         }
     }
@@ -344,6 +352,71 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .insert(display_id.to_string());
     }
 
+    pub(crate) fn brightness(
+        &self,
+        handle: &DisplayHandle,
+    ) -> Result<BrightnessState, MonitorError> {
+        if let Some(adjustment) = self.adjustments.lock().unwrap().get(handle.id()) {
+            return Ok(adjustment.brightness);
+        }
+        let brightness = self.control.get_brightness(handle)?;
+        self.adjustments.lock().unwrap().insert(
+            handle.id().into(),
+            DisplayAdjustment {
+                brightness,
+                tint: Tint::NEUTRAL,
+            },
+        );
+        Ok(brightness)
+    }
+
+    pub(crate) fn brightness_states(&self) -> BTreeMap<String, BrightnessState> {
+        let handles = self.control.enumerate().unwrap_or_default();
+        handles
+            .iter()
+            .filter_map(|handle| {
+                self.brightness(handle)
+                    .ok()
+                    .map(|state| (handle.id().into(), state))
+            })
+            .collect()
+    }
+
+    pub(crate) fn uses_gamma_brightness(&self) -> bool {
+        self.brightness_states()
+            .values()
+            .any(|state| state.source == BrightnessSource::Gamma)
+    }
+
+    pub(crate) fn tinted_displays(&self) -> HashSet<String> {
+        self.adjustments
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, state)| !state.tint.is_neutral())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    fn track_tint(&self, handle: &DisplayHandle, tint: Tint) {
+        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+            state.tint = tint;
+        }
+    }
+
+    fn adopt_adjustment(&self, handle: &DisplayHandle, snapshot: &Snapshot) {
+        self.adjustments.lock().unwrap().insert(
+            handle.id().into(),
+            DisplayAdjustment {
+                brightness: BrightnessState {
+                    value: snapshot.last_value,
+                    source: snapshot.source_kind().unwrap_or(BrightnessSource::Gamma),
+                },
+                tint: snapshot.last_tint,
+            },
+        );
+    }
+
     fn adopt_persisted(&self, handle: &DisplayHandle) -> bool {
         let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
             return false;
@@ -354,8 +427,24 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         let Some(lut) = &snapshot.lut else {
             return false;
         };
+        let expected = lut
+            .dimmed(snapshot.lut_percent())
+            .tinted(snapshot.last_tint);
+        if self
+            .lut
+            .capture(handle.connector())
+            .is_some_and(|current| current != expected)
+        {
+            qol_runtime::probe!(
+                "MONITOR_SESSION",
+                "event=baseline_adoption display={} outcome=external_change",
+                handle.id()
+            );
+            return false;
+        }
         self.lut
             .adopt_baseline(handle, lut, snapshot.lut_percent(), snapshot.last_tint);
+        self.adopt_adjustment(handle, &snapshot);
         self.mark_snapshotted(handle.id());
         true
     }
@@ -402,6 +491,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.store
             .write_snapshot(&snapshot)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
+        self.adopt_adjustment(handle, &snapshot);
         self.mark_snapshotted(handle.id());
         Ok(())
     }
@@ -445,10 +535,19 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))
     }
 
-    pub fn adopt(&self, handle: &DisplayHandle) {
-        if !self.adopt_persisted(handle) {
-            self.mark_snapshotted(handle.id());
+    pub fn adopt(&self, handle: &DisplayHandle) -> bool {
+        if self.adopt_persisted(handle) {
+            return true;
         }
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return false;
+        };
+        if snapshot.clean || snapshot.lut.is_some() {
+            return false;
+        }
+        self.adopt_adjustment(handle, &snapshot);
+        self.mark_snapshotted(handle.id());
+        true
     }
 
     pub fn mark_handoff_all(&self, successor: Option<&str>) {
@@ -503,7 +602,12 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.store
             .write_snapshot(&updated)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
-        self.control.set_brightness(handle, value)
+        self.control
+            .set_brightness_with_tint(handle, value, updated.last_tint)?;
+        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+            state.brightness.value = value;
+        }
+        Ok(())
     }
 
     pub fn mutate_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
@@ -521,7 +625,10 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.store
             .write_snapshot(&updated)
             .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?;
-        self.control.set_tint(handle, tint)
+        self.control
+            .set_gamma_adjustment(handle, updated.lut_percent(), tint)?;
+        self.track_tint(handle, tint);
+        Ok(())
     }
 
     fn restore_one(&self, snapshot: &Snapshot, handle: &DisplayHandle) -> RestoreOutcome {
@@ -735,6 +842,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((handle.id().to_string(), tint));
+            Ok(())
+        }
+
+        fn set_gamma_adjustment(
+            &self,
+            handle: &DisplayHandle,
+            value: u8,
+            _tint: Tint,
+        ) -> Result<(), MonitorError> {
+            if self.source == BrightnessSource::Gamma {
+                self.set_brightness(handle, value)?;
+            }
             Ok(())
         }
 
@@ -1588,6 +1707,7 @@ mod tests {
         let persisted = store.load_snapshot("id-1").unwrap().unwrap();
         assert_eq!(persisted.lut.as_ref(), Some(&baseline));
 
+        *current.lock().unwrap() = baseline.dimmed(80);
         drop(session1);
         drop(control1);
         let lut2 = Arc::new(FakeLut::new(Arc::clone(&current)));
@@ -1611,6 +1731,42 @@ mod tests {
         assert_eq!(adoptions[0].0, "id-1");
         assert_eq!(adoptions[0].1, baseline);
         assert_eq!(adoptions[0].2, 80, "the persisted last_value is adopted");
+    }
+
+    #[test]
+    fn an_external_reset_replaces_a_stale_warm_baseline_before_brightness() {
+        for handoff in [false, true] {
+            let (_dir, store) = fake_store();
+            let display = handle("id-1", "card0-DP-1");
+            let neutral = gamma_table(u16::MAX);
+            let warm = Tint::from_kelvin(3500);
+            let current = Arc::new(StdMutex::new(neutral.clone()));
+            let lut = Arc::new(FakeLut::new(current));
+            store
+                .write_snapshot(&Snapshot {
+                    source: "gamma".into(),
+                    lut: Some(neutral.dimmed(80).tinted(warm)),
+                    last_tint: warm,
+                    handoff,
+                    adopt_generation: Some("old-generation".into()),
+                    ..snapshot("id-1", "card0-DP-1", 100, 80, 3, false, handoff)
+                })
+                .unwrap();
+            let control = Arc::new(
+                RecordingControl::new(vec![display.clone()], 100)
+                    .with_source(BrightnessSource::Gamma),
+            );
+            let session = Session::new(control, store.clone(), lut.clone())
+                .with_adoption_generation(Some("new-generation".into()));
+            assert!(!session.adopt(&display));
+            session.mutate(&display, 80).unwrap();
+            let captured = store.load_snapshot("id-1").unwrap().unwrap();
+            assert_eq!(captured.lut, Some(neutral));
+            assert!(captured.last_tint.is_neutral());
+            assert_eq!(captured.last_value, 80);
+            assert!(lut.adoptions().is_empty());
+            assert!(session.tinted_displays().is_empty());
+        }
     }
 
     #[test]

@@ -1,74 +1,36 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use super::{HostNightLight, HostNightLightError, HostNightLightStatus, TakeoverOutcome};
+use super::super::super::{
+    HostNightLight, HostNightLightError, HostNightLightStatus, TakeoverOutcome,
+};
 use crate::session::{RestoreMode, EVICTION_GENERATION};
 
-const SCHEMA: &str = "org.cinnamon.settings-daemon.plugins.color";
-const KEY: &str = "night-light-enabled";
 const SNAPSHOT_ID: &str = "night-light-enabled";
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
-trait Settings: Send + Sync {
-    fn get(&self) -> Result<bool, HostNightLightError>;
-    fn set(&self, enabled: bool) -> Result<(), HostNightLightError>;
-}
-
-struct Gsettings;
-
-impl Settings for Gsettings {
-    fn get(&self) -> Result<bool, HostNightLightError> {
-        let output = Command::new("gsettings")
-            .args(["get", SCHEMA, KEY])
-            .output()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    HostNightLightError::Unsupported("gsettings is not installed".to_string())
-                } else {
-                    HostNightLightError::Failed(format!("failed to run gsettings: {error}"))
-                }
-            })?;
-        if !output.status.success() {
-            return Err(HostNightLightError::Failed(format!(
-                "gsettings get {SCHEMA} {KEY} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        parse_bool(String::from_utf8_lossy(&output.stdout).trim()).ok_or_else(|| {
-            HostNightLightError::Failed(format!(
-                "gsettings returned an invalid boolean for {SCHEMA} {KEY}"
-            ))
-        })
+pub(super) trait Settings: Send + Sync {
+    fn native_supported(&self) -> bool {
+        false
     }
-
-    fn set(&self, enabled: bool) -> Result<(), HostNightLightError> {
-        let value = if enabled { "true" } else { "false" };
-        let status = Command::new("gsettings")
-            .args(["set", SCHEMA, KEY, value])
-            .status()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    HostNightLightError::Unsupported("gsettings is not installed".to_string())
-                } else {
-                    HostNightLightError::Failed(format!("failed to run gsettings: {error}"))
-                }
-            })?;
-        if !status.success() {
-            return Err(HostNightLightError::Failed(format!(
-                "gsettings set {SCHEMA} {KEY} {value} failed"
-            )));
-        }
+    fn name(&self) -> &'static str;
+    fn native_values(&self) -> Result<Option<BTreeMap<String, String>>, HostNightLightError> {
+        Ok(None)
+    }
+    fn apply_native(&self, _active: bool, _kelvin: u16) -> Result<(), HostNightLightError> {
+        Err(HostNightLightError::Unsupported(
+            "native night light control unavailable".into(),
+        ))
+    }
+    fn restore_native(
+        &self,
+        _values: &BTreeMap<String, String>,
+    ) -> Result<(), HostNightLightError> {
         Ok(())
     }
-}
-
-fn parse_bool(value: &str) -> Option<bool> {
-    match value.trim_matches('\'') {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
+    fn get(&self) -> Result<bool, HostNightLightError>;
+    fn set(&self, enabled: bool) -> Result<(), HostNightLightError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -76,6 +38,8 @@ struct Snapshot {
     schema_version: u32,
     id: String,
     enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_values: Option<BTreeMap<String, String>>,
     mutations: u32,
     clean: bool,
     #[serde(default)]
@@ -103,29 +67,15 @@ struct State {
     status: HostNightLightStatus,
 }
 
-struct CinnamonNightLight<S: Settings = Gsettings> {
+pub(super) struct Controller<S: Settings> {
     settings: S,
     store: qol_host_session::SessionStore,
     state: Mutex<State>,
     adoption_generation: Option<String>,
 }
 
-impl CinnamonNightLight<Gsettings> {
-    fn system(config_root: Option<&Path>) -> Self {
-        let dir = config_root
-            .and_then(|root| crate::config::device_dir(root).ok())
-            .map(|dir| dir.join("host-night-light"))
-            .unwrap_or_else(fallback_dir);
-        Self::new(Gsettings, dir)
-    }
-}
-
-pub(super) fn control(config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
-    Arc::new(CinnamonNightLight::system(config_root))
-}
-
-impl<S: Settings> CinnamonNightLight<S> {
-    fn new(settings: S, dir: PathBuf) -> Self {
+impl<S: Settings> Controller<S> {
+    pub(super) fn new(settings: S, dir: PathBuf) -> Self {
         Self {
             settings,
             store: qol_host_session::SessionStore::new(dir),
@@ -167,23 +117,86 @@ impl<S: Settings> CinnamonNightLight<S> {
         }
     }
 
+    fn disable_for_gamma(&self) -> Result<TakeoverOutcome, HostNightLightError> {
+        let enabled = self.settings.get().map_err(|error| self.fail(error))?;
+        if enabled {
+            self.settings.set(false).map_err(|error| self.fail(error))?;
+        }
+        self.set_state(
+            true,
+            if enabled {
+                HostNightLightStatus::TakenOver
+            } else {
+                HostNightLightStatus::Off
+            },
+        );
+        Ok(if enabled {
+            TakeoverOutcome::Disabled
+        } else {
+            TakeoverOutcome::AlreadyOff
+        })
+    }
+
     fn fail(&self, error: HostNightLightError) -> HostNightLightError {
         let status = match error {
             HostNightLightError::Unsupported(_) => HostNightLightStatus::Unsupported,
             HostNightLightError::Failed(_) => HostNightLightStatus::Failed,
         };
-        self.set_state(false, status);
+        self.set_state(self.is_taken_over(), status);
         error
     }
 }
 
-impl<S: Settings> HostNightLight for CinnamonNightLight<S> {
+impl<S: Settings> HostNightLight for Controller<S> {
+    fn native_supported(&self) -> bool {
+        self.settings.native_supported()
+    }
+    fn strategy(&self) -> &'static str {
+        self.settings.name()
+    }
+
+    fn apply_native(&self, active: bool, kelvin: u16) -> Result<bool, HostNightLightError> {
+        let mut snapshot = self.snapshot().map_err(|error| self.fail(error))?;
+        if snapshot
+            .as_ref()
+            .is_none_or(|saved| saved.clean || saved.native_values.is_none())
+        {
+            let Some(mut values) = self.settings.native_values()? else {
+                return Ok(false);
+            };
+            let enabled = snapshot
+                .as_ref()
+                .filter(|saved| !saved.clean)
+                .map(|saved| saved.enabled)
+                .map(Ok)
+                .unwrap_or_else(|| self.settings.get())?;
+            if let Some(value) = values.get_mut("night-light-enabled") {
+                *value = enabled.to_string();
+            }
+            snapshot = Some(Snapshot {
+                schema_version: SNAPSHOT_SCHEMA_VERSION,
+                id: SNAPSHOT_ID.into(),
+                enabled,
+                native_values: Some(values),
+                mutations: 1,
+                clean: false,
+                handoff: false,
+                adopt_generation: None,
+            });
+            self.write(snapshot.as_ref().unwrap())
+                .map_err(|error| self.fail(error))?;
+        }
+        self.set_state(true, HostNightLightStatus::TakenOver);
+        self.settings
+            .apply_native(active, kelvin)
+            .map_err(|error| self.fail(error))?;
+        self.set_state(true, HostNightLightStatus::TakenOver);
+        Ok(true)
+    }
+
     fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
         if self.is_taken_over() {
-            return Ok(match self.status() {
-                HostNightLightStatus::TakenOver => TakeoverOutcome::Disabled,
-                _ => TakeoverOutcome::AlreadyOff,
-            });
+            return self.disable_for_gamma();
         }
         if let Some(snapshot) = self.snapshot().map_err(|error| self.fail(error))? {
             if snapshot.clean {
@@ -191,17 +204,7 @@ impl<S: Settings> HostNightLight for CinnamonNightLight<S> {
                     .delete(SNAPSHOT_ID)
                     .map_err(|error| self.fail(HostNightLightError::Failed(error.to_string())))?;
             } else {
-                let status = if snapshot.enabled {
-                    HostNightLightStatus::TakenOver
-                } else {
-                    HostNightLightStatus::Off
-                };
-                self.set_state(true, status);
-                return Ok(if snapshot.enabled {
-                    TakeoverOutcome::Disabled
-                } else {
-                    TakeoverOutcome::AlreadyOff
-                });
+                return self.disable_for_gamma();
             }
         }
         let enabled = self.settings.get().map_err(|error| self.fail(error))?;
@@ -209,6 +212,7 @@ impl<S: Settings> HostNightLight for CinnamonNightLight<S> {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             id: SNAPSHOT_ID.to_string(),
             enabled,
+            native_values: None,
             mutations: u32::from(enabled),
             clean: false,
             handoff: false,
@@ -239,8 +243,14 @@ impl<S: Settings> HostNightLight for CinnamonNightLight<S> {
             self.set_state(true, status);
             return Ok(());
         }
-        if !snapshot.clean && snapshot.mutations > 0 && snapshot.enabled {
-            self.settings.set(true).map_err(|error| self.fail(error))?;
+        if !snapshot.clean && snapshot.mutations > 0 {
+            if let Some(values) = &snapshot.native_values {
+                self.settings
+                    .restore_native(values)
+                    .map_err(|error| self.fail(error))?;
+            } else if snapshot.enabled {
+                self.settings.set(true).map_err(|error| self.fail(error))?;
+            }
         }
         match mode {
             RestoreMode::Exit => self
@@ -283,10 +293,12 @@ impl<S: Settings> HostNightLight for CinnamonNightLight<S> {
     }
 }
 
-fn fallback_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("qol-monitor-host-night-light");
-    let _ = qol_fs::create_private_dir(&dir);
-    dir
+pub(super) fn session_dir(config_root: Option<&Path>, name: Option<&str>) -> PathBuf {
+    let base = config_root
+        .and_then(|root| crate::config::device_dir(root).ok())
+        .map(|dir| dir.join("host-night-light"))
+        .unwrap_or_else(|| std::env::temp_dir().join("qol-monitor-host-night-light"));
+    name.map(|name| base.join(name)).unwrap_or(base)
 }
 
 #[cfg(test)]
@@ -314,6 +326,9 @@ mod tests {
     }
 
     impl Settings for FakeSettings {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
         fn get(&self) -> Result<bool, HostNightLightError> {
             Ok(*self.value.lock().unwrap())
         }
@@ -325,9 +340,9 @@ mod tests {
         }
     }
 
-    fn controller(enabled: bool) -> (tempfile::TempDir, CinnamonNightLight<FakeSettings>) {
+    fn controller(enabled: bool) -> (tempfile::TempDir, Controller<FakeSettings>) {
         let dir = tempfile::tempdir().unwrap();
-        let controller = CinnamonNightLight::new(
+        let controller = Controller::new(
             FakeSettings::new(enabled),
             dir.path().join("host-night-light"),
         )
@@ -339,7 +354,7 @@ mod tests {
     fn true_is_disabled_once_and_restored_on_release() {
         let (_dir, controller) = controller(true);
         assert_eq!(controller.take_over().unwrap(), TakeoverOutcome::Disabled);
-        assert_eq!(controller.take_over().unwrap(), TakeoverOutcome::Disabled);
+        assert_eq!(controller.take_over().unwrap(), TakeoverOutcome::AlreadyOff);
         assert_eq!(controller.settings.writes(), vec![false]);
         controller.release(RestoreMode::Exit).unwrap();
         assert_eq!(controller.settings.writes(), vec![false, true]);
@@ -357,7 +372,7 @@ mod tests {
     fn recovery_after_a_crash_restores_true() {
         let (dir, first) = controller(true);
         first.take_over().unwrap();
-        let second = CinnamonNightLight::new(
+        let second = Controller::new(
             FakeSettings::new(false),
             dir.path().join("host-night-light"),
         );
@@ -370,7 +385,7 @@ mod tests {
         let (dir, first) = controller(true);
         first.take_over().unwrap();
         first.mark_handoff(Some("next"));
-        let second = CinnamonNightLight::new(
+        let second = Controller::new(
             FakeSettings::new(false),
             dir.path().join("host-night-light"),
         )
@@ -379,11 +394,96 @@ mod tests {
         assert!(second.is_taken_over());
         assert!(second.settings.writes().is_empty());
     }
+    struct NativeSettings {
+        values: StdMutex<BTreeMap<String, String>>,
+    }
+
+    impl Settings for NativeSettings {
+        fn native_supported(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &'static str {
+            "native-test"
+        }
+        fn get(&self) -> Result<bool, HostNightLightError> {
+            Ok(self.values.lock().unwrap()["night-light-enabled"] == "true")
+        }
+        fn set(&self, enabled: bool) -> Result<(), HostNightLightError> {
+            self.values
+                .lock()
+                .unwrap()
+                .insert("night-light-enabled".into(), enabled.to_string());
+            Ok(())
+        }
+        fn native_values(&self) -> Result<Option<BTreeMap<String, String>>, HostNightLightError> {
+            Ok(Some(self.values.lock().unwrap().clone()))
+        }
+        fn apply_native(&self, active: bool, kelvin: u16) -> Result<(), HostNightLightError> {
+            *self.values.lock().unwrap() = BTreeMap::from([
+                ("night-light-enabled".into(), active.to_string()),
+                ("temperature".into(), kelvin.to_string()),
+                ("schedule".into(), "always".into()),
+            ]);
+            Ok(())
+        }
+        fn restore_native(
+            &self,
+            values: &BTreeMap<String, String>,
+        ) -> Result<(), HostNightLightError> {
+            *self.values.lock().unwrap() = values.clone();
+            Ok(())
+        }
+    }
 
     #[test]
-    fn gsettings_boolean_parser_is_strict() {
-        assert_eq!(parse_bool("true"), Some(true));
-        assert_eq!(parse_bool("'false'"), Some(false));
-        assert_eq!(parse_bool("enabled"), None);
+    fn gamma_takeover_disables_a_live_native_session_without_losing_its_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = BTreeMap::from([
+            ("night-light-enabled".into(), "true".into()),
+            ("temperature".into(), "4500".into()),
+            ("schedule".into(), "sunset".into()),
+        ]);
+        let controller = Controller::new(
+            NativeSettings {
+                values: StdMutex::new(original.clone()),
+            },
+            session_dir(Some(dir.path()), Some("test")),
+        );
+        controller.apply_native(true, 3500).unwrap();
+        assert_eq!(controller.take_over().unwrap(), TakeoverOutcome::Disabled);
+        assert!(!controller.settings.get().unwrap());
+        assert_eq!(controller.take_over().unwrap(), TakeoverOutcome::AlreadyOff);
+        controller.release(RestoreMode::Exit).unwrap();
+        assert_eq!(*controller.settings.values.lock().unwrap(), original);
+    }
+
+    #[test]
+    fn native_session_restores_all_original_settings_after_changes_or_crash() {
+        for mode in [RestoreMode::Exit, RestoreMode::Recovery] {
+            for enabled in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let original = BTreeMap::from([
+                    ("night-light-enabled".into(), enabled.to_string()),
+                    ("temperature".into(), "4500".into()),
+                    ("schedule".into(), "sunset".into()),
+                ]);
+                let controller = Controller::new(
+                    NativeSettings {
+                        values: StdMutex::new(original.clone()),
+                    },
+                    session_dir(Some(dir.path()), Some("test")),
+                );
+                controller.apply_native(true, 3500).unwrap();
+                controller.apply_native(false, 2500).unwrap();
+                assert_ne!(*controller.settings.values.lock().unwrap(), original);
+                controller.release(mode).unwrap();
+                assert_eq!(
+                    *controller.settings.values.lock().unwrap(),
+                    original,
+                    "mode: {mode:?}, enabled: {enabled}"
+                );
+                assert!(!controller.is_taken_over());
+            }
+        }
     }
 }

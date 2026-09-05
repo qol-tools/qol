@@ -153,10 +153,29 @@ pub trait DisplayControl: Send + Sync {
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError>;
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError>;
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        _tint: night::Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_brightness(handle, value)
+    }
     fn set_tint(&self, _handle: &DisplayHandle, _tint: night::Tint) -> Result<(), MonitorError> {
         Err(MonitorError::unsupported(
             "tint",
             "gamma tint is not implemented on this display or platform",
+        ))
+    }
+    fn set_gamma_adjustment(
+        &self,
+        _handle: &DisplayHandle,
+        _value: u8,
+        _tint: night::Tint,
+    ) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported(
+            "gamma",
+            "combined brightness and tint are not implemented on this platform",
         ))
     }
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError>;

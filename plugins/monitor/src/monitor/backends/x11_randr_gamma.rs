@@ -189,6 +189,7 @@ impl<T: GammaTransport> GammaBackend<T> {
         value: Option<u8>,
         tint: Option<Tint>,
     ) -> Result<(), GammaError> {
+        let tint_requested = tint.is_some();
         let mut bus = self.transport.open()?;
         let Some(crtc) = bus.crtc_for_connector(handle.connector())? else {
             return Err(GammaError::Unsupported {
@@ -238,6 +239,9 @@ impl<T: GammaTransport> GammaBackend<T> {
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
                 entry.warned = true;
+            }
+            if tint_requested {
+                return Err(GammaError::Refused { reason: "the night tint write did not verify; another display owner changed the gamma ramp".into() });
             }
         }
         Ok(())
@@ -348,9 +352,28 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
             .map_err(|error| error.into_monitor("brightness"))
     }
 
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_gamma_adjustment(handle, value, tint)
+    }
+
     fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
         self.set_inner(handle, None, Some(tint))
             .map_err(|error| error.into_monitor("tint"))
+    }
+
+    fn set_gamma_adjustment(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_inner(handle, Some(value), Some(tint))
+            .map_err(|error| error.into_monitor("gamma"))
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
@@ -727,6 +750,26 @@ mod tests {
     }
 
     #[test]
+    fn a_complete_adjustment_replaces_both_previous_gamma_components() {
+        let original = identity(4, u16::MAX / 2);
+        let backend = backend(bus(&original, 1));
+        for (value, tint) in [
+            (70, Tint::NEUTRAL),
+            (70, Tint::from_kelvin(3500)),
+            (75, Tint::from_kelvin(3500)),
+            (75, Tint::NEUTRAL),
+        ] {
+            backend
+                .set_gamma_adjustment(&handle(), value, tint)
+                .unwrap();
+            assert_eq!(
+                backend.transport.bus.lock().unwrap().tables[&1],
+                original.dimmed(value).tinted(tint)
+            );
+        }
+    }
+
+    #[test]
     fn restore_after_tint_writes_the_original_ramp() {
         let original = identity(4, 100);
         let backend = backend(bus(&original, 1));
@@ -787,6 +830,18 @@ mod tests {
             Some(original.dimmed(50).checksum()),
             "an unverified write must not become the restore guard"
         );
+    }
+
+    #[test]
+    fn night_tint_reports_failed_readback_instead_of_claiming_it_was_applied() {
+        let original = identity(4, 30_000);
+        let backend = backend(bus(&original, 1));
+        backend.transport.bus.lock().unwrap().co_owner = Some(original);
+        assert!(matches!(
+            backend.set_tint(&handle(), Tint::from_kelvin(3500)),
+            Err(MonitorError::Refused { .. })
+        ));
+        assert_eq!(backend.mismatch_count(&handle()), 1);
     }
 
     #[test]

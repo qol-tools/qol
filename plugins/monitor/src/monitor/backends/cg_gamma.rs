@@ -20,6 +20,7 @@ pub fn display_id_from_connector(connector: &str) -> Option<u32> {
     id.parse().ok()
 }
 
+#[cfg(test)]
 fn scaled_table(original: &GammaTable, percent: u8) -> GammaTable {
     let factor = u32::from(percent.clamp(MIN_PERCENT, 100));
     let scale = |entry: u16| (u32::from(entry) * factor / 100) as u16;
@@ -40,6 +41,7 @@ struct GammaSession {
     original: Option<GammaTable>,
     written_checksum: Option<u64>,
     written_value: Option<u8>,
+    written_tint: Tint,
     mismatches: usize,
     warned: bool,
 }
@@ -78,7 +80,12 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
             .unwrap_or(100))
     }
 
-    fn set_inner(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
+    fn set_inner(
+        &self,
+        handle: &DisplayHandle,
+        value: Option<u8>,
+        tint: Option<Tint>,
+    ) -> Result<(), MonitorError> {
         let display_id = self.display_id(handle)?;
         let current = self.seam.read_table(display_id).ok_or_else(|| {
             MonitorError::unsupported(
@@ -97,8 +104,12 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
         }
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
+        let value = value
+            .unwrap_or(entry.written_value.unwrap_or(100))
+            .clamp(MIN_PERCENT, 100);
+        let tint = tint.unwrap_or(entry.written_tint);
         let original = entry.original.get_or_insert_with(|| current.clone());
-        let target = scaled_table(original, value);
+        let target = original.dimmed(value).tinted(tint);
         let mut verified = false;
         for _ in 0..=1 {
             if !self.seam.write_table(display_id, &target) {
@@ -117,12 +128,17 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
         }
         if verified {
             entry.written_checksum = Some(target.checksum());
-            entry.written_value = Some(value.clamp(MIN_PERCENT, 100));
+            entry.written_value = Some(value);
+            entry.written_tint = tint;
         } else {
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
                 entry.warned = true;
             }
+            return Err(MonitorError::refused(
+                "gamma",
+                "the CoreGraphics gamma write did not verify",
+            ));
         }
         Ok(())
     }
@@ -132,14 +148,15 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        last_tint: Tint,
     ) -> Result<RestoreOutcome, MonitorError> {
         let guard = {
             let session = self.session();
             match session.get(handle.id()) {
                 Some(entry) => entry
                     .written_checksum
-                    .unwrap_or_else(|| scaled_table(original, last_value).checksum()),
-                None => scaled_table(original, last_value).checksum(),
+                    .unwrap_or_else(|| original.dimmed(last_value).tinted(last_tint).checksum()),
+                None => original.dimmed(last_value).tinted(last_tint).checksum(),
             }
         };
         let display_id = self.display_id(handle)?;
@@ -181,6 +198,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
             entry.original = None;
             entry.written_checksum = None;
             entry.written_value = None;
+            entry.written_tint = Tint::NEUTRAL;
         }
         Ok(RestoreOutcome::Restored)
     }
@@ -194,9 +212,10 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
             return Ok(RestoreOutcome::NothingToRestore);
         };
         let last_value = entry.written_value.unwrap_or(100);
+        let last_tint = entry.written_tint;
         let original = original.clone();
         drop(session);
-        self.restore_lut(handle, &original, last_value)
+        self.restore_lut(handle, &original, last_value, last_tint)
     }
 }
 
@@ -229,7 +248,29 @@ impl<T: CgGammaSeam> DisplayControl for CgGammaControl<T> {
     }
 
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, value)
+        self.set_inner(handle, Some(value), None)
+    }
+
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_gamma_adjustment(handle, value, tint)
+    }
+
+    fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.set_inner(handle, None, Some(tint))
+    }
+
+    fn set_gamma_adjustment(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_inner(handle, Some(value), Some(tint))
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
@@ -238,7 +279,7 @@ impl<T: CgGammaSeam> DisplayControl for CgGammaControl<T> {
     }
 
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, value)
+        self.set_inner(handle, Some(value), None)
     }
 
     fn list_modes(&self, _handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError> {
@@ -289,9 +330,9 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
-        _last_tint: Tint,
+        last_tint: Tint,
     ) -> LutRestoreOutcome {
-        match self.restore_lut(handle, original, last_value) {
+        match self.restore_lut(handle, original, last_value, last_tint) {
             Ok(RestoreOutcome::Restored) => LutRestoreOutcome::Restored,
             Ok(RestoreOutcome::ForeignLutPreserved) => LutRestoreOutcome::ForeignLutPreserved,
             Ok(RestoreOutcome::NothingToRestore) | Err(_) => LutRestoreOutcome::Unavailable,
@@ -303,14 +344,15 @@ impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
-        _last_tint: Tint,
+        last_tint: Tint,
     ) {
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
             entry.original = Some(original.clone());
             entry.written_value = Some(last_value);
-            entry.written_checksum = Some(original.dimmed(last_value).checksum());
+            entry.written_tint = last_tint;
+            entry.written_checksum = Some(original.dimmed(last_value).tinted(last_tint).checksum());
         }
     }
 }
@@ -484,6 +526,41 @@ mod tests {
             RestoreOutcome::NothingToRestore,
             "restore is idempotent"
         );
+    }
+
+    #[test]
+    fn night_tint_and_brightness_compose_and_restore_without_losing_either() {
+        for percent in [10, 50, 100] {
+            let original = identity_table(4, 30_000);
+            let backend = backend(seam_with(original.clone()));
+            let display = handle("cg-1");
+            let tint = Tint::from_kelvin(3500);
+            backend.set_brightness(&display, percent).unwrap();
+            backend.set_tint(&display, tint).unwrap();
+            assert_eq!(
+                backend.seam.tables.lock().unwrap()[&1],
+                original.dimmed(percent).tinted(tint),
+                "percent: {percent}"
+            );
+            backend.set_brightness(&display, 70).unwrap();
+            assert_eq!(
+                backend.seam.tables.lock().unwrap()[&1],
+                original.dimmed(70).tinted(tint),
+                "percent: {percent}"
+            );
+            backend.set_tint(&display, Tint::NEUTRAL).unwrap();
+            assert_eq!(
+                backend.seam.tables.lock().unwrap()[&1],
+                original.dimmed(70),
+                "percent: {percent}"
+            );
+            assert_eq!(backend.restore(&display).unwrap(), RestoreOutcome::Restored);
+            assert_eq!(
+                backend.seam.tables.lock().unwrap()[&1],
+                original,
+                "percent: {percent}"
+            );
+        }
     }
 
     #[test]

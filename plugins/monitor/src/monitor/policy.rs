@@ -92,19 +92,28 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> PolicyControl<D, G> {
         }
     }
 
-    fn set_auto(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
+    fn set_auto(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Option<Tint>,
+    ) -> Result<(), MonitorError> {
+        let gamma = || match tint {
+            Some(tint) => self.gamma.set_gamma_adjustment(handle, value, tint),
+            None => self.gamma.set_brightness(handle, value),
+        };
         if self.ddc.writes_dropped(handle.connector()) {
-            return self.gamma.set_brightness(handle, value);
+            return gamma();
         }
         match self.ddc.set_brightness(handle, value) {
             Ok(()) => {
                 if self.ddc.writes_dropped(handle.connector()) {
-                    self.gamma.set_brightness(handle, value)
+                    gamma()
                 } else {
                     Ok(())
                 }
             }
-            Err(_) => self.gamma.set_brightness(handle, value),
+            Err(_) => gamma(),
         }
     }
 
@@ -164,12 +173,34 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
             )),
             BrightnessPolicy::Gamma => self.gamma.set_brightness(handle, value),
             BrightnessPolicy::Ddc => self.ddc.set_brightness(handle, value),
-            BrightnessPolicy::Auto => self.set_auto(handle, value),
+            BrightnessPolicy::Auto => self.set_auto(handle, value, None),
+        }
+    }
+
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        match self.selection(handle.id()) {
+            BrightnessPolicy::Gamma => self.gamma.set_gamma_adjustment(handle, value, tint),
+            BrightnessPolicy::Auto => self.set_auto(handle, value, Some(tint)),
+            BrightnessPolicy::Ddc | BrightnessPolicy::Off => self.set_brightness(handle, value),
         }
     }
 
     fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
         self.gamma.set_tint(handle, tint)
+    }
+
+    fn set_gamma_adjustment(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.gamma.set_gamma_adjustment(handle, value, tint)
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
