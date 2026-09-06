@@ -4,7 +4,7 @@ description = "Desktop theming and cursor effects."
 
 [section.shake_to_grow]
 label = "Shake to Grow"
-description = "Shake the cursor to enlarge it, macOS style. A shake must retrace its own ground: inside the detection window the cursor path must be several times longer than the area it covers, and at least the minimum shake size. The cursor shrinks back after the calm duration."
+description = "Shake the cursor fast back and forth to enlarge it, macOS style. Inside the detection window the cursor path must be Shake Strictness times longer than the area it covers and at least Min Shake Size wide, so the slowest shake that counts is strictness divided by twice the window in seconds (about 4.2 shakes per second with the defaults). Slow or brief wiggles never grow the cursor. The cursor shrinks back after the calm duration."
 actions = ["run"]
 
 [field.enabled]
@@ -24,11 +24,23 @@ default = true
 field = "enabled"
 equals = true
 
+[field.pause_in_fullscreen]
+type = "boolean"
+label = "Pause in Fullscreen"
+description = "Disable Shake to Grow while the focused window is fullscreen."
+section = "shake_to_grow"
+default = true
+
+[field.pause_in_fullscreen.show_when]
+field = "enabled"
+equals = true
+
 [field.shake_strictness]
 type = "number"
 label = "Shake Strictness"
+description = "Path length divided by covered area needed inside the window. Higher means faster shaking."
 section = "shake_to_grow"
-default = 6.5
+default = 5.0
 min = 1
 step = 0.5
 
@@ -75,8 +87,9 @@ equals = true
 [field.shake_window_ms]
 type = "number"
 label = "Detection Window"
+description = "How long a shake has to be sustained. A shorter window demands a faster shake."
 section = "shake_to_grow"
-default = 1000
+default = 600
 min = 100
 step = 50
 
@@ -111,8 +124,9 @@ equals = true
 [field.grow_ms]
 type = "number"
 label = "Grow Duration (ms)"
+description = "Time for the cursor to reach full size."
 section = "shake_to_grow"
-default = 250
+default = 120
 min = 20
 step = 10
 
