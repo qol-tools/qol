@@ -1,3 +1,4 @@
+mod navigation;
 mod object_array_row;
 mod persistence;
 mod rows;
@@ -6,6 +7,7 @@ mod view;
 
 pub mod components;
 pub use components::{settings_action_spinner, settings_busy_message, settings_query_spinner};
+pub use navigation::{CustomPanelInvalidator, CustomSettingsBreadcrumbs, SettingsDestination};
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -107,9 +109,47 @@ impl SettingsPanel {
 
 pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
+type CustomBreadcrumbReader = Rc<dyn Fn(&App) -> Vec<SettingsDestination>>;
+
 pub struct CustomPanelView {
-    pub view: AnyView,
-    pub focus_handle: gpui::FocusHandle,
+    view: AnyView,
+    focus_handle: gpui::FocusHandle,
+    breadcrumbs: CustomBreadcrumbReader,
+    _observation: gpui::Subscription,
+}
+
+impl CustomPanelView {
+    pub fn new<T>(
+        entity: gpui::Entity<T>,
+        on_change: CustomPanelInvalidator,
+        cx: &mut gpui::App,
+    ) -> Self
+    where
+        T: gpui::Render + gpui::Focusable + CustomSettingsBreadcrumbs + 'static,
+    {
+        let focus_handle = entity.read(cx).focus_handle(cx);
+        let observed = entity.downgrade();
+        let breadcrumbs: CustomBreadcrumbReader = Rc::new(move |cx| {
+            observed
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_breadcrumbs())
+                .unwrap_or_default()
+        });
+        let observation = cx.observe(&entity, move |_, cx| on_change(cx));
+        Self {
+            view: entity.into(),
+            focus_handle,
+            breadcrumbs,
+            _observation: observation,
+        }
+    }
+
+    fn breadcrumb_labels(&self, cx: &App) -> Vec<String> {
+        (self.breadcrumbs)(cx)
+            .iter()
+            .map(|destination| destination.label().to_string())
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,6 +164,7 @@ pub struct CustomPanelContext {
     pub dismisser: SurfaceDismisser,
     pub on_back: CustomPanelCallback,
     pub notify: CustomPanelNotifier,
+    pub on_change: CustomPanelInvalidator,
 }
 
 pub type CustomPanelFactory = Rc<dyn Fn(CustomPanelContext, &mut App) -> CustomPanelView>;

@@ -13,7 +13,10 @@ use qol_gpui::settings_panel::components::{
     SettingsGroupHeader, SettingsKeyCombination, SettingsRow, SettingsSelectValue,
     SettingsTextField, SettingsToggle,
 };
-use qol_gpui::settings_panel::{CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier};
+use qol_gpui::settings_panel::{
+    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
+    SettingsDestination,
+};
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::theme::settings_panel_runtime;
 
@@ -30,6 +33,14 @@ use super::model::{
 const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
 const HOTKEY_FIELDS: usize = 4;
+
+const ADD_SHORTCUT_DESTINATION: SettingsDestination =
+    SettingsDestination::from_static("Add Shortcut");
+const EDIT_SHORTCUT_DESTINATION: SettingsDestination =
+    SettingsDestination::from_static("Edit Shortcut");
+const ADD_HOTKEY_DESTINATION: SettingsDestination = SettingsDestination::from_static("Add Hotkey");
+const EDIT_HOTKEY_DESTINATION: SettingsDestination =
+    SettingsDestination::from_static("Edit Hotkey");
 
 fn plural(count: usize, noun: &str) -> String {
     if count == 1 {
@@ -1481,6 +1492,36 @@ impl NativeToolsView {
     }
 }
 
+impl CustomSettingsBreadcrumbs for NativeToolsView {
+    fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
+        breadcrumb_destinations(&self.mode)
+    }
+}
+
+fn breadcrumb_destinations(mode: &Mode) -> Vec<SettingsDestination> {
+    match mode {
+        Mode::List => Vec::new(),
+        Mode::Shortcut(draft) => vec![shortcut_destination(draft)],
+        Mode::Hotkey(draft) => vec![hotkey_destination(draft)],
+    }
+}
+
+fn shortcut_destination(draft: &ShortcutDraft) -> SettingsDestination {
+    if draft.managed.is_some() || draft.original_id.is_some() {
+        EDIT_SHORTCUT_DESTINATION
+    } else {
+        ADD_SHORTCUT_DESTINATION
+    }
+}
+
+fn hotkey_destination(draft: &HotkeyDraft) -> SettingsDestination {
+    if draft.original_id.is_some() {
+        EDIT_HOTKEY_DESTINATION
+    } else {
+        ADD_HOTKEY_DESTINATION
+    }
+}
+
 impl Focusable for NativeToolsView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1613,5 +1654,124 @@ fn app_placeholder(kind: AppRefKind) -> &'static str {
         AppRefKind::BundleId => "com.example.App",
         AppRefKind::Name => "App Name",
         AppRefKind::Path => "/Applications/App.app",
+    }
+}
+
+#[cfg(test)]
+mod breadcrumb_tests {
+    use super::{breadcrumb_destinations, HotkeyDraft, Mode, Shortcut, ShortcutDraft};
+    use crate::hotkeys::HotkeyBinding;
+    use crate::plugins::PluginUid;
+    use crate::shortcuts::model::{AppRef, ShortcutAction, ShortcutSource};
+
+    fn plain_shortcut() -> Shortcut {
+        Shortcut {
+            id: "docs".to_string(),
+            name: "Docs".to_string(),
+            enabled: true,
+            export_to_launcher: true,
+            source: None,
+            action: ShortcutAction::LaunchApp {
+                app: AppRef::Path {
+                    path: "/Applications/App.app".to_string(),
+                },
+            },
+        }
+    }
+
+    fn managed_shortcut() -> Shortcut {
+        Shortcut {
+            id: "plugin-a-open".to_string(),
+            name: "Managed".to_string(),
+            enabled: true,
+            export_to_launcher: true,
+            source: Some(ShortcutSource::PluginManifest {
+                plugin_id: "plugin-a".to_string(),
+                shortcut_id: "open".to_string(),
+            }),
+            action: ShortcutAction::PluginAction {
+                plugin_id: "plugin-a".to_string(),
+                action: "open".to_string(),
+            },
+        }
+    }
+
+    fn hotkey_binding() -> HotkeyBinding {
+        HotkeyBinding {
+            id: "hk-1".to_string(),
+            key: "Ctrl+K".to_string(),
+            plugin_uid: PluginUid::new("plugin-a"),
+            action: "run".to_string(),
+            enabled: true,
+        }
+    }
+
+    fn single_label(mode: &Mode) -> String {
+        let destinations = breadcrumb_destinations(mode);
+        assert_eq!(
+            destinations.len(),
+            1,
+            "an editor mode maps to one destination",
+        );
+        destinations[0].label().to_string()
+    }
+
+    #[test]
+    fn list_mode_represents_the_source_root_with_no_destinations() {
+        assert!(breadcrumb_destinations(&Mode::List).is_empty());
+    }
+
+    #[test]
+    fn blank_drafts_map_to_add_destinations() {
+        let shortcut = Mode::Shortcut(ShortcutDraft::blank());
+        assert_eq!(single_label(&shortcut), "Add Shortcut");
+        let hotkey = Mode::Hotkey(HotkeyDraft::blank(&[], &[]));
+        assert_eq!(single_label(&hotkey), "Add Hotkey");
+    }
+
+    #[test]
+    fn existing_drafts_map_to_edit_destinations() {
+        let shortcut = ShortcutDraft::from_shortcut(&plain_shortcut());
+        assert_eq!(single_label(&Mode::Shortcut(shortcut)), "Edit Shortcut");
+        let hotkey = HotkeyDraft::from_hotkey(&hotkey_binding());
+        assert_eq!(single_label(&Mode::Hotkey(hotkey)), "Edit Hotkey");
+    }
+
+    #[test]
+    fn plugin_managed_shortcut_editors_get_an_explicit_destination() {
+        let draft = ShortcutDraft::from_shortcut(&managed_shortcut());
+        let destinations = breadcrumb_destinations(&Mode::Shortcut(draft));
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(destinations[0].label(), "Edit Shortcut");
+    }
+
+    #[test]
+    fn destination_identity_follows_the_draft_identity_the_renderer_uses() {
+        let mut draft = ShortcutDraft::blank();
+        assert_eq!(single_label(&Mode::Shortcut(draft.clone())), "Add Shortcut");
+        draft.original_id = Some("docs".to_string());
+        assert_eq!(single_label(&Mode::Shortcut(draft)), "Edit Shortcut");
+
+        let mut hotkey = HotkeyDraft::blank(&[], &[]);
+        assert_eq!(single_label(&Mode::Hotkey(hotkey.clone())), "Add Hotkey");
+        hotkey.original_id = Some("hk-1".to_string());
+        assert_eq!(single_label(&Mode::Hotkey(hotkey)), "Edit Hotkey");
+    }
+
+    #[test]
+    fn every_mapped_destination_carries_a_nonempty_label() {
+        let modes = [
+            Mode::List,
+            Mode::Shortcut(ShortcutDraft::blank()),
+            Mode::Shortcut(ShortcutDraft::from_shortcut(&plain_shortcut())),
+            Mode::Shortcut(ShortcutDraft::from_shortcut(&managed_shortcut())),
+            Mode::Hotkey(HotkeyDraft::blank(&[], &[])),
+            Mode::Hotkey(HotkeyDraft::from_hotkey(&hotkey_binding())),
+        ];
+        for mode in &modes {
+            for destination in breadcrumb_destinations(mode) {
+                assert!(!destination.label().trim().is_empty());
+            }
+        }
     }
 }

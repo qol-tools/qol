@@ -25,8 +25,9 @@ use super::rows::{
     SliderHold,
 };
 use super::{
-    CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelNotifier,
-    CustomPanelView, PanelSourceGroup, SettingsPanel, SettingsRuntime, SourceState,
+    CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelInvalidator,
+    CustomPanelNotifier, CustomPanelView, PanelSourceGroup, SettingsDestination, SettingsPanel,
+    SettingsRuntime, SourceState,
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
@@ -282,11 +283,17 @@ struct Level {
     body_scroll: crate::scroll_list::SelectionScroll,
     active_control: Option<ActiveControl>,
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
-    title: Option<String>,
+    header: LevelHeader,
     origin_row: Option<usize>,
     object_array: Option<ObjectArrayState>,
     list_card: bool,
     live_card: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LevelHeader {
+    Root,
+    Card(SettingsDestination),
 }
 
 struct ListActionMenu {
@@ -330,7 +337,7 @@ impl SettingsPanelView {
             body_scroll: crate::scroll_list::SelectionScroll::new(),
             active_control: None,
             row_bounds,
-            title: None,
+            header: LevelHeader::Root,
             origin_row: None,
             object_array: None,
             list_card: false,
@@ -392,6 +399,13 @@ impl SettingsPanelView {
             custom_views: Vec::new(),
         };
         let parent = cx.weak_entity();
+        let parent_for_change = parent.clone();
+        let on_change: CustomPanelInvalidator = Rc::new(move |app| {
+            let parent = parent_for_change.clone();
+            app.defer(move |app| {
+                let _ = parent.update(app, |_, cx| cx.notify());
+            });
+        });
         view.custom_views = view
             .panel
             .sources
@@ -410,6 +424,7 @@ impl SettingsPanelView {
                                 dismisser: dismisser.clone(),
                                 on_back,
                                 notify: Rc::clone(&notify),
+                                on_change: Rc::clone(&on_change),
                             },
                             cx,
                         )
@@ -636,6 +651,12 @@ impl SettingsPanelView {
             self.sync_live_card_to_root();
         }
         if pop_level(&mut self.stack).is_some() {
+            #[cfg(debug_assertions)]
+            qol_runtime::probe!(
+                "SETTINGS_NAV",
+                "phase=card-pop depth={}",
+                self.stack.len() - 1
+            );
             self.deck_transition
                 .state_changed(true, std::time::Instant::now());
             self.deck_motion = Some(DeckMotion::Pop);
@@ -1771,22 +1792,22 @@ impl SettingsPanelView {
             RowControl::Action { .. } => self.dispatch_action(cx),
             RowControl::Status { .. } => {}
             RowControl::List { items, .. } if !items.is_empty() => {
-                self.open_list_card(selected);
+                self.open_list_card(selected, cx);
                 cx.notify();
             }
             RowControl::List { .. } => {}
             RowControl::ObjectArray(_) => {
-                self.open_object_array_card(selected);
+                self.open_object_array_card(selected, cx);
                 cx.notify();
             }
             RowControl::Gamepad { .. } | RowControl::QrCode { .. } => {
-                self.open_live_card(selected);
+                self.open_live_card(selected, cx);
                 cx.notify();
             }
             RowControl::Unsupported { .. } => {}
             RowControl::Number { .. } | RowControl::Text(_) => self.begin_edit(),
             RowControl::TextList(_) => {
-                self.open_text_list_card(selected);
+                self.open_text_list_card(selected, cx);
                 cx.notify();
             }
         }
@@ -2289,14 +2310,36 @@ impl SettingsPanelView {
         cx.notify();
     }
 
-    fn push_card(&mut self, child: Level) {
+    fn push_card(&mut self, destination: SettingsDestination, mut child: Level) {
+        child.header = LevelHeader::Card(destination);
         self.deck_transition
             .state_changed(true, std::time::Instant::now());
         self.deck_motion = Some(DeckMotion::Push);
         push_level(&mut self.stack, child);
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "phase=card-push depth={}",
+            self.stack.len() - 1
+        );
     }
 
-    fn open_text_list_card(&mut self, row_index: usize) {
+    fn card_destination(
+        &mut self,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<SettingsDestination> {
+        match SettingsDestination::new(label) {
+            Ok(destination) => Some(destination),
+            Err(error) => {
+                self.save_error = Some(format!("{error}"));
+                cx.notify();
+                None
+            }
+        }
+    }
+
+    fn open_text_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.level().rows.get(row_index) else {
             return;
         };
@@ -2307,6 +2350,9 @@ impl SettingsPanelView {
         let config_key = row.config_key.clone();
         let source = row.source;
         let values = values.clone();
+        let Some(destination) = self.card_destination(&label, cx) else {
+            return;
+        };
         let rows = text_list_child_rows(&label, &config_key, source, &values);
         let section = RowSection {
             label: label.clone(),
@@ -2324,17 +2370,24 @@ impl SettingsPanelView {
             body_scroll: crate::scroll_list::SelectionScroll::new(),
             active_control: None,
             row_bounds,
-            title: Some(label),
+            header: LevelHeader::Card(destination.clone()),
             origin_row: Some(row_index),
             object_array: None,
             list_card: false,
             live_card: false,
         };
-        self.push_card(child);
+        self.push_card(destination, child);
         self.sync_scroll();
     }
 
-    fn open_list_card(&mut self, row_index: usize) {
+    fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        let (label, config_key, source) = match self.level().rows.get(row_index) {
+            Some(row) => (row.label.clone(), row.config_key.clone(), row.source),
+            None => return,
+        };
+        let Some(destination) = self.card_destination(&label, cx) else {
+            return;
+        };
         let Some(row) = self.level().rows.get(row_index) else {
             return;
         };
@@ -2348,9 +2401,6 @@ impl SettingsPanelView {
         else {
             return;
         };
-        let label = row.label.clone();
-        let config_key = row.config_key.clone();
-        let source = row.source;
         let child = list_card_level(
             ListCardOrigin {
                 label: &label,
@@ -2362,12 +2412,13 @@ impl SettingsPanelView {
             items,
             filter,
             list.selected,
+            destination.clone(),
         );
-        self.push_card(child);
+        self.push_card(destination, child);
         self.sync_scroll();
     }
 
-    fn open_object_array_card(&mut self, row_index: usize) {
+    fn open_object_array_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.level().rows.get(row_index) else {
             return;
         };
@@ -2382,12 +2433,22 @@ impl SettingsPanelView {
             state.schema.clone(),
             state.entries.clone(),
         );
-        let level = object_array_card_level(&label, &config_key, source, child, row_index);
-        self.push_card(level);
+        let Some(destination) = self.card_destination(&label, cx) else {
+            return;
+        };
+        let level = object_array_card_level(
+            &label,
+            &config_key,
+            source,
+            child,
+            row_index,
+            destination.clone(),
+        );
+        self.push_card(destination, level);
         self.sync_scroll();
     }
 
-    fn open_live_card(&mut self, row_index: usize) {
+    fn open_live_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.level().rows.get(row_index) else {
             return;
         };
@@ -2415,8 +2476,19 @@ impl SettingsPanelView {
         let description = row.description.clone();
         let config_key = row.config_key.clone();
         let source = row.source;
-        let child = live_card_level(&label, description, &config_key, source, control, row_index);
-        self.push_card(child);
+        let Some(destination) = self.card_destination(&label, cx) else {
+            return;
+        };
+        let child = live_card_level(
+            &label,
+            description,
+            &config_key,
+            source,
+            control,
+            row_index,
+            destination.clone(),
+        );
+        self.push_card(destination, child);
         self.sync_scroll();
     }
 
@@ -4283,7 +4355,7 @@ impl Render for SettingsPanelView {
             .shadow(crate::kit::float_shadow(self.palette.section_text))
             .bg(rgb(self.palette.window_bg))
             .text_color(rgb(self.palette.section_text))
-            .child(self.render_band())
+            .child(self.render_band(cx))
             .child(self.render_content(
                 cx,
                 window.viewport_size().width.to_f64() as f32,
@@ -4548,9 +4620,9 @@ impl SettingsPanelView {
         crumbs
     }
 
-    fn render_band(&self) -> Div {
+    fn render_band(&self, cx: &App) -> Div {
         let total = self.panel_row_total();
-        let trail = self.trail();
+        let trail = self.trail(cx);
         let subtitle_fits = self.stack.len() == 1;
         div()
             .flex_none()
@@ -4694,15 +4766,27 @@ impl SettingsPanelView {
             .unwrap_or_else(|| self.panel.heading.clone())
     }
 
-    fn trail(&self) -> Vec<String> {
-        let cards = self
-            .stack
-            .iter()
-            .skip(1)
-            .map(|level| level.title.clone().unwrap_or_default())
-            .collect::<Vec<_>>();
+    fn trail(&self, cx: &App) -> Vec<String> {
         let plugin = (self.sources.len() > 1 && !self.filtering())
             .then(|| self.plugin_title(self.materialized_source));
+        let cards = if self.current_source_is_custom() {
+            if self.rail_source_level() {
+                Vec::new()
+            } else {
+                self.custom_view()
+                    .map(|custom| custom.breadcrumb_labels(cx))
+                    .unwrap_or_default()
+            }
+        } else {
+            self.stack
+                .iter()
+                .skip(1)
+                .filter_map(|level| match &level.header {
+                    LevelHeader::Card(destination) => Some(destination.label().to_string()),
+                    LevelHeader::Root => None,
+                })
+                .collect()
+        };
         crumb_labels(&self.panel.heading, plugin, cards)
     }
 
@@ -5441,6 +5525,7 @@ fn object_array_card_level(
     source: usize,
     state: ObjectArrayState,
     origin_row: usize,
+    destination: SettingsDestination,
 ) -> Level {
     let selected = initial_card_selection(state.entries.len());
     let mut state = state;
@@ -5463,7 +5548,7 @@ fn object_array_card_level(
         body_scroll: crate::scroll_list::SelectionScroll::new(),
         active_control: None,
         row_bounds,
-        title: Some(label.to_string()),
+        header: LevelHeader::Card(destination),
         origin_row: Some(origin_row),
         object_array: Some(state),
         list_card: false,
@@ -5569,6 +5654,7 @@ fn list_card_level(
     items: &[ListItem],
     filter: &str,
     selected_slot: usize,
+    destination: SettingsDestination,
 ) -> Level {
     let ListCardOrigin {
         label,
@@ -5595,7 +5681,7 @@ fn list_card_level(
         body_scroll: crate::scroll_list::SelectionScroll::new(),
         active_control: None,
         row_bounds,
-        title: Some(label.to_string()),
+        header: LevelHeader::Card(destination),
         origin_row: Some(origin_row),
         object_array: None,
         list_card: true,
@@ -5665,6 +5751,7 @@ fn live_card_level(
     source: usize,
     control: RowControl,
     origin_row: usize,
+    destination: SettingsDestination,
 ) -> Level {
     let row = Row {
         id: "live_card_body".into(),
@@ -5697,7 +5784,7 @@ fn live_card_level(
         body_scroll: crate::scroll_list::SelectionScroll::new(),
         active_control: None,
         row_bounds: vec![Rc::new(Cell::new(None))],
-        title: Some(label.to_string()),
+        header: LevelHeader::Card(destination),
         origin_row: Some(origin_row),
         object_array: None,
         list_card: false,
@@ -5976,8 +6063,8 @@ mod tests {
         slider_percent_label, slider_value_from_fraction, source_window_height_for,
         step_list_slider, stepped_number, stepped_slider_value, text_or_placeholder,
         transition_in_flight, transition_policy, ChipRowPart, EscapeStep, HeightCache, Intent,
-        Level, ObjectArrayState, Row, RowControl, RowSection, SliderHold, TransitionAction,
-        TransitionTracker,
+        Level, LevelHeader, ObjectArrayState, Row, RowControl, RowSection, SettingsDestination,
+        SliderHold, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -6964,7 +7051,7 @@ default = "visible"
             body_scroll: crate::scroll_list::SelectionScroll::new(),
             active_control: None,
             row_bounds: Vec::new(),
-            title: None,
+            header: LevelHeader::Root,
             origin_row: None,
             object_array: None,
             list_card: false,
@@ -7067,8 +7154,12 @@ default = "visible"
                 monitor: GamepadMonitor::default(),
             },
             3,
+            SettingsDestination::from_static("Controller Input"),
         );
-        assert_eq!(level.title.as_deref(), Some("Controller Input"));
+        assert_eq!(
+            level.header,
+            LevelHeader::Card(SettingsDestination::from_static("Controller Input"))
+        );
         assert_eq!(level.origin_row, Some(3));
         assert!(level.live_card);
         assert!(!level.list_card);
@@ -7116,6 +7207,7 @@ default = "visible"
                 monitor: GamepadMonitor::default(),
             },
             0,
+            SettingsDestination::from_static("Controller Input"),
         );
         live_card_sync(&mut root, &mut card);
         let RowControl::Gamepad {
@@ -7171,6 +7263,7 @@ default = "visible"
                 error: Some("stale".into()),
             },
             0,
+            SettingsDestination::from_static("Pair"),
         );
         live_card_sync(&mut root, &mut card);
         let RowControl::QrCode {
@@ -7218,6 +7311,7 @@ default = "visible"
                 monitor: GamepadMonitor::default(),
             },
             0,
+            SettingsDestination::from_static("Controller Input"),
         );
         live_card_sync(&mut root, &mut card);
         let RowControl::Gamepad {
@@ -7351,11 +7445,25 @@ default = "visible"
             )],
             Vec::new(),
         );
-        let level = super::object_array_card_level("Rules", "rules", 0, empty, 3);
+        let level = super::object_array_card_level(
+            "Rules",
+            "rules",
+            0,
+            empty,
+            3,
+            SettingsDestination::from_static("Rules"),
+        );
         assert_eq!(level.selected, 0);
         assert_eq!(level.object_array.as_ref().unwrap().list.selected, 0);
 
-        let level = super::object_array_card_level("Rules", "rules", 0, object_array_state(), 3);
+        let level = super::object_array_card_level(
+            "Rules",
+            "rules",
+            0,
+            object_array_state(),
+            3,
+            SettingsDestination::from_static("Rules"),
+        );
         assert_eq!(level.selected, 1);
         assert_eq!(level.object_array.as_ref().unwrap().list.selected, 1);
     }
@@ -7369,7 +7477,14 @@ default = "visible"
     #[test]
     fn removing_an_entry_rebuilds_the_card_rows_and_clamps_selection() {
         let state = object_array_state();
-        let mut level = super::object_array_card_level("Rules", "rules", 0, state, 3);
+        let mut level = super::object_array_card_level(
+            "Rules",
+            "rules",
+            0,
+            state,
+            3,
+            SettingsDestination::from_static("Rules"),
+        );
         assert_eq!(level.selected, 1);
         level.selected = 2;
         let child = level.object_array.as_mut().unwrap();
@@ -7395,8 +7510,14 @@ default = "visible"
             )],
             Vec::new(),
         ));
-        let mut child =
-            super::object_array_card_level("Rules", "rules", 0, object_array_state(), 1);
+        let mut child = super::object_array_card_level(
+            "Rules",
+            "rules",
+            0,
+            object_array_state(),
+            1,
+            SettingsDestination::from_static("Rules"),
+        );
         super::object_array_card_sync(&mut root.rows, &mut child);
         let RowControl::ObjectArray(stored) = &root.rows[1].control else {
             panic!("root row holds an object array");
@@ -7636,6 +7757,7 @@ default = "visible"
             items,
             filter,
             list.selected,
+            SettingsDestination::from_static("Devices"),
         );
         (root.rows, child)
     }
@@ -7788,6 +7910,7 @@ default = "visible"
             items,
             filter,
             list.selected,
+            SettingsDestination::from_static("Devices"),
         );
         (root.rows, child)
     }
@@ -7880,7 +8003,7 @@ default = "visible"
             body_scroll: crate::scroll_list::SelectionScroll::new(),
             active_control: None,
             row_bounds: Vec::new(),
-            title: Some("Excluded apps".into()),
+            header: LevelHeader::Card(SettingsDestination::from_static("Excluded apps")),
             origin_row: Some(1),
             object_array: None,
             list_card: false,
@@ -7890,7 +8013,10 @@ default = "visible"
         push_level(&mut stack, child);
         assert_eq!(stack.len(), 2);
         let popped = pop_level(&mut stack).unwrap();
-        assert_eq!(popped.title.as_deref(), Some("Excluded apps"));
+        assert_eq!(
+            popped.header,
+            LevelHeader::Card(SettingsDestination::from_static("Excluded apps"))
+        );
         assert_eq!(popped.origin_row, Some(1));
         assert_eq!(popped.rows.len(), 4);
         assert_eq!(stack.len(), 1);

@@ -4,7 +4,7 @@ mod view;
 
 use std::rc::Rc;
 
-use gpui::{AppContext, Focusable};
+use gpui::AppContext;
 use qol_gpui::settings_panel::{CustomPanelContext, CustomPanelFactory, CustomPanelView};
 
 use crate::settings_surface::CoreTool;
@@ -40,12 +40,9 @@ fn factory(target: CoreTool) -> CustomPanelFactory {
             dismisser,
             on_back,
             notify,
+            on_change,
         } = context;
         let view = cx.new(|cx| NativeToolsView::new(target, dismisser, Some(on_back), notify, cx));
-        let focus_handle = view.read(cx).focus_handle(cx);
-        CustomPanelView {
-            view: view.into(),
-            focus_handle,
-        }
+        CustomPanelView::new(view, on_change, cx)
     })
 }
