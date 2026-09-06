@@ -23,7 +23,7 @@ mod window;
 
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
-pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
+pub use preview::{capture_frozen_frame, grab_preview_rgba};
 pub use recording::{
     capture_screenshot, recording_format, recording_started, recording_stopped, start_capture,
     stop_capture,

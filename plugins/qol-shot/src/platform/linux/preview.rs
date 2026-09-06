@@ -264,14 +264,6 @@ fn bgra_to_rgba(data: &mut [u8]) {
     }
 }
 
-pub fn configure_preview_window(title: String) {
-    super::window::configure_window_async(
-        title,
-        "SHOT_OVERLAY",
-        qol_gpui::popup_window::configure_overlay_window,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::{bgra_to_rgba, capture_frozen_frame, force_opaque_bgra, shm_supports_fd_segments};

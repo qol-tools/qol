@@ -464,6 +464,17 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_api(
     launch_tray_and_wait_api(guest)
 }
 
+pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_env(
+    guest: &mut GuestControlClient,
+    plugin_id: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    stop_preinstalled_runtime(guest)?;
+    let auth_header = launch_tray_and_wait_api_with_env(guest, environment)?;
+    wait_for_plugin(guest, plugin_id, &auth_header)?;
+    Ok(auth_header)
+}
+
 pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<T>(
     guest: &mut GuestControlClient,
     plugin_id: &str,
@@ -479,7 +490,18 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<
 pub(in crate::commands::emu::workflow) fn launch_tray_and_wait_api(
     guest: &mut GuestControlClient,
 ) -> Result<String> {
-    spawn(guest, command(TRAY_BINARY, &[]))?;
+    launch_tray_and_wait_api_with_env(guest, &BTreeMap::new())
+}
+
+fn launch_tray_and_wait_api_with_env(
+    guest: &mut GuestControlClient,
+    environment: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut launch = command(TRAY_BINARY, &[]);
+    for (key, value) in environment {
+        launch.env.insert(key.clone(), value.clone());
+    }
+    spawn(guest, launch)?;
     let token = wait_for_command(
         guest,
         command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
@@ -731,7 +753,10 @@ fn probe_line_matches(line: &str, tag: &str, required: &[&str]) -> bool {
     line.contains(&format!(" {tag} ")) && required.iter().all(|field| line.contains(field))
 }
 
-fn probe_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+pub(in crate::commands::emu::workflow) fn probe_field<'a>(
+    line: &'a str,
+    field: &str,
+) -> Option<&'a str> {
     let prefix = format!("{field}=");
     line.split_ascii_whitespace()
         .find_map(|token| token.strip_prefix(&prefix))

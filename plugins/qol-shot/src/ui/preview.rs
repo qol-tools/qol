@@ -12,7 +12,7 @@ use gpui::*;
 
 use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
-use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
@@ -20,14 +20,15 @@ use qol_gpui::theme::{
     TEXT_NANO,
 };
 use qol_gpui::window::{
-    centered_window_placement, cursor_window_placement, target_monitor_key, ActiveWindows,
-    MonitorKey, WindowPlacement,
+    centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
+    target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
+    WindowPlacement,
 };
 
+use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
 use crate::config::CopyCommand;
 use crate::ui::shortcuts::is_standard_copy_chord;
-use crate::{capture::actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
 const MAX_THUMB_H: f32 = 240.0;
@@ -35,6 +36,9 @@ const MARGIN: f32 = 18.0;
 const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
+const PIN_OPEN_FAILED_TOAST: &str = "Could not pin screenshot";
+const PIN_ANCHOR_FAILED_MESSAGE: &str = "Cursor position unavailable";
+const PIN_OPEN_FAILED_MESSAGE: &str = "Pin window could not be created";
 const BLUR_GUARD: Duration = Duration::from_millis(400);
 const PARKED_REVEAL_GUARD: Duration = Duration::from_millis(5000);
 const EDITOR_OPEN_FAILED_TOAST: &str = "Could not open screenshot editor";
@@ -145,18 +149,6 @@ type DismissSub = (Subscription, Subscription, Option<Task<()>>);
 
 pub type PreviewWindows = Rc<RefCell<ActiveWindows<PreviewView>>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GhostOpenMode {
-    Hidden,
-    Interactive,
-}
-
-impl GhostOpenMode {
-    fn requests_focus(self) -> bool {
-        matches!(self, Self::Interactive)
-    }
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum DismissMode {
     Quit,
@@ -225,19 +217,16 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
         let placement = centered_window_placement(Some(&monitor), default_size, cx);
         let target = placement.target;
         let title = ghost_window_title(PREVIEW_TITLE, target);
-        let Some(handle) = open_ghost_window(
-            cx,
-            GhostContent::empty(),
-            0,
-            &title,
-            &placement,
-            GhostOpenMode::Hidden,
-        ) else {
+        let Some(handle) = open_ghost_window(cx, GhostContent::empty(), 0, &title, &placement)
+        else {
             continue;
         };
         windows.borrow_mut().insert(target, handle);
-        configure_popup_window(&title);
-        qol_gpui::popup_window::set_override_redirect_by_title(&title);
+        if !prepare_preview_window(&title) {
+            windows.borrow_mut().remove(target);
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            continue;
+        }
         let _ = handle.update(cx, |view, window, _cx| {
             view.set_showing(false);
             park_ghost(&title, window, view.window_origin);
@@ -323,6 +312,63 @@ fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     qol_gpui::popup_window::restore_composite(title);
 }
 
+#[cfg(target_os = "linux")]
+fn prepare_preview_window(title: &str) -> bool {
+    if !configure_popup_window(title) {
+        return false;
+    }
+    if !qol_gpui::popup_window::set_override_redirect_by_title(title) {
+        return false;
+    }
+    hide_invisible(title);
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prepare_preview_window(title: &str) -> bool {
+    configure_popup_window(title);
+    qol_gpui::popup_window::set_override_redirect_by_title(title);
+    hide_invisible(title);
+    true
+}
+
+fn fresh_cursor_token(
+    tracker: &MonitorTracker,
+    logical_size: Size<Pixels>,
+) -> Result<CursorWindowPlacement, CursorAnchorError> {
+    let anchor = tracker.cursor_anchor()?;
+    Ok(cursor_window_placement(anchor, logical_size))
+}
+
+fn trace_preview_place(resolved: &ResolvedCursorPlacement) {
+    let cursor = resolved.native_cursor();
+    let monitor = resolved.native_monitor();
+    let native = resolved.native_bounds();
+    let logical = resolved.logical_bounds();
+    qol_runtime::probe!(
+        "SHOT_PREVIEW_PLACE",
+        "cursor={:.0},{:.0} origin={:.0},{:.0} size={:.0}x{:.0} monitor_origin={:.0},{:.0} monitor_size={:.0}x{:.0} logical_size={:.0}x{:.0} native_scale={:.2}",
+        cursor.x,
+        cursor.y,
+        native.x,
+        native.y,
+        native.width,
+        native.height,
+        monitor.x,
+        monitor.y,
+        monitor.width,
+        monitor.height,
+        logical.size.width.to_f64(),
+        logical.size.height.to_f64(),
+        resolved.native_scale()
+    );
+}
+
+fn native_origin_size(resolved: &ResolvedCursorPlacement) -> (f64, f64, f64, f64) {
+    let native = resolved.native_bounds();
+    (native.x, native.y, native.width, native.height)
+}
+
 pub fn show_capture(
     windows: &PreviewWindows,
     tracker: &MonitorTracker,
@@ -331,30 +377,21 @@ pub fn show_capture(
 ) -> Result<()> {
     let content = GhostContent::from_capture(capture)?;
     let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, control_count());
-    let snapshot = tracker.snapshot_cursor();
-    let monitor = snapshot.as_ref().map(|(monitor, _)| monitor);
-    let cursor = snapshot.as_ref().and_then(|(_, cursor)| *cursor);
-    let placement = cursor_window_placement(monitor, cursor, size(px(win_w), px(win_h)), cx);
-    let cursor_label = cursor
-        .map(|cursor| format!("{:.0},{:.0}", cursor.x.to_f64(), cursor.y.to_f64()))
-        .unwrap_or_else(|| "none".to_string());
-    qol_runtime::probe!(
-        "SHOT_PREVIEW_PLACE",
-        "cursor={} origin={:.0},{:.0} size={:.0}x{:.0}",
-        cursor_label,
-        placement.bounds.origin.x.to_f64(),
-        placement.bounds.origin.y.to_f64(),
-        placement.bounds.size.width.to_f64(),
-        placement.bounds.size.height.to_f64()
-    );
-    let target = placement.target;
+    let token = match fresh_cursor_token(tracker, size(px(win_w), px(win_h))) {
+        Ok(token) => token,
+        Err(error) => {
+            qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=anchor-failed reason={error}");
+            return Err(anyhow::anyhow!("preview cursor anchor failed: {error}"));
+        }
+    };
+    let target = token.target();
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
 
     mark_non_target_hidden(windows, target, cx);
-    if reuse_existing(windows, target, &placement, content.clone(), seq, cx) {
+    if reuse_existing(windows, target, &token, content.clone(), seq, cx) {
         return Ok(());
     }
-    if create_and_show(windows, target, &placement, content, seq, cx) {
+    if create_and_show(windows, &token, content, seq, cx) {
         return Ok(());
     }
     Err(anyhow::anyhow!(
@@ -419,7 +456,7 @@ fn mark_non_target_hidden(windows: &PreviewWindows, target: MonitorKey, cx: &mut
 fn reuse_existing(
     windows: &PreviewWindows,
     target: MonitorKey,
-    placement: &WindowPlacement,
+    token: &CursorWindowPlacement,
     content: GhostContent,
     seq: u64,
     cx: &mut App,
@@ -431,23 +468,50 @@ fn reuse_existing(
     let title = ghost_window_title(PREVIEW_TITLE, target);
     let all_titles = windows.borrow().titles(PREVIEW_TITLE);
     let opened_at = Instant::now();
-    let bounds = placement.bounds;
     let reveal = PreviewReveal {
         title: title.clone(),
         all_titles,
     };
+    let mut failed = false;
     let updated = handle
         .update(cx, |view, window, cx| {
-            view.window_origin = bounds.origin;
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    failed = true;
+                    window.remove_window();
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                failed = true;
+                window.remove_window();
+                return;
+            }
+            let (nx, ny, nw, nh) = native_origin_size(&resolved);
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_LAYOUT",
+                "seq={seq} title={title} path=reuse placement=layout-sync applied=true origin={:.0},{:.0} size={:.0}x{:.0}",
+                nx,
+                ny,
+                nw,
+                nh
+            );
+            trace_preview_place(&resolved);
+            view.window_origin = resolved.logical_bounds().origin;
             view.reset_for_show(content, seq, reveal);
-            sync_window_layout(&title, window, bounds.origin, bounds.size);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
             view.schedule_reveal_after_present(window, cx);
         })
         .is_ok();
-    if !updated {
+    if failed || !updated {
         windows.borrow_mut().remove(target);
         return false;
     }
@@ -464,13 +528,13 @@ fn reuse_existing(
 
 fn create_and_show(
     windows: &PreviewWindows,
-    target: MonitorKey,
-    placement: &WindowPlacement,
+    token: &CursorWindowPlacement,
     content: GhostContent,
     seq: u64,
     cx: &mut App,
 ) -> bool {
     let _reason = reason_scope("create");
+    let target = token.target();
     let title = ghost_window_title(PREVIEW_TITLE, target);
     let mut all_titles = windows.borrow().titles(PREVIEW_TITLE);
     if !all_titles.contains(&title) {
@@ -481,24 +545,55 @@ fn create_and_show(
         all_titles,
     };
     let opened_at = Instant::now();
-    let Some(handle) = open_ghost_window(
-        cx,
-        content,
-        seq,
-        &title,
-        placement,
-        GhostOpenMode::Interactive,
-    ) else {
+    let provisional = WindowPlacement {
+        target,
+        bounds: Bounds::new(point(px(0.0), px(0.0)), token.logical_size()),
+        display_id: None,
+    };
+    let Some(handle) = open_ghost_window(cx, content, seq, &title, &provisional) else {
         eprintln!("[qol-shot] preview window open failed");
         return false;
     };
     let open_ms = opened_at.elapsed().as_millis();
     windows.borrow_mut().insert(target, handle);
-    configure_popup_window(&title);
-    hide_invisible(&title);
+    if !prepare_preview_window(&title) {
+        windows.borrow_mut().remove(target);
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
     let park_ms = opened_at.elapsed().as_millis() - open_ms;
-    if handle
+    let mut failed = false;
+    let presented = handle
         .update(cx, |view, window, cx| {
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    failed = true;
+                    window.remove_window();
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                failed = true;
+                window.remove_window();
+                return;
+            }
+            let (nx, ny, nw, nh) = native_origin_size(&resolved);
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_LAYOUT",
+                "seq={seq} title={title} path=create placement=layout-sync applied=true origin={:.0},{:.0} size={:.0}x{:.0}",
+                nx,
+                ny,
+                nw,
+                nh
+            );
+            trace_preview_place(&resolved);
+            view.window_origin = resolved.logical_bounds().origin;
             view.set_showing(true);
             view.pending_reveal = Some(reveal);
             window.activate_window();
@@ -506,8 +601,8 @@ fn create_and_show(
             cx.notify();
             view.schedule_reveal_after_present(window, cx);
         })
-        .is_err()
-    {
+        .is_ok();
+    if failed || !presented {
         windows.borrow_mut().remove(target);
         return false;
     }
@@ -528,32 +623,26 @@ fn open_ghost_window(
     seq: u64,
     title: &str,
     placement: &WindowPlacement,
-    mode: GhostOpenMode,
 ) -> Option<WindowHandle<PreviewView>> {
-    let options = ghost_window_options(placement, mode);
+    let options = ghost_window_options(placement);
     let title = title.to_string();
     let origin = placement.bounds.origin;
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&title);
-        let view = cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx));
-        if mode.requests_focus() {
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
-        }
-        view
+        cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx))
     })
     .ok()
 }
 
-fn ghost_window_options(placement: &WindowPlacement, mode: GhostOpenMode) -> WindowOptions {
+fn ghost_window_options(placement: &WindowPlacement) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
         display_id: placement.display_id,
         titlebar: None,
         window_decorations: Some(ghost_window_decorations(false)),
         kind: ghost_window_kind(),
-        focus: mode.requests_focus(),
-        show: mode == GhostOpenMode::Interactive,
+        focus: false,
+        show: false,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),
@@ -572,13 +661,23 @@ fn open_quit_window(
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count());
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
-    let bounds = preview_bounds(size(px(win_w), px(win_h)), cx);
+    let tracker = MonitorTracker::start(cx);
+    let token = match fresh_cursor_token(&tracker, size(px(win_w), px(win_h))) {
+        Ok(token) => token,
+        Err(error) => {
+            qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=anchor-failed reason={error}");
+            eprintln!("[qol-shot] preview cursor anchor failed: {error}");
+            return false;
+        }
+    };
+    let provisional = Bounds::new(point(px(0.0), px(0.0)), token.logical_size());
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(WindowBounds::Windowed(provisional)),
         titlebar: None,
-        window_decorations: Some(WindowDecorations::Client),
-        kind: WindowKind::Normal,
-        focus: true,
+        window_decorations: Some(ghost_window_decorations(false)),
+        kind: ghost_window_kind(),
+        focus: false,
+        show: false,
         window_background: WindowBackgroundAppearance::Opaque,
         ..Default::default()
     };
@@ -596,24 +695,52 @@ fn open_quit_window(
     let window_title = title.clone();
     let opened = cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
-        let view = cx.new(|cx| PreviewView::new_quit(content, completion, seq, cx));
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
-        view
+        cx.new(|cx| PreviewView::new_quit(content, completion, seq, cx))
     });
-    if opened.is_err() {
+    let Ok(handle) = opened else {
+        return false;
+    };
+    if !prepare_preview_window(&title) {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
         return false;
     }
-    platform::configure_preview_window(title);
+    let mut failed = false;
+    let applied = handle
+        .update(cx, |view, window, cx| {
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    eprintln!("[qol-shot] preview placement resolve failed: {error}");
+                    failed = true;
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                eprintln!("[qol-shot] preview placement apply failed");
+                failed = true;
+                return;
+            }
+            trace_preview_place(&resolved);
+            if !qol_gpui::popup_window::show_normal_window_by_title(&title) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=show");
+                eprintln!("[qol-shot] preview placement show failed");
+                failed = true;
+                return;
+            }
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+        })
+        .is_ok();
+    if failed || !applied {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
     true
-}
-
-fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
-    let tracker = MonitorTracker::start(cx);
-    let snapshot = tracker.snapshot_cursor();
-    let monitor = snapshot.as_ref().map(|(monitor, _)| monitor);
-    let cursor = snapshot.as_ref().and_then(|(_, cursor)| *cursor);
-    cursor_window_placement(monitor, cursor, window_size, cx).bounds
 }
 
 fn bgra_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
@@ -971,11 +1098,69 @@ impl PreviewView {
             file_ready: self.file_ready.clone(),
             started_at,
         };
-        let window_origin = match self.mode {
-            DismissMode::Quit => window.bounds().origin,
-            DismissMode::Ghost => self.window_origin,
+        let pin_mode = match self.mode {
+            DismissMode::Quit => "quit",
+            DismissMode::Ghost => "ghost",
         };
-        let origin = window_origin + point(px(MARGIN), px(MARGIN));
+        let tracker = MonitorTracker::start(cx);
+        let pin_size = size(px(content.size.0), px(content.size.1));
+        let token = match fresh_cursor_token(&tracker, pin_size) {
+            Ok(token) => token,
+            Err(error) => {
+                qol_runtime::probe!(
+                    "SHOT_PIN_PLACE",
+                    "seq={} mode={pin_mode} result=anchor-failed reason={error}",
+                    self.seq
+                );
+                eprintln!("[qol-shot] pin cursor anchor failed: {error}");
+                crate::platform::show_notification(
+                    PIN_OPEN_FAILED_TOAST,
+                    PIN_ANCHOR_FAILED_MESSAGE,
+                    1800,
+                );
+                self.action_pending = false;
+                return;
+            }
+        };
+        let placement = match token.resolve(window) {
+            Ok(placement) => placement,
+            Err(error) => {
+                qol_runtime::probe!(
+                    "SHOT_PIN_PLACE",
+                    "seq={} mode={pin_mode} result=resolve-failed reason={error}",
+                    self.seq
+                );
+                eprintln!("[qol-shot] pin placement resolve failed: {error}");
+                crate::platform::show_notification(
+                    PIN_OPEN_FAILED_TOAST,
+                    PIN_ANCHOR_FAILED_MESSAGE,
+                    1800,
+                );
+                self.action_pending = false;
+                return;
+            }
+        };
+        let cursor = placement.native_cursor();
+        let monitor = placement.native_monitor();
+        let native = placement.native_bounds();
+        qol_runtime::probe!(
+            "SHOT_PIN_PLACE",
+            "seq={} mode={pin_mode} origin={:.0},{:.0} size={:.0}x{:.0} cursor={:.0},{:.0} monitor_origin={:.0},{:.0} monitor_size={:.0}x{:.0} logical_size={:.0}x{:.0} native_scale={:.2}",
+            self.seq,
+            native.x,
+            native.y,
+            native.width,
+            native.height,
+            cursor.x,
+            cursor.y,
+            monitor.x,
+            monitor.y,
+            monitor.width,
+            monitor.height,
+            pin_size.width.to_f64(),
+            pin_size.height.to_f64(),
+            placement.native_scale()
+        );
         let dismiss = match self.mode {
             DismissMode::Quit => crate::ui::pinned::PinnedDismiss::Quit,
             DismissMode::Ghost => crate::ui::pinned::PinnedDismiss::Remove,
@@ -984,7 +1169,12 @@ impl PreviewView {
             DismissMode::Quit => None,
             DismissMode::Ghost => Some(self.title.clone()),
         };
-        if !crate::ui::pinned::open(content, origin, dismiss, source_preview, cx) {
+        if !crate::ui::pinned::open(content, placement, dismiss, source_preview, cx) {
+            crate::platform::show_notification(
+                PIN_OPEN_FAILED_TOAST,
+                PIN_OPEN_FAILED_MESSAGE,
+                1800,
+            );
             self.action_pending = false;
             return;
         }
@@ -1353,8 +1543,7 @@ mod tests {
     use super::{
         circles_total_width, combine_focus_truth, missing_monitors, preview_control_for_keystroke,
         preview_controls, read_render_image, reveal_blur_guard, thumbnail_size, window_dims,
-        ActiveMonitor, GhostOpenMode, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W,
-        PARKED_REVEAL_GUARD,
+        ActiveMonitor, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1482,12 +1671,6 @@ mod tests {
     fn parked_reveals_extend_the_blur_guard() {
         assert_eq!(reveal_blur_guard(true), PARKED_REVEAL_GUARD);
         assert_eq!(reveal_blur_guard(false), BLUR_GUARD);
-    }
-
-    #[test]
-    fn ghost_open_mode_keeps_hidden_windows_inert() {
-        assert!(!GhostOpenMode::Hidden.requests_focus());
-        assert!(GhostOpenMode::Interactive.requests_focus());
     }
 
     #[test]

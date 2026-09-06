@@ -137,8 +137,6 @@ pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {
     Ok(None)
 }
 
-pub fn configure_preview_window(_title: String) {}
-
 #[derive(Clone)]
 pub struct PinResizeSession;
 

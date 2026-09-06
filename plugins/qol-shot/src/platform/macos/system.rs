@@ -250,8 +250,6 @@ fn rgba_to_bgra(pixels: &mut [u8]) {
     }
 }
 
-pub fn configure_preview_window(_title: String) {}
-
 #[derive(Clone)]
 pub struct PinResizeSession;
 

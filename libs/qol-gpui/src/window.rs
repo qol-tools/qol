@@ -4,10 +4,12 @@ use std::rc::Rc;
 
 use gpui::*;
 
-use crate::monitor::{ActiveMonitor, MonitorTracker};
+use crate::monitor::{ActiveMonitor, CursorAnchor, CursorAnchorError, MonitorTracker};
+use qol_runtime::{CursorPos, MonitorBounds};
 
 const CURSOR_WINDOW_GAP: f32 = 20.0;
 const CURSOR_WINDOW_MARGIN: f32 = 12.0;
+const CURSOR_SCALE_TOLERANCE: f32 = 0.01;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MonitorKey {
@@ -279,19 +281,210 @@ pub fn centered_window_placement(
 }
 
 pub fn cursor_window_placement(
-    monitor: Option<&ActiveMonitor>,
-    cursor: Option<Point<Pixels>>,
-    win_size: Size<Pixels>,
-    cx: &App,
-) -> WindowPlacement {
-    let (Some(monitor), Some(cursor)) = (monitor, cursor) else {
-        return centered_window_placement(monitor, win_size, cx);
-    };
-    WindowPlacement {
-        target: target_monitor_key(Some(monitor)),
-        bounds: cursor_adjacent_bounds(monitor.bounds(), cursor, win_size),
-        display_id: display_id_for_monitor(Some(monitor), cx),
+    anchor: CursorAnchor,
+    logical_size: Size<Pixels>,
+) -> CursorWindowPlacement {
+    CursorWindowPlacement {
+        anchor,
+        logical_size,
     }
+}
+
+#[derive(Debug)]
+pub struct CursorWindowPlacement {
+    anchor: CursorAnchor,
+    logical_size: Size<Pixels>,
+}
+
+impl CursorWindowPlacement {
+    pub fn anchor(&self) -> &CursorAnchor {
+        &self.anchor
+    }
+
+    pub fn target(&self) -> MonitorKey {
+        MonitorKey::from_bounds(&ActiveMonitor::from_bounds(self.anchor.native_monitor()).bounds())
+    }
+
+    pub fn logical_size(&self) -> Size<Pixels> {
+        self.logical_size
+    }
+
+    pub fn resolve(&self, window: &Window) -> Result<ResolvedCursorPlacement, CursorAnchorError> {
+        resolve_cursor_geometry(
+            self.anchor.native_cursor(),
+            self.anchor.native_monitor(),
+            self.logical_size,
+            native_scale_for(window),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeDesktopBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug)]
+pub struct ResolvedCursorPlacement {
+    native_bounds: NativeDesktopBounds,
+    logical_bounds: Bounds<Pixels>,
+    native_scale: f32,
+    cursor: CursorPos,
+    monitor: MonitorBounds,
+}
+
+impl ResolvedCursorPlacement {
+    pub fn native_bounds(&self) -> NativeDesktopBounds {
+        self.native_bounds
+    }
+
+    pub fn logical_bounds(&self) -> Bounds<Pixels> {
+        self.logical_bounds
+    }
+
+    pub fn native_scale(&self) -> f32 {
+        self.native_scale
+    }
+
+    pub fn native_cursor(&self) -> CursorPos {
+        self.cursor
+    }
+
+    pub fn native_monitor(&self) -> MonitorBounds {
+        self.monitor
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn native_scale_for(window: &Window) -> f32 {
+    window.scale_factor()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn native_scale_for(_window: &Window) -> f32 {
+    1.0
+}
+
+fn resolve_cursor_geometry(
+    cursor: CursorPos,
+    monitor: MonitorBounds,
+    logical_size: Size<Pixels>,
+    scale: f32,
+) -> Result<ResolvedCursorPlacement, CursorAnchorError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(CursorAnchorError::InvalidGeometry);
+    }
+    let width = logical_size.width.to_f64();
+    let height = logical_size.height.to_f64();
+    if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 {
+        return Err(CursorAnchorError::InvalidGeometry);
+    }
+    let native_width = width * f64::from(scale);
+    let native_height = height * f64::from(scale);
+    if !native_width.is_finite()
+        || !native_height.is_finite()
+        || native_width > f64::from(f32::MAX)
+        || native_height > f64::from(f32::MAX)
+    {
+        return Err(CursorAnchorError::InvalidGeometry);
+    }
+    let native_bounds = cursor_adjacent_bounds(
+        Bounds::new(
+            point(px(monitor.x), px(monitor.y)),
+            size(px(monitor.width), px(monitor.height)),
+        ),
+        point(px(cursor.x), px(cursor.y)),
+        size(px(native_width as f32), px(native_height as f32)),
+    );
+    let native_bounds = NativeDesktopBounds {
+        x: native_bounds.origin.x.to_f64(),
+        y: native_bounds.origin.y.to_f64(),
+        width: native_bounds.size.width.to_f64(),
+        height: native_bounds.size.height.to_f64(),
+    };
+    let logical_bounds = Bounds::new(
+        point(
+            px((native_bounds.x / f64::from(scale)) as f32),
+            px((native_bounds.y / f64::from(scale)) as f32),
+        ),
+        logical_size,
+    );
+    Ok(ResolvedCursorPlacement {
+        native_bounds,
+        logical_bounds,
+        native_scale: scale,
+        cursor,
+        monitor,
+    })
+}
+
+pub fn sync_cursor_window_layout(
+    title: &str,
+    window: &mut Window,
+    placement: &ResolvedCursorPlacement,
+) -> bool {
+    let window_scale = native_scale_for(window);
+    let placement_scale = placement.native_scale();
+    let native = placement.native_bounds();
+    if (window_scale - placement_scale).abs() > CURSOR_SCALE_TOLERANCE {
+        qol_runtime::probe!(
+            "CURSOR_APPLY",
+            "title={title} expected_origin={:.0},{:.0} expected_size={:.0}x{:.0} window_scale={window_scale:.2} placement_scale={placement_scale:.2} setter=false actual=none verified=false result=failed",
+            native.x,
+            native.y,
+            native.width,
+            native.height
+        );
+        return false;
+    }
+    window.resize(placement.logical_bounds().size);
+    let applied = crate::popup_window::sync_window_layout_by_title(
+        title,
+        point(px(native.x as f32), px(native.y as f32)),
+        size(px(native.width as f32), px(native.height as f32)),
+    );
+    let readback = native_readback_position(title);
+    let actual = match readback {
+        Some((x, y)) => format!("{x},{y}"),
+        None => "none".to_string(),
+    };
+    let verified = applied && readback_matches(readback, native);
+    qol_runtime::probe!(
+        "CURSOR_APPLY",
+        "title={title} expected_origin={:.0},{:.0} expected_size={:.0}x{:.0} window_scale={window_scale:.2} placement_scale={placement_scale:.2} setter={applied} actual={actual} verified={verified} result={}",
+        native.x,
+        native.y,
+        native.width,
+        native.height,
+        if verified { "ok" } else { "failed" }
+    );
+    verified
+}
+
+#[cfg(target_os = "linux")]
+fn native_readback_position(title: &str) -> Option<(i32, i32)> {
+    crate::popup_window::window_position_by_title(title)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn native_readback_position(_title: &str) -> Option<(i32, i32)> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn readback_matches(readback: Option<(i32, i32)>, native: NativeDesktopBounds) -> bool {
+    match readback {
+        Some((x, y)) => x == native.x.round() as i32 && y == native.y.round() as i32,
+        None => false,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn readback_matches(_readback: Option<(i32, i32)>, _native: NativeDesktopBounds) -> bool {
+    true
 }
 
 fn cursor_adjacent_bounds(
@@ -348,9 +541,28 @@ fn coord_diff(a: i32, b: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor_adjacent_bounds, non_target_keys, MonitorKey};
+    use super::{
+        cursor_adjacent_bounds, non_target_keys, resolve_cursor_geometry, CursorAnchorError,
+        MonitorKey, ResolvedCursorPlacement,
+    };
     use gpui::{point, px, size, Bounds};
     use proptest::prelude::*;
+    use qol_runtime::{CursorPos, MonitorBounds};
+
+    fn native_of(placement: &ResolvedCursorPlacement) -> (f64, f64, f64, f64) {
+        let bounds = placement.native_bounds();
+        (bounds.x, bounds.y, bounds.width, bounds.height)
+    }
+
+    fn logical_of(placement: &ResolvedCursorPlacement) -> (f64, f64, f64, f64) {
+        let bounds = placement.logical_bounds();
+        (
+            bounds.origin.x.to_f64(),
+            bounds.origin.y.to_f64(),
+            bounds.size.width.to_f64(),
+            bounds.size.height.to_f64(),
+        )
+    }
 
     fn key(x: i32) -> MonitorKey {
         MonitorKey {
@@ -436,5 +648,132 @@ mod tests {
 
         assert_eq!(bounds.origin.x.to_f64(), -390.0);
         assert_eq!(bounds.origin.y.to_f64(), 610.0);
+    }
+
+    fn resolve_at(
+        cursor: (f32, f32),
+        monitor: (f32, f32, f32, f32),
+        logical: (f32, f32),
+        scale: f32,
+    ) -> Result<ResolvedCursorPlacement, CursorAnchorError> {
+        let (x, y) = cursor;
+        let (mx, my, mw, mh) = monitor;
+        let (lw, lh) = logical;
+        resolve_cursor_geometry(
+            CursorPos { x, y },
+            MonitorBounds {
+                x: mx,
+                y: my,
+                width: mw,
+                height: mh,
+            },
+            size(px(lw), px(lh)),
+            scale,
+        )
+    }
+
+    #[test]
+    fn resolution_converts_logical_to_native_before_edge_math_at_scale2() {
+        let placement = resolve_at(
+            (320.0, 400.0),
+            (0.0, 0.0, 1280.0, 800.0),
+            (360.0, 225.0),
+            2.0,
+        )
+        .expect("valid placement");
+
+        assert_eq!(native_of(&placement), (340.0, 12.0, 720.0, 450.0));
+        assert_eq!(logical_of(&placement), (170.0, 6.0, 360.0, 225.0));
+        assert_eq!(placement.native_scale(), 2.0);
+        assert_eq!(placement.native_cursor().x, 320.0);
+        assert_eq!(placement.native_cursor().y, 400.0);
+        let monitor = placement.native_monitor();
+        assert_eq!(
+            (monitor.x, monitor.y, monitor.width, monitor.height),
+            (0.0, 0.0, 1280.0, 800.0)
+        );
+    }
+
+    #[test]
+    fn resolution_at_scale1_keeps_native_and_logical_identical() {
+        let placement = resolve_at(
+            (320.0, 400.0),
+            (0.0, 0.0, 1920.0, 1080.0),
+            (360.0, 225.0),
+            1.0,
+        )
+        .expect("valid placement");
+
+        assert_eq!(native_of(&placement), (340.0, 420.0, 360.0, 225.0));
+        assert_eq!(logical_of(&placement), (340.0, 420.0, 360.0, 225.0));
+        assert_eq!(placement.native_scale(), 1.0);
+    }
+
+    #[test]
+    fn resolution_preserves_negative_origins_and_edge_clamping() {
+        let negative = resolve_at(
+            (-10.0, 870.0),
+            (-1920.0, -200.0, 1920.0, 1080.0),
+            (360.0, 240.0),
+            1.0,
+        )
+        .expect("valid placement");
+        assert_eq!(native_of(&negative), (-390.0, 610.0, 360.0, 240.0));
+        assert_eq!(logical_of(&negative), (-390.0, 610.0, 360.0, 240.0));
+
+        let clamped = resolve_at(
+            (4460.0, 700.0),
+            (1920.0, 0.0, 2560.0, 1440.0),
+            (400.0, 300.0),
+            1.0,
+        )
+        .expect("valid placement");
+        assert_eq!(native_of(&clamped), (4040.0, 720.0, 400.0, 300.0));
+    }
+
+    #[test]
+    fn resolution_rejects_invalid_scale_and_logical_size() {
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                matches!(
+                    resolve_at(
+                        (320.0, 400.0),
+                        (0.0, 0.0, 1280.0, 800.0),
+                        (360.0, 225.0),
+                        scale
+                    ),
+                    Err(CursorAnchorError::InvalidGeometry)
+                ),
+                "scale={scale}"
+            );
+        }
+
+        for logical in [
+            (0.0, 225.0),
+            (360.0, -1.0),
+            (f32::NAN, 225.0),
+            (360.0, f32::INFINITY),
+        ] {
+            assert!(
+                matches!(
+                    resolve_at((320.0, 400.0), (0.0, 0.0, 1280.0, 800.0), logical, 2.0),
+                    Err(CursorAnchorError::InvalidGeometry)
+                ),
+                "logical={logical:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolution_rejects_native_dimension_overflowing_f32() {
+        for logical in [(2.0e38, 225.0), (360.0, 2.0e38)] {
+            assert!(
+                matches!(
+                    resolve_at((320.0, 400.0), (0.0, 0.0, 1280.0, 800.0), logical, 2.0),
+                    Err(CursorAnchorError::InvalidGeometry)
+                ),
+                "logical={logical:?}"
+            );
+        }
     }
 }

@@ -13,6 +13,7 @@ use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
 use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
 use crate::ui::shortcuts::shot_action_for_keystroke;
+use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
@@ -57,6 +58,7 @@ struct PinnedWindowSpec {
     reveal: Option<PinReveal>,
     active: bool,
     focus: bool,
+    show: bool,
     cacheable: bool,
 }
 
@@ -109,6 +111,7 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         reveal: None,
         active: false,
         focus: false,
+        show: false,
         cacheable: true,
     };
     let handle = open_window(content, spec, cx)?;
@@ -136,13 +139,14 @@ pub fn pre_create(cx: &mut App) {
 
 pub fn open(
     content: PinnedContent,
-    origin: Point<Pixels>,
+    placement: ResolvedCursorPlacement,
     dismiss: PinnedDismiss,
     source_preview: Option<String>,
     cx: &mut App,
 ) -> bool {
+    let native = placement.native_bounds();
     let reveal = PinReveal {
-        origin: (origin.x.to_f64(), origin.y.to_f64()),
+        origin: (native.x, native.y),
         source_preview,
     };
     if platform::pin_cache_enabled() {
@@ -153,39 +157,58 @@ pub fn open(
                 qol_runtime::probe!("SHOT_PIN_CACHE", "state=refilled");
             }
         }
-        if cache::open(content.clone(), origin, dismiss, reveal.clone(), cx) {
+        if cache::open(content.clone(), dismiss, reveal.clone(), &placement, cx) {
             return true;
         }
     }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
-    let bounds = Bounds {
-        origin,
-        size: size(px(content.size.0), px(content.size.1)),
-    };
     let config = crate::config::load();
     let border = config.capture.pin_border;
     let spec = PinnedWindowSpec {
         title: title.clone(),
-        bounds,
+        bounds: placement.logical_bounds(),
         dismiss,
         border,
         reveal: Some(reveal),
-        active: true,
-        focus: true,
+        active: false,
+        focus: false,
+        show: false,
         cacheable: false,
     };
     let opened_at = Instant::now();
-    let Some(_handle) = open_window(content, spec, cx) else {
+    let Some(handle) = open_window(content, spec, cx) else {
         eprintln!("[qol-shot] pinned window open failed");
         return false;
     };
     platform::after_pin_open(&title);
+    let mut failed = false;
+    let applied = handle
+        .update(cx, |view, window, cx| {
+            if !sync_cursor_window_layout(&view.title.clone(), window, &placement) {
+                failed = true;
+                window.remove_window();
+                return;
+            }
+            view.active = true;
+            view.placed = true;
+            cx.notify();
+            view.start_full_resolution_upgrade(cx);
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+            view.schedule_reveal_after_present(window, cx);
+        })
+        .is_ok();
+    if failed || !applied {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
     qol_runtime::probe!(
         "SHOT_PIN_OPEN",
         "path=create ms={}",
         opened_at.elapsed().as_millis()
     );
+    cx.activate(true);
     true
 }
 
@@ -200,7 +223,7 @@ fn open_window(
         window_decorations: Some(WindowDecorations::Client),
         kind: qol_gpui::popup_window::pinned_window_kind(),
         focus: spec.focus,
-        show: spec.active,
+        show: spec.show,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),
@@ -218,9 +241,8 @@ fn open_window(
             view
         })
         .ok()?;
-    let _ = handle.update(cx, |view, _window, cx| {
+    let _ = handle.update(cx, |view, _window, _cx| {
         view.handle = Some(handle);
-        view.start_full_resolution_upgrade(cx);
     });
     Some(handle)
 }
@@ -230,9 +252,9 @@ mod cache {
 
     pub fn open(
         content: PinnedContent,
-        origin: Point<Pixels>,
         dismiss: PinnedDismiss,
         reveal: PinReveal,
+        placement: &ResolvedCursorPlacement,
         cx: &mut App,
     ) -> bool {
         let opened_at = Instant::now();
@@ -241,24 +263,23 @@ mod cache {
         };
         let config = crate::config::load();
         let border = config.capture.pin_border;
-        let content_size = content.size;
         let title = handle
             .update(cx, |view, window, cx| {
                 let title = view.title.clone();
+                if !sync_cursor_window_layout(&title, window, placement) {
+                    window.remove_window();
+                    return None;
+                }
                 reset(view, content, dismiss, border, reveal, cx);
+                view.placed = true;
                 view.start_full_resolution_upgrade(cx);
-                qol_gpui::popup_window::sync_window_layout(
-                    &title,
-                    window,
-                    origin,
-                    size(px(content_size.0), px(content_size.1)),
-                );
                 window.focus(&view.focus_handle(cx));
                 window.activate_window();
                 view.schedule_reveal_after_present(window, cx);
-                title
+                Some(title)
             })
-            .ok();
+            .ok()
+            .flatten();
         if title.is_none() {
             return false;
         }
@@ -340,6 +361,7 @@ pub struct PinnedView {
     resize_loop_epoch: u64,
     started_at: Instant,
     active: bool,
+    placed: bool,
     action_pending: bool,
     first_paint: bool,
     reveal_generation: u64,
@@ -374,6 +396,7 @@ impl PinnedView {
             resize_loop_epoch: 0,
             started_at: content.started_at,
             active: spec.active,
+            placed: false,
             action_pending: false,
             first_paint: true,
             reveal_generation,
@@ -441,6 +464,9 @@ impl PinnedView {
     }
 
     fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.placed {
+            return;
+        }
         crate::platform::mark_reveal_requested(&self.title);
         let generation = self.reveal_generation;
         if self.pending_reveal.is_none() || self.scheduled_reveal_generation == Some(generation) {
@@ -742,6 +768,7 @@ impl PinnedView {
             return;
         };
         self.active = false;
+        self.placed = false;
         self.image = None;
         self.path.clear();
         self.resize_drag = None;
