@@ -417,6 +417,13 @@ fn spawn_command_loop(
     });
 }
 
+fn notice_timeout(tone: CustomPanelNoticeTone) -> Option<Duration> {
+    match tone {
+        CustomPanelNoticeTone::Failure => Some(Duration::from_secs(8)),
+        CustomPanelNoticeTone::Success => None,
+    }
+}
+
 fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
     Rc::new(move |tone, message, cx| {
         let toast = Toast::new(
@@ -428,6 +435,11 @@ fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
             CustomPanelNoticeTone::Success => ToastTone::Success,
             CustomPanelNoticeTone::Failure => ToastTone::Danger,
         });
+        let toast = if let Some(timeout) = notice_timeout(tone) {
+            toast.timeout(timeout)
+        } else {
+            toast
+        };
         if let Err(error) = toast_host.show(toast, cx) {
             log::warn!("[toast] settings notice failed: {error:#}");
         }
@@ -954,7 +966,20 @@ mod tests {
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 
-    use super::{config, parse_request, spawn_replacement_after_handover, Command};
+    use super::{config, notice_timeout, parse_request, spawn_replacement_after_handover, Command};
+
+    #[test]
+    fn notice_timeout_gives_failure_a_fixed_lifetime_and_success_the_tone_default() {
+        use std::time::Duration;
+
+        use qol_gpui::settings_panel::CustomPanelNoticeTone;
+
+        assert_eq!(
+            notice_timeout(CustomPanelNoticeTone::Failure),
+            Some(Duration::from_secs(8))
+        );
+        assert_eq!(notice_timeout(CustomPanelNoticeTone::Success), None);
+    }
 
     #[test]
     fn manager_shutdown_contacts_only_the_isolated_settings_host() {
