@@ -957,6 +957,10 @@ impl PreviewView {
     }
 
     fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        self.action_pending = true;
         let started_at = Instant::now();
         qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
         self.file_start.start();
@@ -981,6 +985,7 @@ impl PreviewView {
             DismissMode::Ghost => Some(self.title.clone()),
         };
         if !crate::ui::pinned::open(content, origin, dismiss, source_preview, cx) {
+            self.action_pending = false;
             return;
         }
         match self.mode {

@@ -661,6 +661,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                 .tone(qol_gpui::toast::ToastTone::Info),
             );
             let output_file = cx.background_spawn(async move { job.run() }).await;
+            let _ = cx.update(|cx| state.capture_status.hide(cx));
             let saved_status = match output_file.as_deref() {
                 Some(path) => crate::ui::capture_status::CaptureStatus::timed(
                     "recording",

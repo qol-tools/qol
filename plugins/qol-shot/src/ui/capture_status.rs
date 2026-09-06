@@ -96,6 +96,10 @@ impl CaptureStatusUi {
 
     pub(crate) fn hide(&self, cx: &mut App) {
         self.host.dismiss(cx);
+        qol_runtime::probe!(
+            "SHOT_CAPTURE_STATUS",
+            "stage=dismissed surface=shared-toast"
+        );
     }
 
     pub(crate) fn prepare_selector(&self, cx: &mut App) {
