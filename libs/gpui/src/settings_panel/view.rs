@@ -256,6 +256,7 @@ pub(super) struct SettingsPanelView {
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
+    body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub(super) struct SettingsPanelState {
@@ -396,6 +397,7 @@ impl SettingsPanelView {
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
+            body_bounds: Rc::new(Cell::new(None)),
         };
         let parent = cx.weak_entity();
         let parent_for_change = parent.clone();
@@ -1760,6 +1762,12 @@ impl SettingsPanelView {
     }
 
     fn click_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        qol_runtime::probe!(
+            "SETTINGS_INPUT",
+            "phase=click index={} depth={}",
+            index,
+            self.stack.len() - 1
+        );
         self.level_mut().selected = index;
         self.activate(window, cx);
         cx.notify();
@@ -4403,6 +4411,13 @@ impl SettingsPanelView {
                 })
                 .children(items)
         };
+        let body_bounds = Rc::clone(&self.body_bounds);
+        let frame_bounds = canvas(
+            move |bounds, _, _| body_bounds.set(Some(bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
         div().flex_1().min_w_0().h_full().flex().flex_col().child(
             div()
                 .relative()
@@ -4410,6 +4425,7 @@ impl SettingsPanelView {
                 .min_h(px(0.))
                 .w_full()
                 .child(body)
+                .when(front, |frame| frame.child(frame_bounds))
                 .when(front && !has_custom_view, |frame| {
                     frame.child(crate::scrollbar::seam_track(
                         self.stack[level_index].body_scroll.handle().clone(),
@@ -4878,14 +4894,19 @@ impl SettingsPanelView {
         let target = self.window_height();
         #[cfg(debug_assertions)]
         let built = std::time::Instant::now();
+        #[cfg(debug_assertions)]
+        let body_bounds = Rc::clone(&self.body_bounds);
         canvas(
             |_, _, _| (),
             move |_bounds, _, window, cx| {
                 #[cfg(debug_assertions)]
                 qol_runtime::probe!(
                     "SETTINGS_FRAME",
-                    "phase=painted elapsed_us={}",
-                    built.elapsed().as_micros()
+                    "phase=painted elapsed_us={} viewport_h={:?} target_h={} body={:?}",
+                    built.elapsed().as_micros(),
+                    window.viewport_size().height,
+                    target,
+                    body_bounds.get()
                 );
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
