@@ -1,4 +1,5 @@
 use super::super::super::binding::{Binding, CaptureEvent, Phase};
+#[cfg(debug_assertions)]
 use super::evdev_backend::keycode_name;
 use qol_hotkeys::evdev;
 use qol_hotkeys::grammar::Modifier;

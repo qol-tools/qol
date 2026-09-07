@@ -193,6 +193,7 @@ pub(crate) fn keycode_name(code: u16) -> &'static str {
     }
 }
 
+#[cfg(debug_assertions)]
 fn key_list(keys: &AttributeSet<KeyCode>) -> String {
     keys.iter()
         .map(|key| keycode_name(key.0))
