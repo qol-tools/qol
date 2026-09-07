@@ -1760,6 +1760,12 @@ impl SettingsPanelView {
         }
     }
 
+    fn click_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.level_mut().selected = index;
+        self.activate(window, cx);
+        cx.notify();
+    }
+
     fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.current_visible_rows().contains(&self.level().selected) {
             return;
@@ -3149,7 +3155,7 @@ impl SettingsPanelView {
             return container.child(self.render_list_card_item(index, cx));
         }
         if matches!(row.control, RowControl::List { .. }) {
-            return container.child(self.render_list(index));
+            return container.child(self.render_list(index, cx));
         }
         if matches!(row.control, RowControl::ObjectArray(_)) {
             return container.child(self.render_object_array(index, cx));
@@ -3275,19 +3281,12 @@ impl SettingsPanelView {
         .selected(selected, self.body_has_focus())
         .child(label_group)
         .child(bounds);
-        if !matches!(
-            row.control,
-            RowControl::Status { .. } | RowControl::List { .. } | RowControl::Unsupported { .. }
-        ) {
-            line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                this.level_mut().selected = index;
-                this.activate(window, cx);
-                cx.notify();
-            }));
-        }
+        line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.click_row(index, window, cx);
+        }));
         if let Some(cell) = value_cell {
             line = line.child(cell);
         }
@@ -3404,7 +3403,7 @@ impl SettingsPanelView {
         rail_caption("QoL Plugin Settings").id("settings-rail-plugin-caption")
     }
 
-    fn render_list(&self, index: usize) -> Div {
+    fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let row = &self.level().rows[index];
         let RowControl::List {
             active_label,
@@ -3413,7 +3412,7 @@ impl SettingsPanelView {
             ..
         } = &row.control
         else {
-            return div();
+            return div().id(("settings-list", index));
         };
         let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
         if *runtime_active {
@@ -3432,6 +3431,13 @@ impl SettingsPanelView {
                 .child(self.display_value(index)),
         );
         let mut container = div()
+            .id(("settings-list", index))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.click_row(index, window, cx);
+            }))
             .flex()
             .flex_col()
             .flex_none()
