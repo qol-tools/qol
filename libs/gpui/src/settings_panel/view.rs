@@ -257,6 +257,7 @@ pub(super) struct SettingsPanelView {
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    page_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub(super) struct SettingsPanelState {
@@ -398,6 +399,7 @@ impl SettingsPanelView {
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
             body_bounds: Rc::new(Cell::new(None)),
+            page_bounds: Rc::new(Cell::new(None)),
         };
         let parent = cx.weak_entity();
         let parent_for_change = parent.clone();
@@ -3439,6 +3441,12 @@ impl SettingsPanelView {
         );
         let mut container = div()
             .id(("settings-list", index))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _: &MouseDownEvent, _, _| {
+                    qol_runtime::probe!("SETTINGS_INPUT", "phase=list-mouse-down index={}", index);
+                }),
+            )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if !event.standard_click() {
                     return;
@@ -4359,6 +4367,16 @@ impl Render for SettingsPanelView {
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, event: &MouseDownEvent, _, _| {
+                    qol_runtime::probe!(
+                        "SETTINGS_INPUT",
+                        "phase=root-mouse-down pos={:?}",
+                        event.position
+                    );
+                }),
+            )
             .size_full()
             .relative()
             .overflow_hidden()
@@ -4402,6 +4420,7 @@ impl SettingsPanelView {
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .child(custom_view)
         } else {
+            let page_bounds = Rc::clone(&self.page_bounds);
             settings_page()
                 .id(("settings-panel-body", level_index))
                 .track_scroll(self.stack[level_index].body_scroll.handle())
@@ -4409,6 +4428,14 @@ impl SettingsPanelView {
                 .when(front && self.filter_open, |body| {
                     body.pt(px(FILTER_OVERLAY_HEIGHT))
                 })
+                .child(
+                    canvas(
+                        move |bounds, _, _| page_bounds.set(Some(bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
                 .children(items)
         };
         let body_bounds = Rc::clone(&self.body_bounds);
@@ -4896,17 +4923,20 @@ impl SettingsPanelView {
         let built = std::time::Instant::now();
         #[cfg(debug_assertions)]
         let body_bounds = Rc::clone(&self.body_bounds);
+        #[cfg(debug_assertions)]
+        let page_bounds = Rc::clone(&self.page_bounds);
         canvas(
             |_, _, _| (),
             move |_bounds, _, window, cx| {
                 #[cfg(debug_assertions)]
                 qol_runtime::probe!(
                     "SETTINGS_FRAME",
-                    "phase=painted elapsed_us={} viewport_h={:?} target_h={} body={:?}",
+                    "phase=painted elapsed_us={} viewport_h={:?} target_h={} body={:?} page={:?}",
                     built.elapsed().as_micros(),
                     window.viewport_size().height,
                     target,
-                    body_bounds.get()
+                    body_bounds.get(),
+                    page_bounds.get()
                 );
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
