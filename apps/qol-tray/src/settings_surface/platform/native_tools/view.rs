@@ -545,7 +545,7 @@ impl NativeToolsView {
                             draft.recording = false;
                             draft.capture_session = None;
                             view.fail(
-                                "The desktop is holding the keyboard, so keys cannot be recorded here",
+                                "Hotkeys cannot be recorded here; on macOS, grant qol-tray Accessibility permission to enable recording",
                                 cx,
                             );
                         }

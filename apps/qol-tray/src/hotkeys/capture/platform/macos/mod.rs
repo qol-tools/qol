@@ -19,17 +19,21 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
+mod recorder;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MacCombo {
     mods: BTreeSet<Mod>,
     key: u16,
 }
 
-pub(crate) fn start_recording(_session_id: u64, _events: Arc<crate::daemon::EventBus>) -> bool {
-    false
+pub(crate) fn start_recording(session_id: u64, events: Arc<crate::daemon::EventBus>) -> bool {
+    recorder::global().start(session_id, events)
 }
 
-pub(crate) fn cancel_recording(_session_id: u64) {}
+pub(crate) fn cancel_recording(session_id: u64) {
+    recorder::global().cancel(session_id);
+}
 
 /// The macOS tap passes events through instead of re-emitting them, so it
 /// holds no synthetic key state to flush.
@@ -189,6 +193,13 @@ fn run_tap(
             }
             if !matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
                 return CallbackResult::Keep;
+            }
+            let recorder = recorder::global();
+            if recorder.recording() {
+                if matches!(event_type, CGEventType::KeyDown) && !is_auto_repeat(event) {
+                    recorder.handle_event(event_type, &observed_combo(event));
+                }
+                return CallbackResult::Drop;
             }
             if matches!(event_type, CGEventType::KeyDown) && is_auto_repeat(event) {
                 return CallbackResult::Keep;
