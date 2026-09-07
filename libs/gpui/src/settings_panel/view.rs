@@ -52,7 +52,6 @@ const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
 const CRUMB_MAX_WIDTH: f32 = 200.0;
-const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PanelFocus {
     Sources,
@@ -4536,7 +4535,7 @@ impl SettingsPanelView {
                             .rounded_l(px(qol_theme::RADIUS_CARD * reached))
                             .border_l(px(RAIL_CARD_ACCENT * reached)),
                     )
-                    .left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                    .left(px(super::PANEL_RAIL_WIDTH))
                     .rounded_l(px(qol_theme::RADIUS_CARD * reached))
                     .into_any_element()
                 } else {
@@ -4551,7 +4550,7 @@ impl SettingsPanelView {
                     ))
                     .with_animation(("settings-card-slide", step), ease(), move |card, delta| {
                         let reached = progress(delta);
-                        card.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        card.left(px(super::PANEL_RAIL_WIDTH))
                             .rounded_l(px(qol_theme::RADIUS_CARD * reached))
                     })
                     .into_any_element()
@@ -4564,21 +4563,7 @@ impl SettingsPanelView {
                     .right_0()
                     .top_0()
                     .bottom_0();
-                if snapped {
-                    let reached = progress(1.0);
-                    deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
-                        .into_any_element()
-                } else {
-                    deck.with_animation(
-                        ("settings-card-slide", step),
-                        ease(),
-                        move |deck, delta| {
-                            let reached = progress(delta);
-                            deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
-                        },
-                    )
-                    .into_any_element()
-                }
+                deck.left(px(super::PANEL_RAIL_WIDTH)).into_any_element()
             }
         })
     }
