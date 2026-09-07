@@ -147,7 +147,7 @@ fn caret(x: f32) -> Div {
         .top(px(1.0))
         .w(px(CARET_WIDTH))
         .h(px(16.0))
-        .rounded(px(1.0))
+        .rounded_full()
         .bg(rgb(current_palette().highlight))
 }
 
