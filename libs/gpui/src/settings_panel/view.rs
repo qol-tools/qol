@@ -4451,6 +4451,8 @@ impl SettingsPanelView {
                 .flex_1()
                 .min_h(px(0.))
                 .w_full()
+                .flex()
+                .flex_col()
                 .child(body)
                 .when(front, |frame| frame.child(frame_bounds))
                 .when(front && !has_custom_view, |frame| {
