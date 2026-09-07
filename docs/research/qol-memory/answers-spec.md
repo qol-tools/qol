@@ -20,7 +20,7 @@ Three deterministic changes, no LLM anywhere:
 
 ## Shared contract (names every lane compiles against)
 
-Owned by lane qm-ingest, in `plugins/qol-memory/src/ingest/mod.rs`:
+Owned by lane qm-ingest, in `plugins/memory/src/ingest/mod.rs`:
 
 ```rust
 pub const ASSISTANT_KIND: &str = "assistant";
@@ -29,7 +29,7 @@ pub const PARSER_VERSION: u32 = 2;
 pub struct IngestReport { pub files, pub appended, pub duplicates, pub reparsed, pub compactions: usize }
 ```
 
-Owned by lane qm-ask, in `plugins/qol-memory/src/store/mod.rs`:
+Owned by lane qm-ask, in `plugins/memory/src/store/mod.rs`:
 
 ```rust
 pub const CLAUDE_COMPACTION_MARKER: &str = "This session is being continued from a previous conversation";
@@ -44,7 +44,7 @@ pub fn is_compaction_unit(unit: &Unit) -> bool;
 
 `is_compaction_unit` is `unit.kind == "compaction" || unit.text.starts_with(CLAUDE_COMPACTION_MARKER)`. It exists because the 136 claude summaries already in `units.jsonl` are kind `user` and can never be re-appended (keys are content hashes without the kind).
 
-Owned by lane qm-distill, in `plugins/qol-memory/src/distill/mod.rs`:
+Owned by lane qm-distill, in `plugins/memory/src/distill/mod.rs`:
 
 ```rust
 pub struct DistillReport { pub run: Option<String>, pub unchanged: bool, pub compactions: usize, pub carried: usize, pub added: usize, pub dropped: usize }
@@ -53,7 +53,7 @@ pub fn run(store: &Store) -> anyhow::Result<DistillReport>;
 
 ## Lane qm-ingest
 
-Owned paths: `plugins/qol-memory/src/ingest/mod.rs`, `plugins/qol-memory/src/ingest/transcript.rs`, `plugins/qol-memory/src/ingest/state.rs`.
+Owned paths: `plugins/memory/src/ingest/mod.rs`, `plugins/memory/src/ingest/transcript.rs`, `plugins/memory/src/ingest/state.rs`.
 
 1. `transcript.rs` `handle_event`:
    - claude `type == "assistant"`: content from `message.content`; text via the existing `text_of` (joins only `type == "text"` blocks, so thinking and tool_use never leak) then `redact`; skip when trimmed empty; session and cwd updated from `sessionId` and `cwd` exactly as the `user` arm does; push a unit shaped like `user_unit` but with `"kind": ASSISTANT_KIND`. Refactor `user_unit` into a kind-taking builder rather than duplicating the json block.
@@ -65,7 +65,7 @@ Owned paths: `plugins/qol-memory/src/ingest/mod.rs`, `plugins/qol-memory/src/ing
 
 ## Lane qm-distill
 
-Owned paths: `plugins/qol-memory/src/distill/mod.rs` (new), `plugins/qol-memory/src/distill/sections.rs` (new, pure parsing), `plugins/qol-memory/src/lib.rs`, `plugins/qol-memory/src/cli.rs`, `plugins/qol-memory/src/app/mod.rs`, `plugins/qol-memory/src/watch/mod.rs`.
+Owned paths: `plugins/memory/src/distill/mod.rs` (new), `plugins/memory/src/distill/sections.rs` (new, pure parsing), `plugins/memory/src/lib.rs`, `plugins/memory/src/cli.rs`, `plugins/memory/src/app/mod.rs`, `plugins/memory/src/watch/mod.rs`.
 
 ### Selection
 
@@ -102,7 +102,7 @@ Tests: claim_lines on a pi-shaped summary and on a claude-shaped summary (items,
 
 ## Lane qm-ask
 
-Owned paths: `plugins/qol-memory/src/ask/mod.rs`, `plugins/qol-memory/src/ask/rows.rs`, `plugins/qol-memory/src/store/mod.rs`.
+Owned paths: `plugins/memory/src/ask/mod.rs`, `plugins/memory/src/ask/rows.rs`, `plugins/memory/src/store/mod.rs`.
 
 1. `store/mod.rs`: the constants and predicates from the shared contract.
 2. `ask/mod.rs`:

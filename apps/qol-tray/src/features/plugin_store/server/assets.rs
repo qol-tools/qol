@@ -10,10 +10,10 @@ use rust_embed::Embed;
 struct UiAssets;
 
 #[derive(Embed)]
-#[folder = "../../libs/qol-config/js/"]
+#[folder = "../../libs/config/js/"]
 struct QolConfigAssets;
 
-const QOL_CONFIG_ASSET_PREFIX: &str = "libs/qol-config/js/";
+const QOL_CONFIG_ASSET_PREFIX: &str = "libs/config/js/";
 
 pub(super) const AUTH_FRAGMENT_KEY_PLACEHOLDER: &str =
     "window.__QOL_AUTH_FRAGMENT_KEY__ = null; /* QOL_AUTH_FRAGMENT_KEY_INJECT */";
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn shared_qol_config_assets_resolve_through_the_ui_server() {
-        let asset = embedded_file("libs/qol-config/js/heuristics.js")
+        let asset = embedded_file("libs/config/js/heuristics.js")
             .expect("shared qol-config asset embedded");
         let source = String::from_utf8_lossy(&asset.data);
         assert!(source.contains("export function prettyLabel"));

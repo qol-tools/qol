@@ -1380,7 +1380,7 @@ mod tests {
                 id: "qol-shot".to_string(),
                 name: "QoL Shot".to_string(),
                 version: "1.0.0".to_string(),
-                source: "/repo/plugins/qol-shot".to_string(),
+                source: "/repo/plugins/shot".to_string(),
                 needs_rebuild: true,
                 rebuild_reason: "Source changed".to_string(),
             },

@@ -77,17 +77,17 @@ recorded question. Do not mistake it for preservation of the entire memory.
 
 | Owner | Files |
 | --- | --- |
-| Question parsing, evidence extraction, answer agreement | `plugins/qol-memory/src/ask/question_match.rs` |
-| Candidate agreement and conflict selection | `plugins/qol-memory/src/ask/selection.rs` |
-| Retrieval and answer policy | `plugins/qol-memory/src/ask/mod.rs` |
-| Semantic candidate preparation and application | `plugins/qol-memory/src/ask/semantic.rs` |
-| Background verification, provider and bindings | `plugins/qol-memory/src/verification/` |
-| Daemon requests, warm state and invalidation | `plugins/qol-memory/src/app/request.rs`, `warm.rs` |
-| Launcher rows and provenance presentation | `plugins/qol-memory/src/ask/rows.rs` |
+| Question parsing, evidence extraction, answer agreement | `plugins/memory/src/ask/question_match.rs` |
+| Candidate agreement and conflict selection | `plugins/memory/src/ask/selection.rs` |
+| Retrieval and answer policy | `plugins/memory/src/ask/mod.rs` |
+| Semantic candidate preparation and application | `plugins/memory/src/ask/semantic.rs` |
+| Background verification, provider and bindings | `plugins/memory/src/verification/` |
+| Daemon requests, warm state and invalidation | `plugins/memory/src/app/request.rs`, `warm.rs` |
+| Launcher rows and provenance presentation | `plugins/memory/src/ask/rows.rs` |
 | Launcher async interaction | `plugins/launcher/src/flow/mod.rs`, `src/ui/{controller,state,view,render}.rs` |
-| Selection regressions | `plugins/qol-memory/tests/answer_selection.rs` |
-| Comparison workflows | `plugins/qol-memory/scripts/evaluate.mjs`, `scripts/comparison/` |
-| Headless comparison workers | `plugins/qol-memory/examples/matcher-{baseline,runtime,verifier}.rs` |
+| Selection regressions | `plugins/memory/tests/answer_selection.rs` |
+| Comparison workflows | `plugins/memory/scripts/evaluate.mjs`, `scripts/comparison/` |
+| Headless comparison workers | `plugins/memory/examples/matcher-{baseline,runtime,verifier}.rs` |
 
 Existing probes include `QOL_MEMORY_DAEMON` rows verdict/match/conflict counts
 and verification states, plus `LAUNCHER_FLOW`. Enrich existing probes instead
@@ -259,7 +259,7 @@ outcome mapping described below.
   below_threshold, notes_answer, capture_answer, transcript_answer,
   no_decisive_answer, verified_answer). The ask and rows payloads expose both,
   and the launcher's `parse_verdict` maps `outcome` before the legacy verdict.
-  Diagnostic workflow: `node plugins/qol-memory/scripts/evaluate.mjs contract [--verify]`
+  Diagnostic workflow: `node plugins/memory/scripts/evaluate.mjs contract [--verify]`
   over 38 frozen cases in `tests/fixtures/answer-contract/cases.json` (the 24
   baseline cases plus legacy, declarative, scope, lineage, freshness and
   multi-record cases); the report scores the deterministic path and, with
@@ -286,7 +286,7 @@ outcome mapping described below.
 - Contract (`reports/qol-memory/contract/2026-09-05T18-53-50.178Z/`):
   deterministic 18/28 binary matches, verified 22/28, 0 wrong answers in both.
   Baseline before this round: 10/17 on the 24 original cases.
-- Frozen corpora (`node plugins/qol-memory/scripts/evaluate.mjs verify`, two
+- Frozen corpora (`node plugins/memory/scripts/evaluate.mjs verify`, two
   repeats, `reports/qol-memory/verification/2026-09-05T19-58-37.583Z/`): development 63/66 answerable and reserved 23/24 in both rounds, 0 wrong answers, 26/26 negatives withheld, cached answer p95 2.5 ms, verification completion p95 2.6 s; the gate qualifies. Both corpora had been
   inspected in earlier rounds, so this is regression evidence rather than a
   fresh held-out qualification, and the 38 contract cases were inspected while

@@ -2,7 +2,7 @@ use std::process::Command;
 
 fn main() {
     qol_build_identity::emit_build_identity();
-    println!("cargo:rerun-if-changed=../../libs/qol-config/js");
+    println!("cargo:rerun-if-changed=../../libs/config/js");
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let hash = if profile == "release" {
         Command::new("git")

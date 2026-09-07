@@ -120,7 +120,7 @@ const conventionConstants = [
 const pluginPorts = '42710|42720';
 
 const constantHits = [
-    grep(root, conventionConstants, ['*.rs', ':!libs/qol-conventions/']),
+    grep(root, conventionConstants, ['*.rs', ':!libs/conventions/']),
     grep(root, pluginPorts, ['*.js', '*.py']),
 ]
     .join('')

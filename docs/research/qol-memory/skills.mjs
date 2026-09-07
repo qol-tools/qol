@@ -12,7 +12,7 @@ const pick = (flag, def) => {
   return i >= 0 && ARGS[i + 1] ? ARGS[i + 1] : def;
 };
 const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
-const GLOSSARY_PATH = pick("--glossary", join(BASE, "..", "..", "..", "plugins", "qol-memory", "assets", "skills-glossary.json"));
+const GLOSSARY_PATH = pick("--glossary", join(BASE, "..", "..", "..", "plugins", "memory", "assets", "skills-glossary.json"));
 const SKILLS_ROOT = resolve(
   pick("--skills-root", process.env.QOL_MEMORY_SKILLS_ROOT || join(BASE, "..", "..", "..", "..", "..", "..", "qol-skills"))
 );

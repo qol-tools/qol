@@ -6,7 +6,7 @@ import { acceptance, calibrate, evaluate, validateDataset, validateSplitSeparati
 import { buildWorker, hashFile, prepareModels, readJson, runCommand, sha256, writeJson } from "./artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-const fixtures = join(root, "plugins/qol-memory/tests/fixtures/matcher-comparison");
+const fixtures = join(root, "plugins/memory/tests/fixtures/matcher-comparison");
 const directory = dirname(fileURLToPath(import.meta.url));
 
 function options(args) {
@@ -32,10 +32,10 @@ function sourceProof() {
   const files = [
     ...sourceFiles(directory), ...sourceFiles(fixtures),
     ...sourceFiles(join(root, "docs/research/qol-memory/tier1/src")),
-    ...sourceFiles(join(root, "plugins/qol-memory/src")),
-    join(root, "plugins/qol-memory/examples/matcher-baseline.rs"),
-    join(root, "plugins/qol-memory/scripts/evaluate.mjs"),
-    join(root, "plugins/qol-memory/Cargo.toml"), join(root, "Cargo.lock"),
+    ...sourceFiles(join(root, "plugins/memory/src")),
+    join(root, "plugins/memory/examples/matcher-baseline.rs"),
+    join(root, "plugins/memory/scripts/evaluate.mjs"),
+    join(root, "plugins/memory/Cargo.toml"), join(root, "Cargo.lock"),
     join(root, "docs/research/qol-memory/tier1/Cargo.toml"),
     join(root, "docs/research/qol-memory/tier1/Cargo.lock"),
   ].sort();

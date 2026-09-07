@@ -22,7 +22,7 @@ Phase-1 vertical slice: DDC/CI brightness on Linux via the hardened grant, gamma
 | C | research: macOS/Windows brightness | spec (architect-owned) | kernel/API docs | verdict notes appended to spec phase-2 section | — |
 | D | review board | plugin crate | A2c | pass/conditional/block verdict (7 lanes) | A2c |
 | E | guest-VM verify | plugin crate | A2c | probe/grant/gamma/hotkeys/restore proven in guest; DDC round-trip via i2c-stub or real hardware | D |
-| F | deferred single-source items | libs/qol-host-fixes (+ apps/qol-tray if M5 home lands there) | review report | M5 restore-ordering decision (home: wherever enforced; if tray gpu_driver_sync feature, sequence after B), lock squatting (SO_PEERCRED or stale-detecting fs lock), UdevUaccess arm out of nvidia::rendered_hash_of | B if tray home |
+| F | deferred single-source items | libs/host-fixes (+ apps/qol-tray if M5 home lands there) | review report | M5 restore-ordering decision (home: wherever enforced; if tray gpu_driver_sync feature, sequence after B), lock squatting (SO_PEERCRED or stale-detecting fs lock), UdevUaccess arm out of nvidia::rendered_hash_of | B if tray home |
 
 ## Lane cards
 

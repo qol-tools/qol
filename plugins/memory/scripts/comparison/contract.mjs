@@ -127,7 +127,7 @@ function options(args) {
 
 async function inputHashes() {
   const paths = [fixture, ...sources];
-  return Object.fromEntries(await Promise.all(paths.map(async (path) => [path, await hashFile(join(root, "plugins/qol-memory", path))])));
+  return Object.fromEntries(await Promise.all(paths.map(async (path) => [path, await hashFile(join(root, "plugins/memory", path))])));
 }
 
 export async function contract(args) {
@@ -148,7 +148,7 @@ export async function contract(args) {
   };
   try {
     const settings = options([...args]);
-    const dataset = validateDataset(readJson(join(root, "plugins/qol-memory", fixture)));
+    const dataset = validateDataset(readJson(join(root, "plugins/memory", fixture)));
     const baseline = await buildWorker(root, out, report, "matcher-baseline", ["-p", "qol-memory", "--example", "matcher-baseline"]);
     report.inputs = {
       ...settings,
@@ -167,7 +167,7 @@ export async function contract(args) {
     }
     if (settings.verify) {
       const runtime = await buildWorker(root, out, report, "matcher-runtime", ["-p", "qol-memory", "--example", "matcher-runtime"]);
-      const profile = readJson(join(root, "plugins/qol-memory/src/verification/profile.json"));
+      const profile = readJson(join(root, "plugins/memory/src/verification/profile.json"));
       const settingsWithEndpoint = settings.endpoint ? { ...profile, endpoint: settings.endpoint } : profile;
       await withLocalModel(settingsWithEndpoint, out, report, async (endpoint) => {
         for (const entry of dataset.cases) {

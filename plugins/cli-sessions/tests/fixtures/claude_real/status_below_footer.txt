@@ -10,7 +10,7 @@
 
   Searched for 1 pattern (ctrl+o to expand)
 
-● Bash(grep -n "STATUS_TAIL\b.*=" libs/qol-terminal-sessions/src/cli/screen.rs | head -3; target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null |…)
+● Bash(grep -n "STATUS_TAIL\b.*=" libs/terminal-sessions/src/cli/screen.rs | head -3; target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null |…)
   ⎿  1:const STATUS_TAIL: usize = 8;
      2:const KIMI_STATUS_TAIL: usize = 30;
      ['0x23bf', '0x20', '0xa0'] '⎿ \xa0Running…'
@@ -27,7 +27,7 @@
      kimi_question_picker.meta.json
      … +73 lines (ctrl+o to expand)
 
-● Bash(cat plugins/cli-sessions/tests/fixtures/corpus/working_me.meta.json; echo; sed -n '1,20p' libs/qol-terminal-sessions/src/cli/screen.rs)
+● Bash(cat plugins/cli-sessions/tests/fixtures/corpus/working_me.meta.json; echo; sed -n '1,20p' libs/terminal-sessions/src/cli/screen.rs)
   ⎿  {
        "title": "\u2802 Claude Sessions Improvements",
        "at_prompt": false,
@@ -36,7 +36,7 @@
   Searched for 1 pattern (ctrl+o to expand)
 
 ● Bash(python3 - <<'PY'
-      p='libs/qol-terminal-sessions/src/cli/screen.rs'…)
+      p='libs/terminal-sessions/src/cli/screen.rs'…)
   ⎿  ok
 
 ● Bash(target/debug/qol sessions read v1:kitty:k10304_f04830.13:313693 2>/dev/null > plugins/cli-sessions/tests/fixtures/corpus/claude_status_below_footer.txt; tail -1…)

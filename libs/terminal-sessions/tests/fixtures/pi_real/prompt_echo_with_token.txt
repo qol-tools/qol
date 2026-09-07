@@ -13,17 +13,17 @@
 
  Thinking...
 
- read plugins/qol-memory/src/ask/mod.rs
+ read plugins/memory/src/ask/mod.rs
 
  Thinking...
 
- read plugins/qol-memory/src/ask/mod.rs:1472
+ read plugins/memory/src/ask/mod.rs:1472
 
  Thinking...
 
  Now let me look at the retrieval module to understand the idf computation, and check crate::ingest::CAPTURE_KIND and capture_unit.
 
- $ cd /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory && ls src && ls src/retrieval* 2>/dev/null; grep -n "CAPTURE_KIND\|pub fn capture_unit" src/ingest/mod.rs | head -20
+ $ cd /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory && ls src && ls src/retrieval* 2>/dev/null; grep -n "CAPTURE_KIND\|pub fn capture_unit" src/ingest/mod.rs | head -20
 
  ... (21 earlier lines, ctrl+o to expand)
  src/retrieval_log:
@@ -34,7 +34,7 @@
 
  Took 0.0s
 
- read plugins/qol-memory/src/retrieval/mod.rs
+ read plugins/memory/src/retrieval/mod.rs
 
  Thinking...
 

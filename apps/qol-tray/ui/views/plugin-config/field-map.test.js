@@ -8,7 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../../../..');
 
 test('live Preact field registry covers every Rust wire field kind', () => {
-    const rust = readFileSync(resolve(root, 'libs/qol-config/src/contract/v1.rs'), 'utf8');
+    const rust = readFileSync(resolve(root, 'libs/config/src/contract/v1.rs'), 'utf8');
     const js = readFileSync(resolve(here, 'field-map.js'), 'utf8');
     const wireKinds = parseRustWireKinds(rust);
     const renderedKinds = parseFieldMapKinds(js);

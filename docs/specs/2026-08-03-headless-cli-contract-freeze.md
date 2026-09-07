@@ -38,7 +38,7 @@ Scope: the 8 host-embedded features with 0 headless commands (roadmap table
 classifier only knows daemon/help/version/`--write-mode=`/exec/open/`qol://`/doctor
 (`apps/qol-tray/src/app/host_cli.rs:19`); anything else exits rc=2 "Invalid qol-tray
 invocation" (`apps/qol-tray/src/app/mod.rs:204`). All 8 features sit behind the authenticated
-loopback HTTP server on 127.0.0.1:42700 (`libs/qol-conventions/src/lib.rs:8`,
+loopback HTTP server on 127.0.0.1:42700 (`libs/conventions/src/lib.rs:8`,
 `features/plugin_store/mod.rs:18`), token + Host protected (`server/security.rs:36,47,60`);
 `qol-tray exec` is the proven client primitive (`app/mod.rs:290,348`, `commands/local_http.rs:13-27`).
 Front-door rule (PROPOSED): all commands ship on `qol-tray` — it owns the config store, HTTP
@@ -143,7 +143,7 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
     (`PROFILE_CONFIG_LOCK: OnceLock<RwLock<()>>`, apps/qol-tray/src/plugins/config/mod.rs:104;
     B.4), so a running tray can race the file. Reuse the qol sync `SyncLock` pattern:
     `SyncLock::acquire` blocks on `file.lock()` (flock), the OS releases it on process
-    exit (libs/qol-profile-sync/src/lock.rs:6-8, 27-29), and both `qol sync` and the
+    exit (libs/profile-sync/src/lock.rs:6-8, 27-29), and both `qol sync` and the
     tray's sync service already serialize on the same lockfile
     (tools/qol-cli/src/commands/sync/mod.rs:134;
     apps/qol-tray/src/features/profile/sync/service.rs:78). PROPOSED: a `ConfigWriteLock`
@@ -175,7 +175,7 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
       happen in the tray process (no cross-process write); restart-required semantics
       stay as today. Tray down: direct one-shot under the config-dir lock.
     - `profile backup` — **direct one-shot under the sync lock**, not a new one: writes
-      land in `<profile>/<name>/sync/backups` (libs/qol-profile-sync/src/state.rs:65-66),
+      land in `<profile>/<name>/sync/backups` (libs/profile-sync/src/state.rs:65-66),
       inside the watched profile root, so the running tray's watcher invalidates its
       runtime cache on the new file (runtime_cache.rs:750-760) — that is the reload,
       and backup never replaces live configs. Serialize against the tray's sync engine
@@ -195,13 +195,13 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
   state: PluginManager reload/notify (`plugin_services/operations/install.rs:9-26`),
   task-runner runtime, profile-import reconciliation, launcher sync, self-update EventBus.
   Client: token from disk, loopback HTTP (`commands/local_http.rs:13-27`), 2s connect / 2s io
-  defaults (`libs/qol-runtime/src/local_http.rs:36-41`), tray wrapper raises io to 5s
+  defaults (`libs/runtime/src/local_http.rs:36-41`), tray wrapper raises io to 5s
   (`commands/local_http.rs:16-17`). Server: 401 without token, Host + CSRF checks
   (`security.rs:36,47,60-72`); mutating ops stay POST/DELETE (`plugin_handlers.rs:34-36`).
   OPEN resolved: install/update/self-update exceed the 5s io timeout (clone + staging,
   `installer/operations.rs:13-40`) — **decision (a): raise the mutating-op IPC io
   timeout to 30s.** The io timeout is a per-client builder value
-  (`Client::with_io_timeout`, libs/qol-runtime/src/local_http.rs:45-48) applied only as
+  (`Client::with_io_timeout`, libs/runtime/src/local_http.rs:45-48) applied only as
   TCP read/write timeouts on the loopback socket; the 5s lives at a single call site,
   `post_to_daemon` (apps/qol-tray/src/commands/local_http.rs:16-17). Install/update/
   uninstall handlers await the op inline — the response comes only after clone +
@@ -212,7 +212,7 @@ server has GET `/api/check-update`, POST `/api/self-update` (`meta_handlers.rs:2
   the deadline with the timeout in `error.details`. Read-only GETs keep 5s (hangs
   surface fast). Where it lives: `post_to_daemon` raises its `with_io_timeout` to
   `Duration::from_secs(30)` (apps/qol-tray/src/commands/local_http.rs:16-17); the
-  shared runtime client default stays 2s/2s (libs/qol-runtime/src/local_http.rs:36-41).
+  shared runtime client default stays 2s/2s (libs/runtime/src/local_http.rs:36-41).
 - **Controlled tray autostart** applies only to ops needing the daemon's manager while the
   tray UI may appear; none proposed here (PROPOSED) — mutating IPC commands report "qol-tray
   is not running" (`app/mod.rs:362`) and exit 1 instead.
@@ -236,16 +236,16 @@ serve usage-class failures today (the spec flags this: "Exit code 2 means three
 things", residual friction 3). Implementation is split:
 
 - qol-headless defines `EXIT_SUCCESS=0`, `EXIT_RUNTIME_ERROR=1`, `EXIT_USAGE=64`
-  (libs/qol-headless/src/lib.rs:14-16); doctor aggregates map `Ok→0, Warn→1, Fail→2`
-  (libs/qol-headless/src/doctor/render.rs:48-54).
+  (libs/headless/src/lib.rs:14-16); doctor aggregates map `Ok→0, Warn→1, Fail→2`
+  (libs/headless/src/doctor/render.rs:48-54).
 - qol-tray front door returns **2** for a malformed invocation — `Invocation::Invalid`
   prints "Invalid qol-tray invocation" and exits 2 (apps/qol-tray/src/app/mod.rs:203-206).
 - `plugin-controllers doctor --fix` exits **64** with "Unknown doctor check `--fix`":
-  `split_output_format` extracts only `--json` (libs/qol-headless/src/lib.rs:907-917),
+  `split_output_format` extracts only `--json` (libs/headless/src/lib.rs:907-917),
   so `--fix` dispatches as a check id, misses, and `DispatchError::Usage` → `EXIT_USAGE`
-  (libs/qol-headless/src/lib.rs:729, 879, 962-966). `DoctorCheck` has no fix handler
-  (libs/qol-headless/src/doctor/check.rs:7-12); `DoctorCheckResult.fix` is advisory prose
-  (libs/qol-headless/src/doctor/contract.rs, `with_fix`).
+  (libs/headless/src/lib.rs:729, 879, 962-966). `DoctorCheck` has no fix handler
+  (libs/headless/src/doctor/check.rs:7-12); `DoctorCheckResult.fix` is advisory prose
+  (libs/headless/src/doctor/contract.rs, `with_fix`).
 
 **Rule B1 (normalize on 64).** All usage errors across all binaries — including the
 qol-tray front door — exit **64**: the framework already implements 64, the V5 table
@@ -261,7 +261,7 @@ is unaffected. Doctor aggregates (0/1/2) are status, not usage — unchanged.
 
 Only `--json` commands emit JSON; the envelope is identical on every binary. Doctor
 reports keep their existing shape (`DoctorReport`: `plugin_id,status,checks[]` with
-`id,status,message,fix,details` — libs/qol-headless/src/doctor/contract.rs) and are
+`id,status,message,fix,details` — libs/headless/src/doctor/contract.rs) and are
 NOT wrapped. PROPOSED schema for host commands:
 
 ```json
@@ -277,7 +277,7 @@ NOT wrapped. PROPOSED schema for host commands:
   and a tool that rewrites a document preserves unknown fields (round-trip)
   wherever the type declares extension storage: `#[serde(default, flatten)]
   extensions: BTreeMap<String, Value>` on `DoctorReport` and `DoctorCheckResult`
-  (libs/qol-headless/src/doctor/contract.rs:162-164,187-188), and on
+  (libs/headless/src/doctor/contract.rs:162-164,187-188), and on
   `DoctorAggregateReport` and `PluginDoctorReport` once the C.2 extension-storage
   fix lands (contract.rs:137,42). Every doctor contract type therefore both
   tolerates and preserves unknown fields, so forward-compatible additions survive
@@ -293,7 +293,7 @@ deadline measured from CLI start, or exits 1 (runtime) with the timeout in
 `error.details`. The deadline is enforced at the CLI layer, not by the HTTP
 transport: `with_io_timeout` only sets per-socket read/write timeouts —
 `stream.set_read_timeout(Some(self.io_timeout))` / `set_write_timeout(...)`
-inside `connect()` (libs/qol-runtime/src/local_http.rs:45-57) — so it bounds a
+inside `connect()` (libs/runtime/src/local_http.rs:45-57) — so it bounds a
 single TCP op, never a whole request; a stalled request with a slow-but-alive
 peer can outlive any io value. Defaults PROPOSED: one-shot host commands 30s;
 doctor checks are two-tier (both tiers are wall-clock deadlines on the
@@ -325,7 +325,7 @@ deadline regardless of transport, lock, or remote-op behavior.
 
 2. **Bounded lock acquisition.** Lock acquisition is explicitly unbounded today:
    the cross-process lock blocks on `file.lock()` (flock) with no try-lock, no
-   timeout (libs/qol-profile-sync/src/lock.rs:6-8, 27-29), and the in-process
+   timeout (libs/profile-sync/src/lock.rs:6-8, 27-29), and the in-process
    guard blocks until readers drain (apps/qol-tray/src/plugins/config/mod.rs:187-192)
    — a held lock could silently consume the whole 30s. PROPOSED: `ConfigWriteLock`
    acquire and the B.4 guard take a 10s acquire timeout; on expiry the command
@@ -353,7 +353,7 @@ deadline regardless of transport, lock, or remote-op behavior.
 4. **The 30s io bound covers PUT and DELETE.** No PUT/DELETE client helper exists:
    `apps/qol-tray/src/commands/local_http.rs` has only `get_from_daemon` (GET,
    :5-11) and `post_to_daemon` (POST, :13-20); the runtime `Method` enum is
-   Get/Post/Put with no Delete (libs/qol-runtime/src/local_http.rs:7-11).
+   Get/Post/Put with no Delete (libs/runtime/src/local_http.rs:7-11).
    PROPOSED: add `put_to_daemon` / `delete_to_daemon` mirroring `post_to_daemon`
    at the same 30s io timeout (`Method::Delete` added to the runtime enum). First
    consumers: `theme set` PUT `/theme` | `/theme/accent`
@@ -393,7 +393,7 @@ depending on the writing process:
 
 - **Cross-process lock (PROPOSED).** `ConfigWriteLock` reuses the qol sync
   `SyncLock` pattern: `SyncLock::acquire` blocks on `file.lock()` (flock), the
-  OS releases it on process exit (libs/qol-profile-sync/src/lock.rs:6-8, 27-29),
+  OS releases it on process exit (libs/profile-sync/src/lock.rs:6-8, 27-29),
   and both `qol sync` and the tray's sync service already serialize on the same
   lockfile (tools/qol-cli/src/commands/sync/mod.rs:134;
   apps/qol-tray/src/features/profile/sync/service.rs:78). Lockfile keyed on the
@@ -523,8 +523,8 @@ crates (audit.sh:71-87). It never executes a binary, yet reports "21 units, 0 no
 | audit verdict | Guest-VM evidence | Root cause |
 |---|---|---|
 | `plugin-bluetooth` headless | `doctor --json` hangs >25 s (timeout rc=124, no output) in a guest without BlueZ services | `bluez_available` check calls `adapter_health()` (plugins/bluetooth/src/cli.rs:316-317) → `default_adapter().await` with no deadline (plugins/bluetooth/src/platform/linux.rs:369-378); the bluer D-Bus call blocks when `org.bluez` is absent |
-| `plugin-controllers` headless | `doctor --fix` rejected, rc=64, "Unknown doctor check `--fix`" | doctor accepts only registered check ids; unknown ids are `DispatchError::Usage` → `EXIT_USAGE=64` (libs/qol-headless/src/lib.rs:16,281; rejection in `selected_doctor_checks`, lib.rs:875-880). `--fix` is not a flag; fixes are the separate `apply_fixes` command (plugins/controllers/src/cli.rs:26-36) |
-| `qol-tray` headless | `doctor --json` works: rc=2, valid JSON `{status,host,plugins}` | aggregate shape is `DoctorAggregateReport{status,host,plugins}` (libs/qol-headless/src/doctor/contract.rs:120-123); exit 2 = failures (tools/qol-cli/src/commands/doctor.rs:25 help text). Plugins fail in-guest with "current process is outside the configured cgroup delegation" (libs/qol-process/src/platform/linux/containment/mod.rs:1227) — a guest restriction, NOT a product regression |
+| `plugin-controllers` headless | `doctor --fix` rejected, rc=64, "Unknown doctor check `--fix`" | doctor accepts only registered check ids; unknown ids are `DispatchError::Usage` → `EXIT_USAGE=64` (libs/headless/src/lib.rs:16,281; rejection in `selected_doctor_checks`, lib.rs:875-880). `--fix` is not a flag; fixes are the separate `apply_fixes` command (plugins/controllers/src/cli.rs:26-36) |
+| `qol-tray` headless | `doctor --json` works: rc=2, valid JSON `{status,host,plugins}` | aggregate shape is `DoctorAggregateReport{status,host,plugins}` (libs/headless/src/doctor/contract.rs:120-123); exit 2 = failures (tools/qol-cli/src/commands/doctor.rs:25 help text). Plugins fail in-guest with "current process is outside the configured cgroup delegation" (libs/process/src/platform/linux/containment/mod.rs:1227) — a guest restriction, NOT a product regression |
 
 Conclusion: structural checks prove *shape* (manifest declares runtime/doctor/daemon, crate
 depends on qol-headless); they cannot prove *behavior* (binary builds, `help` exits 0,
@@ -541,7 +541,7 @@ audit.sh:96).
 Runner: small Rust tool `tools/qol-contract-gate` (see C.3). For every unit layer 1 marks
 headless:
 
-- `help` → must exit 0 (`EXIT_SUCCESS`, libs/qol-headless/src/lib.rs:14; help dispatch
+- `help` → must exit 0 (`EXIT_SUCCESS`, libs/headless/src/lib.rs:14; help dispatch
   returns before any command handler runs, lib.rs:413-419). Non-zero exit or empty stdout = FAIL.
 - `doctor --json` → must exit within `DOCTOR_TIMEOUT` and print exactly one valid JSON
   document matching the validator selected for the unit's audit.sh row (mapping below).
@@ -549,12 +549,12 @@ headless:
   tools/qol-cli/src/commands/doctor.rs:25); any other exit code or unparseable output = FAIL.
   The `status/host/plugins` schema applies to the aggregate validator ONLY: plugin
   binaries emit `DoctorReport{plugin_id,status,checks[]}`
-  (libs/qol-headless/src/doctor/contract.rs:158) and must never be validated against
+  (libs/headless/src/doctor/contract.rs:158) and must never be validated against
   the aggregate shape.
 
 ### Doctor report validators (three distinct serde shapes; verified in source)
 
-| Validator | Shape (libs/qol-headless/src/doctor/contract.rs) | Emitted by |
+| Validator | Shape (libs/headless/src/doctor/contract.rs) | Emitted by |
 |---|---|---|
 | (a) plugin report | `DoctorReport{plugin_id, status, checks:[DoctorCheckResult{id, status, message, fix?, details?}]}` (contract.rs:158,179) | every standalone plugin binary; consumer binaries that register their own checks via `HeadlessApp` (qol-guest-runner, qol-tray-install, qol-tray-migrate) |
 | (b) consumer report | per binary — the real shape the binary emits (table below), never a wrapper | `qol`, `qol-guest-runner` (kind `tool`, docs/headless-cli-audit/audit.sh:83-84); `qol-tray-install` / `qol-tray-doctor` / `qol-tray-migrate` (kind `app`, audit.sh:86-87) |
@@ -582,7 +582,7 @@ PROPOSED (open, fixed in `tools/qol-contract-gate`): strictness follows serde
 semantics, with unknown-field handling made uniform via extension storage.
 serde's default for a struct without `flatten` is to *ignore* unknown fields on
 read — rejecting them would require `#[serde(deny_unknown_fields)]`, which no
-doctor contract type sets (verified in libs/qol-headless/src/doctor/contract.rs) —
+doctor contract type sets (verified in libs/headless/src/doctor/contract.rs) —
 but ignored fields are dropped on re-serialize, which breaks B.2's round-trip
 preservation. Fix: give the aggregate types the extension storage they currently
 lack, matching the existing `DoctorReport` / `DoctorCheckResult` pattern
@@ -641,7 +641,7 @@ defect, not an environment issue.
   namespace is `COVERED` (8× feature NOT_YET stands until then).
 - **`COVERED` is three conditions, all verified by execution** — `<command> help` exiting
   0 is necessary but never sufficient (help dispatch returns before any command handler
-  runs, libs/qol-headless/src/lib.rs:413-419; `EXIT_SUCCESS` at lib.rs:14):
+  runs, libs/headless/src/lib.rs:413-419; `EXIT_SUCCESS` at lib.rs:14):
   1. `<command> help` exits 0 and lists the command;
   2. read-only commands execute successfully: exit 0 and, run with `--json`, print exactly
      one valid B.2 envelope with `ok: true` (schema `{ok, command, result|error{class,
@@ -701,7 +701,7 @@ Per destructive class, the guest fixture must isolate:
 
 Destructive commands route through authenticated IPC to a running tray (A) —
 the guest fixture runs a tray against the disposable root; PROPOSED: route the
-HTTP token through the override too (paths/mod.rs:216-218 → libs/qol-config/
+HTTP token through the override too (paths/mod.rs:216-218 → libs/config/
 src/lib.rs:45, not root-overridden). State-mutating commands without a B.6
 preview (theme set, mode set, auth login, profile backup, launcher-apps sync)
 execute in the guest under the same fixtures; auth login needs a mock OAuth
@@ -737,7 +737,7 @@ today only forwards to qol-tray-doctor (tools/qol-cli/src/commands/doctor.rs:8-2
 
 Doctor failures are encoded in the JSON report on stdout — one `DoctorCheckResult`
 per check (`id, status, message, fix?, details?`,
-libs/qol-headless/src/doctor/contract.rs:179-186) — not on stderr; the exit code
+libs/headless/src/doctor/contract.rs:179-186) — not on stderr; the exit code
 is the aggregate status (Ok→0, Warn→1, Fail→2, render.rs:48-54).
 Stderr-signature classification is unreliable: a well-formed run can emit
 D-Bus/BlueZ text on stderr while the report's `status`/`message` carry the real
@@ -775,7 +775,7 @@ within `DOCTOR_TIMEOUT` — FAIL, no env exception; exit code outside 0/1/2 —
 (`ENV_MISSING`) for CI annotations — never a block.
 
 **Rule C4c (GUEST_RESTRICTION unchanged).** The cgroup signature "current process
-is outside the configured cgroup delegation" (libs/qol-process/src/platform/linux/containment/mod.rs:1227)
+is outside the configured cgroup delegation" (libs/process/src/platform/linux/containment/mod.rs:1227)
 stays `GUEST_RESTRICTION` — SKIP, recorded, accepted only with `--guest`. It is a
 host-level failure of the runner invocation, not a check: the signature MUST be
 asserted on the stderr of the gate's spawned invocation only; a check whose
@@ -802,7 +802,7 @@ env exception.
 | 0 | all layers pass (SKIPs recorded) |
 | 1 | ≥1 `PRODUCT_REGRESSION` or unclassified failure |
 | 2 | ≥1 `GUEST_RESTRICTION` skip recorded (env-absence in valid reports never blocks, C.4b) — never silent; CI policy decides (guest runs may treat 2 as pass-with-annotations, host runs may not) |
-| 64 | gate usage error (mirrors `EXIT_USAGE`, libs/qol-headless/src/lib.rs:16) |
+| 64 | gate usage error (mirrors `EXIT_USAGE`, libs/headless/src/lib.rs:16) |
 
 ## C.6 CI wiring (PROPOSED)
 
@@ -835,7 +835,7 @@ apps/qol-tray/src/dev_generation/mod.rs:83-93), `QOL_TRAY_DAEMON_REPLACE_EXISTIN
 (spawn.rs:96-125). Listeners are pre-bound by the host and passed as inherited fds
 (`QOL_TRAY_DAEMON_LISTENER_FD`, `QOL_TRAY_DAEMON_PORT_FD` + per-extra-port),
 plugins/daemon_lifecycle/listener/platform/unix.rs:195-216; daemons adopt them and skip
-bind() (libs/qol-plugin-daemon/src/daemon/platform/unix.rs:328-332).
+bind() (libs/plugin-daemon/src/daemon/platform/unix.rs:328-332).
 
 Two gate mechanisms exist in the daemons:
 
@@ -935,7 +935,7 @@ side-effecting action verb MUST either (a) declare the exemption in its D.2 matr
 and document the side effect in `help`, or (b) change bare to status/help. The exemption
 never waives D4b's core invariants: bare still must not start a daemon and must never
 block a session. Help-side baseline: the framework already prints `binary  # <default>`
-when a default command exists (libs/qol-headless/src/lib.rs:615-619); the default
+when a default command exists (libs/headless/src/lib.rs:615-619); the default
 command's about/detail must state the action it runs.
 
 Per-feature verdicts (PROPOSED, Phase 1):
@@ -1094,10 +1094,10 @@ carry both fractions only if each names its category.
 Guest `/run/qol-payload/plugins` had **13** dirs (observed in a guest session; payload
 root is `/run/qol-payload`, tools/qol-cli/src/commands/env/dev_session.rs:19-20) against
 the roadmap's 15 plugins (roadmap:9). Mechanism confirmed in-tree: the dev bundle stages
-only buildable plugins — `scan_buildable_plugins` (libs/qol-workspace/src/lib.rs:277-292)
-skips reserved ids (`plugin-template`, libs/qol-conventions/src/lib.rs:263) and
+only buildable plugins — `scan_buildable_plugins` (libs/workspace/src/lib.rs:277-292)
+skips reserved ids (`plugin-template`, libs/conventions/src/lib.rs:263) and
 platforms other than the current one (`keyremap` is macos-only,
-plugins/keyremap/plugin.toml:8; eligibility at libs/qol-workspace/src/lib.rs:263-268).
+plugins/keyremap/plugin.toml:8; eligibility at libs/workspace/src/lib.rs:263-268).
 On Linux: 15 − template − keyremap = **13** — the expected payload, not a packaging
 bug. Consequence: "15/15 plugins headless" is a **source-shape** claim; guest execution
 covers only 13 on Linux, so "all 15 verified in a guest" is false —

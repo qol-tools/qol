@@ -2385,7 +2385,7 @@ mod tests {
 
     fn recorded_pi_screen(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../libs/qol-terminal-sessions/tests/fixtures/pi_real")
+            .join("../../libs/terminal-sessions/tests/fixtures/pi_real")
             .join(name);
         std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("missing fixture {}: {error}", path.display()))

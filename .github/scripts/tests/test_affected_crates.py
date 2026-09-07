@@ -162,9 +162,9 @@ class LocalPlannerContract(unittest.TestCase):
     def test_windows_targets_track_affected_packages(self, changed_files, graph, emit):
         graph.return_value = {
             "foundation": {"dir": "libs/foundation", "deps": set(), "doctest": True},
-            "qol-process": {"dir": "libs/qol-process", "deps": {"foundation"}, "doctest": True},
+            "qol-process": {"dir": "libs/process", "deps": {"foundation"}, "doctest": True},
             "qol-dev-build": {
-                "dir": "libs/qol-dev-build",
+                "dir": "libs/dev-build",
                 "deps": {"qol-process"},
                 "doctest": True,
             },
@@ -172,9 +172,9 @@ class LocalPlannerContract(unittest.TestCase):
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
-            ("libs/qol-process/src/lib.rs", True, True, True),
+            ("libs/process/src/lib.rs", True, True, True),
             ("libs/foundation/src/lib.rs", True, True, True),
-            ("libs/qol-dev-build/src/lib.rs", False, True, True),
+            ("libs/dev-build/src/lib.rs", False, True, True),
             ("tools/qol-cli/src/main.rs", False, False, True),
             ("libs/unrelated/src/lib.rs", False, False, False),
         ]

@@ -43,7 +43,7 @@ traffic (settle checks) lands exactly inside that window.
 
 ## Verified ground truth (recon 2026-06-11, gpui 0.2.2 from crates.io)
 
-- Picker kind on macOS is `WindowKind::Normal` (`libs/qol-gpui/src/platform/macos.rs:28`).
+- Picker kind on macOS is `WindowKind::Normal` (`libs/gpui/src/platform/macos.rs:28`).
   Linux already uses `PopUp`. `Normal` dates from the file's creation; PopUp was never
   tried and reverted on macOS (git log -L confirms).
 - gpui maps `WindowKind::PopUp` to `GPUIPanel`, an `NSPanel` subclass, and ORs in

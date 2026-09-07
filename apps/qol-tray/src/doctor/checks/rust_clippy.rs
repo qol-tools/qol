@@ -126,8 +126,8 @@ mod tests {
     fn first_lint_extracts_message_and_location() {
         let cases = [
             (
-                "    Checking qol-shot\nerror: clamp-like pattern\n  --> plugins/qol-shot/src/linux_selector.rs:229:27\n",
-                "error: clamp-like pattern (plugins/qol-shot/src/linux_selector.rs:229:27)",
+                "    Checking qol-shot\nerror: clamp-like pattern\n  --> plugins/shot/src/linux_selector.rs:229:27\n",
+                "error: clamp-like pattern (plugins/shot/src/linux_selector.rs:229:27)",
             ),
             ("error: could not compile\n", "error: could not compile"),
             (

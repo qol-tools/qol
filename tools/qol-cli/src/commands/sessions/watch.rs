@@ -5312,7 +5312,7 @@ mod tests {
 
     fn recorded_pi_screen(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../libs/qol-terminal-sessions/tests/fixtures/pi_real")
+            .join("../../libs/terminal-sessions/tests/fixtures/pi_real")
             .join(name);
         std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("missing fixture {}: {error}", path.display()))
@@ -5999,7 +5999,7 @@ mod tests {
             Some(group),
             Some("qm-ask-verdict"),
             Transcript::Working,
-            vec!["grep plugins/qol-memory".to_owned(); 2],
+            vec!["grep plugins/memory".to_owned(); 2],
         );
         lane.poll(&sim);
         lane.backend.mark_gone();

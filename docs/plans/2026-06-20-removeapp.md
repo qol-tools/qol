@@ -368,7 +368,7 @@ fn trash(path: &std::path::Path) -> Result<(), String> {
     }
 }
 ```
-(If the exact `objc2-foundation` method name/feature differs, mirror `libs/qol-app-icon/src/macos.rs` for the objc2 import/call style; fall back to the `trash` crate if the binding is missing.)
+(If the exact `objc2-foundation` method name/feature differs, mirror `libs/app-icon/src/macos.rs` for the objc2 import/call style; fall back to the `trash` crate if the binding is missing.)
 
 - [ ] **Step 4: Implement the core free-fn API in `src/core/mod.rs`**: each delegates to `platform::Platform::default()` (a `fn platform() -> Platform`). `resolve_unique`: call `search`; if exactly one strong match return it, if zero `Err("no app matches {q}")`, if many `Err` listing candidate names. `search`: `installed_apps()` ranked by `qol_search` against the query. `remove(plan, how)`: if `is_protected(&plan.app)` return typed `Err`; else `Platform.remove_paths(&plan.items.paths(), how)`.
 

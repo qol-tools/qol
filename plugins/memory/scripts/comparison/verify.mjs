@@ -10,7 +10,7 @@ const gate = Object.freeze({ max_wrong_answers: 0, min_answer_coverage: 0.9, max
 const inputs = ["src/verification/mod.rs", "src/verification/ollama.rs", "src/verification/service.rs", "src/verification/profile.json", "src/ask/semantic.rs", "tests/fixtures/answer-verification/development.json", "tests/fixtures/answer-verification/heldout.json"];
 
 function options(args) {
-  const settings = { ...readJson(join(root, "plugins/qol-memory/src/verification/profile.json")), repeats: 2 };
+  const settings = { ...readJson(join(root, "plugins/memory/src/verification/profile.json")), repeats: 2 };
   while (args.length) {
     const flag = args.shift();
     if (flag === "--prepare") { settings.prepare = true; continue; }
@@ -22,7 +22,7 @@ function options(args) {
 }
 
 async function inputHashes() {
-  return Object.fromEntries(await Promise.all(inputs.map(async path => [path, await hashFile(join(root, "plugins/qol-memory", path))])));
+  return Object.fromEntries(await Promise.all(inputs.map(async path => [path, await hashFile(join(root, "plugins/memory", path))])));
 }
 
 export function score(dataset, rows) {
@@ -57,12 +57,12 @@ export async function verify(args) {
         const worst = [...rounds].sort((a, b) => b.cached.summary.wrong_answers - a.cached.summary.wrong_answers || a.cached.summary.correct_answers - b.cached.summary.correct_answers || b.completion.summary.warm_p95_ms - a.completion.summary.warm_p95_ms)[0];
         return { current: evaluate(dataset, cold.results), rounds, summary: worst.cached.summary, qualifies: rounds.every(round => round.qualifies) };
       };
-      const development = validateDataset(readJson(join(root, "plugins/qol-memory/tests/fixtures/answer-verification/development.json")), "development");
+      const development = validateDataset(readJson(join(root, "plugins/memory/tests/fixtures/answer-verification/development.json")), "development");
       report.development = runSplit(development);
       if (!report.development.qualifies) throw new Error("Development runtime gate failed; fresh held-out questions remain unused");
-      const heldout = validateDataset(readJson(join(root, "plugins/qol-memory/tests/fixtures/answer-verification/heldout.json")), "heldout");
+      const heldout = validateDataset(readJson(join(root, "plugins/memory/tests/fixtures/answer-verification/heldout.json")), "heldout");
       validateSplitSeparation(development, heldout);
-      validateSplitSeparation(readJson(join(root, "plugins/qol-memory/tests/fixtures/matcher-comparison/heldout.json")), heldout);
+      validateSplitSeparation(readJson(join(root, "plugins/memory/tests/fixtures/matcher-comparison/heldout.json")), heldout);
       report.heldout = runSplit(heldout);
     });
     for (const name of ["matcher-baseline", "matcher-runtime"]) {

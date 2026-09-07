@@ -6,7 +6,7 @@
 
 **Architecture:** Add a frozen `uid` to each `plugin.toml`. Thread a `PluginUid` newtype through the loader, registry, profile lock, hotkeys, and plugin-config storage so all durable/synced state is uid-keyed (opaque on disk). A PreFlight `FileMigration` (`v3_19_to_v3_20_plugin_uid`) re-keys existing installs from id→uid and coalesces duplicates, driven by local manifests plus a built-in core `legacy_id→uid` table so it works even where a plugin isn't installed.
 
-**Tech Stack:** Rust, `git2` (unrelated), `toml`, `serde`; crates `apps/qol-tray` and `libs/qol-migrations`.
+**Tech Stack:** Rust, `git2` (unrelated), `toml`, `serde`; crates `apps/qol-tray` and `libs/migrations`.
 
 **Spec:** `docs/specs/2026-06-23-plugin-uid-identity-design.md`
 
@@ -33,7 +33,7 @@
 | `apps/qol-tray/src/hotkeys/types.rs` | `HotkeyBinding.plugin_uid` |
 | `apps/qol-tray/src/features/profile/scope_store.rs` | plugin-config files keyed by uid |
 | `apps/qol-tray/src/doctor/checks/...` | `qol doctor` uid↔name decode table |
-| `libs/qol-migrations/src/v3_19_to_v3_20_plugin_uid/mod.rs` (new) | the re-key migration + `LEGACY_ID_TO_UID` table |
+| `libs/migrations/src/v3_19_to_v3_20_plugin_uid/mod.rs` (new) | the re-key migration + `LEGACY_ID_TO_UID` table |
 | `plugins/*/plugin.toml` (~12) | author frozen `uid` |
 | `docs/plugin-contract.md` | document `uid` |
 
@@ -79,7 +79,7 @@ fn manifest_parses_optional_uid() {
 
 **Files:**
 - Modify: each `plugins/*/plugin.toml` (launcher, qol-shot, alt-tab, keyremap, lights, os-themes, window-actions, pointz, cli-sessions, removeapp, ide-checkout; `plugin-template` gets a commented placeholder, not a real uid)
-- Create: `libs/qol-migrations/src/v3_19_to_v3_20_plugin_uid/legacy_table.rs` with `pub const LEGACY_ID_TO_UID: &[(&str, &str)]`
+- Create: `libs/migrations/src/v3_19_to_v3_20_plugin_uid/legacy_table.rs` with `pub const LEGACY_ID_TO_UID: &[(&str, &str)]`
 
 **Interfaces:**
 - Produces: `LEGACY_ID_TO_UID` mapping every current core id **and historical id** to its plugin's uid. MUST include `("plugin-screen-recorder", <qol-shot uid>)` and `("qol-shot", <qol-shot uid>)` pointing at the same uid.
@@ -187,9 +187,9 @@ fn legacy_table_is_unique_and_aliases_screen_recorder() {
 ### Task 8: Migration `v3_19_to_v3_20_plugin_uid`
 
 **Files:**
-- Create: `libs/qol-migrations/src/v3_19_to_v3_20_plugin_uid/mod.rs` (+ `legacy_table.rs` from Task 2)
-- Modify: `libs/qol-migrations/src/lib.rs` (`mod` + `PreFlightRegistry::current()`), `libs/qol-migrations/Cargo.toml` (version bump)
-- Create: `libs/qol-migrations/fixtures/v3_19_to_v3_20_plugin_uid/{before,after}/`
+- Create: `libs/migrations/src/v3_19_to_v3_20_plugin_uid/mod.rs` (+ `legacy_table.rs` from Task 2)
+- Modify: `libs/migrations/src/lib.rs` (`mod` + `PreFlightRegistry::current()`), `libs/migrations/Cargo.toml` (version bump)
+- Create: `libs/migrations/fixtures/v3_19_to_v3_20_plugin_uid/{before,after}/`
 
 **Interfaces:**
 - Consumes: `LEGACY_ID_TO_UID` (Task 2), the on-disk shapes from Tasks 4-7.

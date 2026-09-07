@@ -87,7 +87,7 @@ One primitive, one ledger, three lifecycle moments. Everything else is a backend
 
 ### The primitive
 
-`libs/qol-host-session`, a crate name you already picked in the earlier plan.
+`libs/host-session`, a crate name you already picked in the earlier plan.
 
 ```rust
 pub enum Lifetime {
@@ -154,7 +154,7 @@ list) and that behaviour is load-bearing, not incidental.
 Each is one commit, each leaves the tree green.
 
 **Phase 1. Extract the ledger.** `os-themes`'s `SessionStore<T: SessionSnapshot>` is already
-generic; lift it into `libs/qol-host-session` with the `Lifetime` field added, and migrate
+generic; lift it into `libs/host-session` with the `Lifetime` field added, and migrate
 os-themes onto it. Pure move, no behaviour change, so the existing os-themes tests are the
 proof.
 

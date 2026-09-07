@@ -1023,8 +1023,8 @@ fn themed_gpui_surfaces_do_not_use_inline_color_literals() {
         "plugins/launcher/src/ui/view.rs",
         "plugins/alt-tab/src/app/render.rs",
         "plugins/removeapp/src/ui/mod.rs",
-        "plugins/qol-shot/src/ui/region_selector/mod.rs",
-        "plugins/qol-shot/src/ui/preview.rs",
+        "plugins/shot/src/ui/region_selector/mod.rs",
+        "plugins/shot/src/ui/preview.rs",
     ];
     let mut violations = Vec::new();
 
@@ -1362,7 +1362,7 @@ fn light_system_palette_holds_contrast_floors() {
     }
 }
 
-const SURFACE_ROOTS: [&str; 3] = ["libs/qol-gpui/src", "plugins", "apps/qol-tray/src"];
+const SURFACE_ROOTS: [&str; 3] = ["libs/gpui/src", "plugins", "apps/qol-tray/src"];
 
 fn surface_sources(workspace: &Path) -> Vec<(String, std::path::PathBuf)> {
     let mut found = Vec::new();
@@ -1434,8 +1434,8 @@ const SURFACE_HEIGHT_FLOOR: f32 = 28.0;
 const HEIGHT_METHODS: [&str; 4] = ["h", "min_h", "max_h", "size"];
 
 const OFF_LADDER_HEIGHT_LITERAL_DEBT: [(&str, f32); 2] = [
-    ("libs/qol-gpui/src/gamepad/view.rs", 34.0),
-    ("libs/qol-gpui/src/gamepad/view.rs", 72.0),
+    ("libs/gpui/src/gamepad/view.rs", 34.0),
+    ("libs/gpui/src/gamepad/view.rs", 72.0),
 ];
 
 #[test]
@@ -1714,49 +1714,49 @@ preset has to carry it. A preset below the floor has no visible focus indicator.
 }
 
 const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 17] = [
-    ("libs/qol-gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
-    ("libs/qol-gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
-    ("libs/qol-gpui/src/kit.rs", "ROW_HEIGHT", HEIGHT_SETTING_ROW),
+    ("libs/gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
+    ("libs/gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
+    ("libs/gpui/src/kit.rs", "ROW_HEIGHT", HEIGHT_SETTING_ROW),
     (
-        "libs/qol-gpui/src/kit.rs",
+        "libs/gpui/src/kit.rs",
         "ROW_DESCRIBED_HEIGHT",
         HEIGHT_SETTING_ROW,
     ),
-    ("libs/qol-gpui/src/kit.rs", "ROW_TIGHT_HEIGHT", 32.0),
-    ("libs/qol-gpui/src/kit.rs", "GUTTER", SPACE_GUTTER),
-    ("libs/qol-gpui/src/dropdown.rs", "ROW_H", HEIGHT_INLINE),
+    ("libs/gpui/src/kit.rs", "ROW_TIGHT_HEIGHT", 32.0),
+    ("libs/gpui/src/kit.rs", "GUTTER", SPACE_GUTTER),
+    ("libs/gpui/src/dropdown.rs", "ROW_H", HEIGHT_INLINE),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_ROW_HEIGHT",
         HEIGHT_SETTING_ROW,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_RAIL_ITEM_HEIGHT",
         HEIGHT_CONTROL,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_LIST_ITEM_HEIGHT",
         HEIGHT_RULE_ROW,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_BAND_HEIGHT",
         HEIGHT_BAND,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_GROUP_HEADER_HEIGHT",
         HEIGHT_CONTROL,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_HINT_BAR_HEIGHT",
         HEIGHT_HINT_BAR,
     ),
     (
-        "libs/qol-gpui/src/settings_panel/mod.rs",
+        "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_FILTER_HEIGHT",
         HEIGHT_CONTROL,
     ),
@@ -1773,7 +1773,7 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 17] = [
     ),
 ];
 
-const OFF_LADDER_DEBT: [(&str, &str, f32); 1] = [("libs/qol-gpui/src/dropdown.rs", "ROW_H", 26.0)];
+const OFF_LADDER_DEBT: [(&str, &str, f32); 1] = [("libs/gpui/src/dropdown.rs", "ROW_H", 26.0)];
 
 fn declared_f32(workspace: &Path, file: &str, name: &str) -> Option<f32> {
     let contents = fs::read_to_string(workspace.join(file)).ok()?;
@@ -1863,12 +1863,12 @@ fn rust_sources(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 const SETTINGS_SCOPE: [&str; 7] = [
-    "libs/qol-gpui/src/settings_panel/",
-    "libs/qol-gpui/src/gamepad/",
-    "libs/qol-gpui/src/kit.rs",
-    "libs/qol-gpui/src/dropdown.rs",
-    "libs/qol-gpui/src/hint_bar.rs",
-    "libs/qol-gpui/src/deck.rs",
+    "libs/gpui/src/settings_panel/",
+    "libs/gpui/src/gamepad/",
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/dropdown.rs",
+    "libs/gpui/src/hint_bar.rs",
+    "libs/gpui/src/deck.rs",
     "apps/qol-tray/src/settings_surface/",
 ];
 
@@ -1879,11 +1879,11 @@ fn in_settings_scope(relative: &str) -> bool {
 }
 
 const RECIPE_OWNERS: [&str; 5] = [
-    "libs/qol-gpui/src/kit.rs",
-    "libs/qol-gpui/src/settings_panel/components.rs",
-    "libs/qol-gpui/src/dropdown.rs",
-    "libs/qol-gpui/src/deck.rs",
-    "libs/qol-gpui/src/hint_bar.rs",
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/settings_panel/components.rs",
+    "libs/gpui/src/dropdown.rs",
+    "libs/gpui/src/deck.rs",
+    "libs/gpui/src/hint_bar.rs",
 ];
 
 fn compact_line(line: &str) -> String {
@@ -1936,10 +1936,10 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
 }
 
 const REM_SPACING_HELPER_DEBT: [(&str, usize); 4] = [
-    ("libs/qol-gpui/src/status_indicator.rs", 1),
-    ("libs/qol-gpui/src/toast.rs", 4),
+    ("libs/gpui/src/status_indicator.rs", 1),
+    ("libs/gpui/src/toast.rs", 4),
     ("plugins/alt-tab/src/app/render.rs", 4),
-    ("plugins/qol-shot/src/ui/editor/render.rs", 3),
+    ("plugins/shot/src/ui/editor/render.rs", 3),
 ];
 
 #[test]
@@ -1998,8 +1998,8 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
 }
 
 const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 13] = [
-    ("libs/qol-gpui/src/toast.rs", 10.0),
-    ("libs/qol-gpui/src/toast.rs", 3.0),
+    ("libs/gpui/src/toast.rs", 10.0),
+    ("libs/gpui/src/toast.rs", 3.0),
     ("plugins/alt-tab/src/app/render.rs", 26.0),
     ("plugins/alt-tab/src/app/render.rs", 18.0),
     ("plugins/cli-sessions/src/ui/render.rs", 24.0),
@@ -2137,83 +2137,51 @@ const LEAF_METHODS: [&str; 9] = [
 ];
 
 const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
-    ("libs/qol-gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
+    ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
-        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        "libs/gpui/src/gamepad/diagram/controls.rs",
         ".border_color(",
         8,
     ),
     (
-        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        "libs/gpui/src/gamepad/diagram/controls.rs",
         ".font_weight(",
         3,
     ),
+    ("libs/gpui/src/gamepad/diagram/controls.rs", ".shadow(", 2),
     (
-        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
-        ".shadow(",
-        2,
-    ),
-    (
-        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        "libs/gpui/src/gamepad/diagram/controls.rs",
         ".text_color(",
         3,
     ),
     (
-        "libs/qol-gpui/src/gamepad/diagram/controls.rs",
+        "libs/gpui/src/gamepad/diagram/controls.rs",
         ".text_size(",
         3,
     ),
-    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
-    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
-    ("libs/qol-gpui/src/gamepad/diagram/mod.rs", ".shadow(", 1),
-    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
-    (
-        "libs/qol-gpui/src/gamepad/diagram/top.rs",
-        ".border_color(",
-        1,
-    ),
-    (
-        "libs/qol-gpui/src/gamepad/diagram/top.rs",
-        ".font_weight(",
-        1,
-    ),
-    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
-    (
-        "libs/qol-gpui/src/gamepad/diagram/top.rs",
-        ".text_color(",
-        1,
-    ),
-    ("libs/qol-gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".bg(", 11),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".border_color(", 8),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".font_weight(", 7),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".shadow(", 1),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".text_color(", 17),
-    ("libs/qol-gpui/src/gamepad/view.rs", ".text_size(", 17),
-    ("libs/qol-gpui/src/settings_panel/view.rs", ".bg(", 20),
-    ("libs/qol-gpui/src/settings_panel/view.rs", ".border(", 1),
-    (
-        "libs/qol-gpui/src/settings_panel/view.rs",
-        ".border_color(",
-        5,
-    ),
-    (
-        "libs/qol-gpui/src/settings_panel/view.rs",
-        ".font_weight(",
-        6,
-    ),
-    ("libs/qol-gpui/src/settings_panel/view.rs", ".rounded(", 11),
-    ("libs/qol-gpui/src/settings_panel/view.rs", ".shadow(", 5),
-    (
-        "libs/qol-gpui/src/settings_panel/view.rs",
-        ".text_color(",
-        33,
-    ),
-    (
-        "libs/qol-gpui/src/settings_panel/view.rs",
-        ".text_size(",
-        28,
-    ),
+    ("libs/gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
+    ("libs/gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
+    ("libs/gpui/src/gamepad/diagram/mod.rs", ".shadow(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".border_color(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".font_weight(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_color(", 1),
+    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
+    ("libs/gpui/src/gamepad/view.rs", ".bg(", 11),
+    ("libs/gpui/src/gamepad/view.rs", ".border_color(", 8),
+    ("libs/gpui/src/gamepad/view.rs", ".font_weight(", 7),
+    ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
+    ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
+    ("libs/gpui/src/gamepad/view.rs", ".text_size(", 17),
+    ("libs/gpui/src/settings_panel/view.rs", ".bg(", 20),
+    ("libs/gpui/src/settings_panel/view.rs", ".border(", 1),
+    ("libs/gpui/src/settings_panel/view.rs", ".border_color(", 5),
+    ("libs/gpui/src/settings_panel/view.rs", ".font_weight(", 6),
+    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 11),
+    ("libs/gpui/src/settings_panel/view.rs", ".shadow(", 5),
+    ("libs/gpui/src/settings_panel/view.rs", ".text_color(", 33),
+    ("libs/gpui/src/settings_panel/view.rs", ".text_size(", 28),
 ];
 
 #[test]
@@ -2283,8 +2251,8 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
 
     for (relative, path) in surface_sources(&workspace) {
         if !in_settings_scope(&relative)
-            || relative == "libs/qol-gpui/src/kit.rs"
-            || relative == "libs/qol-gpui/src/settings_panel/components.rs"
+            || relative == "libs/gpui/src/kit.rs"
+            || relative == "libs/gpui/src/settings_panel/components.rs"
         {
             continue;
         }
@@ -2333,7 +2301,7 @@ fn settings_surfaces_have_one_focus_owner() {
         calls.join("\n")
     );
     assert!(
-        calls[0].starts_with("libs/qol-gpui/src/settings_panel/view.rs:"),
+        calls[0].starts_with("libs/gpui/src/settings_panel/view.rs:"),
         "the one window.focus call lives in settings_panel/view.rs, found {}",
         calls[0]
     );
@@ -2441,7 +2409,7 @@ fn settings_surfaces_build_spinners_through_components() {
     assert!(
         calls
             .iter()
-            .all(|call| call.starts_with("libs/qol-gpui/src/settings_panel/components.rs:")),
+            .all(|call| call.starts_with("libs/gpui/src/settings_panel/components.rs:")),
         "Settings surfaces build spinners through the components recipes, so Spinner::new and \
          Busy::new live only in settings_panel/components.rs:\n{}",
         calls.join("\n")

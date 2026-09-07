@@ -32,7 +32,7 @@ Worktree resolution logic exists in four places today: `qol-cli/src/commands/dev
 
 ## Design
 
-### 1. Shared library: `libs/qol-dev-build`, new `tray` module
+### 1. Shared library: `libs/dev-build`, new `tray` module
 
 Moved out of qol-tray, with the tray delegating so behavior is unchanged:
 

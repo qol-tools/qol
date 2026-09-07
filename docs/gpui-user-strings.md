@@ -14,8 +14,8 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `Alt Tab` | plugins/alt-tab/src/app/render.rs:189 |
 | `Alt Tab · Live Window Grid` | plugins/alt-tab/src/app/render.rs:196 |
 | `Launcher Settings` | plugins/launcher/src/ui/run.rs:129 |
-| `QoL Shot Settings` | plugins/qol-shot/src/ui/settings_panel.rs:8 |
-| `QoL Shot Editor` | plugins/qol-shot/src/ui/editor/mod.rs:224 |
+| `QoL Shot Settings` | plugins/shot/src/ui/settings_panel.rs:8 |
+| `QoL Shot Editor` | plugins/shot/src/ui/editor/mod.rs:224 |
 | `CLI SESSIONS` | plugins/cli-sessions/src/ui/render.rs:190 |
 
 ## qol-gpui shared kit
@@ -115,7 +115,7 @@ Overlay hints:
 | `{} h {} min` / `{} min` / `{} sec` | ui/region_selector/mod.rs:1378-1382 |
 | `{:.0},{:.0}` | ui/preview.rs:312 cursor coords |
 
-Windows doctor text (plugins/qol-shot/src/platform/windows/mod.rs): full-sentence messages at 181-206, short `qol-shot: ...` errors at 38-127.
+Windows doctor text (plugins/shot/src/platform/windows/mod.rs): full-sentence messages at 181-206, short `qol-shot: ...` errors at 38-127.
 
 ## removeapp
 

@@ -70,7 +70,7 @@ typing, leaving the flow, closing, or reopening the launcher.
 
 `Understand question variations (experimental)` is disabled by default. It
 requires Ollama and the exact local `qwen3:8b` digest in
-`plugins/qol-memory/src/verification/profile.json`. Run `ollama pull qwen3:8b`
+`plugins/memory/src/verification/profile.json`. Run `ollama pull qwen3:8b`
 before enabling it and restarting Memory. An empty endpoint starts an owned
 loopback provider on demand; an explicit endpoint must be a literal loopback
 HTTP address. Runtime never downloads a model. Missing or incompatible models,
@@ -84,7 +84,7 @@ long-lived daemon.
 Run the production-path comparison with:
 
 ```sh
-node plugins/qol-memory/scripts/evaluate.mjs verify --prepare
+node plugins/memory/scripts/evaluate.mjs verify --prepare
 ```
 
 It freezes model, policy and fixtures; builds and hashes copied Rust workers;

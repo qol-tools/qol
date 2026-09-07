@@ -25,7 +25,7 @@ function evaluateAnswers() {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     status: passed ? "pass" : "failed",
-    inputs: { fixture_suite: "plugins/qol-memory/tests/answer_selection.rs", platform: process.platform },
+    inputs: { fixture_suite: "plugins/memory/tests/answer_selection.rs", platform: process.platform },
     artifacts: { cases: join(out, "cases.json"), log: join(out, "tests.log") },
     commands: [{ argv: command, exit_code: result.status, signal: result.signal }],
     paraphrases: { total: cases.length, passed: cases.filter((entry) => entry.passed).length },
@@ -57,5 +57,5 @@ switch (process.argv[2]) {
     break;
   }
   default:
-    throw new Error("Usage: node plugins/qol-memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH] | verify [--prepare] [--endpoint URL] [--repeats N] | contract [--verify [--endpoint URL]]");
+    throw new Error("Usage: node plugins/memory/scripts/evaluate.mjs [compare [--offline] [--repeats N] [--model-cache PATH] | verify [--prepare] [--endpoint URL] [--repeats N] | contract [--verify [--endpoint URL]]");
 }

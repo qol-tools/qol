@@ -577,7 +577,7 @@ mod tests {
             ),
             devlink(
                 "qol-shot",
-                "/Users/kaho/repos/private/qol-monorepo/plugins/qol-shot",
+                "/Users/kaho/repos/private/qol-monorepo/plugins/shot",
             ),
         ]);
         let mut probe = HashMap::new();
@@ -586,7 +586,7 @@ mod tests {
             ManifestStatus::Missing,
         );
         probe.insert(
-            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/qol-shot"),
+            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/shot"),
             ManifestStatus::WithId("qol-shot".into()),
         );
 
@@ -624,7 +624,7 @@ mod tests {
             ManifestStatus::Missing,
         );
         probe.insert(
-            PathBuf::from("/mono/plugins/qol-shot"),
+            PathBuf::from("/mono/plugins/shot"),
             ManifestStatus::WithId("qol-shot".into()),
         );
         let dev_root = PathBuf::from("/mono/plugins");

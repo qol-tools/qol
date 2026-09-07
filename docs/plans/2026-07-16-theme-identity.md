@@ -25,8 +25,8 @@
 ### Task 1: ThemeIdentity model in qol-theme
 
 **Files:**
-- Modify: `libs/qol-theme/src/lib.rs`
-- Test: `libs/qol-theme/tests/theme.rs`
+- Modify: `libs/theme/src/lib.rs`
+- Test: `libs/theme/tests/theme.rs`
 
 **Interfaces:**
 - Produces: `pub struct ThemeIdentity { pub key, pub font_ui, pub font_data, pub case_label, pub tracking_label, pub radius_2xs..radius_xl (u8, px), pub glow_text, pub frame_border, pub frame_texture, pub frame_bg, pub crt_band_display, pub card_border, pub card_bg, pub card_shadow, pub cover_bg, pub cover_texture, pub sel_outline, pub sel_outline_offset, pub ghost_btn_bg, pub ghost_btn_radius, pub hint_bg, pub hint_border, pub hint_shadow, pub panel_bg, pub panel_border, pub panel_radius, pub panel_shadow, pub heading_size, pub heading_weight, pub minimap_slab_radius }` — all `&'static str` except radii (`u8`); `RETRO_IDENTITY`, `MODERN_IDENTITY` consts; `TrayThemePreset.identity: &'static ThemeIdentity`.
@@ -160,7 +160,7 @@ NOTE for the implementer: `sel_outline: "none"` for retro is correct because ret
 
 - [ ] **Step 2: Add `identity` to `TrayThemePreset` and all four presets.** `pub identity: &'static ThemeIdentity,` after `accent_key`. slate/graphite/void get `identity: &RETRO_IDENTITY`, midnight gets `identity: &MODERN_IDENTITY`.
 
-- [ ] **Step 3: Test.** In `libs/qol-theme/tests/theme.rs`:
+- [ ] **Step 3: Test.** In `libs/theme/tests/theme.rs`:
 
 ```rust
 #[test]
@@ -175,14 +175,14 @@ fn tray_theme_identities_are_assigned() {
 ```
 
 - [ ] **Step 4: Run** `cargo test -p qol-theme` — expect only `generated_artifacts_are_current` may fail (regen happens in Task 2; if it fails here, regenerate all five profiles now).
-- [ ] **Step 5: Commit** `feat(qol-theme): model theme identity as preset data` — `libs/qol-theme/src/lib.rs libs/qol-theme/tests/theme.rs` (+ regenerated artifacts if step 4 required them).
+- [ ] **Step 5: Commit** `feat(qol-theme): model theme identity as preset data` — `libs/theme/src/lib.rs libs/theme/tests/theme.rs` (+ regenerated artifacts if step 4 required them).
 
 ---
 
 ### Task 2: Identity token emission
 
 **Files:**
-- Modify: `libs/qol-theme/src/css.rs`, `libs/qol-theme/tests/theme.rs`
+- Modify: `libs/theme/src/css.rs`, `libs/theme/tests/theme.rs`
 - Regenerate: all five artifacts
 
 **Interfaces:**
@@ -221,7 +221,7 @@ fn tray_css_emits_identity_tokens_per_theme() {
 ### Task 3: Retro no-change guard
 
 **Files:**
-- Test: `libs/qol-theme/tests/theme.rs`
+- Test: `libs/theme/tests/theme.rs`
 
 - [ ] **Step 1:** Add a table-driven test pinning retro token values to the exact strings the sweeps will remove from the style sheets:
 
@@ -359,6 +359,6 @@ Replace `var(--font-mono)` per this classification (complete inventory):
 
 - [ ] **Step 1:** Full gates: `cargo test -p qol-theme`, `cargo test -p qol-tray --features dev`, UI suite, `cargo fmt --check`, clippy with `--features dev --all-targets`.
 - [ ] **Step 2:** POST `/api/dev/recompile-self`; wait until served CSS contains `--crt-band-display`.
-- [ ] **Step 3:** Playwright: for slate then midnight — plugins page, a plugin config page (`#plugins/qol-shot/config`), settings panel open. Six screenshots at repo root (`identity-final-<theme>-<page>.png`). Slate must be visually indistinguishable from pre-branch screenshots; midnight must match the v6 mock direction.
+- [ ] **Step 3:** Playwright: for slate then midnight — plugins page, a plugin config page (`#plugins/shot/config`), settings panel open. Six screenshots at repo root (`identity-final-<theme>-<page>.png`). Slate must be visually indistinguishable from pre-branch screenshots; midnight must match the v6 mock direction.
 - [ ] **Step 4:** Verify live theme switch re-skins identity without reload (fonts, radius, cover tiles) and auto-accent still re-tints.
 - [ ] **Step 5:** Restore theme selection to auto; present screenshots to the user for the style verdict.

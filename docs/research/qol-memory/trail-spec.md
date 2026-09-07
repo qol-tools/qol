@@ -35,9 +35,9 @@ Fixed row height is the second constraint.
 Measuring node positions to place the line would need a prepaint pass; instead every node occupies one fixed slot and every dot centre is arithmetic.
 The body text is clamped to three lines to fit that slot.
 
-## Lane A: `libs/qol-gpui/src/trail/`
+## Lane A: `libs/gpui/src/trail/`
 
-Owned paths: `libs/qol-gpui/src/trail/mod.rs`, `libs/qol-gpui/src/trail/model.rs`, `libs/qol-gpui/src/trail/motion.rs`, `libs/qol-gpui/src/lib.rs`.
+Owned paths: `libs/gpui/src/trail/mod.rs`, `libs/gpui/src/trail/model.rs`, `libs/gpui/src/trail/motion.rs`, `libs/gpui/src/lib.rs`.
 
 ### `model.rs`
 
@@ -191,7 +191,7 @@ Drawing details:
 - the focused node's body takes the primary text colour, every other node takes the muted colour, and a struck node draws its body with a strikethrough.
 - element ids for the nodes are `(id, index)` so no two siblings collide.
 
-The module ships one integration test in `libs/qol-gpui/tests/` only if a headless gpui harness already exists in this workspace; if it does not, `motion.rs` unit tests are the whole test surface and that is stated in the lane report rather than worked around.
+The module ships one integration test in `libs/gpui/tests/` only if a headless gpui harness already exists in this workspace; if it does not, `motion.rs` unit tests are the whole test surface and that is stated in the lane report rather than worked around.
 
 `lib.rs` gains `pub mod trail;` in alphabetical position and `pub use trail::Trail;` beside the existing `Spinner` re-export.
 
@@ -349,7 +349,7 @@ The hint bar while dived reads `down back in time`, `up forward`, `ctrl-y copy`,
 
 ## Lane D: qol-memory emits the trail
 
-Owned path: `plugins/qol-memory/src/ask/rows.rs`.
+Owned path: `plugins/memory/src/ask/rows.rs`.
 
 `FlowRow` gains one field:
 
@@ -383,7 +383,7 @@ Lanes B, C and D are disjoint and run together in the second round, against A's 
 
 ## Acceptance
 
-1. `qol_gpui::trail` compiles with no dependency added to `libs/qol-gpui/Cargo.toml` and names no plugin, no memory concept and no theme hex value.
+1. `qol_gpui::trail` compiles with no dependency added to `libs/gpui/Cargo.toml` and names no plugin, no memory concept and no theme hex value.
 2. `motion.rs` tests cover the table above and pass.
 3. In the launcher, enter on a memory row opens the trail, esc returns to the list, a second esc leaves the flow.
 4. Down moves the focus: the brass leaves the current circle, travels the line, and fills the next one, with the line empty at rest and exactly one circle filled.
@@ -405,8 +405,8 @@ Any change to `RowActionSpec`, the manifest, or `launcher-flows.json`.
 The per-row dive is withdrawn.
 In flow mode the query's answers are the trail: rows arrive, they render as one node each on the vertical trail, the selected row is the lit circle, down and up move the focus with the travel and drain motion, enter runs the row action, esc leaves the flow.
 There is no `FlowView`, no dive, no ascend, no `FlowDive` or `FlowAscend` effect, and no ctrl-y binding.
-Lane A (`libs/qol-gpui/src/trail`) is unchanged.
-Lane D (`plugins/qol-memory`) is unchanged.
+Lane A (`libs/gpui/src/trail`) is unchanged.
+Lane D (`plugins/memory`) is unchanged.
 
 ### Order
 
@@ -478,7 +478,7 @@ Delete `hint_bar_trail`.
 3. Down and up move the brass along the line into the next circle; the line is empty at rest and exactly one circle is lit.
 4. Enter copies or runs the row action as before; esc leaves the flow.
 
-### Lane A2: `libs/qol-gpui/src/trail/{mod.rs,motion.rs}` match the accepted prototype
+### Lane A2: `libs/gpui/src/trail/{mod.rs,motion.rs}` match the accepted prototype
 
 The prototype (artifact 7a7821a3, "The Provenance Trail") is the visual contract; the shipped component drifted from it.
 The launcher font stays; everything else follows the prototype.
@@ -545,7 +545,7 @@ Verified gpui 0.2.2 facts: `.border(px(1.5))` and `.border_color(..)` are valid 
 
 Three changes: the motion gets quicker, a keypress during a move continues from where the brass actually is instead of snapping, and enter on a row opens that memory's full text and metadata instead of copying.
 
-### Lane A3: `libs/qol-gpui/src/trail/{motion.rs,mod.rs}`
+### Lane A3: `libs/gpui/src/trail/{motion.rs,mod.rs}`
 
 `motion.rs` owns the easing so the launcher can ask where the brass is mid-flight:
 
@@ -708,7 +708,7 @@ No colour literals; every tone comes from `kit.palette`.
 
 `trace.rs`: `effect_label` gains `InputEffect::FlowDetail => "flow_detail"` and `InputEffect::FlowDetailClose => "flow_detail_close"`.
 
-### Lane D3: `plugins/qol-memory/src/ask/rows.rs`
+### Lane D3: `plugins/memory/src/ask/rows.rs`
 
 `FlowRow` gains one field beside `trail`:
 
@@ -748,7 +748,7 @@ The same defect makes the trail animate once when a query's rows first arrive.
 
 The fix is to stop animating at all once the move is over, so there is no animation state left to lose.
 
-### Lane A4: `libs/qol-gpui/src/trail/{motion.rs,mod.rs}`
+### Lane A4: `libs/gpui/src/trail/{motion.rs,mod.rs}`
 
 `motion.rs` gains one constant:
 

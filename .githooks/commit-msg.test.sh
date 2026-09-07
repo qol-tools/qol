@@ -73,7 +73,7 @@ test_derive_today() {
   local root; root="$(mktemp -d)"
   mk_fixture "$root" \
     plugins/alt-tab plugins/template \
-    libs/qol-color libs/qol-plugin-api apps/qol-tray tools/qol-cli
+    libs/color libs/plugin-api apps/qol-tray tools/qol-cli
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
   exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins qol-cli qol-color qol-plugin-api qol-tray settings template tools tray workspace "

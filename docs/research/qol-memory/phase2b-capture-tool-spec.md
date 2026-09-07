@@ -16,14 +16,14 @@ Rules for every lane: edit only the paths in your ownership row; never run build
 
 | Lane | Owned paths |
 |---|---|
-| `qm-capture-write` | `plugins/qol-memory/plugin.toml`, `plugins/qol-memory/qol-runtime.toml`, `plugins/qol-memory/src/cli.rs`, `plugins/qol-memory/src/app/request.rs`, `plugins/qol-memory/src/ingest/mod.rs` |
-| `qm-capture-recall` | `plugins/qol-memory/src/store/mod.rs`, `plugins/qol-memory/src/ask/mod.rs`, `plugins/qol-memory/src/app/warm.rs`, `plugins/qol-memory/src/continue_recall/mod.rs`, `docs/research/qol-memory/ask.mjs` |
+| `qm-capture-write` | `plugins/memory/plugin.toml`, `plugins/memory/qol-runtime.toml`, `plugins/memory/src/cli.rs`, `plugins/memory/src/app/request.rs`, `plugins/memory/src/ingest/mod.rs` |
+| `qm-capture-recall` | `plugins/memory/src/store/mod.rs`, `plugins/memory/src/ask/mod.rs`, `plugins/memory/src/app/warm.rs`, `plugins/memory/src/continue_recall/mod.rs`, `docs/research/qol-memory/ask.mjs` |
 
 Two lanes never share a file. `qm-capture-write` may call `crate::store::in_answer_pool` and `qm-capture-recall` may call `crate::ingest::capture_unit`, `crate::ingest::CAPTURE_KIND`; both exist once both lanes land and the architect runs the gate after the fan-in.
 
 ## 3. Lane `qm-capture-write`
 
-### 3.1 `plugins/qol-memory/plugin.toml`
+### 3.1 `plugins/memory/plugin.toml`
 
 Add directly after the `[action.status]` block (the host only executes catalogued actions, `validate_catalog_action_membership`):
 
@@ -33,7 +33,7 @@ label = "Capture"
 args = ["capture"]
 ```
 
-### 3.2 `plugins/qol-memory/qol-runtime.toml`
+### 3.2 `plugins/memory/qol-runtime.toml`
 
 Replace the `[action.capture]` block with:
 
@@ -47,7 +47,7 @@ input = { text = "the fact as one self-contained sentence", cwd = "absolute work
 
 `qol_mcp::input_schema` marks every input required; that is intended for both fields.
 
-### 3.3 `plugins/qol-memory/src/ingest/mod.rs`
+### 3.3 `plugins/memory/src/ingest/mod.rs`
 
 Add next to `unit_key`:
 
@@ -62,7 +62,7 @@ Behavior: `key = unit_key(CAPTURE_SOURCE, cwd, None, text)` so the key depends o
 
 Tests (in the existing `tests` module): `capture_unit_key_ignores_ts_and_depends_on_cwd_and_text` (same text and cwd with two different ts values give one key; a different cwd gives another key; the object carries source `agent`, kind `capture`, the ts passed in, and neither `file` nor `session`).
 
-### 3.4 `plugins/qol-memory/src/app/request.rs`
+### 3.4 `plugins/memory/src/app/request.rs`
 
 `capture` accepts two input shapes:
 
@@ -73,7 +73,7 @@ Both shapes then run the existing append and warm push unchanged and answer `jso
 
 Tests: `request_capture_from_text_is_idempotent_and_recallable` using the existing `warm_state` and `respond` helpers: first call `{"text": "...", "cwd": "/tmp/proj"}` answers appended 1 and a 16 hex key equal to `capture_unit(..)["key"]`; the same call answers appended 0 and the same key; a following `ask` request with a query built from distinctive words of the text returns `answer.layer == "unit"` and `answer.source_kind == "capture"` (this relies on the recall lane's predicate landing in the same round). Add `request_capture_rejects_empty_text` covering whitespace-only text (error text above).
 
-### 3.5 `plugins/qol-memory/src/cli.rs`
+### 3.5 `plugins/memory/src/cli.rs`
 
 - `USAGE_CAPTURE` becomes `usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH]`.
 - `capture_command` `.about("Append one settled fact or one whole unit to the memory store.")`, `.detail("Pass a fact with --text and --cwd, or a whole unit as a JSON object with --unit.")`; output and exit lines unchanged.
@@ -84,7 +84,7 @@ Tests: extend `capture_requires_a_json_object` only if its fixtures now conflict
 
 ## 4. Lane `qm-capture-recall`
 
-### 4.1 `plugins/qol-memory/src/store/mod.rs`
+### 4.1 `plugins/memory/src/store/mod.rs`
 
 Add next to `BOILERPLATE_MARKERS`:
 
@@ -96,7 +96,7 @@ pub fn in_answer_pool(kind: &str) -> bool
 
 `in_answer_pool` is true exactly for the two listed kinds. Test: `answer_pool_accepts_user_and_capture_only`.
 
-### 4.2 `plugins/qol-memory/src/ask/mod.rs`
+### 4.2 `plugins/memory/src/ask/mod.rs`
 
 - Both `.filter(|unit| unit.kind == "user")` sites (the units layer pool near line 292 and the second near line 1061) become `.filter(|unit| crate::store::in_answer_pool(&unit.kind))`.
 - In the `unit_winner` branch (near line 642) the `Answer` gets `source_kind: top.kind.clone()` and the reason is `units layer answer (user's own words), confidence capped medium` when `top.kind == "user"` and `units layer answer (agent capture), confidence capped medium` when `top.kind == "capture"`. `UnitHit` already carries `kind`.
@@ -104,11 +104,11 @@ pub fn in_answer_pool(kind: &str) -> bool
 
 Test: `ask_answers_from_a_capture_unit_with_capture_provenance`: a store with one capture-kind unit (build it with `crate::ingest::capture_unit`) answers a query from its distinctive words with `layer == "unit"`, `source_kind == "capture"`, the agent-capture reason, verdict `answered`, confidence `medium`. Keep every existing test unchanged.
 
-### 4.3 `plugins/qol-memory/src/app/warm.rs`
+### 4.3 `plugins/memory/src/app/warm.rs`
 
 The `.filter(|unit| unit.kind == "user")` near line 163 becomes `.filter(|unit| crate::store::in_answer_pool(&unit.kind))`. The warm layer must serve capture units pushed by `push_units` after a daemon capture; verify by reading `push_units` and adjust only if it filters by kind itself.
 
-### 4.4 `plugins/qol-memory/src/continue_recall/mod.rs`
+### 4.4 `plugins/memory/src/continue_recall/mod.rs`
 
 - `is_candidate`: the kind gate accepts `user`, `compaction` and `capture`.
 - The slot loop: a `capture` unit takes the user slot (`index 0`, `CAP_USER`); `compaction` stays in slot 1.

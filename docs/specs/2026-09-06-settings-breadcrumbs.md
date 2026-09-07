@@ -27,7 +27,7 @@ The existing `CustomPanelView` wrapper currently exposes raw view and focus fiel
 
 ## Shared API
 
-Implement the following public contract in `libs/qol-gpui/src/settings_panel/navigation.rs`, exported from `settings_panel/mod.rs`:
+Implement the following public contract in `libs/gpui/src/settings_panel/navigation.rs`, exported from `settings_panel/mod.rs`:
 
 - `SettingsDestination`: private label storage, `Clone + Debug + PartialEq + Eq`, no `Default`.
 - `SettingsDestination::new(label: impl Into<String>) -> anyhow::Result<Self>` validates and normalizes a nonempty trimmed dynamic label.
@@ -76,12 +76,12 @@ One grouped implementation delivery, with disjoint file ownership:
 
 ### Lane settings-breadcrumbs-contract
 
-- `libs/qol-gpui/src/settings_panel/navigation.rs` (new)
-- `libs/qol-gpui/src/settings_panel/mod.rs`
-- `libs/qol-gpui/src/settings_panel/view.rs`
-- `libs/qol-gpui/tests/fixtures/settings_breadcrumbs/complete_contract.rs` (new)
-- `libs/qol-gpui/tests/fixtures/settings_breadcrumbs/missing_contract.rs` (new)
-- `libs/qol-gpui/tests/fixtures/settings_breadcrumbs/missing_destination.rs` (new)
+- `libs/gpui/src/settings_panel/navigation.rs` (new)
+- `libs/gpui/src/settings_panel/mod.rs`
+- `libs/gpui/src/settings_panel/view.rs`
+- `libs/gpui/tests/fixtures/settings_breadcrumbs/complete_contract.rs` (new)
+- `libs/gpui/tests/fixtures/settings_breadcrumbs/missing_contract.rs` (new)
+- `libs/gpui/tests/fixtures/settings_breadcrumbs/missing_destination.rs` (new)
 
 The positive fixture registers a generic entity with all required bounds. The missing-contract fixture uses an otherwise identical generic registration without `CustomSettingsBreadcrumbs` and must fail specifically at that bound. The missing-destination fixture attempts metadata-free construction and must fail at the required/private constructor boundary. Fixtures contain no code comments and no standalone Cargo manifests or new dependencies. The architect compiles these probes against the built library artifacts centrally.
 
@@ -127,7 +127,7 @@ The repository gate stopped at native formatting before compilation. The native 
 
 Personal diff review found open_list_card and open_object_array_card retain references borrowed from self.level() across a mutable self.card_destination call, then reuse those references. The contract lane must validate before taking the long-lived row-control borrow or finish extracting owned child data first, preserving validation before navigation mutation.
 
-Static whitespace validation currently recognizes only ASCII whitespace while dynamic validation uses str::trim. Make both reject whitespace-only labels including Unicode White_Space; retain const evaluation for native constants. Add focused coverage and one additional owned fixture, libs/qol-gpui/tests/fixtures/settings_breadcrumbs/blank_static_destination.rs, whose const destination must fail evaluation for a Unicode-whitespace-only label. No new dependencies or changes to existing display literals are authorized.
+Static whitespace validation currently recognizes only ASCII whitespace while dynamic validation uses str::trim. Make both reject whitespace-only labels including Unicode White_Space; retain const evaluation for native constants. Add focused coverage and one additional owned fixture, libs/gpui/tests/fixtures/settings_breadcrumbs/blank_static_destination.rs, whose const destination must fail evaluation for a Unicode-whitespace-only label. No new dependencies or changes to existing display literals are authorized.
 
 The contract lane must inspect its own changed code for additional Rust ownership errors without executing checks. The architect will rerun the integrated gate after both corrections return.
 

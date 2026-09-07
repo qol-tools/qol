@@ -52,7 +52,7 @@ VERSION_PLUGIN_MANIFEST_RE = re.compile(
 
 
 def _reserved_plugin_ids() -> set[str]:
-    lib = Path(__file__).resolve().parents[2] / "libs/qol-conventions/src/lib.rs"
+    lib = Path(__file__).resolve().parents[2] / "libs/conventions/src/lib.rs"
     match = re.search(
         r"RESERVED_PLUGIN_IDS:\s*&\[&str\]\s*=\s*&\[(.*?)\]", lib.read_text(), re.DOTALL
     )

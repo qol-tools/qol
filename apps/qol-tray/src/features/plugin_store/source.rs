@@ -326,7 +326,7 @@ mod tests {
             ("plugins/has..dots/plugin.toml", None),
             ("plugins/UPPER/plugin.toml", None),
             ("apps/qol-tray/plugin.toml", None),
-            ("libs/qol-config/plugin.toml", None),
+            ("libs/config/plugin.toml", None),
         ];
         for (path, expected) in cases {
             assert_eq!(

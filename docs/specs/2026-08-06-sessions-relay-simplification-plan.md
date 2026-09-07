@@ -39,7 +39,7 @@ zero qol processes, submit into the unfocused python window executed
 ## Execution log (2026-08-06)
 
 - Commit `a4c104b1` (qol-monorepo): submit fix in
-  `libs/qol-terminal-sessions/src/kitty/mod.rs` — `DeliveryMode::Submit` is now
+  `libs/terminal-sessions/src/kitty/mod.rs` — `DeliveryMode::Submit` is now
   one `send-text --bracketed-paste=disable` write carrying the payload plus a
   trailing carriage return; the intermediate re-validation discovery and the
   `send-key` step are gone. Insert mode unchanged. `validate_target` removed
@@ -102,11 +102,11 @@ Two outcomes:
 
 ## Track 1: Submit fix (correctness, shared lib)
 
-The fix lives in `libs/qol-terminal-sessions` so all consumers inherit it:
+The fix lives in `libs/terminal-sessions` so all consumers inherit it:
 `qol sessions send --submit`, MCP `session_send_text submit:true`, and
 qol-voice's opt-in Submit mode (default is Insert, unaffected).
 
-1. `libs/qol-terminal-sessions/src/kitty/mod.rs` (`TextInput for KittyBackend`,
+1. `libs/terminal-sessions/src/kitty/mod.rs` (`TextInput for KittyBackend`,
    lines 177-211): Submit path becomes one atomic write —
    `kitten @ send-text --match id:N --stdin --bracketed-paste=disable` with
    payload `text + "\r"`. Delete the intermediate `validate_target` +

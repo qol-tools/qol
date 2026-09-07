@@ -26,15 +26,15 @@ qol-shot gains a `capture.saved_feedback` select; when set to `toast`, the daemo
 ### Task 1: Toast placement math in qol-gpui
 
 **Files:**
-- Create: `libs/qol-gpui/src/surface.rs`
-- Modify: `libs/qol-gpui/src/lib.rs` (add `pub mod surface;` after `pub mod scroll_list;`)
+- Create: `libs/gpui/src/surface.rs`
+- Modify: `libs/gpui/src/lib.rs` (add `pub mod surface;` after `pub mod scroll_list;`)
 
 **Interfaces:**
 - Produces: `surface::Corner` (enum: `TopLeft | TopRight | BottomLeft | BottomRight`), `surface::Anchor::CornerStack(Corner)`, and private `corner_anchored_bounds(monitor: Bounds<Pixels>, corner: Corner, win: Size<Pixels>, margin: f32) -> Bounds<Pixels>` used by Task 2.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `libs/qol-gpui/src/surface.rs`:
+Create `libs/gpui/src/surface.rs`:
 
 ```rust
 use gpui::*;
@@ -108,7 +108,7 @@ mod tests {
 }
 ```
 
-Add to `libs/qol-gpui/src/lib.rs` after `pub mod scroll_list;`:
+Add to `libs/gpui/src/lib.rs` after `pub mod scroll_list;`:
 
 ```rust
 pub mod surface;
@@ -156,8 +156,8 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add libs/qol-gpui/src/surface.rs libs/qol-gpui/src/lib.rs
-git commit -m "feat(qol-gpui): add toast surface placement math" -- libs/qol-gpui/src/surface.rs libs/qol-gpui/src/lib.rs
+git add libs/gpui/src/surface.rs libs/gpui/src/lib.rs
+git commit -m "feat(qol-gpui): add toast surface placement math" -- libs/gpui/src/surface.rs libs/gpui/src/lib.rs
 ```
 
 ---
@@ -165,8 +165,8 @@ git commit -m "feat(qol-gpui): add toast surface placement math" -- libs/qol-gpu
 ### Task 2: Surface builder with toast window and timeout dismiss
 
 **Files:**
-- Modify: `libs/qol-gpui/src/surface.rs`
-- Modify: `libs/qol-gpui/src/window.rs` (make `display_id_for_monitor` at line 284 `pub`)
+- Modify: `libs/gpui/src/surface.rs`
+- Modify: `libs/gpui/src/window.rs` (make `display_id_for_monitor` at line 284 `pub`)
 
 **Interfaces:**
 - Consumes: `corner_anchored_bounds`, `Corner`, `Anchor` from Task 1; `crate::monitor::MonitorTracker::snapshot_cursor()`; `crate::window::display_id_for_monitor(Option<&ActiveMonitor>, &App) -> Option<DisplayId>`.
@@ -180,7 +180,7 @@ No unit test cycle for this task: window creation cannot be exercised on the hos
 
 - [ ] **Step 1: Make the display-id helper public**
 
-In `libs/qol-gpui/src/window.rs` change:
+In `libs/gpui/src/window.rs` change:
 
 ```rust
 fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
@@ -194,7 +194,7 @@ pub fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Opti
 
 - [ ] **Step 2: Implement the builder**
 
-Add to `libs/qol-gpui/src/surface.rs` (below the `Anchor` enum, above `corner_anchored_bounds`), and extend the imports at the top of the file:
+Add to `libs/gpui/src/surface.rs` (below the `Anchor` enum, above `corner_anchored_bounds`), and extend the imports at the top of the file:
 
 ```rust
 use std::cell::{Cell, RefCell};
@@ -356,8 +356,8 @@ Expected: PASS, including the Task 1 placement tests.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add libs/qol-gpui/src/surface.rs libs/qol-gpui/src/window.rs
-git commit -m "feat(qol-gpui): add Surface builder with toast window and timeout dismiss" -- libs/qol-gpui/src/surface.rs libs/qol-gpui/src/window.rs
+git add libs/gpui/src/surface.rs libs/gpui/src/window.rs
+git commit -m "feat(qol-gpui): add Surface builder with toast window and timeout dismiss" -- libs/gpui/src/surface.rs libs/gpui/src/window.rs
 ```
 
 ---
@@ -365,15 +365,15 @@ git commit -m "feat(qol-gpui): add Surface builder with toast window and timeout
 ### Task 3: qol-shot saved_feedback config
 
 **Files:**
-- Modify: `plugins/qol-shot/src/config.rs`
-- Modify: `plugins/qol-shot/qol-config.toml`
+- Modify: `plugins/shot/src/config.rs`
+- Modify: `plugins/shot/qol-config.toml`
 
 **Interfaces:**
 - Produces (used by Task 5): `config::SavedFeedback` (enum: `Notification` default, `Toast`) at `config.capture.saved_feedback`.
 
 - [ ] **Step 1: Write the failing test assertion**
 
-In `plugins/qol-shot/src/config.rs`, extend `contract_defaults_match_runtime_fallbacks` with:
+In `plugins/shot/src/config.rs`, extend `contract_defaults_match_runtime_fallbacks` with:
 
 ```rust
         assert_eq!(
@@ -389,7 +389,7 @@ Expected: FAIL to compile with "cannot find type `SavedFeedback`".
 
 - [ ] **Step 3: Implement config field and contract**
 
-In `plugins/qol-shot/src/config.rs` add below the `CopyCommand` enum:
+In `plugins/shot/src/config.rs` add below the `CopyCommand` enum:
 
 ```rust
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -414,7 +414,7 @@ And in `impl Default for CaptureConfig` add:
             saved_feedback: SavedFeedback::default(),
 ```
 
-In `plugins/qol-shot/qol-config.toml` add after the `capture_open_folder_after_save` field:
+In `plugins/shot/qol-config.toml` add after the `capture_open_folder_after_save` field:
 
 ```toml
 [field.capture_saved_feedback]
@@ -439,8 +439,8 @@ Expected: PASS, including `validate_qol_contracts` (it revalidates the edited TO
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/qol-shot/src/config.rs plugins/qol-shot/qol-config.toml
-git commit -m "feat(qol-shot): add saved_feedback config select" -- plugins/qol-shot/src/config.rs plugins/qol-shot/qol-config.toml
+git add plugins/shot/src/config.rs plugins/shot/qol-config.toml
+git commit -m "feat(qol-shot): add saved_feedback config select" -- plugins/shot/src/config.rs plugins/shot/qol-config.toml
 ```
 
 ---
@@ -448,7 +448,7 @@ git commit -m "feat(qol-shot): add saved_feedback config select" -- plugins/qol-
 ### Task 4: Extract SavedAnnouncement from the notification path
 
 **Files:**
-- Modify: `plugins/qol-shot/src/completion.rs`
+- Modify: `plugins/shot/src/completion.rs`
 
 **Interfaces:**
 - Produces (used by Task 5):
@@ -459,7 +459,7 @@ git commit -m "feat(qol-shot): add saved_feedback config select" -- plugins/qol-
 
 - [ ] **Step 1: Refactor announce_saved through announce()**
 
-In `plugins/qol-shot/src/completion.rs`:
+In `plugins/shot/src/completion.rs`:
 
 Add a `Toast` variant to `RevealSource` (not cfg-gated; the toast exists on every platform the daemon runs on) and its label:
 
@@ -545,8 +545,8 @@ Note: `RevealSource::Toast` and `announce` are consumed in Task 5; between these
 - [ ] **Step 3: Commit**
 
 ```bash
-git add plugins/qol-shot/src/completion.rs
-git commit -m "refactor(qol-shot): extract saved announcement from notification path" -- plugins/qol-shot/src/completion.rs
+git add plugins/shot/src/completion.rs
+git commit -m "refactor(qol-shot): extract saved announcement from notification path" -- plugins/shot/src/completion.rs
 ```
 
 ---
@@ -554,9 +554,9 @@ git commit -m "refactor(qol-shot): extract saved announcement from notification 
 ### Task 5: Saved toast view and daemon wiring
 
 **Files:**
-- Create: `plugins/qol-shot/src/saved_toast.rs`
-- Modify: `plugins/qol-shot/src/lib.rs` (add `mod saved_toast;` alongside the existing module list)
-- Modify: `plugins/qol-shot/src/daemon_app.rs`
+- Create: `plugins/shot/src/saved_toast.rs`
+- Modify: `plugins/shot/src/lib.rs` (add `mod saved_toast;` alongside the existing module list)
+- Modify: `plugins/shot/src/daemon_app.rs`
 
 **Interfaces:**
 - Consumes: `Surface`/`SurfaceKind::Toast`/`Anchor::CornerStack(Corner::BottomRight)`/`SurfaceDismisser` (Task 2), `SavedFeedback` (Task 3), `SavedAnnouncement`/`announce`/`RevealSource::Toast` (Task 4), `qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette}`.
@@ -564,7 +564,7 @@ git commit -m "refactor(qol-shot): extract saved announcement from notification 
 
 - [ ] **Step 1: Implement the toast view**
 
-Create `plugins/qol-shot/src/saved_toast.rs`:
+Create `plugins/shot/src/saved_toast.rs`:
 
 ```rust
 use std::time::Duration;
@@ -646,11 +646,11 @@ impl Render for SavedToastView {
 }
 ```
 
-In `plugins/qol-shot/src/lib.rs` add `mod saved_toast;` in alphabetical position among the existing `mod` declarations.
+In `plugins/shot/src/lib.rs` add `mod saved_toast;` in alphabetical position among the existing `mod` declarations.
 
 - [ ] **Step 2: Wire the daemon feedback dispatch**
 
-In `plugins/qol-shot/src/daemon_app.rs`:
+In `plugins/shot/src/daemon_app.rs`:
 
 In `capture_and_preview`, pass the tracker to the completion future. Change:
 
@@ -770,8 +770,8 @@ Expected: PASS. Then `cargo build -p qol-shot` with no warnings.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add plugins/qol-shot/src/saved_toast.rs plugins/qol-shot/src/lib.rs plugins/qol-shot/src/daemon_app.rs
-git commit -m "feat(qol-shot): show saved toast surface when configured" -- plugins/qol-shot/src/saved_toast.rs plugins/qol-shot/src/lib.rs plugins/qol-shot/src/daemon_app.rs
+git add plugins/shot/src/saved_toast.rs plugins/shot/src/lib.rs plugins/shot/src/daemon_app.rs
+git commit -m "feat(qol-shot): show saved toast surface when configured" -- plugins/shot/src/saved_toast.rs plugins/shot/src/lib.rs plugins/shot/src/daemon_app.rs
 ```
 
 ---

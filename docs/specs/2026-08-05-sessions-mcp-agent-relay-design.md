@@ -14,7 +14,7 @@ model: relay via MCP servers → host CLI.
 ## What already exists (verified in source, 2026-08-05)
 
 1. **The delivery primitive is abstracted and shared.**
-   `libs/qol-terminal-sessions` defines `TerminalBackend =
+   `libs/terminal-sessions` defines `TerminalBackend =
    SessionInventory + ScreenReader + SessionFocus + TextInput`, with
    `TextInput::send_text(&SessionBinding, &str, DeliveryMode)` where
    `DeliveryMode = Insert | Submit` (`src/model.rs:125`).
@@ -29,7 +29,7 @@ model: relay via MCP servers → host CLI.
 
 2. **qol-voice proves the "text → chosen session" loop end to end.**
    `ConversationSink { targets(), subscribe_target(), deliver() }`
-   (`plugins/qol-voice/src/app/delivery.rs`), pure `ConversationRouter` with
+   (`plugins/voice/src/app/delivery.rs`), pure `ConversationRouter` with
    pinned routes and `RouteState` (Unselected → Ready → Delivered →
    TargetUnavailable/Failed), delivery queue cap 8, typed failures.
    Routing target is config-chosen today — the idea replaces "config-chosen"
@@ -213,7 +213,7 @@ Sources: MCP spec (2025-03-26/06-18/11-25), sst/opencode source, Claude Code doc
 
 ## Per-tool strategy research (2026-08-05)
 
-Four research passes (one per CLI, sources: official docs + upstream source; pi verified against the installed package on this machine). Each verified or falsified the existing `CliSessionStrategy` assumptions in `libs/qol-terminal-sessions/src/cli/builtins/`.
+Four research passes (one per CLI, sources: official docs + upstream source; pi verified against the installed package on this machine). Each verified or falsified the existing `CliSessionStrategy` assumptions in `libs/terminal-sessions/src/cli/builtins/`.
 
 ### Claude Code
 - Transcripts: `~/.claude/projects/<project>/<session-id>.jsonl`, where `<project>` is the cwd with every non-alphanumeric character replaced by `-` (confirmed in docs; matches the strategy's encoding).

@@ -27,7 +27,7 @@ The daemon routes the `settings` action to the panel; every other path is unchan
 ### Task 1: Panel kind in qol-gpui
 
 **Files:**
-- Modify: `libs/qol-gpui/src/surface.rs`
+- Modify: `libs/gpui/src/surface.rs`
 
 **Interfaces:**
 - Produces: `SurfaceKind::Panel`, `Anchor::MonitorCenter`, and `Surface::show_focused<V: Render + Focusable + 'static>(self, tracker, cx, build) -> Result<SurfaceDismisser>` with the same build-closure shape as `show`.
@@ -108,8 +108,8 @@ Expected: all existing tests pass, no new warnings.
 
 ```bash
 cargo fmt -p qol-gpui
-git add libs/qol-gpui/src/surface.rs
-git commit -m "feat(qol-gpui): add focus-taking Panel surface kind" -- libs/qol-gpui/src/surface.rs
+git add libs/gpui/src/surface.rs
+git commit -m "feat(qol-gpui): add focus-taking Panel surface kind" -- libs/gpui/src/surface.rs
 ```
 
 ---
@@ -117,8 +117,8 @@ git commit -m "feat(qol-gpui): add focus-taking Panel surface kind" -- libs/qol-
 ### Task 2: Row model and config-write helpers (TDD)
 
 **Files:**
-- Create: `plugins/qol-shot/src/settings_panel.rs` (model half)
-- Modify: `plugins/qol-shot/src/lib.rs` (add gated `mod settings_panel;` after `mod saved_toast;`)
+- Create: `plugins/shot/src/settings_panel.rs` (model half)
+- Modify: `plugins/shot/src/lib.rs` (add gated `mod settings_panel;` after `mod saved_toast;`)
 
 **Interfaces:**
 - Produces (used by Task 3):
@@ -448,8 +448,8 @@ Expected: 3 tests PASS.
 
 ```bash
 cargo fmt -p qol-shot
-git add plugins/qol-shot/src/settings_panel.rs plugins/qol-shot/src/lib.rs
-git commit -m "feat(qol-shot): map config contract to settings panel rows" -- plugins/qol-shot/src/settings_panel.rs plugins/qol-shot/src/lib.rs
+git add plugins/shot/src/settings_panel.rs plugins/shot/src/lib.rs
+git commit -m "feat(qol-shot): map config contract to settings panel rows" -- plugins/shot/src/settings_panel.rs plugins/shot/src/lib.rs
 ```
 
 ---
@@ -457,7 +457,7 @@ git commit -m "feat(qol-shot): map config contract to settings panel rows" -- pl
 ### Task 3: Panel view, write-through, and open()
 
 **Files:**
-- Modify: `plugins/qol-shot/src/settings_panel.rs`
+- Modify: `plugins/shot/src/settings_panel.rs`
 
 **Interfaces:**
 - Consumes: Task 1 `show_focused`/`Panel`/`MonitorCenter`; Task 2 model; `qol_config::{plugin_config_paths_from_env, contract::parse_spec_str, normalized::resolve_config}`; `qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette}`; `crate::PLUGIN_ID` and `CONFIG_CONTRACT` access via a new `pub(crate) const` re-export if needed (config.rs owns `CONFIG_CONTRACT`; add `pub(crate) fn contract() -> &'static str { CONFIG_CONTRACT }` in `config.rs`).
@@ -558,8 +558,8 @@ Expected: all tests pass, no warnings.
 
 ```bash
 cargo fmt -p qol-shot
-git add plugins/qol-shot/src/settings_panel.rs plugins/qol-shot/src/config.rs
-git commit -m "feat(qol-shot): render gpui settings panel with write-through" -- plugins/qol-shot/src/settings_panel.rs plugins/qol-shot/src/config.rs
+git add plugins/shot/src/settings_panel.rs plugins/shot/src/config.rs
+git commit -m "feat(qol-shot): render gpui settings panel with write-through" -- plugins/shot/src/settings_panel.rs plugins/shot/src/config.rs
 ```
 
 ---
@@ -567,7 +567,7 @@ git commit -m "feat(qol-shot): render gpui settings panel with write-through" --
 ### Task 4: Daemon routing with browser fallback
 
 **Files:**
-- Modify: `plugins/qol-shot/src/daemon_app.rs`
+- Modify: `plugins/shot/src/daemon_app.rs`
 
 **Interfaces:**
 - Consumes: `settings_panel::open`, existing `run_cli` flow.
@@ -607,8 +607,8 @@ Expected: green, no warnings.
 
 ```bash
 cargo fmt -p qol-shot
-git add plugins/qol-shot/src/daemon_app.rs
-git commit -m "feat(qol-shot): route settings action to the gpui panel" -- plugins/qol-shot/src/daemon_app.rs
+git add plugins/shot/src/daemon_app.rs
+git commit -m "feat(qol-shot): route settings action to the gpui panel" -- plugins/shot/src/daemon_app.rs
 ```
 
 ---

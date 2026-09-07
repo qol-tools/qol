@@ -61,7 +61,7 @@ mod tests {
                 blob("plugins/launcher/src/main.rs"),
                 blob("plugins/alt-tab/qol-config.toml"),
                 blob("apps/qol-tray/plugin.toml"),
-                blob("libs/qol-config/plugin.toml"),
+                blob("libs/config/plugin.toml"),
                 blob("Cargo.toml"),
                 tree_node("plugins/alt-tab"),
                 tree_node("plugins/alt-tab/src"),

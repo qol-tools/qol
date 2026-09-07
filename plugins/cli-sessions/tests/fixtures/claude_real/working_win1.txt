@@ -1,4 +1,4 @@
-   modified:   libs/qol-gpui/src/scroll_list.rs                                                                                         
+   modified:   libs/gpui/src/scroll_list.rs
                                                                                                                                         
                                                                                                                                         
 is this not committed?                                                                                                                  
@@ -10,7 +10,7 @@ is this not committed?
 ⏺ The feature is committed. Here's the precise picture:
   
   - 09d1ffcb contains the whole feature - all 4 files (scroll_list.rs new, lib.rs, launcher state.rs, removeapp ui/mod.rs).
-  - What git status shows as modified: libs/qol-gpui/src/scroll_list.rs is a separate, trivial uncommitted delta on top: one test
+  - What git status shows as modified: libs/gpui/src/scroll_list.rs is a separate, trivial uncommitted delta on top: one test
   assertion got line-wrapped (single line → 3 lines). Zero behavior change - it's a pure formatting reflow of assert!(...) in the test
   module.
 

@@ -1619,7 +1619,7 @@ mod tests {
     fn sample_entries() -> Vec<ProductEntry> {
         vec![
             ProductEntry {
-                path: "libs/qol-host-fixes/src/lib.rs".to_string(),
+                path: "libs/host-fixes/src/lib.rs".to_string(),
                 mode: 0o644,
                 sha256: "a".repeat(64),
             },
@@ -1960,11 +1960,11 @@ mod tests {
     fn scenario_edits_stay_outside_the_product_closure_and_key() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join("libs/qol-host-fixes/src")).unwrap();
+        fs::create_dir_all(root.join("libs/host-fixes/src")).unwrap();
         fs::create_dir_all(root.join("apps/qol-tray/src")).unwrap();
         fs::write(root.join("Cargo.toml"), b"manifest").unwrap();
         fs::write(root.join("Cargo.lock"), b"lock").unwrap();
-        fs::write(root.join("libs/qol-host-fixes/src/lib.rs"), b"host fixes").unwrap();
+        fs::write(root.join("libs/host-fixes/src/lib.rs"), b"host fixes").unwrap();
         fs::write(root.join("apps/qol-tray/src/lib.rs"), b"tray source").unwrap();
         let facts = sample_facts();
         let first = product_key(&product_closure_entries(root).unwrap(), &facts);
@@ -2025,17 +2025,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         fs::create_dir_all(root.join("apps/qol-tray/src")).unwrap();
-        fs::create_dir_all(root.join("libs/qol-host-fixes/src")).unwrap();
+        fs::create_dir_all(root.join("libs/host-fixes/src")).unwrap();
         fs::write(root.join("Cargo.toml"), b"root manifest").unwrap();
         fs::write(root.join("apps/qol-tray/src/lib.rs"), b"tray source").unwrap();
         fs::write(root.join("Cargo.lock"), b"lockfile").unwrap();
-        fs::write(root.join("libs/qol-host-fixes/src/lib.rs"), b"host fixes").unwrap();
+        fs::write(root.join("libs/host-fixes/src/lib.rs"), b"host fixes").unwrap();
         let mode = fs::metadata(root.join("Cargo.toml"))
             .unwrap()
             .permissions()
             .mode()
             & 0o777;
-        let libs_mode = fs::metadata(root.join("libs/qol-host-fixes/src/lib.rs"))
+        let libs_mode = fs::metadata(root.join("libs/host-fixes/src/lib.rs"))
             .unwrap()
             .permissions()
             .mode()
@@ -2057,7 +2057,7 @@ mod tests {
                 sha256: sha256_bytes(b"tray source"),
             },
             ProductEntry {
-                path: "libs/qol-host-fixes/src/lib.rs".to_string(),
+                path: "libs/host-fixes/src/lib.rs".to_string(),
                 mode: libs_mode,
                 sha256: sha256_bytes(b"host fixes"),
             },
@@ -2390,9 +2390,9 @@ mod tests {
     fn closure_requires_cargo_manifests_and_rejects_toolchain_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join("libs/qol-host-fixes/src")).unwrap();
+        fs::create_dir_all(root.join("libs/host-fixes/src")).unwrap();
         fs::create_dir_all(root.join("apps/qol-tray/src")).unwrap();
-        fs::write(root.join("libs/qol-host-fixes/src/lib.rs"), b"content").unwrap();
+        fs::write(root.join("libs/host-fixes/src/lib.rs"), b"content").unwrap();
         assert!(
             product_closure_entries(root).is_err(),
             "Cargo.toml and Cargo.lock are required"
@@ -2444,16 +2444,16 @@ mod tests {
     fn a_source_change_in_another_local_library_changes_the_key() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join("libs/qol-host-fixes/src")).unwrap();
-        fs::create_dir_all(root.join("libs/qol-other/src")).unwrap();
+        fs::create_dir_all(root.join("libs/host-fixes/src")).unwrap();
+        fs::create_dir_all(root.join("libs/other/src")).unwrap();
         fs::create_dir_all(root.join("apps/qol-tray/src")).unwrap();
         fs::write(root.join("Cargo.toml"), b"manifest").unwrap();
         fs::write(root.join("Cargo.lock"), b"lock").unwrap();
-        fs::write(root.join("libs/qol-host-fixes/src/lib.rs"), b"host fixes").unwrap();
-        fs::write(root.join("libs/qol-other/src/lib.rs"), b"other v1").unwrap();
+        fs::write(root.join("libs/host-fixes/src/lib.rs"), b"host fixes").unwrap();
+        fs::write(root.join("libs/other/src/lib.rs"), b"other v1").unwrap();
         let facts = sample_facts();
         let first = product_key(&product_closure_entries(root).unwrap(), &facts);
-        fs::write(root.join("libs/qol-other/src/lib.rs"), b"other v2").unwrap();
+        fs::write(root.join("libs/other/src/lib.rs"), b"other v2").unwrap();
         let second = product_key(&product_closure_entries(root).unwrap(), &facts);
         assert_ne!(
             first, second,
@@ -2465,11 +2465,11 @@ mod tests {
     fn product_closure_rejects_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join("libs/qol-host-fixes/src")).unwrap();
-        fs::write(root.join("libs/qol-host-fixes/src/lib.rs"), b"content").unwrap();
+        fs::create_dir_all(root.join("libs/host-fixes/src")).unwrap();
+        fs::write(root.join("libs/host-fixes/src/lib.rs"), b"content").unwrap();
         std::os::unix::fs::symlink(
-            root.join("libs/qol-host-fixes/src/lib.rs"),
-            root.join("libs/qol-host-fixes/src/link.rs"),
+            root.join("libs/host-fixes/src/lib.rs"),
+            root.join("libs/host-fixes/src/link.rs"),
         )
         .unwrap();
         assert!(product_closure_entries(root).is_err());

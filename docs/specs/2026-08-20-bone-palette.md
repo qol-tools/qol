@@ -51,7 +51,7 @@ Fixed non-ramp colors: accent 0x2F74A0, accent_ink 0x1F5A82, accent_fill
 
 ## Palette fills
 
-Read from the live structs: SystemPalette at libs/qol-theme/src/lib.rs:172,
+Read from the live structs: SystemPalette at libs/theme/src/lib.rs:172,
 OverlayPalette at lib.rs:217, TuiBackgroundPalette at lib.rs:225.
 
 ### SystemPalette

@@ -21,7 +21,7 @@ Decisions taken by the architect, deviating from the plan text:
 
 | Lane | Owned paths (all under the qm-bridge worktree) |
 |---|---|
-| `bridge-plugin` | `plugins/qol-memory/.claude-plugin/plugin.json`, `plugins/qol-memory/hooks/hooks.json`, `plugins/qol-memory/bin/qol-tray-http.cjs`, `plugins/qol-memory/bin/inject-qol-memory-continue.cjs`, `plugins/qol-memory/.pi/extensions/qol-memory-tool.ts`, `plugins/qol-memory/skills/qol-memory/SKILL.md`, `plugins/qol-memory/test/qol-tray-http.test.cjs`, `plugins/qol-memory/test/inject-qol-memory-continue.test.cjs` |
+| `bridge-plugin` | `plugins/memory/.claude-plugin/plugin.json`, `plugins/memory/hooks/hooks.json`, `plugins/memory/bin/qol-tray-http.cjs`, `plugins/memory/bin/inject-qol-memory-continue.cjs`, `plugins/memory/.pi/extensions/qol-memory-tool.ts`, `plugins/memory/skills/qol-memory/SKILL.md`, `plugins/memory/test/qol-tray-http.test.cjs`, `plugins/memory/test/inject-qol-memory-continue.test.cjs` |
 | `bridge-project` | `plugins/qol-project/hooks/hooks.json`, `plugins/qol-project/.claude-plugin/plugin.json`, deletion of `plugins/qol-project/bin/inject-qol-memory-continue.cjs`, `plugins/qol-project/.pi/extensions/qol-memory-tool.ts`, `plugins/qol-project/test/inject-qol-memory-continue.test.cjs` |
 
 Generated files (`.codex-plugin`, `.kimi-plugin`, `.pi-plugin` manifests, `.pi/extensions/hooks.ts`, the three marketplace files, `kimi.plugin.json`, root `package.json`) are produced by the architect with `node scripts/sync-plugin-manifests.cjs` at the gate; lanes never touch them.
@@ -94,7 +94,7 @@ Frontmatter `name: qol-memory` and a one-sentence `description` starting with `U
 ## 5. Gate and acceptance (architect)
 
 1. In the worktree: `node scripts/sync-plugin-manifests.cjs`, then `node scripts/sync-plugin-manifests.cjs --check`, `node scripts/check-skill-invariants.cjs --check`, `node --test test/*.test.cjs plugins/*/test/*.test.cjs`.
-2. Live hook against the tray after phase 3 is recompiled: `printf '{"cwd":"/media/kmrh47/WD_SN850X/Git/qol-monorepo","session_id":"spec-check"}' | node plugins/qol-memory/bin/inject-qol-memory-continue.cjs` prints the continue JSON or nothing, exit 0.
+2. Live hook against the tray after phase 3 is recompiled: `printf '{"cwd":"/media/kmrh47/WD_SN850X/Git/qol-monorepo","session_id":"spec-check"}' | node plugins/memory/bin/inject-qol-memory-continue.cjs` prints the continue JSON or nothing, exit 0.
 3. `qol mcp configure pi` on this host; `~/.pi/agent/mcp.json` carries the `qol` entry; `tools/list` over curl still lists the three tools.
 4. One commit on `qm-bridge` (`feat(qol-memory): move the memory bridge into its own plugin`) including the regenerated manifests and marketplace files; no push. Claude Code loads marketplace plugins from pushed commits, so the fresh-session tool listing is verified after the user's push.
 

@@ -1,7 +1,7 @@
 # qol-tray web UI theming and component consolidation
 
 Approved 2026-07-16.
-Scope: tray web UI only; themes defined centrally in `libs/qol-theme` so gpui plugins can adopt later.
+Scope: tray web UI only; themes defined centrally in `libs/theme` so gpui plugins can adopt later.
 
 ## Goals
 

@@ -14,7 +14,7 @@ Rules for every lane: edit only the paths in your ownership row; never run build
 
 ## 2. Contract files (lane `qm-daemon`)
 
-### 2.1 `plugins/qol-memory/plugin.toml`
+### 2.1 `plugins/memory/plugin.toml`
 
 Add after `[runtime]`:
 
@@ -27,7 +27,7 @@ socket = "/tmp/qol-memory.sock"
 
 Everything else unchanged. Version stays 0.1.0 (release bump is a separate step).
 
-### 2.2 `plugins/qol-memory/qol-runtime.toml` (new)
+### 2.2 `plugins/memory/qol-runtime.toml` (new)
 
 ```toml
 schema_version = 1
@@ -55,9 +55,9 @@ input = { unit = "one unit as a JSON object" }
 description = "Drop the persisted BM25 indexes and rebuild them"
 ```
 
-The runtime contract validator (`libs/qol-config/src/contract/runtime.rs`) requires a `tool_description` when `agent_tool = true` and input names that pass `is_valid_runable_name`.
+The runtime contract validator (`libs/config/src/contract/runtime.rs`) requires a `tool_description` when `agent_tool = true` and input names that pass `is_valid_runable_name`.
 
-### 2.3 `plugins/qol-memory/Cargo.toml`
+### 2.3 `plugins/memory/Cargo.toml`
 
 Add dependencies `qol-plugin-daemon.workspace = true`, `qol-runtime.workspace = true`, `qol-watch.workspace = true`. Nothing removed.
 
@@ -65,8 +65,8 @@ Add dependencies `qol-plugin-daemon.workspace = true`, `qol-runtime.workspace = 
 
 | Lane | Owns (exclusive) |
 |---|---|
-| `qm-daemon` | `plugins/qol-memory/plugin.toml`, `plugins/qol-memory/qol-runtime.toml`, `plugins/qol-memory/Cargo.toml`, `plugins/qol-memory/src/lib.rs`, `plugins/qol-memory/src/main.rs`, `plugins/qol-memory/src/cli.rs`, `plugins/qol-memory/src/ask/mod.rs`, `plugins/qol-memory/src/app/mod.rs`, `plugins/qol-memory/src/app/request.rs`, `plugins/qol-memory/src/app/warm.rs`, `plugins/qol-memory/src/watch/mod.rs` |
-| `qm-ingest` | `plugins/qol-memory/src/store/mod.rs`, `plugins/qol-memory/src/store/lock.rs`, `plugins/qol-memory/src/ingest/mod.rs`, `plugins/qol-memory/src/ingest/redact.rs`, `plugins/qol-memory/src/ingest/transcript.rs`, `plugins/qol-memory/src/ingest/state.rs`, `plugins/qol-memory/src/continue_recall/mod.rs`, `docs/research/qol-memory/lib/merge.js` |
+| `qm-daemon` | `plugins/memory/plugin.toml`, `plugins/memory/qol-runtime.toml`, `plugins/memory/Cargo.toml`, `plugins/memory/src/lib.rs`, `plugins/memory/src/main.rs`, `plugins/memory/src/cli.rs`, `plugins/memory/src/ask/mod.rs`, `plugins/memory/src/app/mod.rs`, `plugins/memory/src/app/request.rs`, `plugins/memory/src/app/warm.rs`, `plugins/memory/src/watch/mod.rs` |
+| `qm-ingest` | `plugins/memory/src/store/mod.rs`, `plugins/memory/src/store/lock.rs`, `plugins/memory/src/ingest/mod.rs`, `plugins/memory/src/ingest/redact.rs`, `plugins/memory/src/ingest/transcript.rs`, `plugins/memory/src/ingest/state.rs`, `plugins/memory/src/continue_recall/mod.rs`, `docs/research/qol-memory/lib/merge.js` |
 
 `src/lib.rs` (qm-daemon) declares `pub mod app; pub mod continue_recall; pub mod ingest; pub mod watch;` alongside the existing modules, in alphabetical order. `src/store/mod.rs` (qm-ingest) declares `pub mod lock;` next to `pub mod seal;`.
 

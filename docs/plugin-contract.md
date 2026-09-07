@@ -42,10 +42,10 @@ qol-tray does four things with it:
 - **Dispatches actions** to it: a hotkey, a dashboard click, or a launcher entry all funnel to one executor that either talks to the plugin's daemon socket or spawns `the-binary <argv>`.
 - **Owns its lifetime**: spawns, tracks the PID, kills it on reload/exit, and arms a host-death watchdog so the process cannot outlive qol-tray.
 
-Source-of-truth crates: `libs/qol-plugin-api` (manifest schema + validation),
-`libs/qol-config` (config + runtime schema, config loader), `libs/qol-plugin-daemon`
-(the daemon helper a plugin links), `libs/qol-runtime` (state socket client +
-watchdog + wire protocol), `libs/qol-gpui` (gpui plugin building blocks), and
+Source-of-truth crates: `libs/plugin-api` (manifest schema + validation),
+`libs/config` (config + runtime schema, config loader), `libs/plugin-daemon`
+(the daemon helper a plugin links), `libs/runtime` (state socket client +
+watchdog + wire protocol), `libs/gpui` (gpui plugin building blocks), and
 `apps/qol-tray/src/{plugins,hotkeys,runtime,logging}` (the host side).
 
 ### Channel inventory
@@ -56,26 +56,26 @@ watchdog + wire protocol), `libs/qol-gpui` (gpui plugin building blocks), and
 | Config form / query / action | host UI to plugin daemon | HTTP to daemon socket | `plugin_config_handlers/`, `qol-config/src/contract/runtime.rs` |
 | Config reload | host to plugin | `reload` daemon action (else daemon restart) | `.../plugin_config_handlers/notify.rs` |
 | Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/qol-tray/src/plugins/action_executor/` |
-| Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/qol-runtime/src/client.rs`, `.../protocol.rs` |
+| Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/runtime/src/client.rs`, `.../protocol.rs` |
 | `set_focus` | plugin to host | state socket, fire-and-forget | `runtime/server/socket/requests.rs` |
-| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/qol-runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
-| Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/qol-runtime/src/watchdog.rs` + `requests.rs` |
+| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
+| Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/runtime/src/watchdog.rs` + `requests.rs` |
 | Logging | plugin to host | piped stderr/stdout relay | `apps/qol-tray/src/logging/relay.rs` |
 | OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `plugin-cli-sessions/src/notify.rs`) |
-| Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/qol-runtime/src/broker/{bus,client,protocol,topic}.rs` |
+| Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/runtime/src/broker/{bus,client,protocol,topic}.rs` |
 
 ---
 
 ## 2. Declaration files
 
 Three independent files, three independent validators, plus one cross-validator
-(`qol-config` to `qol-runtime`). Source: `libs/qol-plugin-api/src/manifest/`
-(`plugin.toml`) and `libs/qol-config/src/contract/` (`qol-config.toml`,
+(`qol-config` to `qol-runtime`). Source: `libs/plugin-api/src/manifest/`
+(`plugin.toml`) and `libs/config/src/contract/` (`qol-config.toml`,
 `qol-runtime.toml`).
 
 ### 2.1 `plugin.toml` (required) - discovery, menu, shortcuts, runtime, daemon
 
-Schema structs in `libs/qol-plugin-api/src/manifest/schema.rs`
+Schema structs in `libs/plugin-api/src/manifest/schema.rs`
 (`PluginManifest`, `PluginInfo`, `ActionDeclaration`, `MenuConfig`, `MenuItem`,
 `ActionType`, `RuntimeConfig`, `DaemonConfig`, `Capabilities`, `Dependencies`,
 `ShortcutDeclaration`, `ConfigDeclarations`). Current manifest version is 3
@@ -201,10 +201,10 @@ pattern = "plugin-template-{os}-{arch}"
 
 ### 2.2 `qol-config.toml` (optional) - the settings UI schema
 
-Schema in `libs/qol-config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
+Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
 `FieldSpec`, `FieldKind`); validation in `.../validation.rs`; normalization
 (defaults + override merge) in `.../normalized.rs`. Authoritative prose doc:
-`libs/qol-config/docs/v1.md` - but note it is **stale** (missing `color`, `action`,
+`libs/config/docs/v1.md` - but note it is **stale** (missing `color`, `action`,
 `list`, `status`, `qr_code` and several attributes); trust the structs.
 
 - Top level: `schema_version` (must be `1`), optional `title`, `description`.
@@ -261,7 +261,7 @@ equals = "fixed"
 
 Distinct from `plugin.toml`'s `[runtime]` block. Declares the actions/queries/streams
 that `qol-config.toml` fields (and section `actions`) bind to. Schema in
-`libs/qol-config/src/contract/runtime.rs` (`RuntimeSpec`, `ActionSpec`, `QuerySpec`,
+`libs/config/src/contract/runtime.rs` (`RuntimeSpec`, `ActionSpec`, `QuerySpec`,
 `StreamSpec`); cross-validation in `.../cross_validate.rs`.
 
 - `[action.<name>]`: `description`, optional `confirm`, optional `input` map,
@@ -308,7 +308,7 @@ A plugin reads its config on startup:
 let cfg: MyConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
 ```
 
-Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
+Source: `libs/config/src/lib.rs` (`load_plugin_config_from_env`,
 `plugin_id_from_env`, `load_plugin_config`, `plugin_config_paths`, `config_roots`).
 
 - Identity comes from the `QOL_TRAY_PLUGIN_ID` env var (injected by the host). If
@@ -411,7 +411,7 @@ socket and runs the gpui panel itself (self-daemonizing). The spawn carries
 
 ## 5. Process lifecycle and ownership
 
-### 5.1 The daemon helper crate (`libs/qol-plugin-daemon`)
+### 5.1 The daemon helper crate (`libs/plugin-daemon`)
 
 A plugin links this to receive actions while running (`src/daemon.rs`):
 
@@ -461,7 +461,7 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 ### 5.4 The host-death watchdog (orphan prevention)
 
 This is mission non-negotiable #3 (host left exactly as found, no orphaned daemons).
-Source: `libs/qol-runtime/src/watchdog.rs`; host side
+Source: `libs/runtime/src/watchdog.rs`; host side
 `apps/qol-tray/src/runtime/server/socket/requests.rs`.
 
 - `spawn_host_death_watchdog()` **does nothing unless `QOL_TRAY_STATE_SOCKET` is in
@@ -483,8 +483,8 @@ Source: `libs/qol-runtime/src/watchdog.rs`; host side
 
 A host-authoritative Unix socket (`QOL_TRAY_STATE_SOCKET`, default
 `/tmp/qol-tray-state.sock`, const in `apps/qol-tray/src/paths/mod.rs`). Client API in
-`libs/qol-runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
-in `libs/qol-runtime/src/protocol.rs`; server in `apps/qol-tray/src/runtime/server/`.
+`libs/runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
+in `libs/runtime/src/protocol.rs`; server in `apps/qol-tray/src/runtime/server/`.
 
 Requests (newline JSON, `cmd`-tagged): `get_state` (monitors etc.),
 `set_focus {monitor_idx}` (fire-and-forget), `subscribe {plugin_id, events}` (held-open
@@ -520,14 +520,14 @@ gpui plugins consume this via `qol_gpui::MonitorTracker` (placement) and
 > plugins can use today.
 
 The per-uid broker socket hosts a publish/subscribe bus beside the pane-field
-pull API (design: `libs/qol-runtime/docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md`).
+pull API (design: `libs/runtime/docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md`).
 Same transport, same identity model as the pull API: the socket file is mode
-`0600` inside a `0700` parent (`libs/qol-runtime/src/broker/path.rs`), and
+`0600` inside a `0700` parent (`libs/runtime/src/broker/path.rs`), and
 peer credentials are verified at accept (`peer_cred.rs`), so only same-uid
 processes connect. A plugin can therefore only publish to, and only receive
 events from, peers on its own uid - there is no cross-uid delivery.
 
-Source of truth: `libs/qol-runtime/src/broker/` - `bus.rs` (core), `topic.rs`
+Source of truth: `libs/runtime/src/broker/` - `bus.rs` (core), `topic.rs`
 (gate), `protocol.rs` (wire types), `client.rs` (plugin API).
 
 ### 7.1 Topics and the naming convention
@@ -600,7 +600,7 @@ opening another plugin replaces the view in that window; closing it leaves the h
 ready to create one fresh window on the next request. Custom pickers, overlays, and
 toasts remain plugin-owned.
 
-The rendering contract is the `libs/qol-gpui` crate that such plugins depend on:
+The rendering contract is the `libs/gpui` crate that such plugins depend on:
 
 - `keepalive::open_keepalive` - a hidden 1x1 window so the app process stays alive
   with no visible windows.
@@ -622,7 +622,7 @@ accessory policy, MonitorTracker placement, ghost decorations/kind,
 `open_window_with_focus`, and `spawn_command_loop`. Platform divergence is sharp
 (macOS `Normal` windows + opacity vs Linux/X11 `PopUp` + unmap; ghosts must be
 `is_movable`; Muffin drops cross-monitor moves) - see `qol-langs:gpui-conventions`
-and the `libs/qol-gpui` rules, and verify Linux ghost behavior via `qol trace`, not
+and the `libs/gpui` rules, and verify Linux ghost behavior via `qol trace`, not
 a live session.
 
 ---
@@ -679,7 +679,7 @@ is validated against the manifest id rules **and** the installed plugin set;
 an unknown id is rejected with `error` and nothing is displayed.
 
 Plugin API - one call, no async setup; the id comes from `QOL_TRAY_PLUGIN_ID`
-(`libs/qol-runtime/src/client.rs`, protocol types in `libs/qol-runtime/src/protocol.rs`):
+(`libs/runtime/src/client.rs`, protocol types in `libs/runtime/src/protocol.rs`):
 
 ```rust
 let client = qol_runtime::PlatformStateClient::from_env();
@@ -705,7 +705,7 @@ run, or host rejection). Host receiver:
 ### 8.4 Adding a new channel
 
 `qol-project:qol-arch-channels` is the canonical decision guide for picking or
-adding a host-plugin channel; reuse the infra in `libs/qol-runtime` rather than
+adding a host-plugin channel; reuse the infra in `libs/runtime` rather than
 inventing a socket.
 
 ---

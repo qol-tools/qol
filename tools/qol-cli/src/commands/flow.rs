@@ -3069,7 +3069,7 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
         "qol-shot-capture" | "qol-shot-cold-boot" | "qol-shot-storm" => DesktopCompanionRecipe {
             package: "qol-shot",
             binary: "qol-shot",
-            plugin_dir: "qol-shot",
+            plugin_dir: "shot",
             plugin_id: "qol-shot",
         },
         "shortcut-storm" => {
@@ -4875,7 +4875,7 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         package: "qol-shot",
                         binary: "qol-shot",
-                        plugin_dir: "qol-shot",
+                        plugin_dir: "shot",
                         plugin_id: "qol-shot",
                     }),
                     tray_features: None,
@@ -4887,7 +4887,7 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         package: "qol-shot",
                         binary: "qol-shot",
-                        plugin_dir: "qol-shot",
+                        plugin_dir: "shot",
                         plugin_id: "qol-shot",
                     }),
                     tray_features: None,
@@ -4899,7 +4899,7 @@ mod tests {
                     companion: Some(DesktopCompanionRecipe {
                         package: "qol-shot",
                         binary: "qol-shot",
-                        plugin_dir: "qol-shot",
+                        plugin_dir: "shot",
                         plugin_id: "qol-shot",
                     }),
                     tray_features: None,
@@ -4986,7 +4986,7 @@ mod tests {
     #[test]
     fn desktop_plugin_payload_includes_runtime_contract_and_excludes_sources() {
         let root = tempfile::tempdir().unwrap();
-        let plugin = root.path().join("plugins/qol-shot");
+        let plugin = root.path().join("plugins/shot");
         fs::create_dir_all(plugin.join("src")).unwrap();
         for (path, content) in [
             ("plugin.toml", "manifest"),

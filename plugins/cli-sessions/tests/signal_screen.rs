@@ -146,12 +146,16 @@ fn every_live_pi_footer_height_is_stabilizable() {
 #[test]
 fn real_pi_frames_classify_live_and_stabilize() {
     const FRAMES: [&str; 6] = [
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/completion_line.txt"),
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/frozen_spinner_a.txt"),
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/frozen_spinner_b.txt"),
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/prompt_echo_with_token.txt"),
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/provider_error_terminated.txt"),
-        include_str!("../../../libs/qol-terminal-sessions/tests/fixtures/pi_real/token_in_editor.txt"),
+        include_str!("../../../libs/terminal-sessions/tests/fixtures/pi_real/completion_line.txt"),
+        include_str!("../../../libs/terminal-sessions/tests/fixtures/pi_real/frozen_spinner_a.txt"),
+        include_str!("../../../libs/terminal-sessions/tests/fixtures/pi_real/frozen_spinner_b.txt"),
+        include_str!(
+            "../../../libs/terminal-sessions/tests/fixtures/pi_real/prompt_echo_with_token.txt"
+        ),
+        include_str!(
+            "../../../libs/terminal-sessions/tests/fixtures/pi_real/provider_error_terminated.txt"
+        ),
+        include_str!("../../../libs/terminal-sessions/tests/fixtures/pi_real/token_in_editor.txt"),
     ];
     let pane = pi_pane();
     let interpreter = CliSessionInterpreter::system();

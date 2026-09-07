@@ -75,7 +75,7 @@ registry and presentation model.
 ### Adding a terminal host
 
 1. Implement the segregated terminal capability traits in
-   `libs/qol-terminal-sessions`.
+   `libs/terminal-sessions`.
 2. Register the backend in `TerminalSessionService`.
 3. Keep dashboard-specific selection and attention behavior in this plugin.
 

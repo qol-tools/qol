@@ -28,7 +28,7 @@ The cli-sessions plugin process (one pid) presents three windows to
 
 `101` = `NSPopUpMenuWindowLevel`, set by
 `qol_gpui::popup_window::configure_popup_window`
-(`libs/qol-gpui/src/popup_window/platform/macos.rs:188`) so the panel stays
+(`libs/gpui/src/popup_window/platform/macos.rs:188`) so the panel stays
 always-on-top. CGWindow's `kCGWindowOwnerName` is the executable basename
 (`cli-sessions`), available without Screen Recording permission.
 
@@ -436,11 +436,11 @@ keepalive, and one tiny layer-0 keepalive.
 - `plugins/alt-tab/src/config.rs` - serde config loaded per show
 - `plugins/alt-tab/src/picker/run.rs` - `dispatch_show` config reload and
   live discovery call
-- `libs/qol-gpui/src/popup_window/platform/macos.rs:188` -
+- `libs/gpui/src/popup_window/platform/macos.rs:188` -
   `configure_popup_window` (sets `NSPopUpMenuWindowLevel`)
-- `libs/qol-gpui/src/popup_window/platform/linux.rs` -
+- `libs/gpui/src/popup_window/platform/linux.rs` -
   `configure_popup_window` (sets `_NET_WM_WINDOW_TYPE_DOCK`, `_QOL_GHOST`,
   and above/skip-taskbar/skip-pager state)
 - `apps/qol-tray/src/paths.rs` - `runtime_pids_dir`, `runtime_cache_dir`
 - `apps/qol-tray/src/plugins/manager/runtime.rs` - `persist_daemon_pids`
-- `libs/qol-plugin-api/src/manifest/schema.rs` - capabilities extras
+- `libs/plugin-api/src/manifest/schema.rs` - capabilities extras

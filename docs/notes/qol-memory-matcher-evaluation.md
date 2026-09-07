@@ -1,6 +1,6 @@
 # Memory matcher evaluation
 
-Run `node plugins/qol-memory/scripts/evaluate.mjs compare` from the workspace.
+Run `node plugins/memory/scripts/evaluate.mjs compare` from the workspace.
 The comparison prepares pinned public model files in the checkout's ignored
 target directory, builds the workers, and writes an isolated run under
 `reports/qol-memory/comparison`. `--offline` requires verified cached models.
@@ -69,7 +69,7 @@ machine, corpus, and repetition count; it is not a large-store service guarantee
 Verification commands:
 
 ```
-node --test plugins/qol-memory/scripts/comparison/*.test.mjs
+node --test plugins/memory/scripts/comparison/*.test.mjs
 cargo test --locked --manifest-path docs/research/qol-memory/tier1/Cargo.toml --all-targets --target-dir target/qol-memory-compare
 cargo clippy --locked --manifest-path docs/research/qol-memory/tier1/Cargo.toml --all-targets --target-dir target/qol-memory-compare -- -D warnings
 cargo run -q -p qol -- check

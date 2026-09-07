@@ -1,19 +1,19 @@
- $ wc -l /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs
+ $ wc -l /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs
 
- 1921 /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs
+ 1921 /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs
 
  Took 0.1s
 
- read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs:540-639
+ read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs:540-639
 
  Thinking...
 
- read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs:589-608
+ read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs:589-608
 
  Thinking...
 
  $ grep -n "ask_keeps_the_margin_gate_for_user_units\|ask_answers_from_a_capture_unit_with_capture_provenance\|mod tests\|fn temp_root\|fn write_units\|fn write_newest_run_notes\|fn fixture_notes\|fn
- run_ask\|struct Gates\|DEFAULTS" /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs
+ run_ask\|struct Gates\|DEFAULTS" /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs
 
  ... (25 earlier lines, ctrl+o to expand)
  1494:        assert_eq!(overridden.unit_cov, Gates::DEFAULTS.unit_cov);
@@ -24,18 +24,17 @@
 
  Took 0.0s
 
- read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs:1342-1421
+ read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs:1342-1421
 
- read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/qol-memory/src/ask/mod.rs:1780-1921
+ read /media/kmrh47/WD_SN850X/Git/worktrees/qm-recall/qol-monorepo/plugins/memory/src/ask/mod.rs:1780-1921
 
  Thinking...
 
  Error: terminated
 
  Thinking...
- Both tests land as described; the extra note keeps full coverage.
 
- QOL_BRIDGE_DONE_9a62a1a69874fa89a31a
+ ⠼ Working...
 
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 

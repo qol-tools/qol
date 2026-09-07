@@ -279,7 +279,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("tools/qol-cli");
         fs::create_dir_all(package.join("src")).unwrap();
-        fs::create_dir_all(root.path().join("libs/qol-lib/src")).unwrap();
+        fs::create_dir_all(root.path().join("libs/lib/src")).unwrap();
         fs::write(
             package.join("Cargo.toml"),
             "[package]\nversion = \"0.0.0\"\n[dependencies]\nqol-lib.workspace = true\n",
@@ -287,20 +287,20 @@ mod tests {
         .unwrap();
         fs::write(
             root.path().join("Cargo.toml"),
-            "[workspace]\n[workspace.dependencies]\nqol-lib = { path = \"libs/qol-lib\" }\n",
+            "[workspace]\n[workspace.dependencies]\nqol-lib = { path = \"libs/lib\" }\n",
         )
         .unwrap();
         fs::write(root.path().join("Cargo.lock"), "").unwrap();
         fs::write(package.join("src/lib.rs"), "").unwrap();
         fs::write(
-            root.path().join("libs/qol-lib/Cargo.toml"),
+            root.path().join("libs/lib/Cargo.toml"),
             "[package]\nname = \"qol-lib\"\nversion = \"0.0.0\"\n",
         )
         .unwrap();
-        fs::write(root.path().join("libs/qol-lib/src/lib.rs"), "").unwrap();
+        fs::write(root.path().join("libs/lib/src/lib.rs"), "").unwrap();
 
         let newest = newest_setup_input(root.path(), &package).unwrap();
-        let dependency_src = fs::metadata(root.path().join("libs/qol-lib/src/lib.rs"))
+        let dependency_src = fs::metadata(root.path().join("libs/lib/src/lib.rs"))
             .unwrap()
             .modified()
             .unwrap();

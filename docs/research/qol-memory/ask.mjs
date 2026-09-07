@@ -34,7 +34,7 @@ try {
 
 const STOPWORDS = new Set(["what", "when", "where", "which", "who", "how", "do", "does", "did", "is", "are", "the", "a", "an", "to", "for", "of", "in", "on", "with", "and", "or", "me", "you", "my", "we", "i", "it", "have", "has", "be", "been", "was", "were", "many", "much", "exist", "really", "want", "should", "could", "would", "can", "work", "fix", "this", "that", "these", "those", "there", "about", "get", "make", "use", "tell", "explain"]);
 
-const ALIASES = process.env.QOL_MEMORY_ALIASES_DISABLE === "1" ? new Map() : loadAliases(join(ASK_BASE, "..", "..", "..", "plugins", "qol-memory", "assets", "concept-aliases.json"));
+const ALIASES = process.env.QOL_MEMORY_ALIASES_DISABLE === "1" ? new Map() : loadAliases(join(ASK_BASE, "..", "..", "..", "plugins", "memory", "assets", "concept-aliases.json"));
 
 const BOILERPLATE_MARKERS = [
   "[qol session bridge]",
