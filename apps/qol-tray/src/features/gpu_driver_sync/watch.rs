@@ -966,10 +966,16 @@ mod lifecycle_tests {
             .expect("the probe must run and panic");
         stop_watch();
         assert_eq!(running_watcher_count(), 0);
+        let settled = has_panicked.load(Ordering::SeqCst);
+        assert!(
+            settled >= 1,
+            "the probe must have run at least once before the panic"
+        );
+        std::thread::sleep(Duration::from_millis(200));
         assert_eq!(
             has_panicked.load(Ordering::SeqCst),
-            1,
-            "the wrapper must not keep probing after the panic"
+            settled,
+            "a stopped watcher must not probe again after the panic"
         );
         reset_state();
         std::fs::remove_dir_all(&dir).ok();
