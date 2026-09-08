@@ -15,6 +15,7 @@ use qol_gpui::theme::{
     font_mono, runtime_theme, shot_selector_runtime, ShotSelectorPalette, TEXT_MICRO,
 };
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
+use qol_gpui::window_options::PopupWindowOptions;
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
@@ -139,20 +140,17 @@ impl SelectorWindow {
     }
 
     fn options(&self) -> WindowOptions {
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(self.bounds)),
-            titlebar: None,
-            window_decorations: Some(self.decorations),
-            kind: self.kind,
-            focus: self.focus,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: self.display_id,
-            window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some(SELECTOR_APP_ID.to_string()),
-            ..Default::default()
-        }
+        PopupWindowOptions::new()
+            .bounds(self.bounds)
+            .decorations(self.decorations)
+            .kind(self.kind)
+            .focus(self.focus)
+            .movable(false)
+            .resizable(false)
+            .minimizable(false)
+            .display_id(self.display_id)
+            .app_id(SELECTOR_APP_ID)
+            .build()
     }
 }
 

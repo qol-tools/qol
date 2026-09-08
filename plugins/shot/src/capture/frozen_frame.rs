@@ -33,7 +33,7 @@ impl FrozenFrame {
             .map(|(bounds, pixels, pixel_width, pixel_height)| {
                 Some((
                     bounds,
-                    render_image(pixels, pixel_width, pixel_height)?,
+                    qol_gpui::image::render_image(pixels, pixel_width, pixel_height)?,
                     pixel_width,
                     pixel_height,
                 ))
@@ -75,7 +75,7 @@ impl FrozenFrame {
         }
         let crop = self.crop(rect)?;
         let (pixels, width, height) = crop.into_bgra_parts();
-        render_image(pixels, width, height)
+        qol_gpui::image::render_image(pixels, width, height)
     }
 
     pub(crate) fn crop(&self, rect: Rect) -> Option<FrozenCrop> {
@@ -271,13 +271,6 @@ fn compose_crop(rect: Rect, segments: &[(&FrozenSegment, Rect)]) -> Option<Froze
         width,
         height,
     })
-}
-
-fn render_image(pixels: Vec<u8>, width: u32, height: u32) -> Option<Arc<RenderImage>> {
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)?;
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(buffer)
-    ])))
 }
 
 fn scaled_edge(offset: i32, logical_size: i32, pixel_size: u32) -> Option<u32> {

@@ -598,17 +598,10 @@ fn commit_icons_foreground(
 pub(crate) fn build_icon_cache(raw_icons: HashMap<String, crate::discovery::RgbaImage>) -> IconMap {
     let mut cache: IconMap = HashMap::new();
     for (app_name, icon) in raw_icons {
-        let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
-            icon.width as u32,
-            icon.height as u32,
-            icon.data,
-        );
-        if let Some(buf) = buf {
-            let frame = image::Frame::new(buf);
-            cache.insert(
-                app_name,
-                Arc::new(gpui::RenderImage::new(smallvec::smallvec![frame])),
-            );
+        if let Some(image) =
+            qol_gpui::image::render_image(icon.data, icon.width as u32, icon.height as u32)
+        {
+            cache.insert(app_name, image);
         }
     }
     cache

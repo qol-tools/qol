@@ -12,6 +12,7 @@ use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
+use qol_gpui::window_options::PopupWindowOptions;
 
 pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
@@ -268,16 +269,10 @@ fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptio
         origin: placement.bounds.origin,
         size: full_window_size(),
     };
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        display_id: placement.display_id,
-        titlebar: None,
-        window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),
-        kind: qol_gpui::platform::ghost_window_kind(),
-        focus,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(LAUNCHER_APP_ID.to_string()),
-        ..Default::default()
-    }
+    PopupWindowOptions::new()
+        .bounds(bounds)
+        .display_id(placement.display_id)
+        .focus(focus)
+        .app_id(LAUNCHER_APP_ID)
+        .build()
 }

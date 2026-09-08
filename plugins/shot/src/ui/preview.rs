@@ -14,7 +14,6 @@ use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
-use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
     font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
@@ -25,6 +24,7 @@ use qol_gpui::window::{
     target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
     WindowPlacement,
 };
+use qol_gpui::window_options::PopupWindowOptions;
 
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
@@ -427,7 +427,7 @@ impl GhostContent {
     fn from_capture(capture: PreviewCapture) -> Result<Self> {
         let image = capture.pixels.and_then(|pixels| {
             let (data, w, h) = pixels.into_bgra_parts();
-            bgra_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
+            qol_gpui::image::render_image(data, w, h).map(|render_image| (render_image, w, h))
         });
         let (thumb, render_image) = match image {
             Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
@@ -634,19 +634,10 @@ fn open_ghost_window(
 }
 
 fn ghost_window_options(placement: &WindowPlacement) -> WindowOptions {
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
-        display_id: placement.display_id,
-        titlebar: None,
-        window_decorations: Some(ghost_window_decorations(false)),
-        kind: ghost_window_kind(),
-        focus: false,
-        show: false,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(PREVIEW_APP_ID.to_string()),
-        ..Default::default()
-    }
+    PopupWindowOptions::from_placement(placement)
+        .show(false)
+        .app_id(PREVIEW_APP_ID)
+        .build()
 }
 
 fn open_quit_window(
@@ -670,16 +661,11 @@ fn open_quit_window(
         }
     };
     let provisional = Bounds::new(point(px(0.0), px(0.0)), token.logical_size());
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(provisional)),
-        titlebar: None,
-        window_decorations: Some(ghost_window_decorations(false)),
-        kind: ghost_window_kind(),
-        focus: false,
-        show: false,
-        window_background: WindowBackgroundAppearance::Opaque,
-        ..Default::default()
-    };
+    let options = PopupWindowOptions::new()
+        .bounds(provisional)
+        .background(WindowBackgroundAppearance::Opaque)
+        .show(false)
+        .build();
 
     let content = GhostContent {
         path,
@@ -742,19 +728,6 @@ fn open_quit_window(
     true
 }
 
-fn bgra_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
-    let frame = image::Frame::new(buffer);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
-}
-
-fn rgba_to_render_image(mut data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    for pixel in data.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    bgra_to_render_image(data, w, h)
-}
-
 fn read_thumb(path: &Path) -> Result<(f32, f32)> {
     let started = Instant::now();
     let (width, height) = image::image_dimensions(path)
@@ -788,7 +761,7 @@ pub(super) fn read_render_image(path: &Path) -> Result<(Arc<RenderImage>, u32, u
         .with_context(|| format!("failed to read preview image: {}", path.display()))?;
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let render_image = rgba_to_render_image(rgba.into_raw(), width, height)
+    let render_image = qol_gpui::image::render_image_rgba(rgba.into_raw(), width, height)
         .with_context(|| format!("failed to prepare preview image: {}", path.display()))?;
     Ok((render_image, width, height))
 }

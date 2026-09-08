@@ -16,9 +16,7 @@ pub(crate) fn fast_pixel_hash(data: &[u8]) -> u64 {
 }
 
 pub(crate) fn bgra_to_render_image(data: Vec<u8>, w: usize, h: usize) -> Option<Arc<RenderImage>> {
-    let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, data)?;
-    let frame = image::Frame::new(buf);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+    qol_gpui::image::render_image(data, w as u32, h as u32)
 }
 
 pub(crate) fn shot_request_dims(window_w: f32, window_h: f32) -> (usize, usize) {

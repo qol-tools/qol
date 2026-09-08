@@ -15,6 +15,7 @@ use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
+use qol_gpui::window_options::PopupWindowOptions;
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
@@ -215,18 +216,14 @@ fn open_window(
     spec: PinnedWindowSpec,
     cx: &mut App,
 ) -> Option<WindowHandle<PinnedView>> {
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
-        titlebar: None,
-        window_decorations: Some(WindowDecorations::Client),
-        kind: qol_gpui::popup_window::pinned_window_kind(),
-        focus: spec.focus,
-        show: spec.show,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(PREVIEW_APP_ID.to_string()),
-        ..Default::default()
-    };
+    let options = PopupWindowOptions::new()
+        .bounds(spec.bounds)
+        .decorations(WindowDecorations::Client)
+        .kind(qol_gpui::popup_window::pinned_window_kind())
+        .focus(spec.focus)
+        .show(spec.show)
+        .app_id(PREVIEW_APP_ID)
+        .build();
     let focus = spec.focus;
     let handle = cx
         .open_window(options, move |window, cx| {
