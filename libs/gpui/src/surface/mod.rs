@@ -210,7 +210,8 @@ impl SurfaceDismisser {
         )
     }
 
-    pub(crate) fn current_title(&self) -> String {
+    /// The reserved window title; carries a "-N" suffix when the requested title was still live at open.
+    pub fn current_title(&self) -> String {
         self.state.title.borrow().clone()
     }
 
@@ -319,7 +320,7 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
-        self.open_on(monitor, cx, |dismisser, window, cx| {
+        self.open_on(Some(monitor), cx, |dismisser, window, cx| {
             let view = build(dismisser, window, cx);
             window.focus(&view.focus_handle(cx));
             window.activate_window();
@@ -327,6 +328,8 @@ impl Surface {
         })
     }
 
+    /// Panel and OverlayPanel surfaces center on the primary display when no monitor
+    /// state is available; Toast requires cursor state.
     pub(crate) fn open<V: Render + 'static>(
         self,
         tracker: &MonitorTracker,
@@ -334,20 +337,26 @@ impl Surface {
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
         let monitor = match self.kind {
-            SurfaceKind::Toast => tracker.snapshot_cursor().map(|(monitor, _)| monitor),
+            SurfaceKind::Toast => Some(
+                tracker
+                    .snapshot_cursor()
+                    .map(|(monitor, _)| monitor)
+                    .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?,
+            ),
             SurfaceKind::Panel | SurfaceKind::OverlayPanel => tracker.snapshot_monitor(),
-        }
-        .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
-        self.open_on(&monitor, cx, build)
+        };
+        self.open_on(monitor.as_ref(), cx, build)
     }
 
     fn open_on<V: Render + 'static>(
         self,
-        monitor: &ActiveMonitor,
+        monitor: Option<&ActiveMonitor>,
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
-        let bounds = self.resolved_bounds(monitor);
+        let bounds = monitor
+            .map(|m| self.resolved_bounds(m))
+            .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
         let title = reserve_surface_title(&self.title);
         let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
@@ -359,7 +368,7 @@ impl Surface {
         let applies_settings_identity = resolved_app_id == qol_conventions::SETTINGS_SURFACE_APP_ID;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            display_id: crate::window::display_id_for_monitor(Some(monitor), cx),
+            display_id: crate::window::display_id_for_monitor(monitor, cx),
             titlebar: None,
             window_decorations: Some(WindowDecorations::Client),
             kind: self.window_kind(),
@@ -946,10 +955,13 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                     .set(self.dismisser.state.generation.get().wrapping_add(1));
                 self.reveal_pending.set(false);
             }
-            let Some(monitor) = tracker.snapshot_monitor() else {
-                return false;
+            let bounds = match (self.kind, tracker.snapshot_monitor()) {
+                (_, Some(monitor)) => self.placement.bounds(monitor.bounds(), self.size()),
+                (SurfaceKind::Toast, None) => return false,
+                (SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
+                    Bounds::centered(None, self.size(), cx)
+                }
             };
-            let bounds = self.placement.bounds(monitor.bounds(), self.size());
             crate::popup_window::capture_focus_return();
             let title = self.dismisser.current_title();
             if self.constrains_size && !constrain_native_size(&title, bounds.size) {

@@ -29,6 +29,7 @@ static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
     pub host: Arc<dyn TerminalHost + Send + Sync>,
+    title: String,
     dismisser: SurfaceDismisser,
     selection: Selection,
     is_showing: bool,
@@ -49,9 +50,11 @@ impl SessionsView {
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
+        let title = dismisser.current_title();
         Self {
             registry,
             host,
+            title,
             dismisser,
             selection: Selection::default(),
             list_scroll: qol_gpui::scroll_list::SelectionScroll::new(),
@@ -194,6 +197,7 @@ impl SessionsView {
         cx: &mut Context<Self>,
     ) {
         let host = self.host.clone();
+        let title = self.title.clone();
         trace::focus_start(reason, target.session_id());
         let result_id = target.session_id().clone();
         let retain_panel_focus = reason == "cycle-implementer";
@@ -206,7 +210,7 @@ impl SessionsView {
                         if retain_panel_focus {
                             let commit = CYCLE_FOCUS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
                             qol_gpui::popup_window::reassert_focus_until_held(
-                                WINDOW_TITLE,
+                                &title,
                                 &CYCLE_FOCUS_GEN,
                                 commit,
                             );
