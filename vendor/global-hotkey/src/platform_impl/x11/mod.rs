@@ -483,6 +483,30 @@ fn modifiers_to_x11_mods(modifiers: Modifiers) -> ModMask {
     x11mods
 }
 
+fn keycode_for_keysym(
+    min_keycode: Keycode,
+    keysyms_per_keycode: usize,
+    keysyms: &[RawKeysym],
+    keysym: RawKeysym,
+) -> Option<Keycode> {
+    for (i, chunk) in keysyms.chunks(keysyms_per_keycode).enumerate() {
+        if chunk.first() == Some(&keysym) {
+            return Some(min_keycode + i as u8);
+        }
+    }
+    for (i, chunk) in keysyms.chunks(keysyms_per_keycode).enumerate() {
+        if chunk.get(1) == Some(&keysym) {
+            return Some(min_keycode + i as u8);
+        }
+    }
+    for (i, chunk) in keysyms.chunks(keysyms_per_keycode).enumerate() {
+        if chunk.contains(&keysym) {
+            return Some(min_keycode + i as u8);
+        }
+    }
+    None
+}
+
 fn keysym_to_keycode(conn: &RustConnection, keysym: RawKeysym) -> Result<Option<Keycode>, String> {
     let setup = conn.setup();
     let min_keycode = setup.min_keycode;
@@ -497,11 +521,92 @@ fn keysym_to_keycode(conn: &RustConnection, keysym: RawKeysym) -> Result<Option<
 
     let keysyms_per_keycode = mapping.keysyms_per_keycode as usize;
 
-    for (i, keysyms) in mapping.keysyms.chunks(keysyms_per_keycode).enumerate() {
-        if keysyms.contains(&keysym) {
-            return Ok(Some(min_keycode + i as u8));
-        }
+    Ok(keycode_for_keysym(
+        min_keycode,
+        keysyms_per_keycode,
+        &mapping.keysyms,
+        keysym,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIN_KEYCODE: Keycode = 8;
+    const KEYSYMS_PER_KEYCODE: usize = 6;
+
+    fn row(keycode: Keycode, keysyms: [RawKeysym; 6]) -> (usize, [RawKeysym; 6]) {
+        ((keycode - MIN_KEYCODE) as usize, keysyms)
     }
 
-    Ok(None)
+    fn mapping(rows: &[(usize, [RawKeysym; 6])]) -> Vec<RawKeysym> {
+        let total_rows = rows.iter().map(|(index, _)| index + 1).max().unwrap_or(0);
+        let mut keysyms = vec![0 as RawKeysym; total_rows * KEYSYMS_PER_KEYCODE];
+        for (index, values) in rows {
+            keysyms[*index * KEYSYMS_PER_KEYCODE..(*index + 1) * KEYSYMS_PER_KEYCODE]
+                .copy_from_slice(values);
+        }
+        keysyms
+    }
+
+    #[test]
+    fn prefers_the_primary_level_over_a_secondary_group_match() {
+        let keysyms = mapping(&[
+            row(20, [0x2b, 0x3f, 0x2d, 0x5f, 0xb1, 0xbf]),
+            row(61, [0x2d, 0x5f, 0x2f, 0x3f, 0xfe60, 0xfe61]),
+        ]);
+
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x2d),
+            Some(61)
+        );
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x2b),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn us_layout_plus_resolves_to_the_shifted_equal_key() {
+        let keysyms = mapping(&[
+            row(20, [0x2d, 0x5f, 0, 0, 0, 0]),
+            row(21, [0x3d, 0x2b, 0, 0, 0, 0]),
+        ]);
+
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x2b),
+            Some(21)
+        );
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x2d),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_any_level_when_no_primary_match() {
+        let keysyms = mapping(&[
+            row(20, [0x2b, 0x3f, 0x2d, 0x5f, 0xb1, 0xbf]),
+            row(61, [0x2d, 0x5f, 0x2f, 0x3f, 0xfe60, 0xfe61]),
+        ]);
+
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x3f),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn unknown_keysym_resolves_to_none() {
+        let keysyms = mapping(&[
+            row(20, [0x2b, 0x3f, 0x2d, 0x5f, 0xb1, 0xbf]),
+            row(61, [0x2d, 0x5f, 0x2f, 0x3f, 0xfe60, 0xfe61]),
+        ]);
+
+        assert_eq!(
+            keycode_for_keysym(MIN_KEYCODE, KEYSYMS_PER_KEYCODE, &keysyms, 0x41),
+            None
+        );
+    }
 }

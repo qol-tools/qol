@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const ID: &str = "dev_link_paths";
-const RENAMED_PLUGINS: &[(&str, &str)] = &[("plugin-screen-recorder", "qol-shot")];
+const RENAMED_PLUGINS: &[(&str, &str, &str)] = &[("plugin-screen-recorder", "qol-shot", "shot")];
 
 pub(super) struct DevLinkPathsCheck;
 
@@ -301,7 +301,7 @@ fn registered_successor(
     plugin_id: &str,
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
 ) -> Option<&'static str> {
-    for (legacy, successor) in RENAMED_PLUGINS {
+    for (legacy, successor, _folder) in RENAMED_PLUGINS {
         if *legacy != plugin_id {
             continue;
         }
@@ -325,11 +325,11 @@ fn disk_successor(
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
 ) -> Option<&'static str> {
     let root = dev_root?;
-    for (legacy, successor) in RENAMED_PLUGINS {
+    for (legacy, successor, folder) in RENAMED_PLUGINS {
         if *legacy != plugin_id {
             continue;
         }
-        if matches!(manifest_probe(&root.join(successor)), ManifestStatus::WithId(ref id) if id == successor)
+        if matches!(manifest_probe(&root.join(folder)), ManifestStatus::WithId(ref id) if id == successor)
         {
             return Some(*successor);
         }

@@ -1,7 +1,7 @@
 mod snapshot;
 mod subscribers;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
@@ -23,7 +23,7 @@ pub(crate) struct SharedState {
     subscribers: Mutex<Vec<SubscriberEntry>>,
     subscriber_changed: Condvar,
     next_subscriber_id: AtomicU64,
-    armed_lifelines: Mutex<HashSet<String>>,
+    armed_lifelines: Mutex<HashMap<String, usize>>,
     platform: OnceLock<SharedPlatform>,
 }
 
@@ -38,22 +38,30 @@ impl SharedState {
             subscribers: Mutex::new(Vec::new()),
             subscriber_changed: Condvar::new(),
             next_subscriber_id: AtomicU64::new(1),
-            armed_lifelines: Mutex::new(HashSet::new()),
+            armed_lifelines: Mutex::new(HashMap::new()),
             platform: OnceLock::new(),
         }
     }
 
     pub(super) fn arm_lifeline(&self, plugin_id: String) {
-        lock_or_recover(&self.armed_lifelines).insert(plugin_id);
+        *lock_or_recover(&self.armed_lifelines)
+            .entry(plugin_id)
+            .or_insert(0) += 1;
     }
 
     pub(super) fn disarm_lifeline(&self, plugin_id: &str) {
-        lock_or_recover(&self.armed_lifelines).remove(plugin_id);
+        let mut lifelines = lock_or_recover(&self.armed_lifelines);
+        if let Some(count) = lifelines.get_mut(plugin_id) {
+            *count -= 1;
+            if *count == 0 {
+                lifelines.remove(plugin_id);
+            }
+        }
     }
 
     pub(super) fn armed_lifelines(&self) -> Vec<String> {
         let mut ids: Vec<String> = lock_or_recover(&self.armed_lifelines)
-            .iter()
+            .keys()
             .cloned()
             .collect();
         ids.sort();
@@ -293,5 +301,37 @@ mod tests {
         shared.remove_subscriber(window_id);
 
         assert!(!shared.has_window_list_subscribers());
+    }
+
+    #[test]
+    fn lifeline_stays_armed_while_an_older_connection_for_the_same_id_drops() {
+        let shared = SharedState::new(Vec::new());
+
+        shared.arm_lifeline("plugin-monitor".to_string());
+        shared.arm_lifeline("plugin-monitor".to_string());
+        shared.disarm_lifeline("plugin-monitor");
+
+        assert_eq!(shared.armed_lifelines(), vec!["plugin-monitor".to_string()]);
+    }
+
+    #[test]
+    fn lifeline_disarms_once_every_connection_has_dropped() {
+        let shared = SharedState::new(Vec::new());
+
+        shared.arm_lifeline("plugin-monitor".to_string());
+        shared.arm_lifeline("plugin-monitor".to_string());
+        shared.disarm_lifeline("plugin-monitor");
+        shared.disarm_lifeline("plugin-monitor");
+
+        assert!(shared.armed_lifelines().is_empty());
+    }
+
+    #[test]
+    fn disarming_an_unarmed_id_is_a_no_op() {
+        let shared = SharedState::new(Vec::new());
+
+        shared.disarm_lifeline("plugin-monitor");
+
+        assert!(shared.armed_lifelines().is_empty());
     }
 }
