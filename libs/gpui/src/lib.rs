@@ -10,6 +10,7 @@ pub mod gamepad;
 pub mod ghost;
 pub mod hint_bar;
 pub mod history;
+pub mod image;
 pub mod keepalive;
 pub mod kit;
 pub mod monitor;
@@ -31,6 +32,7 @@ pub mod toast;
 pub mod trail;
 pub mod vertical_label;
 pub mod window;
+pub mod window_options;
 
 pub use format::format_bytes;
 pub use spinner::{Busy, Spinner};
