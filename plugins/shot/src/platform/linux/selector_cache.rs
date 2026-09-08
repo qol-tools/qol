@@ -1,17 +1,28 @@
 use crate::capture::space::CaptureKind;
+use crate::ui::preview::{live_topology, WarmWindowPool};
 use crate::ui::region_selector::{
     open_window, rect_from_bounds, RectMapper, RegionSelector, SelectionState, SelectorReveal,
     SelectorWindow, SelectorWindowSources,
 };
 use crate::Rect;
-use gpui::{App, Bounds, Context, Focusable, Pixels, WindowHandle};
+use gpui::{App, Bounds, Context, Focusable, Pixels};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
 
-#[derive(Clone, Default)]
+const SELECTOR_WINDOW_KIND: &str = "selector";
+const SELECTOR_POOL_CAPACITY: usize = 1;
+
 pub(crate) struct SelectorCache {
-    handle: Rc<RefCell<Option<WindowHandle<RegionSelector>>>>,
+    pool: WarmWindowPool<RegionSelector>,
+}
+
+impl Default for SelectorCache {
+    fn default() -> Self {
+        Self {
+            pool: WarmWindowPool::new(SELECTOR_WINDOW_KIND, SELECTOR_POOL_CAPACITY),
+        }
+    }
 }
 
 pub(crate) fn pre_create_cached(
@@ -20,7 +31,10 @@ pub(crate) fn pre_create_cached(
     kind: CaptureKind,
     cx: &mut App,
 ) -> Option<String> {
-    if cache.handle.borrow().is_some() {
+    let topology = live_topology(cx);
+    let bounds = rect_from_bounds(selector.bounds);
+    let size = (bounds.w, bounds.h);
+    if cache.pool.peek(size, &topology, cx).is_some() {
         return None;
     }
     let title = selector.title.clone();
@@ -49,7 +63,12 @@ pub(crate) fn pre_create_cached(
             qol_gpui::popup_window::hide_for_capture(&view.title, window)
         })
         .unwrap_or(false);
-    *cache.handle.borrow_mut() = Some(handle);
+    let key = cache.pool.key(&topology, size);
+    if !cache.pool.put(key, handle) {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=failed");
+        return None;
+    }
     qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=ok hidden={_hidden}");
     Some(title)
 }
@@ -62,7 +81,13 @@ pub(crate) fn open_cached(
     reveal: SelectorReveal,
     cx: &mut App,
 ) -> Option<String> {
-    let handle = (*cache.handle.borrow())?;
+    let size = {
+        let selector = selector.as_ref()?;
+        let bounds = rect_from_bounds(selector.bounds);
+        (bounds.w, bounds.h)
+    };
+    let topology = live_topology(cx);
+    let handle = cache.pool.peek(size, &topology, cx)?;
     let result = handle.update(cx, |view, window, cx| {
         let tx = tx.take()?;
         let selector = selector.take()?;
@@ -104,7 +129,7 @@ pub(crate) fn open_cached(
         }
         Ok(None) => None,
         Err(_) => {
-            *cache.handle.borrow_mut() = None;
+            let _ = cache.pool.take(size, &topology, cx);
             qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 result=stale-cache");
             None
         }

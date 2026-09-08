@@ -1,5 +1,4 @@
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +11,10 @@ use gpui::*;
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
-use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
+use crate::ui::preview::{
+    current_palette, live_topology, surface_shadow, MonitorTopology, WarmWindowKey, WarmWindowPool,
+    PREVIEW_APP_ID,
+};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
@@ -27,12 +29,14 @@ const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
 const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
 const PIN_CACHE_CAPACITY: usize = 2;
 const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
+const PIN_CACHE_SIZE_KEY: (i32, i32) = (PIN_CACHE_SIZE.0 as i32, PIN_CACHE_SIZE.1 as i32);
+const PIN_WINDOW_KIND: &str = "pin";
 
 static PIN_SEQ: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
-    static PIN_CACHE: RefCell<VecDeque<WindowHandle<PinnedView>>> =
-        const { RefCell::new(VecDeque::new()) };
+    static PIN_POOL: WarmWindowPool<PinnedView> =
+        const { WarmWindowPool::new(PIN_WINDOW_KIND, PIN_CACHE_CAPACITY) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -60,6 +64,7 @@ struct PinnedWindowSpec {
     focus: bool,
     show: bool,
     cacheable: bool,
+    pool_key: Option<WarmWindowKey>,
 }
 
 #[derive(Clone)]
@@ -89,7 +94,10 @@ fn spawn_full_resolution_load(
     Ok(receiver)
 }
 
-fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
+fn create_parked(
+    topology: &MonitorTopology,
+    cx: &mut App,
+) -> Option<(WarmWindowKey, WindowHandle<PinnedView>)> {
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
     let origin = point(px(-100.0), px(-100.0));
@@ -104,6 +112,7 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         file_ready: CaptureFileReady::ready(),
         started_at: Instant::now(),
     };
+    let key = PIN_POOL.with(|pool| pool.key(topology, PIN_CACHE_SIZE_KEY));
     let spec = PinnedWindowSpec {
         title: title.clone(),
         bounds,
@@ -114,6 +123,7 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         focus: false,
         show: false,
         cacheable: true,
+        pool_key: Some(key.clone()),
     };
     let handle = open_window(content, spec, cx)?;
     if !platform::prepare_pin_window(&title, (-100.0, -100.0)) {
@@ -121,21 +131,23 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         return None;
     }
     platform::reassert_parked(&title, cx);
-    Some(handle)
+    Some((key, handle))
 }
 
 pub fn pre_create(cx: &mut App) {
     if !platform::pin_cache_enabled() {
         return;
     }
+    let topology = live_topology(cx);
     for _ in 0..PIN_CACHE_CAPACITY {
-        if let Some(handle) = create_parked(cx) {
-            PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+        if let Some((key, handle)) = create_parked(&topology, cx) {
+            if !PIN_POOL.with(|pool| pool.put(key, handle)) {
+                let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            }
         }
     }
-    PIN_CACHE.with(|cache| {
-        qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={}", cache.borrow().len());
-    });
+    let windows = PIN_POOL.with(|pool| pool.len());
+    qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={windows}");
 }
 
 pub fn open(
@@ -152,15 +164,27 @@ pub fn open(
         size: placement.logical_bounds().size,
     };
     if platform::pin_cache_enabled() {
-        let cache_empty = PIN_CACHE.with(|cache| cache.borrow().is_empty());
-        if cache_empty {
-            if let Some(handle) = create_parked(cx) {
-                PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+        let topology = live_topology(cx);
+        if PIN_POOL
+            .with(|pool| pool.peek(PIN_CACHE_SIZE_KEY, &topology, cx))
+            .is_none()
+        {
+            if let Some((key, handle)) = create_parked(&topology, cx) {
+                PIN_POOL.with(|pool| pool.put(key, handle));
                 qol_runtime::probe!("SHOT_PIN_CACHE", "state=refilled");
             }
         }
-        if cache::open(content.clone(), dismiss, reveal.clone(), &placement, cx) {
-            return true;
+        if let Some(handle) = PIN_POOL.with(|pool| pool.take(PIN_CACHE_SIZE_KEY, &topology, cx)) {
+            if cache::open(
+                handle,
+                content.clone(),
+                dismiss,
+                reveal.clone(),
+                &placement,
+                cx,
+            ) {
+                return true;
+            }
         }
     }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -177,6 +201,7 @@ pub fn open(
         focus: false,
         show: false,
         cacheable: false,
+        pool_key: None,
     };
     let opened_at = Instant::now();
     let Some(handle) = open_window(content, spec, cx) else {
@@ -249,6 +274,7 @@ mod cache {
     use super::*;
 
     pub fn open(
+        handle: WindowHandle<PinnedView>,
         content: PinnedContent,
         dismiss: PinnedDismiss,
         reveal: PinReveal,
@@ -256,9 +282,6 @@ mod cache {
         cx: &mut App,
     ) -> bool {
         let opened_at = Instant::now();
-        let Some(handle) = PIN_CACHE.with(|cache| cache.borrow_mut().pop_front()) else {
-            return false;
-        };
         let config = crate::config::load();
         let border = config.capture.pin_border;
         let title = handle
@@ -366,6 +389,7 @@ pub struct PinnedView {
     scheduled_reveal_generation: Option<u64>,
     pending_reveal: Option<PinReveal>,
     cacheable: bool,
+    pool_key: Option<WarmWindowKey>,
     handle: Option<WindowHandle<PinnedView>>,
     focus_handle: FocusHandle,
 }
@@ -401,6 +425,7 @@ impl PinnedView {
             scheduled_reveal_generation: None,
             pending_reveal: spec.reveal,
             cacheable: spec.cacheable,
+            pool_key: spec.pool_key,
             handle: None,
             focus_handle: cx.focus_handle(),
         }
@@ -819,6 +844,10 @@ impl PinnedView {
             window.remove_window();
             return;
         };
+        let Some(key) = self.pool_key.clone() else {
+            window.remove_window();
+            return;
+        };
         self.active = false;
         self.placed = false;
         self.image = None;
@@ -838,15 +867,8 @@ impl PinnedView {
             window.remove_window();
             return;
         }
-        let cached = PIN_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if cache.len() >= PIN_CACHE_CAPACITY {
-                return false;
-            }
-            cache.push_back(handle);
-            true
-        });
-        if !cached {
+        let pooled = PIN_POOL.with(|pool| pool.put(key, handle));
+        if !pooled {
             window.remove_window();
             return;
         }

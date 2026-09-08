@@ -62,6 +62,163 @@ pub(super) fn surface_shadow() -> Vec<BoxShadow> {
     }]
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MonitorTopology {
+    monitors: Vec<MonitorKey>,
+}
+
+impl MonitorTopology {
+    fn from_monitors(monitors: &[ActiveMonitor]) -> Self {
+        let mut monitors = monitors
+            .iter()
+            .map(|monitor| MonitorKey::from_bounds(&monitor.bounds()))
+            .collect::<Vec<_>>();
+        monitors.sort_by_key(|monitor| (monitor.x, monitor.y, monitor.width, monitor.height));
+        monitors.dedup();
+        Self { monitors }
+    }
+
+    fn matches(&self, live: &Self) -> bool {
+        self.monitors.is_empty() || live.monitors.is_empty() || self.monitors == live.monitors
+    }
+}
+
+pub(crate) fn live_topology(cx: &App) -> MonitorTopology {
+    MonitorTopology::from_monitors(&MonitorTracker::start(cx).all_monitors_or_snapshot())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WarmWindowKey {
+    kind: &'static str,
+    topology: MonitorTopology,
+    size: (i32, i32),
+}
+
+struct WarmWindow<T> {
+    key: WarmWindowKey,
+    handle: WindowHandle<T>,
+}
+
+pub(crate) struct WarmWindowPool<T> {
+    kind: &'static str,
+    capacity: usize,
+    entries: RefCell<Vec<WarmWindow<T>>>,
+}
+
+impl<T> WarmWindowPool<T> {
+    pub(crate) const fn new(kind: &'static str, capacity: usize) -> Self {
+        Self {
+            kind,
+            capacity,
+            entries: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn key(&self, topology: &MonitorTopology, size: (i32, i32)) -> WarmWindowKey {
+        WarmWindowKey {
+            kind: self.kind,
+            topology: topology.clone(),
+            size,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.borrow().len()
+    }
+}
+
+impl<T: Render + 'static> WarmWindowPool<T> {
+    pub(crate) fn take(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let mut entries = self.entries.borrow_mut();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries.remove(index).handle)
+    }
+
+    pub(crate) fn peek(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let entries = self.entries.borrow();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries[index].handle)
+    }
+
+    pub(crate) fn put(&self, key: WarmWindowKey, handle: WindowHandle<T>) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        if entries.len() >= self.capacity {
+            return false;
+        }
+        entries.push(WarmWindow { key, handle });
+        true
+    }
+
+    fn retain_live(&self, topology: &MonitorTopology, cx: &mut App) {
+        let stale = {
+            let mut entries = self.entries.borrow_mut();
+            let mut stale = Vec::new();
+            entries.retain(|entry| {
+                if entry.key.topology.matches(topology) {
+                    return true;
+                }
+                stale.push(entry.handle);
+                false
+            });
+            stale
+        };
+        if stale.is_empty() {
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_WARM_INVALIDATE",
+            "kind={} monitors={} dropped={}",
+            self.kind,
+            topology.monitors.len(),
+            stale.len()
+        );
+        Self::remove_windows(stale, cx);
+    }
+
+    fn remove_windows(handles: Vec<WindowHandle<T>>, cx: &mut App) {
+        for handle in handles {
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        }
+    }
+
+    fn index_for(
+        &self,
+        entries: &[WarmWindow<T>],
+        size: (i32, i32),
+        topology: &MonitorTopology,
+    ) -> Option<usize> {
+        let mut fallback = None;
+        for (index, entry) in entries.iter().enumerate() {
+            if !self.reusable(entry, topology) {
+                continue;
+            }
+            if entry.key.size == size {
+                return Some(index);
+            }
+            if fallback.is_none() {
+                fallback = Some(index);
+            }
+        }
+        fallback
+    }
+
+    fn reusable(&self, entry: &WarmWindow<T>, topology: &MonitorTopology) -> bool {
+        entry.key.kind == self.kind && entry.key.topology.matches(topology)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewControl {
     Action(ShotAction),
@@ -1538,7 +1695,7 @@ mod tests {
     use super::{
         combine_focus_truth, missing_monitors, preview_control_for_keystroke, preview_controls,
         read_render_image, reveal_blur_guard, thumbnail_size, window_dims, ActiveMonitor,
-        PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
+        MonitorTopology, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1750,5 +1907,30 @@ mod tests {
         let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
         let existing: Vec<_> = monitors.iter().map(key).collect();
         assert!(missing_monitors(&existing, monitors).is_empty());
+    }
+
+    #[test]
+    fn monitor_topology_matches_known_equal_sets_only() {
+        let single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let same_single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let pair = MonitorTopology::from_monitors(&[monitor(0.0, 0.0), monitor(1920.0, 0.0)]);
+        let reversed_pair =
+            MonitorTopology::from_monitors(&[monitor(1920.0, 0.0), monitor(0.0, 0.0)]);
+        let unknown = MonitorTopology::from_monitors(&[]);
+        let cases = [
+            (single.clone(), same_single, true),
+            (pair.clone(), reversed_pair, true),
+            (single.clone(), pair.clone(), false),
+            (single.clone(), unknown.clone(), true),
+            (unknown.clone(), pair, true),
+            (unknown, single, true),
+        ];
+        for (stored, live, expected) in cases {
+            assert_eq!(
+                stored.matches(&live),
+                expected,
+                "stored={stored:?} live={live:?}"
+            );
+        }
     }
 }
