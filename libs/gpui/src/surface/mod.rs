@@ -23,6 +23,7 @@ const VIEWPORT_TOLERANCE: f64 = 1.0;
 pub enum SurfaceKind {
     Toast,
     Panel,
+    OverlayPanel,
 }
 
 pub struct DragGestureState {
@@ -127,6 +128,7 @@ pub struct Surface {
 pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
+    kind: SurfaceKind,
     placement: MonitorPlacement,
     bounds: Bounds<Pixels>,
     constrains_size: bool,
@@ -237,7 +239,7 @@ impl Surface {
     pub fn new(kind: SurfaceKind) -> Self {
         let placement = match kind {
             SurfaceKind::Toast => MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
-            SurfaceKind::Panel => MonitorPlacement::center(),
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => MonitorPlacement::center(),
         };
         Self {
             kind,
@@ -328,7 +330,7 @@ impl Surface {
     ) -> Result<OpenedSurface<V>> {
         let monitor = match self.kind {
             SurfaceKind::Toast => tracker.snapshot_cursor().map(|(monitor, _)| monitor),
-            SurfaceKind::Panel => tracker.snapshot_monitor(),
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => tracker.snapshot_monitor(),
         }
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         self.open_on(&monitor, cx, build)
@@ -343,7 +345,7 @@ impl Surface {
         let bounds = self.resolved_bounds(monitor);
         let title = reserve_surface_title(&self.title);
         let constrains_size = self.constrains_size();
-        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
+        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
         let passive_reveal_gate =
             matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
@@ -484,6 +486,7 @@ impl Surface {
                 PendingReveal {
                     handle,
                     title: title.clone(),
+                    kind: self.kind,
                     anchor: RevealAnchor {
                         placement: self.placement,
                         bounds,
@@ -500,6 +503,7 @@ impl Surface {
         Ok(OpenedSurface {
             handle,
             dismisser,
+            kind: self.kind,
             placement: self.placement,
             bounds,
             constrains_size,
@@ -515,19 +519,19 @@ impl Surface {
     fn window_kind(&self) -> WindowKind {
         match self.kind {
             SurfaceKind::Toast => WindowKind::PopUp,
-            SurfaceKind::Panel => WindowKind::Normal,
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => WindowKind::Normal,
         }
     }
 
     fn takes_focus(&self) -> bool {
         match self.kind {
             SurfaceKind::Toast => false,
-            SurfaceKind::Panel => true,
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => true,
         }
     }
 
     fn constrains_size(&self) -> bool {
-        matches!(self.kind, SurfaceKind::Panel)
+        matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel)
     }
 }
 
@@ -607,6 +611,7 @@ impl RevealAnchor {
 struct PendingReveal<V: Render + 'static> {
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
+    kind: SurfaceKind,
     anchor: RevealAnchor,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -641,10 +646,65 @@ fn restore_window_state_verified(title: &str, reused: bool, reason: &str) -> boo
     shown
 }
 
+fn restore_reveal_state_verified(
+    title: &str,
+    reused: bool,
+    reason: &str,
+    kind: SurfaceKind,
+) -> bool {
+    match kind {
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            restore_window_state_verified(title, reused, reason)
+        }
+    }
+}
+
+fn restore_overlay_state(title: &str, reused: bool, reason: &str) -> bool {
+    let configured = crate::popup_window::configure_overlay_window(title);
+    let shown = {
+        let _reason = crate::popup_window::reason_scope(reason);
+        crate::popup_window::show_window_by_title(title)
+    };
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=state-restored shown={shown} overlay_configured={configured} reused={reused}"
+    );
+    shown
+}
+
+fn show_after_timeout(title: &str, reused: bool, reason: &str, kind: SurfaceKind) -> bool {
+    match kind {
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            let _reason = crate::popup_window::reason_scope(reason);
+            crate::popup_window::show_normal_window_by_title(title)
+        }
+    }
+}
+
+fn reassert_revealed_focus(title: &str, commit_gen: u64, kind: SurfaceKind) {
+    match kind {
+        SurfaceKind::OverlayPanel => crate::popup_window::reassert_focus_until_held(
+            title,
+            &PANEL_FOCUS_GENERATION,
+            commit_gen,
+        ),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            crate::popup_window::reassert_normal_focus_until_held(
+                title,
+                &PANEL_FOCUS_GENERATION,
+                commit_gen,
+            )
+        }
+    }
+}
+
 fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut App) {
     let PendingReveal {
         handle,
         title,
+        kind,
         anchor,
         visible,
         reveal_pending,
@@ -708,10 +768,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         if !readiness.ready() {
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
-                let shown = {
-                    let _reason = crate::popup_window::reason_scope("surface-reveal-timeout");
-                    crate::popup_window::show_normal_window_by_title(&title)
-                };
+                let shown = show_after_timeout(&title, false, "surface-reveal-timeout", kind);
                 visible.set(shown);
                 qol_runtime::probe!(
                     "SURFACE_REVEAL",
@@ -739,7 +796,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             );
             return;
         }
-        let shown = restore_window_state_verified(&title, false, "surface-reveal");
+        let shown = restore_reveal_state_verified(&title, false, "surface-reveal", kind);
         let repaint_requested = shown
             && cx
                 .update(|cx| request_surface_repaint(handle, cx))
@@ -779,11 +836,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             }
         }
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        crate::popup_window::reassert_normal_focus_until_held(
-            &title,
-            &PANEL_FOCUS_GENERATION,
-            focus_commit,
-        );
+        reassert_revealed_focus(&title, focus_commit, kind);
         for _ in 0..3 {
             if reveal_cancelled(&dismiss_state, dismiss_generation) {
                 break;
@@ -1092,6 +1145,21 @@ impl<V> OpenedSurface<V> {
     }
 }
 
+impl<V: Render + 'static> OpenedSurface<V> {
+    pub fn update_view<R>(
+        &self,
+        cx: &mut App,
+        f: impl FnOnce(&mut V, &mut Window, &mut Context<V>) -> R,
+    ) -> Option<R> {
+        self.handle
+            .update(cx, |root, window, cx| {
+                let inner = root.inner.clone();
+                inner.update(cx, |view, cx| f(view, window, cx))
+            })
+            .ok()
+    }
+}
+
 impl<V: Render + Focusable + 'static> OpenedSurface<V> {
     pub(crate) fn is_visible(&self) -> bool {
         self.visible.get()
@@ -1153,6 +1221,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 PendingReveal {
                     handle: self.handle,
                     title,
+                    kind: self.kind,
                     anchor: RevealAnchor {
                         placement: self.placement,
                         bounds,
@@ -1197,6 +1266,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
     let PendingReveal {
         handle,
         title,
+        kind,
         anchor,
         visible,
         reveal_pending,
@@ -1260,8 +1330,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         if !readiness.ready() {
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
-                let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
-                let shown = crate::popup_window::show_normal_window_by_title(&title);
+                let shown = show_after_timeout(&title, true, "surface-reuse-timeout", kind);
                 visible.set(shown);
                 qol_runtime::probe!(
                     "SURFACE_REVEAL",
@@ -1287,7 +1356,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             );
             return;
         }
-        let shown = restore_window_state_verified(&title, true, "surface-reuse-reveal");
+        let shown = restore_reveal_state_verified(&title, true, "surface-reuse-reveal", kind);
         visible.set(shown);
         reveal_pending.set(false);
         if !shown {
@@ -1319,11 +1388,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             readiness.content_rendered
         );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        crate::popup_window::reassert_normal_focus_until_held(
-            &title,
-            &PANEL_FOCUS_GENERATION,
-            focus_commit,
-        );
+        reassert_revealed_focus(&title, focus_commit, kind);
         let _ = cx.update(|cx| trace_ready(title, true, cx));
     })
     .detach();
@@ -1461,6 +1526,16 @@ mod tests {
     #[test]
     fn panel_surfaces_are_normal_focusable_windows() {
         let surface = Surface::new(SurfaceKind::Panel);
+
+        assert_eq!(surface.window_kind(), WindowKind::Normal);
+        assert_eq!(surface.placement, MonitorPlacement::center());
+        assert!(surface.takes_focus());
+        assert!(surface.constrains_size());
+    }
+
+    #[test]
+    fn overlay_panels_are_normal_focusable_windows_centered_on_the_active_monitor() {
+        let surface = Surface::new(SurfaceKind::OverlayPanel);
 
         assert_eq!(surface.window_kind(), WindowKind::Normal);
         assert_eq!(surface.placement, MonitorPlacement::center());
