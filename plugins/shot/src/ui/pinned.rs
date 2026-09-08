@@ -20,7 +20,7 @@ use qol_gpui::window_options::PopupWindowOptions;
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
-const EDGE: f32 = 8.0;
+const EDGE: f32 = qol_gpui::theme::SPACE_INSET;
 const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);

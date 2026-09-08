@@ -17,9 +17,9 @@ use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 pub const WINDOW_TITLE: &str = "removeapp";
 pub const WINDOW_WIDTH: f32 = 460.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
-const SEARCH_H: f32 = 40.0;
-const SEARCH_PAD: f32 = 12.0;
-const FAILBAR_H: f32 = 64.0;
+const SEARCH_H: f32 = qol_gpui::theme::HEIGHT_HINT_BAR;
+const SEARCH_PAD: f32 = qol_gpui::theme::SPACE_CELL;
+const FAILBAR_H: f32 = qol_gpui::theme::HEIGHT_BAND;
 const ROW_H: f32 = 40.0;
 const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
     - SEARCH_PAD
