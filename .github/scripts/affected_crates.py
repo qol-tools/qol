@@ -18,7 +18,6 @@ from pathlib import Path
 GLOBAL_PREFIXES = (".github/workflows/", ".github/scripts/", ".cargo/")
 GLOBAL_FILES = {
     "Cargo.toml",
-    "Cargo.lock",
     "rust-toolchain.toml",
     "rust-toolchain",
     "clippy.toml",
@@ -165,6 +164,39 @@ def with_untracked(files, head):
     return sorted(set(files) | set(untracked.stdout.splitlines()))
 
 
+def lock_entries(text):
+    return {
+        (entry.get("name"), entry.get("version")): entry
+        for entry in tomllib.loads(text).get("package", [])
+    }
+
+
+def lock_changed_packages(base, head):
+    base_text = run(["git", "show", f"{base}:Cargo.lock"])
+    if base_text.returncode != 0:
+        return None
+    if head == WORKTREE_HEAD:
+        try:
+            head_body = Path("Cargo.lock").read_text()
+        except OSError:
+            return None
+    else:
+        head_text = run(["git", "show", f"{head}:Cargo.lock"])
+        if head_text.returncode != 0:
+            return None
+        head_body = head_text.stdout
+    try:
+        before = lock_entries(base_text.stdout)
+        after = lock_entries(head_body)
+    except tomllib.TOMLDecodeError:
+        return None
+    return {
+        key[0]
+        for key in set(before) | set(after)
+        if before.get(key) != after.get(key)
+    }
+
+
 def workspace_graph():
     meta = run(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"]
@@ -242,7 +274,11 @@ def main():
     if not files:
         return skip_all("empty diff")
 
+    lock_changed = False
     for path in files:
+        if path == "Cargo.lock":
+            lock_changed = True
+            continue
         if path in GLOBAL_FILES or any(path.startswith(p) for p in GLOBAL_PREFIXES):
             return full_workspace(f"global file changed: {path}")
 
@@ -250,7 +286,20 @@ def main():
     if not pkgs:
         return full_workspace("cargo metadata unavailable")
 
-    seeds = {owner for owner in (owning_package(f, pkgs) for f in files) if owner}
+    lock_seeds = set()
+    if lock_changed:
+        lock_seeds = lock_changed_packages(base, head)
+        if lock_seeds is None:
+            return full_workspace("Cargo.lock diff unreadable")
+        foreign = lock_seeds - set(pkgs)
+        if foreign:
+            return full_workspace(
+                f"Cargo.lock changed a non-workspace package: {sorted(foreign)[0]}"
+            )
+
+    seeds = {
+        owner for owner in (owning_package(f, pkgs) for f in files) if owner
+    } | lock_seeds
     if not seeds:
         return skip_all("no crate-owning changes (docs/non-build files only)")
 

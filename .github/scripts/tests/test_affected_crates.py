@@ -145,6 +145,83 @@ class LocalPlannerContract(unittest.TestCase):
 
                 full_workspace.assert_called_once_with(f"global file changed: {path}")
 
+    @patch.object(ac, "emit")
+    @patch.object(ac, "lock_changed_packages")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_member_only_lock_change_seeds_those_members(
+        self, changed_files, graph, lock_changed_packages, emit
+    ):
+        changed_files.return_value = ["Cargo.lock"]
+        graph.return_value = {
+            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
+        }
+        lock_changed_packages.return_value = {"alt-tab"}
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+
+        self.assertIn("-p alt-tab", emit.call_args.args[0]["ubuntu_build"])
+        self.assertNotIn("unrelated", emit.call_args.args[0]["ubuntu_build"])
+        self.assertIs(emit.call_args.args[0]["full"], False)
+
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "lock_changed_packages")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_third_party_lock_change_uses_full_workspace(
+        self, changed_files, graph, lock_changed_packages, full_workspace
+    ):
+        changed_files.return_value = ["Cargo.lock"]
+        graph.return_value = {
+            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
+        }
+        lock_changed_packages.return_value = {"serde"}
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+
+        full_workspace.assert_called_once()
+        self.assertIn("serde", full_workspace.call_args.args[0])
+
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "lock_changed_packages")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_unreadable_lock_uses_full_workspace(
+        self, changed_files, graph, lock_changed_packages, full_workspace
+    ):
+        changed_files.return_value = ["Cargo.lock"]
+        graph.return_value = {
+            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+        }
+        lock_changed_packages.return_value = None
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+
+        full_workspace.assert_called_once_with("Cargo.lock diff unreadable")
+
+    @patch.object(ac, "run")
+    def test_lock_change_set_is_keyed_by_name_and_version(self, run):
+        before = (
+            '[[package]]\nname = "alt-tab"\nversion = "0.1.0"\n'
+            'dependencies = ["qol-runtime"]\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
+            '[[package]]\nname = "unrelated"\nversion = "0.2.0"\n'
+        )
+        after = (
+            '[[package]]\nname = "alt-tab"\nversion = "0.1.0"\n'
+            'dependencies = ["qol-runtime", "tracing"]\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
+            '[[package]]\nname = "unrelated"\nversion = "0.2.0"\n'
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, before, ""),
+            subprocess.CompletedProcess([], 0, after, ""),
+        ]
+
+        self.assertEqual(ac.lock_changed_packages("base", "head"), {"alt-tab"})
+
     @patch.object(ac, "run")
     def test_workspace_metadata_is_locked(self, run):
         run.return_value.returncode = 1
