@@ -425,6 +425,7 @@ impl RemoveAppView {
 
     fn remove_bar(&self) -> Option<AnyElement> {
         let kit = qol_gpui::kit::kit();
+        let palette = current_palette();
         let app = self.matches.get(self.list.selected)?;
         if core::is_protected(app) {
             return None;
@@ -436,7 +437,7 @@ impl RemoveAppView {
             None => qol_gpui::Busy::new(
                 "removeapp-size",
                 "measuring size",
-                rgb(kit.palette.text_secondary),
+                rgb(palette.text_secondary),
             )
             .into_any_element(),
         };
@@ -460,9 +461,9 @@ impl RemoveAppView {
                         .top_0()
                         .bottom_0()
                         .w(px(qol_gpui::theme::SPACE_MARK))
-                        .bg(rgb(kit.palette.danger)),
+                        .bg(rgb(palette.danger)),
                 )
-                .child(kit.status_dot(kit.palette.danger, kit.washes.halo_invalid.packed()))
+                .child(kit.status_dot(palette.danger, kit.washes.halo_invalid.packed()))
                 .child(
                     div()
                         .flex_1()
@@ -475,14 +476,14 @@ impl RemoveAppView {
                                 .truncate()
                                 .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(kit.palette.text_primary))
+                                .text_color(rgb(palette.text_primary))
                                 .child(format!("Remove {}", app.name)),
                         )
                         .child(
                             div()
                                 .truncate()
                                 .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                                .text_color(rgb(kit.palette.text_secondary))
+                                .text_color(rgb(palette.text_secondary))
                                 .child(subtitle),
                         ),
                 )
@@ -496,7 +497,7 @@ impl RemoveAppView {
                         .border_color(rgba(kit.washes.edge_invalid.packed()))
                         .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                         .text_size(px(qol_gpui::theme::TEXT_KEYCAP))
-                        .text_color(rgb(kit.palette.danger))
+                        .text_color(rgb(palette.danger))
                         .child(chord("platform+backspace")),
                 )
                 .into_any_element(),
@@ -505,6 +506,7 @@ impl RemoveAppView {
 
     fn search_box(&self) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
+        let palette = current_palette();
         let empty = self.query.is_empty();
         let shown = if empty {
             "Search installed apps".to_string()
@@ -536,9 +538,9 @@ impl RemoveAppView {
                             .truncate()
                             .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .text_color(rgb(if empty {
-                                kit.palette.text_muted
+                                palette.text_muted
                             } else {
-                                kit.palette.text_primary
+                                palette.text_primary
                             }))
                             .child(shown),
                     )
@@ -848,6 +850,7 @@ fn app_row(
     protected: bool,
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
+    let palette = current_palette();
     let row = div()
         .flex_none()
         .h(px(ROW_H))
@@ -867,9 +870,9 @@ fn app_row(
                 .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(if protected {
-                    rgb(kit.palette.text_muted)
+                    rgb(palette.text_muted)
                 } else {
-                    rgb(kit.palette.text_primary)
+                    rgb(palette.text_primary)
                 })
                 .child(app.name.clone()),
         )
@@ -878,7 +881,7 @@ fn app_row(
                 div()
                     .flex_none()
                     .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .text_color(rgb(kit.palette.danger))
+                    .text_color(rgb(palette.danger))
                     .child("protected"),
             )
         })
@@ -888,7 +891,7 @@ fn app_row(
                     .flex_none()
                     .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                     .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                    .text_color(rgb(kit.palette.text_secondary))
+                    .text_color(rgb(palette.text_secondary))
                     .child(qol_gpui::format_bytes(size)),
             )
         });
@@ -917,6 +920,7 @@ fn section_header(title: &str) -> impl IntoElement {
 
 fn footer(hints: &[(&str, &str)], counter: Option<String>) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
+    let palette = current_palette();
     let mut bar = kit.hint_bar();
     for (key, label) in hints {
         bar = bar.child(kit.hint(key.to_string(), label.to_string()));
@@ -928,7 +932,7 @@ fn footer(hints: &[(&str, &str)], counter: Option<String>) -> impl IntoElement {
                     .flex_none()
                     .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                     .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .text_color(rgb(kit.palette.text_muted))
+                    .text_color(rgb(palette.text_muted))
                     .child(counter),
             )
         })

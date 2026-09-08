@@ -29,18 +29,7 @@ impl GpuiRuntimeConfig {
 }
 
 pub fn normalize_color(value: Option<&str>) -> Option<String> {
-    let raw = value?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let body = raw.strip_prefix('#').unwrap_or(raw);
-    if body.len() != 6 {
-        return None;
-    }
-    if !body.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(format!("#{}", body.to_ascii_lowercase()))
+    qol_color::normalize_hex(value?.trim())
 }
 
 #[cfg(test)]
