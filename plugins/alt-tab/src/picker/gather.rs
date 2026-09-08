@@ -645,7 +645,7 @@ async fn run_capture(
     job: Queued<PreviewCaptureRequest>,
     scheduler: &PreviewCaptureScheduler,
 ) -> CaptureResult {
-    use crate::rendering::preview_image::{bgra_to_render_image, shot_request_dims};
+    use crate::rendering::preview_image::shot_request_dims;
 
     let generation = job.generation;
     let request = job.value;
@@ -711,7 +711,9 @@ async fn run_capture(
             CaptureResult::with_capture(outcome, capture_duration)
         }
         BlockingCaptureResult::Preview(Some(rgba)) => {
-            let Some(image) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
+            let Some(image) =
+                qol_gpui::image::render_image(rgba.data, rgba.width as u32, rgba.height as u32)
+            else {
                 return CaptureResult::with_capture(
                     CaptureOutcome::Empty("decode_failed"),
                     capture_duration,

@@ -28,10 +28,6 @@ impl GpuiRuntimeConfig {
     }
 }
 
-pub fn normalize_color(value: Option<&str>) -> Option<String> {
-    qol_color::normalize_hex(value?.trim())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,31 +54,5 @@ mod tests {
 
         let loaded = GpuiRuntimeConfig::load().unwrap();
         assert_eq!(loaded, GpuiRuntimeConfig::default());
-    }
-
-    #[test]
-    fn normalize_color_table() {
-        let cases: &[(Option<&str>, Option<&str>)] = &[
-            (None, None),
-            (Some(""), None),
-            (Some("   "), None),
-            (Some("#ff8800"), Some("#ff8800")),
-            (Some("ff8800"), Some("#ff8800")),
-            (Some("  #FF8800  "), Some("#ff8800")),
-            (Some("#FFAACC"), Some("#ffaacc")),
-            (Some("#fff"), None),
-            (Some("#ff88000"), None),
-            (Some("#zzzzzz"), None),
-            (Some("not-a-color"), None),
-            (Some("#12 3456"), None),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(
-                normalize_color(*input).as_deref(),
-                *expected,
-                "input: {:?}",
-                input
-            );
-        }
     }
 }

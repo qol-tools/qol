@@ -135,7 +135,9 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     .await;
     if let Err(error) = opened {
         eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
-        if let Err(error) = crate::qol::open() {
+        if let Err(error) =
+            qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::config::plugin_id())
+        {
             eprintln!("[launcher] failed to open settings page: {error}");
         }
     }

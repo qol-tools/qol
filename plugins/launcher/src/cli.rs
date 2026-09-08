@@ -40,7 +40,9 @@ impl Operations for ProductionOperations {
     }
 
     fn open_settings(&self) -> CommandResult {
-        match crate::qol::open() {
+        match qol_apps::desktop_integration::open_plugin_settings_via_tray(
+            crate::config::plugin_id(),
+        ) {
             Ok(()) => CommandResult::success(""),
             Err(error) => CommandResult::new(
                 "",

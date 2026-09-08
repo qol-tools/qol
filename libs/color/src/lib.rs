@@ -10,7 +10,8 @@ pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
 }
 
 pub fn normalize_hex(hex: &str) -> Option<String> {
-    let body = hex.strip_prefix('#').unwrap_or(hex);
+    let body = hex.trim();
+    let body = body.strip_prefix('#').unwrap_or(body);
     if body.len() != 6 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -99,6 +100,8 @@ mod tests {
             ("gggggg", None),
             ("#12 3456", None),
             ("#aäxyz", None),
+            ("  #FF8800  ", Some("#ff8800")),
+            ("   ", None),
         ];
         for (input, expected) in cases {
             assert_eq!(normalize_hex(input).as_deref(), expected, "input: {input}");

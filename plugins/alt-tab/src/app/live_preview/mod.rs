@@ -10,7 +10,7 @@ use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
 use crate::picker::PreviewMap;
-use crate::rendering::preview_image::{bgra_to_render_image, fast_pixel_hash, shot_request_dims};
+use crate::rendering::preview_image::{fast_pixel_hash, shot_request_dims};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -311,7 +311,9 @@ async fn preview_loop(
             continue;
         }
         prev_hash = Some((selected.1, hash));
-        let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
+        let Some(img) =
+            qol_gpui::image::render_image(rgba.data, rgba.width as u32, rgba.height as u32)
+        else {
             continue;
         };
         #[cfg(debug_assertions)]
