@@ -92,9 +92,9 @@ pub(super) fn input(
             qol_runtime::probe::token(key_char.unwrap_or("none")),
             effect_label(effect),
             qol_runtime::probe::token(&view.window_title),
-            qol_runtime::probe::quoted(&view.state.query, 120),
-            view.state.query_len(),
-            view.state.cursor,
+            qol_runtime::probe::quoted(view.state.query.text(), 120),
+            view.state.query.char_len(),
+            view.state.query.cursor(),
             selection_label(view),
             selected_before,
             view.state.scroll_list.selected,
@@ -154,8 +154,8 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
             "LAUNCHER_DISMISS",
             "from={from} title={} q=\"{}\" q_len={} results={} selected={} selected_name=\"{}\"",
             qol_runtime::probe::token(&view.window_title),
-            qol_runtime::probe::quoted(&view.state.query, 120),
-            view.state.query_len(),
+            qol_runtime::probe::quoted(view.state.query.text(), 120),
+            view.state.query.char_len(),
             view.store.result_count(),
             view.state.scroll_list.selected,
             qol_runtime::probe::quoted(selected_name, 120),
@@ -183,7 +183,7 @@ pub(super) fn flow(view: &LauncherView, event: &'static str) {
             "event={} plugin={} q=\"{}\" rows={} gen={} pending={}",
             event,
             qol_runtime::probe::token(plugin),
-            qol_runtime::probe::quoted(&view.state.query, 120),
+            qol_runtime::probe::quoted(view.state.query.text(), 120),
             rows,
             generation,
             pending,
@@ -214,7 +214,7 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
             "LAUNCHER_RESIZE",
             "title={} q=\"{}\" rows={} results={} from_h={:.1} to_h={:.1} win=({},{},{}x{})",
             qol_runtime::probe::token(&view.window_title),
-            qol_runtime::probe::quoted(&view.state.query, 120),
+            qol_runtime::probe::quoted(view.state.query.text(), 120),
             sample.visible_rows,
             sample.result_count,
             from_h,
@@ -229,9 +229,9 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
     let signature = RenderSignature {
         showing: view.is_showing,
         title: view.window_title.clone(),
-        query: view.state.query.clone(),
-        query_len: view.state.query_len(),
-        cursor: view.state.cursor,
+        query: view.state.query.text().to_owned(),
+        query_len: view.state.query.char_len(),
+        cursor: view.state.query.cursor(),
         mode: view.state.mode.label(),
         fuzziness: view.state.fuzziness.label(),
         result_count: sample.result_count,
@@ -312,7 +312,7 @@ fn effect_label(effect: InputEffect) -> &'static str {
 
 #[cfg(debug_assertions)]
 fn selection_label(view: &LauncherView) -> String {
-    let Some((start, end)) = view.state.selected_range() else {
+    let Some((start, end)) = view.state.query.selected_range() else {
         return "none".to_string();
     };
     format!("{start}-{end}")

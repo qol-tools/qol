@@ -164,8 +164,11 @@ fn show_ghost(
             view.sync_entries_from_shared();
             view.reset_for_show();
             view.set_window_origin(placement.bounds.origin);
-            view.store
-                .ensure_filtered(&view.state.query, view.state.mode, view.state.fuzziness);
+            view.store.ensure_filtered(
+                view.state.query.text(),
+                view.state.mode,
+                view.state.fuzziness,
+            );
             qol_gpui::ghost::sync_window_layout(
                 &title,
                 window,

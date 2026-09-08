@@ -122,8 +122,11 @@ impl Render for LauncherView {
         let t0 = std::time::Instant::now();
         let flow_active = self.state.flow.is_some();
         if !flow_active {
-            self.store
-                .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+            self.store.ensure_filtered(
+                self.state.query.text(),
+                self.state.mode,
+                self.state.fuzziness,
+            );
         }
         #[cfg(debug_assertions)]
         let filter_us = t0.elapsed().as_micros();
@@ -224,7 +227,7 @@ impl Render for LauncherView {
             if n.is_multiple_of(10) {
                 eprintln!(
                     "[render #{n}] total={total_us}us filter={filter_us}us rows={rows_us}us gap={gap_us}us visible={visible} results={result_count} q={:?}",
-                    self.state.query
+                    self.state.query.text()
                 );
             }
         }
@@ -271,8 +274,6 @@ impl Render for LauncherView {
             .child(view::search_bar(
                 &self.state.query,
                 self.state.launch_error.as_deref(),
-                self.state.cursor,
-                self.state.selected_range(),
                 self.state.scroll_list.selected,
                 result_count,
                 flow_pending,

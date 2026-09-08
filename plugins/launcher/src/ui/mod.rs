@@ -124,7 +124,7 @@ impl LauncherView {
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_for_show was={} q=\"{}\" title={}",
                 self.state.scroll_list.selected,
-                self.state.query,
+                self.state.query.text(),
                 self.window_title,
             );
         }
