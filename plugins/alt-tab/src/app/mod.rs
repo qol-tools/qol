@@ -14,7 +14,9 @@ use crate::preview_plane::{PreviewPlaneItem, PreviewPlanePayload, PreviewPlaneRe
 use crate::rendering::RenderingFlow;
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 pub(crate) static ACTIVE_PICKER_MONITOR: std::sync::Mutex<Option<qol_gpui::window::MonitorKey>> =
