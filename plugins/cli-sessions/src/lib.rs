@@ -18,6 +18,6 @@ pub use storage::{paths, persist};
 pub use ui::{collapse, nav, notify, placement, selection};
 
 pub fn show_settings() -> anyhow::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(crate::storage::paths::PLUGIN_ID)
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::storage::paths::PLUGIN_ID)
         .context("failed to open CLI Sessions settings URL")
 }

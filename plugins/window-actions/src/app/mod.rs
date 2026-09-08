@@ -164,7 +164,7 @@ pub(crate) fn run() -> Result<(), String> {
 }
 
 fn open_settings_page() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(crate::cli::PLUGIN_ID)
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::cli::PLUGIN_ID)
 }
 
 fn receive_command(rx: &Receiver<Command>, glide_is_active: bool) -> Result<Option<Command>, ()> {

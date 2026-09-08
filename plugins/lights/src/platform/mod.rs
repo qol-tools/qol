@@ -60,6 +60,6 @@ pub(crate) struct SerialAccess {
 }
 
 pub fn open_settings() -> Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
         .context("failed to open settings URL")
 }

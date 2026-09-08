@@ -26,7 +26,7 @@ pub fn open_with_default_app_checked(target: impl AsRef<OsStr>) -> io::Result<()
 
 /// Asks the running tray to focus this plugin in the unified settings window,
 /// falling back to the plugin's web settings page when no daemon answers.
-pub fn open_plugin_settings(plugin_id: &str) -> io::Result<()> {
+pub fn open_plugin_settings_via_tray(plugin_id: &str) -> io::Result<()> {
     let path = qol_conventions::api_routes::plugin_settings(plugin_id);
     if let Ok((status, _)) = qol_plugin_api::host_exec::post_to_daemon(&path, "") {
         if (200..300).contains(&status) {

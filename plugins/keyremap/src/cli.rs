@@ -89,7 +89,7 @@ where
 }
 
 fn launch_settings_page() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
 }
 
 fn settings_command(settings: impl Fn() -> std::io::Result<()> + Send + Sync + 'static) -> Command {

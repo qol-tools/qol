@@ -12,7 +12,7 @@ pub(crate) fn is_executable(path: &std::path::Path) -> bool {
 }
 
 pub(crate) fn open_settings() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(env!("QOL_PLUGIN_ID"))
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(env!("QOL_PLUGIN_ID"))
 }
 
 pub fn run() -> u8 {

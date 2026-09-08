@@ -870,9 +870,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 true
             }
             Command::Settings => {
-                if let Err(error) =
-                    qol_apps::desktop_integration::open_plugin_settings(crate::hotkeys::PLUGIN_ID)
-                {
+                if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
+                    crate::hotkeys::PLUGIN_ID,
+                ) {
                     eprintln!("[plugin-monitor] failed to open settings page: {error}");
                 }
                 true

@@ -56,9 +56,9 @@ pub(crate) fn run() {
                 break;
             }
             daemon::Command::Settings => {
-                if let Err(error) =
-                    qol_apps::desktop_integration::open_plugin_settings(crate::cli::PLUGIN_ID)
-                {
+                if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
+                    crate::cli::PLUGIN_ID,
+                ) {
                     eprintln!("[keyremap] failed to open settings page: {error}");
                 }
             }

@@ -121,7 +121,7 @@ fn settings_command() -> Command {
         .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
         .run_result(move |_| {
             Ok(result_for(
-                qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+                qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                     .map_err(|error| format!("failed to open settings URL: {error}")),
             ))
         })

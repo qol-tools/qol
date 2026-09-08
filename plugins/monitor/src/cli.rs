@@ -199,7 +199,7 @@ fn settings_command() -> Command {
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
         .run_plain_text(|_| {
-            qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+            qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                 .context("failed to open settings URL")?;
             Ok(PlainTextOutput::empty())
         })
