@@ -27,6 +27,16 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 | B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `139773965` |
 | B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated | `fea1353c9` |
 | B17 bluetooth dead `qol-gpui` dep | both target legs removed; `gpui = true` kept (host-rendered settings) | `139773965` |
+| A3 shot reveal copies | public `surface::reveal` (`schedule_fresh_frame`, `await_reveal_readiness`, `RevealProof`); `Surface` refactored onto it; preview and pinned migrated; selector exempt (pre-created reused full-screen window never emits a per-reveal bounds epoch) | `86b4c6224` |
+| A6 blur guard | `ghost::BlurGuard` owns the arm/expiry state machine; per-surface durations stay local | `8f1fd46ae` |
+| A7 atlas registry | `RenderImage` atlas registry promoted from alt-tab to `qol_gpui::image_registry`; alt-tab drops `image`/`smallvec` | `7c9485589` |
+| A8 Linux ghost title | alt-tab Linux picker title calls `ghost::ghost_window_title` | `0a1394378` |
+| B3 native_tools form nav | `settings_panel::form_nav` exported; hosted panel and native_tools share it | `aa9059fea` |
+| B6 removeapp palette | removeapp reads only `RemoveAppPalette` | `43478cd38` |
+| B10 alt-tab hint fitting | hint bar built through `fit_hints` | `0a1394378` |
+| B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `43478cd38` |
+| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed | `7c9485589` |
+| B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `0a1394378` |
 
 Guest verification of A2 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
 `SURFACE_REVEAL phase=opened hidden=true` -> `phase=frame-ready expected=observed=rendered=360x400` ->
@@ -36,6 +46,14 @@ _NET_WM_STATE_SKIP_PAGER` with `_MOTIF_WM_HINTS` decorations off and `WM_NORMAL_
 min=max; Escape gives `CLI_SESSIONS_DISMISS hidden=true` with the window unmapped and focus returned;
 reopen repeats the full reveal on a new window; collapse/expand give 360x52 and 360x400 with the
 overlay state preserved.
+
+Guest verification of A3 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle): preview
+`SHOT_PREVIEW_REVEAL state=proof ready=true ... expected=396x329 observed=396x329 rendered=396x329`
+-> `state=presented preview_ms=108`; pinned `SHOT_PIN_REVEAL state=proof ready=true ... 360x240` ->
+`action_ms=98 state=presented` -> `SHOT_PIN_TRANSITION focused=true`; the refactored `Surface` on
+cli-sessions and removeapp gives `phase=frame-ready ... content_rendered=true` -> `phase=revealed`
+-> `phase=ready focus=true` (removeapp `first_paint_latency_ms=1`); the exempt selector still gives
+`SHOT_SELECT_REVEAL state=presented`, `SHOT_SELECT_VIEWPORT aligned=true`, and a 600x400 capture.
 
 Line counts in scope: `libs/gpui` 33,259 (70 files); GPUI-touching consumer code 7,832 (launcher),
 8,755 (alt-tab), 10,943 (shot), 6,999 (qol-tray), 2,197 (cli-sessions), 1,141 (removeapp).
