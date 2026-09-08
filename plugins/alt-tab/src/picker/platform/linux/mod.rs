@@ -5,10 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
 
 pub fn picker_window_title(target: qol_gpui::window::MonitorKey) -> String {
-    format!(
-        "{}@{},{},{}x{}",
-        PICKER_WINDOW_TITLE, target.x, target.y, target.width, target.height
-    )
+    qol_gpui::ghost::ghost_window_title(PICKER_WINDOW_TITLE, target)
 }
 
 pub fn picker_window_kind() -> gpui::WindowKind {

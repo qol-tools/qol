@@ -7,6 +7,7 @@ use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::float_shadow;
 use qol_gpui::theme::{
     runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_CAPTION, TEXT_NANO,
@@ -194,7 +195,7 @@ impl Render for AltTabApp {
                 ))
             })
             .child(grid)
-            .when(snap.show_hotkey_hints, |s| s.child(hint_bar()));
+            .when(snap.show_hotkey_hints, |s| s.child(hint_bar(panel_w)));
 
         let root = div()
             .id("alt-tab-backdrop")
@@ -273,14 +274,24 @@ fn probe_rendered_front(
     }
 }
 
-fn hint_bar() -> Div {
+fn hint_bar(available_width: f32) -> Div {
     let kit = qol_gpui::kit::kit();
-    kit.hint_bar()
-        .justify_center()
-        .gap(px(26.0))
-        .child(kit.hint("\u{2325}\u{21E5}", "next"))
-        .child(kit.hint("\u{2325}\u{21E7}\u{21E5}", "previous"))
-        .child(kit.hint("W", "close window"))
+    let items = [
+        BarItem::Hint(HintDescriptor::new("\u{2325}\u{21E5}", "next", 3)),
+        BarItem::Hint(HintDescriptor::new(
+            "\u{2325}\u{21E7}\u{21E5}",
+            "previous",
+            2,
+        )),
+        BarItem::Hint(HintDescriptor::new("W", "close window", 1)),
+    ];
+    let mut bar = kit.hint_bar().justify_center().gap(px(26.0));
+    for item in fit_hints(available_width, &items) {
+        if let BarItem::Hint(hint) = item {
+            bar = bar.child(kit.hint(hint.key, hint.label));
+        }
+    }
+    bar
 }
 
 fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
