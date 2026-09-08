@@ -370,9 +370,7 @@ fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo], ap
     let Ok(mut cache) = preview_cache.lock() else {
         return;
     };
-    crate::rendering::image_registry::retain_or_release(&mut *cache, app, None, |id| {
-        active.contains(id)
-    });
+    qol_gpui::image_registry::retain_or_release(&mut *cache, app, None, |id| active.contains(id));
 }
 
 fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut App) {
@@ -380,7 +378,7 @@ fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut A
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    crate::rendering::image_registry::retain_or_release(&mut *cache, app, None, |name| {
+    qol_gpui::image_registry::retain_or_release(&mut *cache, app, None, |name| {
         active.contains(name)
     });
 }
@@ -428,7 +426,7 @@ pub(super) fn commit_icons_to_shared_cache(
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    crate::rendering::image_registry::extend_with(&mut *cache, rendered, app, None);
+    qol_gpui::image_registry::extend_with(&mut *cache, rendered, app, None);
 }
 
 fn has_windows(windows: &[WindowInfo]) -> bool {

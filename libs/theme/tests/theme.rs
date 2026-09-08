@@ -1713,16 +1713,9 @@ preset has to carry it. A preset below the floor has no visible focus indicator.
     );
 }
 
-const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 17] = [
+const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 14] = [
     ("libs/gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
     ("libs/gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
-    ("libs/gpui/src/kit.rs", "ROW_HEIGHT", HEIGHT_SETTING_ROW),
-    (
-        "libs/gpui/src/kit.rs",
-        "ROW_DESCRIBED_HEIGHT",
-        HEIGHT_SETTING_ROW,
-    ),
-    ("libs/gpui/src/kit.rs", "ROW_TIGHT_HEIGHT", 32.0),
     ("libs/gpui/src/kit.rs", "GUTTER", SPACE_GUTTER),
     ("libs/gpui/src/dropdown.rs", "ROW_H", HEIGHT_INLINE),
     (

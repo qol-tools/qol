@@ -587,7 +587,7 @@ fn commit_icons_foreground(
         // None. View update enters handle.update where window IS leased and
         // forwards Some(window) into the registry release path.
         if let Ok(mut icache) = cache.lock() {
-            crate::rendering::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
+            qol_gpui::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_icons(rendered, window, cx);
@@ -858,12 +858,7 @@ fn commit_preview(
                 return false;
             }
             if let Ok(mut cache) = cache.lock() {
-                crate::rendering::image_registry::extend_with(
-                    &mut *cache,
-                    shared_previews,
-                    cx,
-                    None,
-                );
+                qol_gpui::image_registry::extend_with(&mut *cache, shared_previews, cx, None);
                 #[cfg(debug_assertions)]
                 crate::rendering::preview_trace::record_shared_fill([wid]);
             }

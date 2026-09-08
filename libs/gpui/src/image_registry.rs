@@ -1,10 +1,10 @@
 //! Single-owner GPU atlas lifecycle for `Arc<RenderImage>`.
 //!
-//! See ADR `docs/adr/ALTTAB-2-...md`. `MetalAtlas::remove` double-decrements its
-//! texture refcount when called twice for the same key, so every cache that
-//! holds an `Arc<RenderImage>` must route insertion/removal through this
-//! registry. The registry guarantees `App::drop_image` runs exactly once per
-//! `ImageId` when its last owner releases.
+//! `MetalAtlas::remove` double-decrements its texture refcount when called
+//! twice for the same key, so every cache that holds an `Arc<RenderImage>`
+//! must route insertion/removal through this registry. The registry
+//! guarantees `App::drop_image` runs exactly once per `ImageId` when its last
+//! owner releases.
 
 use gpui::{App, RenderImage, Window};
 use std::collections::HashMap;

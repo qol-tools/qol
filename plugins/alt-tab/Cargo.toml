@@ -8,11 +8,9 @@ license = "PolyForm-Noncommercial-1.0.0"
 [dependencies]
 futures = "0.3"
 gpui.workspace = true
-image = { version = "0.25", default-features = false }
 qol-apps.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-smallvec = "1.13"
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-plugin-daemon.workspace = true

@@ -402,12 +402,7 @@ fn push_updates(
     cx.update(|app_cx| {
         let mut cache_write = false;
         if let Ok(mut cache) = preview_cache.lock() {
-            crate::rendering::image_registry::extend_with(
-                &mut *cache,
-                shared_updates,
-                app_cx,
-                None,
-            );
+            qol_gpui::image_registry::extend_with(&mut *cache, shared_updates, app_cx, None);
             cache_write = true;
         }
         // App-level: no Window leased here, so insert_preview's release path
