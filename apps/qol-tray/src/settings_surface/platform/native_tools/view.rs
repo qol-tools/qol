@@ -14,7 +14,8 @@ use qol_gpui::settings_panel::components::{
     SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
+    adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomPanelCallback,
+    CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
     SettingsDestination,
 };
 use qol_gpui::surface::SurfaceDismisser;
@@ -611,6 +612,15 @@ impl NativeToolsView {
         }
     }
 
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let depth = usize::from(!matches!(self.mode, Mode::List));
+        match escape_step(depth, false, self.on_back.is_some()) {
+            EscapeStep::CloseFilter => {}
+            EscapeStep::PopCard => self.close_editor(),
+            EscapeStep::AscendRail | EscapeStep::Dismiss => self.go_back(window, cx),
+        }
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         if self.capture_local_key(event, cx) {
@@ -630,7 +640,7 @@ impl NativeToolsView {
         if list_mode {
             self.on_list_key(event, window, cx);
         } else {
-            self.on_editor_key(event, cx);
+            self.on_editor_key(event, window, cx);
         }
     }
 
@@ -654,7 +664,7 @@ impl NativeToolsView {
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.modified();
         match key {
-            "escape" | "esc" => self.go_back(window, cx),
+            "escape" | "esc" => self.escape(window, cx),
             "up" => self.move_list(-1),
             "down" => self.move_list(1),
             "enter" | "return" => self.activate_selected(),
@@ -666,14 +676,14 @@ impl NativeToolsView {
         cx.notify();
     }
 
-    fn on_editor_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn on_editor_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if modifier_is_secondary(&event.keystroke.modifiers) && matches!(key, "enter" | "return") {
             self.save_current(cx);
             return;
         }
         if matches!(key, "escape" | "esc") {
-            self.close_editor();
+            self.escape(window, cx);
             cx.notify();
             return;
         }
@@ -1559,25 +1569,21 @@ impl Render for NativeToolsView {
 }
 
 fn navigate_form(selected: &mut usize, count: usize, event: &KeyDownEvent) -> bool {
-    match event.keystroke.key.as_str() {
-        "up" => {
-            *selected = selected.saturating_sub(1);
-            true
-        }
-        "down" => {
-            *selected = (*selected + 1).min(count.saturating_sub(1));
-            true
-        }
-        "tab" => {
-            if event.keystroke.modifiers.shift {
-                *selected = selected.checked_sub(1).unwrap_or(count.saturating_sub(1));
+    let visible = (0..count).collect::<Vec<_>>();
+    match intent(event.keystroke.key.as_str(), None, false) {
+        Some(Intent::Up) => *selected = adjacent_visible_row(&visible, *selected, -1),
+        Some(Intent::Down) => *selected = adjacent_visible_row(&visible, *selected, 1),
+        Some(Intent::Tab) => {
+            let direction = if event.keystroke.modifiers.shift {
+                -1
             } else {
-                *selected = (*selected + 1) % count.max(1);
-            }
-            true
+                1
+            };
+            *selected = wrapping_visible_row(&visible, *selected, direction);
         }
-        _ => false,
+        _ => return false,
     }
+    true
 }
 
 fn apply_shortcut_field(

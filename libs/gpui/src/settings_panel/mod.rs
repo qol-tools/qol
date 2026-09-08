@@ -1,3 +1,4 @@
+mod form_nav;
 mod navigation;
 mod object_array_row;
 mod persistence;
@@ -7,6 +8,9 @@ mod view;
 
 pub mod components;
 pub use components::{settings_action_spinner, settings_busy_message, settings_query_spinner};
+pub use form_nav::{
+    adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
+};
 pub use navigation::{CustomPanelInvalidator, CustomSettingsBreadcrumbs, SettingsDestination};
 
 use std::rc::Rc;
