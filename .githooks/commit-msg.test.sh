@@ -76,7 +76,7 @@ test_derive_today() {
     libs/color libs/plugin-api apps/qol-tray tools/qol-cli
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
-  exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins qol-cli qol-color qol-plugin-api qol-tray settings template tools tray workspace "
+  exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins qol-cli qol-tray settings template tools tray workspace "
   eq "derive(today's layout)" "$exp" "$got"
   rm -rf "$root"
 }
