@@ -41,6 +41,31 @@ pub enum WindowControlIcon {
     Close,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionCircleSize {
+    Full,
+    Control,
+    Inline,
+}
+
+impl ActionCircleSize {
+    pub fn px(self) -> f32 {
+        match self {
+            Self::Full => qol_theme::ACTION_CIRCLE_SIZE,
+            Self::Control => qol_theme::HEIGHT_CONTROL,
+            Self::Inline => qol_theme::HEIGHT_INLINE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionCircleState {
+    Resting,
+    Primary,
+    Armed,
+    Disabled,
+}
+
 #[derive(Clone, Copy)]
 pub struct Kit {
     pub palette: SystemPalette,
@@ -670,33 +695,80 @@ impl Kit {
         }
     }
 
-    pub fn segmented(&self, options: &[SharedString], selected: usize) -> Div {
-        let mut group = div()
+    pub fn action_circle(&self, size: ActionCircleSize, state: ActionCircleState) -> Div {
+        let circle = div()
+            .flex_none()
+            .w(px(size.px()))
+            .h(px(size.px()))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border(px(1.0))
+            .shadow(float_shadow(self.palette.text_primary))
+            .text_size(px(qol_theme::TEXT_BODY));
+        match state {
+            ActionCircleState::Resting => circle
+                .bg(rgb(self.palette.surface_raised))
+                .border_color(rgb(self.palette.border_subtle))
+                .text_color(rgb(self.palette.text_primary)),
+            ActionCircleState::Primary => circle
+                .bg(rgb(self.palette.accent))
+                .border_color(rgb(self.palette.border_subtle))
+                .text_color(rgb(self.palette.solid_ink)),
+            ActionCircleState::Armed => circle
+                .bg(rgb(self.palette.accent_fill))
+                .border_color(rgb(self.palette.accent))
+                .text_color(rgb(self.palette.accent_ink))
+                .font_weight(FontWeight::SEMIBOLD),
+            ActionCircleState::Disabled => circle
+                .bg(rgb(self.palette.surface_raised))
+                .border_color(rgb(self.palette.border_subtle))
+                .text_color(rgb(self.palette.text_primary))
+                .opacity(DISABLED_OPACITY),
+        }
+    }
+
+    pub fn action_row(&self) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::ACTION_CIRCLE_GAP))
+    }
+
+    pub fn segment(&self, label: impl Into<SharedString>, active: bool) -> Div {
+        let segment = div()
+            .px(px(qol_theme::SPACE_CELL))
+            .py(px(qol_theme::SPACE_STACK))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .text_size(px(qol_theme::TEXT_CAPTION))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(label.into());
+        if active {
+            segment
+                .bg(rgb(self.palette.accent))
+                .text_color(rgb(self.palette.surface_raised))
+                .shadow(raised_shadow(self.palette.text_primary))
+        } else {
+            segment.text_color(rgb(self.palette.text_secondary))
+        }
+    }
+
+    pub fn segmented_group(&self) -> Div {
+        div()
             .flex_none()
             .flex()
             .flex_row()
             .gap(px(qol_theme::SPACE_STACK))
             .p(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .bg(rgb(self.palette.surface_hovered));
+            .bg(rgb(self.palette.surface_hovered))
+    }
+
+    pub fn segmented(&self, options: &[SharedString], selected: usize) -> Div {
+        let mut group = self.segmented_group();
         for (index, option) in options.iter().enumerate() {
-            let active = index == selected;
-            let mut segment = div()
-                .px(px(qol_theme::SPACE_CELL))
-                .py(px(qol_theme::SPACE_STACK))
-                .rounded(px(qol_theme::RADIUS_TIGHT))
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(option.clone());
-            segment = if active {
-                segment
-                    .bg(rgb(self.palette.accent))
-                    .text_color(rgb(self.palette.surface_raised))
-                    .shadow(raised_shadow(self.palette.text_primary))
-            } else {
-                segment.text_color(rgb(self.palette.text_secondary))
-            };
-            group = group.child(segment);
+            group = group.child(self.segment(option.clone(), index == selected));
         }
         group
     }
@@ -708,6 +780,13 @@ impl Kit {
             .h(px(1.0))
             .bg(rgb(self.palette.border_subtle))
     }
+}
+
+pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
+    if count == 0 {
+        return 0.0;
+    }
+    count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
 }
 
 fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
@@ -823,8 +902,8 @@ pub fn kit() -> Kit {
 #[cfg(test)]
 mod tests {
     use super::{
-        focus_ring_for, path_label, rail_scrim, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
-        RAIL_SCRIM_END, RAIL_SCRIM_START,
+        action_row_width, focus_ring_for, path_label, rail_scrim, ActionCircleSize,
+        FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA, RAIL_SCRIM_END, RAIL_SCRIM_START,
     };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 
@@ -857,6 +936,21 @@ mod tests {
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_END}")));
         assert!(rendered.contains("a: 0.0"));
         assert!(rendered.contains(&format!("a: {}", f32::from(RAIL_SCRIM_ALPHA) / 255.0)));
+    }
+
+    #[test]
+    fn action_row_width_sums_circles_and_gaps() {
+        assert_eq!(action_row_width(0, ActionCircleSize::Full), 0.0);
+        assert_eq!(action_row_width(1, ActionCircleSize::Full), 46.0);
+        assert_eq!(
+            action_row_width(5, ActionCircleSize::Full),
+            5.0 * 46.0 + 4.0 * 14.0
+        );
+        assert_eq!(
+            action_row_width(2, ActionCircleSize::Control),
+            2.0 * 36.0 + 14.0
+        );
+        assert_eq!(action_row_width(1, ActionCircleSize::Inline), 28.0);
     }
 
     #[test]

@@ -11,18 +11,16 @@ use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
 
 use crate::capture::actions::ShotAction;
 use crate::capture::annotation::{save_strokes, NormalizedPoint, PenStroke};
+use crate::config::CopyCommand;
 use crate::ui::preview::current_palette;
+use crate::ui::shortcuts::shot_action_for_keystroke;
 
 mod render;
 
-const CONTENT_MARGIN: f32 = 18.0;
-const HEADER_HEIGHT: f32 = 42.0;
-const TOOLBAR_HEIGHT: f32 = 82.0;
 const MAX_IMAGE_WIDTH: f32 = 1000.0;
 const MAX_IMAGE_HEIGHT: f32 = 680.0;
-const CONTROL_SIZE: f32 = 46.0;
-const CONTROL_GAP: f32 = 14.0;
-const PEN_SCREEN_WIDTH: f32 = 5.0;
+const CONTROL_COUNT: usize = 6;
+const PRIMARY_CONTROL: usize = 3;
 
 pub(crate) struct EditorDocument {
     path: PathBuf,
@@ -38,8 +36,42 @@ struct EditorLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PenWidth {
+    Thin,
+    Medium,
+    Thick,
+}
+
+impl PenWidth {
+    const ALL: [Self; 3] = [Self::Thin, Self::Medium, Self::Thick];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Thin => "Thin",
+            Self::Medium => "Medium",
+            Self::Thick => "Thick",
+        }
+    }
+
+    fn screen_px(self) -> f32 {
+        match self {
+            Self::Thin => 3.0,
+            Self::Medium => 5.0,
+            Self::Thick => 9.0,
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Thin => Self::Medium,
+            Self::Medium => Self::Thick,
+            Self::Thick => Self::Thin,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorControl {
-    Pen,
     Color,
     Undo,
     Redo,
@@ -48,19 +80,8 @@ enum EditorControl {
 }
 
 impl EditorControl {
-    const ALL: [Self; 7] = [
-        Self::Pen,
-        Self::Color,
-        Self::Undo,
-        Self::Redo,
-        Self::Action(ShotAction::Copy),
-        Self::Action(ShotAction::CopyPath),
-        Self::Save,
-    ];
-
     fn label(self) -> &'static str {
         match self {
-            Self::Pen => "Pen",
             Self::Color => "Color",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
@@ -71,7 +92,6 @@ impl EditorControl {
 
     fn glyph(self) -> &'static str {
         match self {
-            Self::Pen => "✎",
             Self::Color => "",
             Self::Undo => "↶",
             Self::Redo => "↷",
@@ -181,12 +201,34 @@ struct ActiveWheel {
     popup: WindowHandle<ColorWheelPopup>,
 }
 
+fn copy_actions(default_copy_action: CopyCommand) -> [ShotAction; 2] {
+    match default_copy_action {
+        CopyCommand::CopyImage => [ShotAction::Copy, ShotAction::CopyPath],
+        CopyCommand::CopyPath => [ShotAction::CopyPath, ShotAction::Copy],
+    }
+}
+
+fn editor_controls(default_copy_action: CopyCommand) -> [EditorControl; CONTROL_COUNT] {
+    let actions = copy_actions(default_copy_action);
+    [
+        EditorControl::Color,
+        EditorControl::Undo,
+        EditorControl::Redo,
+        EditorControl::Action(actions[0]),
+        EditorControl::Action(actions[1]),
+        EditorControl::Save,
+    ]
+}
+
 struct EditorView {
     document: EditorDocument,
     layout: EditorLayout,
     history: UndoHistory<PenStroke>,
     active_stroke: Option<PenStroke>,
     pen_color: u32,
+    pen_width: PenWidth,
+    controls: [EditorControl; CONTROL_COUNT],
+    default_copy_action: CopyCommand,
     selected: usize,
     output_pending: Option<EditorOutput>,
     output_error: Option<String>,
@@ -246,13 +288,17 @@ impl EditorView {
     ) -> Self {
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
+        let default_copy_action = crate::config::load().shortcuts.copy_command;
         Self {
             document,
             layout,
             history: UndoHistory::new(),
             active_stroke: None,
             pen_color: current_palette().state_off,
-            selected: 0,
+            pen_width: PenWidth::Medium,
+            controls: editor_controls(default_copy_action),
+            default_copy_action,
+            selected: PRIMARY_CONTROL,
             output_pending: None,
             output_error: None,
             image_bounds: Rc::new(Cell::new(None)),
@@ -351,11 +397,22 @@ impl EditorView {
         let width = bounds.size.width.to_f64() as f32;
         let height = bounds.size.height.to_f64() as f32;
         render::normalized_pointer(local_x, local_y, width, height, clamp)
-            .map(|point| (point, PEN_SCREEN_WIDTH / width.min(height)))
+            .map(|point| (point, self.pen_width.screen_px() / width.min(height)))
+    }
+
+    fn set_pen_width(&mut self, width: PenWidth, cx: &mut Context<Self>) {
+        self.pen_width = width;
+        qol_runtime::probe!("SHOT_EDIT", "phase=width width={}", width.label());
+        cx.notify();
+    }
+
+    fn cycle_pen_width(&mut self, cx: &mut Context<Self>) {
+        let width = self.pen_width.next();
+        self.set_pen_width(width, cx);
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = EditorControl::ALL.len() as isize;
+        let count = CONTROL_COUNT as isize;
         self.selected = (((self.selected as isize + delta) % count + count) % count) as usize;
         cx.notify();
     }
@@ -366,7 +423,8 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.selected = EditorControl::ALL
+        self.selected = self
+            .controls
             .iter()
             .position(|candidate| *candidate == control)
             .unwrap_or(0);
@@ -375,7 +433,6 @@ impl EditorView {
             return;
         }
         match control {
-            EditorControl::Pen => cx.notify(),
             EditorControl::Color => self.open_color_wheel(window, cx),
             EditorControl::Undo => self.change_history(HistoryAction::Undo, cx),
             EditorControl::Redo => self.change_history(HistoryAction::Redo, cx),
@@ -389,10 +446,7 @@ impl EditorView {
             return false;
         }
         match control {
-            EditorControl::Pen
-            | EditorControl::Color
-            | EditorControl::Action(_)
-            | EditorControl::Save => true,
+            EditorControl::Color | EditorControl::Action(_) | EditorControl::Save => true,
             EditorControl::Undo => self.active_stroke.is_some() || self.history.can_undo(),
             EditorControl::Redo => self.active_stroke.is_none() && self.history.can_redo(),
         }
@@ -581,6 +635,14 @@ impl EditorView {
             }
             return;
         }
+        if let Some(action) =
+            shot_action_for_keystroke(&event.keystroke, copy_actions(self.default_copy_action)[0])
+        {
+            if matches!(action, ShotAction::Copy | ShotAction::CopyPath) {
+                self.finish(EditorOutput::Action(action), cx);
+                return;
+            }
+        }
         if event.keystroke.modifiers.modified() {
             return;
         }
@@ -589,13 +651,13 @@ impl EditorView {
             "left" | "up" => self.move_selection(-1, cx),
             "right" | "down" | "tab" => self.move_selection(1, cx),
             "enter" | "return" | "space" => {
-                self.activate_control(EditorControl::ALL[self.selected], window, cx)
+                self.activate_control(self.controls[self.selected], window, cx)
             }
-            "p" => self.activate_control(EditorControl::Pen, window, cx),
-            "c" => self.activate_control(EditorControl::Color, window, cx),
-            "u" => self.activate_control(EditorControl::Undo, window, cx),
-            "r" => self.activate_control(EditorControl::Redo, window, cx),
-            "s" => self.activate_control(EditorControl::Save, window, cx),
+            "u" => self.change_history(HistoryAction::Undo, cx),
+            "r" => self.change_history(HistoryAction::Redo, cx),
+            "s" => self.finish(EditorOutput::Save, cx),
+            "h" => self.open_color_wheel(window, cx),
+            "w" => self.cycle_pen_width(cx),
             _ => {}
         }
     }
@@ -627,11 +689,6 @@ fn editor_shortcut(key: &str, modifiers: Modifiers) -> Option<EditorShortcut> {
     if key.eq_ignore_ascii_case("y") && modifiers == secondary {
         return Some(EditorShortcut::History(HistoryAction::Redo));
     }
-    if key.eq_ignore_ascii_case("c") && modifiers == secondary {
-        return Some(EditorShortcut::Output(EditorOutput::Action(
-            ShotAction::Copy,
-        )));
-    }
     if key.eq_ignore_ascii_case("s") && modifiers == secondary {
         return Some(EditorShortcut::Output(EditorOutput::Save));
     }
@@ -641,11 +698,12 @@ fn editor_shortcut(key: &str, modifiers: Modifiers) -> Option<EditorShortcut> {
 #[cfg(test)]
 mod tests {
     use super::{
-        editor_shortcut, perform_edit_action, EditorControl, EditorOutput, EditorShortcut,
-        HistoryAction,
+        editor_controls, editor_shortcut, perform_edit_action, EditorControl, EditorOutput,
+        EditorShortcut, HistoryAction, PenWidth,
     };
     use crate::capture::actions::ShotAction;
     use crate::capture::annotation::{NormalizedPoint, PenStroke};
+    use crate::config::CopyCommand;
     use gpui::Modifiers;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -682,17 +740,11 @@ mod tests {
                 Some(EditorShortcut::History(HistoryAction::Redo)),
             ),
             (
-                "c",
-                secondary,
-                Some(EditorShortcut::Output(EditorOutput::Action(
-                    ShotAction::Copy,
-                ))),
-            ),
-            (
                 "s",
                 secondary,
                 Some(EditorShortcut::Output(EditorOutput::Save)),
             ),
+            ("c", secondary, None),
             ("z", secondary_alt, None),
             ("c", secondary_alt, None),
             ("z", Modifiers::none(), None),
@@ -708,9 +760,48 @@ mod tests {
     }
 
     #[test]
-    fn editor_controls_reuse_screenshot_copy_actions() {
-        assert!(EditorControl::ALL.contains(&EditorControl::Action(ShotAction::Copy)));
-        assert!(EditorControl::ALL.contains(&EditorControl::Action(ShotAction::CopyPath)));
+    fn editor_controls_follow_the_default_copy_action() {
+        let cases = [
+            (
+                CopyCommand::CopyImage,
+                [
+                    EditorControl::Color,
+                    EditorControl::Undo,
+                    EditorControl::Redo,
+                    EditorControl::Action(ShotAction::Copy),
+                    EditorControl::Action(ShotAction::CopyPath),
+                    EditorControl::Save,
+                ],
+            ),
+            (
+                CopyCommand::CopyPath,
+                [
+                    EditorControl::Color,
+                    EditorControl::Undo,
+                    EditorControl::Redo,
+                    EditorControl::Action(ShotAction::CopyPath),
+                    EditorControl::Action(ShotAction::Copy),
+                    EditorControl::Save,
+                ],
+            ),
+        ];
+
+        for (copy_command, expected) in cases {
+            assert_eq!(editor_controls(copy_command), expected);
+        }
+    }
+
+    #[test]
+    fn pen_width_cycles_through_every_preset() {
+        let cycle = [
+            PenWidth::Thin,
+            PenWidth::Medium,
+            PenWidth::Thick,
+            PenWidth::Thin,
+        ];
+        for pair in cycle.windows(2) {
+            assert_eq!(pair[0].next(), pair[1]);
+        }
     }
 
     #[test]

@@ -1935,11 +1935,10 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
     found
 }
 
-const REM_SPACING_HELPER_DEBT: [(&str, usize); 4] = [
+const REM_SPACING_HELPER_DEBT: [(&str, usize); 3] = [
     ("libs/gpui/src/status_indicator.rs", 1),
     ("libs/gpui/src/toast.rs", 4),
     ("plugins/alt-tab/src/app/render.rs", 4),
-    ("plugins/shot/src/ui/editor/render.rs", 3),
 ];
 
 #[test]

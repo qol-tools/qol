@@ -12,12 +12,13 @@ use gpui::*;
 
 use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
+use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
-    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, RADIUS_THUMB, TEXT_CAPTION,
-    TEXT_NANO,
+    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
+    RADIUS_THUMB, TEXT_CAPTION, TEXT_NANO,
 };
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
@@ -33,8 +34,6 @@ use crate::ui::shortcuts::is_standard_copy_chord;
 const MAX_THUMB_W: f32 = 360.0;
 const MAX_THUMB_H: f32 = 240.0;
 const MARGIN: f32 = 18.0;
-const CIRCLE: f32 = 46.0;
-const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 const PIN_OPEN_FAILED_TOAST: &str = "Could not pin screenshot";
 const PIN_ANCHOR_FAILED_MESSAGE: &str = "Cursor position unavailable";
@@ -1410,12 +1409,13 @@ impl Render for PreviewView {
         }
 
         let system = runtime_theme().system;
+        let kit = kit();
         let controls = preview_controls(self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
-        let circles_width = circles_total_width(controls.len());
+        let circles_width = action_row_width(controls.len(), ActionCircleSize::Full);
         let start_x = (win_w - circles_width) / 2.0;
-        let circle_top = MARGIN + thumb_h - CIRCLE / 2.0;
+        let circle_top = MARGIN + thumb_h - ActionCircleSize::Full.px() / 2.0;
         let label = controls
             .get(self.selected)
             .map(|control| control.label())
@@ -1459,43 +1459,21 @@ impl Render for PreviewView {
             );
 
         for (index, control) in controls.into_iter().enumerate() {
-            let left = start_x + index as f32 * (CIRCLE + CIRCLE_GAP);
+            let left = start_x + index as f32 * (ActionCircleSize::Full.px() + ACTION_CIRCLE_GAP);
             let selected = index == self.selected;
-            let primary = index == 0 && !selected;
+            let state = if selected {
+                ActionCircleState::Armed
+            } else if index == 0 {
+                ActionCircleState::Primary
+            } else {
+                ActionCircleState::Resting
+            };
             root = root.child(
-                div()
+                kit.action_circle(ActionCircleSize::Full, state)
                     .id(("shot-action", index))
                     .absolute()
                     .left(px(left))
                     .top(px(circle_top))
-                    .w(px(CIRCLE))
-                    .h(px(CIRCLE))
-                    .rounded_full()
-                    .shadow(qol_gpui::kit::float_shadow(system.text_primary))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_1()
-                    .border_color(if selected {
-                        rgb(system.accent)
-                    } else {
-                        rgb(palette.action_border)
-                    })
-                    .bg(if selected {
-                        rgb(system.accent_fill)
-                    } else if primary {
-                        rgb(system.accent)
-                    } else {
-                        rgb(palette.action_bg)
-                    })
-                    .text_color(if selected {
-                        rgb(system.accent_ink)
-                    } else if primary {
-                        rgb(system.solid_ink)
-                    } else {
-                        rgb(palette.action_glyph)
-                    })
-                    .when(selected, |row| row.font_weight(FontWeight::SEMIBOLD))
                     .child(control.glyph())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -1521,16 +1499,9 @@ fn thumbnail_size(w: f32, h: f32) -> (f32, f32) {
 }
 
 fn window_dims(thumb_w: f32, thumb_h: f32, action_count: usize) -> (f32, f32) {
-    let width = thumb_w.max(circles_total_width(action_count)) + 2.0 * MARGIN;
-    let height = MARGIN + thumb_h + CIRCLE / 2.0 + LABEL_H + MARGIN;
+    let width = thumb_w.max(action_row_width(action_count, ActionCircleSize::Full)) + 2.0 * MARGIN;
+    let height = MARGIN + thumb_h + ActionCircleSize::Full.px() / 2.0 + LABEL_H + MARGIN;
     (width, height)
-}
-
-fn circles_total_width(count: usize) -> f32 {
-    if count == 0 {
-        return 0.0;
-    }
-    count as f32 * CIRCLE + (count as f32 - 1.0) * CIRCLE_GAP
 }
 
 #[cfg(test)]
@@ -1541,12 +1512,13 @@ mod tests {
     use qol_runtime::MonitorBounds;
 
     use super::{
-        circles_total_width, combine_focus_truth, missing_monitors, preview_control_for_keystroke,
-        preview_controls, read_render_image, reveal_blur_guard, thumbnail_size, window_dims,
-        ActiveMonitor, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
+        combine_focus_truth, missing_monitors, preview_control_for_keystroke, preview_controls,
+        read_render_image, reveal_blur_guard, thumbnail_size, window_dims, ActiveMonitor,
+        PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
+    use qol_gpui::kit::{action_row_width, ActionCircleSize};
 
     fn keystroke(key: &str, modifiers: Modifiers) -> Keystroke {
         Keystroke {
@@ -1712,7 +1684,10 @@ mod tests {
     #[test]
     fn window_grows_to_fit_the_circle_row() {
         let (width, _) = window_dims(40.0, 40.0, 2);
-        assert!(width >= circles_total_width(2), "row fits inside window");
+        assert!(
+            width >= action_row_width(2, ActionCircleSize::Full),
+            "row fits inside window"
+        );
     }
 
     fn monitor(x: f32, y: f32) -> ActiveMonitor {

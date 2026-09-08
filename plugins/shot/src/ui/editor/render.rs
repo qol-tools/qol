@@ -1,20 +1,29 @@
 use super::*;
+use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
+use qol_gpui::kit::{action_row_width, ActionCircleSize, ActionCircleState};
 use qol_gpui::surface::PanelDragArea;
-
-fn chord(input: &str) -> String {
-    qol_hotkeys::chord::label_for(input).unwrap_or_default()
-}
-
-fn editor_hint() -> String {
-    format!(
-        "Drag to draw \u{00B7} {} undo \u{00B7} {} copies & closes \u{00B7} {} cancels",
-        chord("secondary+z"),
-        chord("secondary+c"),
-        chord("escape")
-    )
-}
+use qol_gpui::theme::{
+    ACTION_CIRCLE_SIZE, HEIGHT_HINT_BAR, HEIGHT_INLINE, SPACE_GUTTER, SPACE_PAD, TEXT_CAPTION,
+};
 
 impl EditorView {
+    fn render_width_control(&self, cx: &mut Context<Self>) -> Div {
+        let kit = qol_gpui::kit::kit();
+        let mut group = kit.segmented_group();
+        for (index, width) in PenWidth::ALL.into_iter().enumerate() {
+            group = group.child(
+                kit.segment(width.label(), width == self.pen_width)
+                    .id(("shot-editor-width", index))
+                    .cursor(CursorStyle::PointingHand)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        this.set_pen_width(width, cx)
+                    })),
+            );
+        }
+        group
+    }
+
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut strokes = self.history.applied().to_vec();
         strokes.extend(self.active_stroke.iter().cloned());
@@ -54,48 +63,44 @@ impl EditorView {
             )
     }
 
-    fn render_control(&self, index: usize, control: EditorControl, cx: &mut Context<Self>) -> Div {
-        let palette = current_palette();
-        let selected = self.selected == index;
+    fn render_control(
+        &self,
+        index: usize,
+        control: EditorControl,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let kit = qol_gpui::kit::kit();
         let enabled = self.control_enabled(control);
+        let state = if !enabled {
+            ActionCircleState::Disabled
+        } else if index == self.selected {
+            ActionCircleState::Armed
+        } else if index == PRIMARY_CONTROL {
+            ActionCircleState::Primary
+        } else {
+            ActionCircleState::Resting
+        };
         let color_bounds = self.color_bounds.clone();
-        let mut button = div()
+        let mut circle = kit
+            .action_circle(ActionCircleSize::Full, state)
             .id(("shot-editor-control", index))
-            .relative()
-            .w(px(CONTROL_SIZE))
-            .h(px(CONTROL_SIZE))
-            .rounded_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_2()
-            .border_color(if selected {
-                rgb(palette.action_border_selected)
-            } else {
-                rgb(palette.action_border)
-            })
-            .bg(if selected {
-                rgb(palette.action_bg_selected)
-            } else {
-                rgb(palette.action_bg)
-            })
-            .text_color(rgb(palette.action_glyph));
+            .relative();
         if enabled {
-            button = button
+            circle = circle
                 .cursor(CursorStyle::PointingHand)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.activate_control(control, window, cx)
                 }));
         }
         if control == EditorControl::Color {
-            button = button
+            circle = circle
                 .child(
                     div()
-                        .w(px(22.0))
-                        .h(px(22.0))
-                        .rounded_none()
+                        .size(px(SPACE_GUTTER))
+                        .rounded_full()
                         .border_1()
-                        .border_color(rgb(palette.action_glyph))
+                        .border_color(rgb(kit.palette.text_primary))
                         .bg(rgb(self.pen_color)),
                 )
                 .child(
@@ -107,37 +112,68 @@ impl EditorView {
                     .inset_0(),
                 );
         } else {
-            button = button.child(control.glyph());
+            circle = circle.child(control.glyph());
         }
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap_1()
-            .opacity(if enabled { 1.0 } else { 0.4 })
-            .child(button)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.label_text))
-                    .child(control.label()),
+        circle
+    }
+
+    fn render_label(&self) -> AnyElement {
+        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
+        if let Some(error) = self.output_error.clone() {
+            return div()
+                .text_color(rgb(kit.palette.danger))
+                .child(error)
+                .into_any_element();
+        }
+        if let Some(output) = self.output_pending {
+            return qol_gpui::Busy::new(
+                "shot-editor-pending",
+                output.pending_message(),
+                rgb(palette.label_text),
             )
+            .into_any_element();
+        }
+        let label = self
+            .controls
+            .get(self.selected)
+            .map(|control| control.label())
+            .unwrap_or_default();
+        div()
+            .text_color(rgb(palette.label_text))
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_hint_bar(&self, window_width: f32) -> Div {
+        let kit = qol_gpui::kit::kit();
+        let items = [
+            BarItem::Hint(HintDescriptor::new("\u{23CE}", "activate", 3)),
+            BarItem::Hint(HintDescriptor::new("\u{2190}\u{2192}", "move", 2)),
+            BarItem::Hint(HintDescriptor::new("H", "hue", 2)),
+            BarItem::Hint(HintDescriptor::new("W", "width", 2)),
+            BarItem::Hint(HintDescriptor::new("U", "undo", 1)),
+            BarItem::Hint(HintDescriptor::new("S", "save", 1)),
+            BarItem::Hint(HintDescriptor::new("drag", "draw", 0)),
+            BarItem::Spacer,
+            BarItem::Hint(HintDescriptor::pinned("esc", "close")),
+        ];
+        let mut bar = kit.hint_bar();
+        for item in fit_hints(window_width, &items) {
+            bar = match item {
+                BarItem::Hint(hint) => bar.child(kit.hint(hint.key, hint.label)),
+                BarItem::FixedWidth(_) => bar,
+                BarItem::Spacer => bar.child(div().flex_1()),
+            };
+        }
+        bar
     }
 }
 
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let kit = qol_gpui::kit::kit();
         let palette = current_palette();
-        let status: SharedString = self
-            .output_error
-            .clone()
-            .unwrap_or_else(|| {
-                if let Some(output) = self.output_pending {
-                    return output.pending_message().to_string();
-                }
-                editor_hint()
-            })
-            .into();
         div()
             .id("shot-editor")
             .track_focus(&self.focus_handle)
@@ -150,84 +186,67 @@ impl Render for EditorView {
             .border_color(rgb(palette.thumb_border))
             .bg(rgb(palette.window_bg))
             .child(
-                div()
-                    .h(px(HEADER_HEIGHT))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .px_4()
-                    .text_color(rgb(palette.action_glyph))
-                    .child("Edit screenshot")
-                    .panel_drag_area(),
+                kit.header("Edit screenshot")
+                    .panel_drag_area()
+                    .child(self.render_width_control(cx)),
             )
             .child(
                 div()
-                    .flex_1()
+                    .flex_none()
                     .flex()
-                    .items_center()
                     .justify_center()
-                    .px(px(CONTENT_MARGIN))
+                    .px(px(SPACE_PAD))
+                    .pt(px(SPACE_PAD))
                     .child(self.render_canvas(cx)),
             )
             .child(
                 div()
-                    .h(px(TOOLBAR_HEIGHT))
                     .flex_none()
                     .flex()
-                    .flex_col()
-                    .items_center()
                     .justify_center()
-                    .gap_1()
+                    .pt(px(SPACE_PAD))
                     .child(
-                        div().flex().items_center().gap(px(CONTROL_GAP)).children(
-                            EditorControl::ALL
+                        kit.action_row().children(
+                            self.controls
                                 .iter()
                                 .copied()
                                 .enumerate()
                                 .map(|(index, control)| self.render_control(index, control, cx)),
                         ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(if self.output_error.is_some() {
-                                palette.state_off
-                            } else {
-                                palette.label_text
-                            }))
-                            .child(
-                                if self.output_error.is_none() && self.output_pending.is_some() {
-                                    qol_gpui::Busy::new(
-                                        "shot-editor-pending",
-                                        status,
-                                        rgb(palette.label_text),
-                                    )
-                                    .into_any_element()
-                                } else {
-                                    status.into_any_element()
-                                },
-                            ),
                     ),
             )
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(HEIGHT_INLINE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(TEXT_CAPTION))
+                    .child(self.render_label()),
+            )
+            .child(self.render_hint_bar(self.layout.window.0))
     }
 }
 
 pub(super) fn editor_layout(width: u32, height: u32, monitor: (f32, f32)) -> EditorLayout {
-    let chrome_width = controls_width() + 2.0 * CONTENT_MARGIN;
-    let max_width = (monitor.0 - 2.0 * qol_gpui::placement::CORNER_MARGIN - 2.0 * CONTENT_MARGIN)
+    let chrome_width = action_row_width(CONTROL_COUNT, ActionCircleSize::Full) + 2.0 * SPACE_PAD;
+    let chrome_height = qol_gpui::kit::HEADER_HEIGHT
+        + SPACE_PAD
+        + SPACE_PAD
+        + ACTION_CIRCLE_SIZE
+        + HEIGHT_INLINE
+        + HEIGHT_HINT_BAR;
+    let max_width = (monitor.0 - 2.0 * qol_gpui::placement::CORNER_MARGIN - 2.0 * SPACE_PAD)
         .clamp(1.0, MAX_IMAGE_WIDTH);
-    let max_height = (monitor.1
-        - 2.0 * qol_gpui::placement::CORNER_MARGIN
-        - HEADER_HEIGHT
-        - TOOLBAR_HEIGHT
-        - 2.0 * CONTENT_MARGIN)
+    let max_height = (monitor.1 - 2.0 * qol_gpui::placement::CORNER_MARGIN - chrome_height)
         .clamp(1.0, MAX_IMAGE_HEIGHT);
     let image = fit_image(width, height, max_width, max_height);
     EditorLayout {
         image,
         window: (
-            (image.0 + 2.0 * CONTENT_MARGIN).max(chrome_width),
-            HEADER_HEIGHT + image.1 + TOOLBAR_HEIGHT + 2.0 * CONTENT_MARGIN,
+            (image.0 + 2.0 * SPACE_PAD).max(chrome_width),
+            image.1 + chrome_height,
         ),
     }
 }
@@ -240,11 +259,6 @@ fn fit_image(width: u32, height: u32, max_width: f32, max_height: f32) -> (f32, 
         .min(max_height / height as f32)
         .min(1.0);
     (width as f32 * scale, height as f32 * scale)
-}
-
-fn controls_width() -> f32 {
-    let count = EditorControl::ALL.len() as f32;
-    count * CONTROL_SIZE + (count - 1.0) * CONTROL_GAP
 }
 
 pub(super) fn normalized_pointer(

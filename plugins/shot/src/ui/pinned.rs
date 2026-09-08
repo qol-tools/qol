@@ -13,14 +13,12 @@ use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
 use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
 use crate::ui::shortcuts::shot_action_for_keystroke;
+use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
 const EDGE: f32 = 8.0;
-const CIRCLE: f32 = 36.0;
-const CIRCLE_GAP: f32 = 10.0;
-const CLOSE_CIRCLE: f32 = 26.0;
 const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
@@ -955,32 +953,21 @@ impl PinnedView {
     }
 
     fn action_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = current_palette();
-        div()
+        let kit = kit();
+        kit.action_row()
             .absolute()
             .bottom(px(EDGE + 4.0))
             .left_0()
             .right_0()
-            .flex()
             .justify_center()
-            .gap(px(CIRCLE_GAP))
             .children(
                 ShotAction::PINNED
                     .iter()
                     .copied()
                     .enumerate()
                     .map(|(index, action)| {
-                        div()
+                        kit.action_circle(ActionCircleSize::Control, ActionCircleState::Resting)
                             .id(("pin-action", index))
-                            .w(px(CIRCLE))
-                            .h(px(CIRCLE))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .border_1()
-                            .border_color(rgb(palette.action_border))
-                            .bg(rgb(palette.action_bg))
-                            .text_color(rgb(palette.action_glyph))
                             .child(action.glyph())
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -991,22 +978,13 @@ impl PinnedView {
     }
 
     fn close_circle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = current_palette();
-        div()
+        kit()
+            .action_circle(ActionCircleSize::Inline, ActionCircleState::Resting)
             .id("pin-close")
             .absolute()
             .top(px(EDGE))
             .right(px(EDGE))
-            .w(px(CLOSE_CIRCLE))
-            .h(px(CLOSE_CIRCLE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(rgb(palette.action_border))
-            .bg(rgb(palette.action_bg))
-            .text_color(rgb(palette.action_glyph))
-            .child("✕")
+            .child("\u{2715}")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close(window, cx)))
     }
@@ -1330,9 +1308,9 @@ fn resize_rect(start: PinRect, edge: ResizeEdge, dx: f32, dy: f32, ratio: f32) -
 }
 
 fn action_row_fits(width: f32, height: f32) -> bool {
-    let count = ShotAction::PINNED.len() as f32;
-    let needed_width = count * CIRCLE + (count - 1.0) * CIRCLE_GAP + 2.0 * EDGE;
-    let needed_height = CIRCLE + CLOSE_CIRCLE + 3.0 * EDGE;
+    let needed_width =
+        action_row_width(ShotAction::PINNED.len(), ActionCircleSize::Control) + 2.0 * EDGE;
+    let needed_height = ActionCircleSize::Control.px() + ActionCircleSize::Inline.px() + 3.0 * EDGE;
     width >= needed_width && height >= needed_height
 }
 
@@ -1559,9 +1537,9 @@ mod tests {
     fn action_row_fits_requires_room_for_circles() {
         let cases = [
             (400.0, 300.0, true),
-            (98.0, 86.0, true),
-            (97.0, 86.0, false),
-            (98.0, 85.0, false),
+            (102.0, 88.0, true),
+            (101.0, 88.0, false),
+            (102.0, 87.0, false),
             (48.0, 48.0, false),
         ];
         for (width, height, expected) in cases {
