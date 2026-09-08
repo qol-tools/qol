@@ -8,7 +8,7 @@
 mod field;
 mod platform;
 
-pub use field::{visible_char_count, CaretStyle, TextField, TextFieldElement};
+pub use field::{single_line, visible_char_count, CaretStyle, TextField, TextFieldElement};
 
 use gpui::Modifiers;
 

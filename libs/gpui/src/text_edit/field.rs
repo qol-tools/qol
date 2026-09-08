@@ -57,13 +57,18 @@ fn caret_element(caret: CaretStyle, x: f32) -> Div {
         .bg(caret.color)
 }
 
+/// Strips control characters (newlines, tabs, carriage returns) so the text fits a single-line field.
+pub fn single_line(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).collect()
+}
+
 impl TextField {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn with_text(text: impl Into<String>) -> Self {
-        let text = text.into();
+        let text = single_line(&text.into());
         let cursor = text.chars().count();
         Self {
             text,
@@ -81,7 +86,7 @@ impl TextField {
     }
 
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
+        self.text = single_line(&text.into());
         self.cursor = self.text.chars().count();
         self.anchor = None;
     }
@@ -138,6 +143,9 @@ impl TextField {
     }
 
     pub fn insert_char(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
         self.delete_selection();
         let index = char_to_byte(&self.text, self.cursor);
         self.text.insert(index, ch);
@@ -146,21 +154,23 @@ impl TextField {
     }
 
     pub fn insert_str(&mut self, text: &str) {
+        let text = single_line(text);
         if text.is_empty() {
             return;
         }
         self.delete_selection();
         let index = char_to_byte(&self.text, self.cursor);
-        self.text.insert_str(index, text);
+        self.text.insert_str(index, &text);
         self.cursor += text.chars().count();
         self.anchor = None;
     }
 
     pub fn paste(&mut self, text: &str) -> bool {
+        let text = single_line(text);
         if text.is_empty() {
             return false;
         }
-        self.insert_str(text);
+        self.insert_str(&text);
         true
     }
 
@@ -365,7 +375,7 @@ impl<'a> TextFieldElement<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{visible_char_count, TextField};
+    use super::{single_line, visible_char_count, TextField};
     use crate::text_edit::Span;
 
     fn field(text: &str, cursor: usize) -> TextField {
@@ -410,6 +420,40 @@ mod tests {
         assert!(field.paste("shot"));
         assert_eq!(field.text(), "shot");
         assert_eq!(field.cursor(), 4);
+    }
+
+    #[test]
+    fn single_line_strips_control_characters() {
+        let mut field = field("qol", 3);
+        field.set_text("a\nb");
+        assert_eq!(field.text(), "ab");
+        assert_eq!(field.cursor(), 2);
+
+        assert_eq!(TextField::with_text("a\r\nb").text(), "ab");
+        assert_eq!(single_line("x\ty"), "xy");
+    }
+
+    #[test]
+    fn paste_rejects_control_only_text_and_leaves_the_field_unchanged() {
+        let mut field = field("qol memory", 5);
+        assert!(!field.paste("\n"));
+        assert_eq!(field.text(), "qol memory");
+        assert_eq!(field.cursor(), 5);
+        assert!(field.paste("a\nb"));
+        assert_eq!(field.text(), "qol mabemory");
+        assert_eq!(field.cursor(), 7);
+    }
+
+    #[test]
+    fn insertion_rejects_control_characters() {
+        let mut field = field("qol", 1);
+        field.insert_char('\t');
+        assert_eq!(field.text(), "qol");
+        assert_eq!(field.cursor(), 1);
+
+        field.insert_str("x\ny");
+        assert_eq!(field.text(), "qxyol");
+        assert_eq!(field.cursor(), 3);
     }
 
     #[test]

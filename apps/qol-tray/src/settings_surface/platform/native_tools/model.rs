@@ -135,10 +135,12 @@ impl ShortcutDraft {
                     )
                 }
             };
+        let target = qol_gpui::text_edit::single_line(&target);
+        let browser = qol_gpui::text_edit::single_line(&browser);
         Self {
             managed,
             original_id: Some(shortcut.id.clone()),
-            name: shortcut.name.clone(),
+            name: qol_gpui::text_edit::single_line(&shortcut.name),
             enabled: shortcut.enabled,
             export_to_launcher: shortcut.export_to_launcher,
             action_kind,
@@ -483,6 +485,26 @@ mod tests {
             ),
             "saving must not rewrite the plugin action"
         );
+    }
+
+    #[test]
+    fn a_shortcut_with_control_characters_loads_as_a_single_line_draft() {
+        let shortcut = Shortcut {
+            id: "managed".to_string(),
+            name: "a\nb".to_string(),
+            enabled: true,
+            export_to_launcher: true,
+            source: Some(ShortcutSource::PluginManifest {
+                plugin_id: "plugin-a".to_string(),
+                shortcut_id: "open".to_string(),
+            }),
+            action: ShortcutAction::PluginAction {
+                plugin_id: "plugin-a".to_string(),
+                action: "open".to_string(),
+            },
+        };
+        let draft = ShortcutDraft::from_shortcut(&shortcut);
+        assert_eq!(draft.name, "ab");
     }
 
     #[test]
