@@ -12,6 +12,31 @@ file:line evidence, not independently re-read here.
 Baseline: `cargo clippy --workspace --all-targets` exits 0 with no warnings (only the upstream
 `proc-macro-error2` future-incompat note). Nothing in this audit is a lint-level defect.
 
+## 0. Delivery status
+
+Branch `gpui-dedup` (worktree `/media/kmrh47/WD_SN850X/Git/worktrees/gpui-dedup/qol-monorepo`) fixes
+the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --workspace
+--all-targets`, the workspace nextest suite (6150 tests) and `qol check` (9/9 stages).
+
+| Finding | Fix | Commit |
+|---|---|---|
+| A1 `WindowOptions` at 7 sites | `PopupWindowOptions` builder + 6 sites migrated (cli-sessions' site removed by A2) | `1b71928d3`, `7fcb7504a` |
+| A2 cli-sessions hand-rolled panel | `SurfaceKind::OverlayPanel` + `OpenedSurface::update_view`, cli-sessions moved onto `Surface` | `5ee5b33b1` |
+| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated (atlas-registry promotion outstanding) | `1b71928d3`, `7fcb7504a` |
+| B2 cli-sessions toast 380x76 | sends `style = "compact"`; host derives 340x76 | `139773965` |
+| B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `139773965` |
+| B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated | `fea1353c9` |
+| B17 bluetooth dead `qol-gpui` dep | both target legs removed; `gpui = true` kept (host-rendered settings) | `139773965` |
+
+Guest verification of A2 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
+`SURFACE_REVEAL phase=opened hidden=true` -> `phase=frame-ready expected=observed=rendered=360x400` ->
+`SHOW_WIN_STATE presentation=Overlay` -> `phase=state-restored overlay_configured=true` ->
+`phase=ready focus=true`; `xprop` shows `_NET_WM_STATE_ABOVE, _NET_WM_STATE_SKIP_TASKBAR,
+_NET_WM_STATE_SKIP_PAGER` with `_MOTIF_WM_HINTS` decorations off and `WM_NORMAL_HINTS` 360x400
+min=max; Escape gives `CLI_SESSIONS_DISMISS hidden=true` with the window unmapped and focus returned;
+reopen repeats the full reveal on a new window; collapse/expand give 360x52 and 360x400 with the
+overlay state preserved.
+
 Line counts in scope: `libs/gpui` 33,259 (70 files); GPUI-touching consumer code 7,832 (launcher),
 8,755 (alt-tab), 10,943 (shot), 6,999 (qol-tray), 2,197 (cli-sessions), 1,141 (removeapp).
 
