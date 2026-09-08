@@ -5,7 +5,10 @@
 //! Cursors are char indices into `text`. A word is a run of alphanumerics
 //! and underscores; everything else separates words.
 
+mod field;
 mod platform;
+
+pub use field::{visible_char_count, CaretStyle, TextField, TextFieldElement};
 
 use gpui::Modifiers;
 

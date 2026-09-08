@@ -19,6 +19,7 @@ use qol_gpui::settings_panel::{
     SettingsDestination,
 };
 use qol_gpui::surface::SurfaceDismisser;
+use qol_gpui::text_edit::{self, TextField};
 use qol_gpui::theme::settings_panel_runtime;
 
 use crate::hotkeys::HotkeyBinding;
@@ -72,6 +73,14 @@ struct FieldMenu {
     menu: Dropdown,
 }
 
+struct TextFieldSpec<'a> {
+    index: usize,
+    label: &'static str,
+    value: &'a str,
+    placeholder: &'static str,
+    selected: bool,
+}
+
 pub(super) struct NativeToolsView {
     focus_handle: FocusHandle,
     body_focused: bool,
@@ -85,6 +94,8 @@ pub(super) struct NativeToolsView {
     tool: ToolKind,
     initial_editor: bool,
     mode: Mode,
+    editor_text: TextField,
+    editor_text_key: Option<(usize, ShortcutActionKind, bool)>,
     shortcuts: Vec<Shortcut>,
     hotkeys: Vec<HotkeyBinding>,
     plugins: Vec<PluginOption>,
@@ -127,6 +138,8 @@ impl NativeToolsView {
             tool,
             initial_editor,
             mode: Mode::List,
+            editor_text: TextField::new(),
+            editor_text_key: None,
             shortcuts: Vec::new(),
             hotkeys: Vec::new(),
             plugins: Vec::new(),
@@ -229,6 +242,7 @@ impl NativeToolsView {
     fn open_editor(&mut self, mode: Mode) {
         self.menu = None;
         self.mode = mode;
+        self.editor_text_key = None;
         self.editor_step = self.editor_step.wrapping_add(1);
         self.editor_motion = Some(deck::Motion::Push);
     }
@@ -258,8 +272,25 @@ impl NativeToolsView {
         self.cancel_capture();
         self.menu = None;
         self.mode = Mode::List;
+        self.editor_text_key = None;
         self.editor_step = self.editor_step.wrapping_add(1);
         self.editor_motion = Some(deck::Motion::Pop);
+    }
+
+    fn sync_editor_text(&mut self) {
+        let Mode::Shortcut(draft) = &mut self.mode else {
+            return;
+        };
+        let key = shortcut_text_target_key(draft);
+        if key == self.editor_text_key {
+            return;
+        }
+        let value = shortcut_text_target(draft).map(|value| value.clone());
+        match value {
+            Some(value) => self.editor_text.set_text(value),
+            None => self.editor_text.clear(),
+        }
+        self.editor_text_key = key;
     }
 
     fn move_list(&mut self, direction: isize) {
@@ -622,6 +653,7 @@ impl NativeToolsView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_editor_text();
         cx.stop_propagation();
         if self.capture_local_key(event, cx) {
             cx.notify();
@@ -718,7 +750,7 @@ impl NativeToolsView {
         }
         match &mut self.mode {
             Mode::Shortcut(draft) => {
-                if apply_shortcut_field(draft, event, cx) {
+                if apply_shortcut_field(draft, &mut self.editor_text, event, cx) {
                     cx.notify();
                 }
             }
@@ -749,7 +781,7 @@ impl NativeToolsView {
         plugin.actions.iter().find(|action| action.id == action_id)
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.loading {
             return settings_busy_message(
                 "native-tools-loading",
@@ -760,7 +792,7 @@ impl NativeToolsView {
         }
         let editor = match &self.mode {
             Mode::List => return self.page(self.render_list(cx)).into_any_element(),
-            Mode::Shortcut(draft) => self.render_shortcut_editor(draft, cx),
+            Mode::Shortcut(draft) => self.render_shortcut_editor(window, draft, cx),
             Mode::Hotkey(draft) => self.render_hotkey_editor(draft, cx),
         };
         let slide = deck::slide(
@@ -982,7 +1014,12 @@ impl NativeToolsView {
         }
     }
 
-    fn render_shortcut_editor(&self, draft: &ShortcutDraft, cx: &mut Context<Self>) -> AnyElement {
+    fn render_shortcut_editor(
+        &self,
+        window: &mut Window,
+        draft: &ShortcutDraft,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut body = self.editor_body();
         if let Some(managed) = &draft.managed {
             return body
@@ -1009,11 +1046,14 @@ impl NativeToolsView {
                 cx,
             ))
             .child(self.text_field(
-                2,
-                "Name",
-                &draft.name,
-                "My Shortcut",
-                draft.selected == 2,
+                window,
+                TextFieldSpec {
+                    index: 2,
+                    label: "Name",
+                    value: &draft.name,
+                    placeholder: "My Shortcut",
+                    selected: draft.selected == 2,
+                },
                 cx,
             ))
             .child(self.select_field(
@@ -1034,22 +1074,28 @@ impl NativeToolsView {
                         cx,
                     ))
                     .child(self.text_field(
-                        5,
-                        "App",
-                        &draft.target,
-                        app_placeholder(draft.target_kind),
-                        draft.selected == 5,
+                        window,
+                        TextFieldSpec {
+                            index: 5,
+                            label: "App",
+                            value: &draft.target,
+                            placeholder: app_placeholder(draft.target_kind),
+                            selected: draft.selected == 5,
+                        },
                         cx,
                     ));
             }
             ShortcutActionKind::Url => {
                 body = body
                     .child(self.text_field(
-                        4,
-                        "URL",
-                        &draft.target,
-                        "https://example.com",
-                        draft.selected == 4,
+                        window,
+                        TextFieldSpec {
+                            index: 4,
+                            label: "URL",
+                            value: &draft.target,
+                            placeholder: "https://example.com",
+                            selected: draft.selected == 4,
+                        },
                         cx,
                     ))
                     .child(self.boolean_field(
@@ -1069,11 +1115,14 @@ impl NativeToolsView {
                             cx,
                         ))
                         .child(self.text_field(
-                            7,
-                            "Browser",
-                            &draft.browser,
-                            app_placeholder(draft.browser_kind),
-                            draft.selected == 7,
+                            window,
+                            TextFieldSpec {
+                                index: 7,
+                                label: "Browser",
+                                value: &draft.browser,
+                                placeholder: app_placeholder(draft.browser_kind),
+                                selected: draft.selected == 7,
+                            },
                             cx,
                         ));
                 }
@@ -1265,22 +1314,41 @@ impl NativeToolsView {
 
     fn text_field(
         &self,
-        index: usize,
-        label: &'static str,
-        value: &str,
-        placeholder: &'static str,
-        selected: bool,
+        window: &mut Window,
+        spec: TextFieldSpec<'_>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let TextFieldSpec {
+            index,
+            label,
+            value,
+            placeholder,
+            selected,
+        } = spec;
         let palette = settings_panel_runtime();
-        let empty = value.is_empty();
-        let display = if selected {
-            format!("{}▏", if empty { "" } else { value })
-        } else if empty {
-            placeholder.to_string()
+        let text = if selected {
+            self.editor_text.text()
         } else {
-            value.to_string()
+            value
         };
+        let empty = text.is_empty();
+        let focused = selected;
+        let mono = font(qol_theme::font_mono());
+        let advance =
+            qol_gpui::text::shaped_width(window, "0", mono.clone(), qol_theme::TEXT_CAPTION);
+        let content_px = qol_gpui::text::shaped_width(window, text, mono, qol_theme::TEXT_CAPTION)
+            + 2.0 * qol_theme::SPACE_CELL
+            + 2.0;
+        let field_width = content_px.clamp(180.0, 320.0);
+        let available = field_width - 2.0 * qol_theme::SPACE_CELL - 2.0 - 2.0;
+        let visible = text_edit::visible_char_count(available, advance);
+        let field = if selected {
+            SettingsTextField::editable(&self.editor_text, visible, advance, focused, palette)
+        } else {
+            SettingsTextField::new(text.to_owned(), empty, focused, palette)
+                .placeholder(placeholder)
+        }
+        .width(field_width);
         SettingsRow::rule(("native-tools-text", index), palette)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1288,7 +1356,7 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(label, palette))
-            .child(SettingsTextField::new(display, empty, selected, palette))
+            .child(field)
             .into_any_element()
     }
 
@@ -1540,6 +1608,7 @@ impl Focusable for NativeToolsView {
 
 impl Render for NativeToolsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_editor_text();
         self.sync_lists();
         self.body_focused = self.focus_handle.is_focused(window);
         div()
@@ -1563,7 +1632,7 @@ impl Render for NativeToolsView {
                     .flex()
                     .flex_col()
                     .child(self.measure_body_width())
-                    .child(self.render_body(cx)),
+                    .child(self.render_body(window, cx)),
             )
     }
 }
@@ -1588,35 +1657,68 @@ fn navigate_form(selected: &mut usize, count: usize, event: &KeyDownEvent) -> bo
 
 fn apply_shortcut_field(
     draft: &mut ShortcutDraft,
+    field: &mut TextField,
     event: &KeyDownEvent,
     cx: &mut Context<NativeToolsView>,
 ) -> bool {
     let key = event.keystroke.key.as_str();
+    let modifiers = &event.keystroke.modifiers;
     if matches!(key, "enter" | "return" | "space" | "right") && activate_shortcut_field(draft) {
         return true;
     }
     if draft.managed.is_some() {
         return false;
     }
-    let target = shortcut_text_target(draft);
-    let Some(value) = target else {
+    if shortcut_text_target(draft).is_none() {
         return false;
-    };
-    if modifier_is_secondary(&event.keystroke.modifiers) && key == "v" {
+    }
+    if modifier_is_secondary(modifiers) && key == "v" {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            value.push_str(&text);
+            field.paste(&text);
+            sync_shortcut_target(draft, field);
             return true;
         }
         return false;
     }
-    if key == "backspace" {
-        value.pop();
-        return true;
+    let span = text_edit::span(modifiers);
+    match key {
+        "backspace" => {
+            if field.backspace(span) {
+                sync_shortcut_target(draft, field);
+                return true;
+            }
+            return false;
+        }
+        "delete" => {
+            if field.delete_forward(span) {
+                sync_shortcut_target(draft, field);
+                return true;
+            }
+            return false;
+        }
+        "left" => {
+            field.move_left(modifiers.shift, span);
+            return true;
+        }
+        "right" => {
+            field.move_right(modifiers.shift, span);
+            return true;
+        }
+        "home" => {
+            field.move_home(modifiers.shift);
+            return true;
+        }
+        "end" => {
+            field.move_end(modifiers.shift);
+            return true;
+        }
+        "a" if modifier_is_secondary(modifiers) => {
+            field.select_all();
+            return true;
+        }
+        _ => {}
     }
-    if event.keystroke.modifiers.control
-        || event.keystroke.modifiers.alt
-        || event.keystroke.modifiers.platform
-    {
+    if modifiers.control || modifiers.alt || modifiers.platform {
         return false;
     }
     let Some(character) = event
@@ -1627,8 +1729,16 @@ fn apply_shortcut_field(
     else {
         return false;
     };
-    value.push_str(character);
+    field.insert_str(character);
+    sync_shortcut_target(draft, field);
     true
+}
+
+fn sync_shortcut_target(draft: &mut ShortcutDraft, field: &TextField) {
+    if let Some(value) = shortcut_text_target(draft) {
+        value.clear();
+        value.push_str(field.text());
+    }
 }
 
 fn activate_shortcut_field(draft: &mut ShortcutDraft) -> bool {
@@ -1643,6 +1753,17 @@ fn activate_shortcut_field(draft: &mut ShortcutDraft) -> bool {
     let count = draft.field_count();
     draft.selected = draft.selected.min(count.saturating_sub(1));
     true
+}
+
+fn shortcut_text_target_key(draft: &ShortcutDraft) -> Option<(usize, ShortcutActionKind, bool)> {
+    let editing = match (draft.action_kind, draft.selected) {
+        (_, 2) => true,
+        (ShortcutActionKind::App, 5) => true,
+        (ShortcutActionKind::Url, 4) => true,
+        (ShortcutActionKind::Url, 7) if draft.browser_override => true,
+        _ => false,
+    };
+    editing.then_some((draft.selected, draft.action_kind, draft.browser_override))
 }
 
 fn shortcut_text_target(draft: &mut ShortcutDraft) -> Option<&mut String> {

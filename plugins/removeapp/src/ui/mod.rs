@@ -2,8 +2,8 @@ pub mod run;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable, FontWeight,
-    KeyDownEvent, SharedString, WeakEntity, Window,
+    div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
+    FontWeight, KeyDownEvent, SharedString, WeakEntity, Window,
 };
 
 use crate::core::{
@@ -11,6 +11,7 @@ use crate::core::{
 };
 use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::surface::PanelDragArea;
+use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 
 pub const WINDOW_TITLE: &str = "removeapp";
@@ -59,7 +60,7 @@ enum DoneAction {
 
 pub struct RemoveAppView {
     apps: Vec<InstalledApp>,
-    query: String,
+    query: TextField,
     matches: Vec<InstalledApp>,
     list: ScrollList,
     mode: Mode,
@@ -82,7 +83,7 @@ impl RemoveAppView {
         Self::spawn_size_prewarm(cx, apps.clone());
         Self {
             apps,
-            query: String::new(),
+            query: TextField::new(),
             matches,
             list: ScrollList::new(MAX_VISIBLE),
             mode: Mode::Picking,
@@ -144,7 +145,7 @@ impl RemoveAppView {
     }
 
     fn refilter(&mut self) {
-        let mut matches = core::filter(&self.apps, &self.query);
+        let mut matches = core::filter(&self.apps, self.query.text());
         matches.sort_by(|a, b| {
             let left = self.sizes.get(&a.path).copied().unwrap_or(0);
             let right = self.sizes.get(&b.path).copied().unwrap_or(0);
@@ -293,6 +294,9 @@ impl RemoveAppView {
 
     fn on_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.as_str();
+        let span = text_edit::span(&ev.keystroke.modifiers);
+        let shift = ev.keystroke.modifiers.shift;
+        let secondary = ev.keystroke.modifiers.secondary();
         match self.mode {
             Mode::Picking => match key {
                 "escape" => cx.quit(),
@@ -313,18 +317,46 @@ impl RemoveAppView {
                     cx.notify();
                 }
                 "backspace" => {
-                    self.query.pop();
+                    self.query.backspace(span);
                     self.refilter();
                     cx.notify();
                 }
+                "delete" => {
+                    if self.query.delete_forward(span) {
+                        self.refilter();
+                    }
+                    cx.notify();
+                }
+                "left" => {
+                    self.query.move_left(shift, span);
+                    cx.notify();
+                }
+                "right" => {
+                    self.query.move_right(shift, span);
+                    cx.notify();
+                }
+                "home" => {
+                    self.query.move_home(shift);
+                    cx.notify();
+                }
+                "end" => {
+                    self.query.move_end(shift);
+                    cx.notify();
+                }
+                "a" if secondary => {
+                    self.query.select_all();
+                    cx.notify();
+                }
                 "space" => {
-                    self.query.push(' ');
+                    self.query.insert_char(' ');
                     self.refilter();
                     cx.notify();
                 }
                 k if is_typed_char(k) => {
-                    self.query.push_str(k);
-                    self.refilter();
+                    if let Some(ch) = k.chars().next() {
+                        self.query.insert_char(ch);
+                        self.refilter();
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -372,15 +404,15 @@ impl RemoveAppView {
         }
     }
 
-    fn render_body(&self) -> AnyElement {
+    fn render_body(&self, window: &mut Window) -> AnyElement {
         match self.mode {
-            Mode::Picking => self.render_picking(),
+            Mode::Picking => self.render_picking(window),
             Mode::Confirming => self.render_confirming(),
             Mode::Done => self.render_done(),
         }
     }
 
-    fn render_picking(&self) -> AnyElement {
+    fn render_picking(&self, window: &mut Window) -> AnyElement {
         let range = self.list.visible_range(self.matches.len());
         let selected = self.list.selected;
         let rows: Vec<_> = self.matches[range.clone()]
@@ -401,7 +433,7 @@ impl RemoveAppView {
             .flex()
             .flex_col()
             .size_full()
-            .child(self.search_box())
+            .child(self.search_box(window))
             .child(
                 div()
                     .flex_1()
@@ -504,15 +536,23 @@ impl RemoveAppView {
         )
     }
 
-    fn search_box(&self) -> impl IntoElement {
+    fn search_box(&self, window: &mut Window) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
         let palette = current_palette();
         let empty = self.query.is_empty();
-        let shown = if empty {
-            "Search installed apps".to_string()
-        } else {
-            self.query.clone()
-        };
+        let mono = font(qol_gpui::theme::font_mono());
+        let advance =
+            qol_gpui::text::shaped_width(window, "0", mono.clone(), qol_gpui::theme::TEXT_CAPTION);
+        let keycap = qol_gpui::text::shaped_width(window, "/", mono, qol_gpui::theme::TEXT_KEYCAP)
+            + 2.0 * qol_gpui::theme::SPACE_SNUG
+            + 2.0;
+        let available = WINDOW_WIDTH
+            - 2.0 * SEARCH_PAD
+            - 2.0 * qol_gpui::theme::SPACE_PAD
+            - 10.0
+            - keycap
+            - 2.0;
+        let visible = text_edit::visible_char_count(available, advance);
         div()
             .flex_none()
             .w_full()
@@ -535,14 +575,33 @@ impl RemoveAppView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .truncate()
+                            .overflow_hidden()
+                            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                             .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                             .text_color(rgb(if empty {
                                 palette.text_muted
                             } else {
                                 palette.text_primary
                             }))
-                            .child(shown),
+                            .child(
+                                TextFieldElement::new(&self.query, visible, advance)
+                                    .selection(
+                                        rgba(palette.selection_bg_rgba).into(),
+                                        Some(rgb(palette.text_primary).into()),
+                                    )
+                                    .caret(CaretStyle {
+                                        color: rgb(palette.accent).into(),
+                                        width: 2.0,
+                                        height: 16.0,
+                                        top: 1.0,
+                                        radius: 1.0,
+                                    })
+                                    .placeholder(
+                                        "Search installed apps",
+                                        rgb(palette.text_muted).into(),
+                                    )
+                                    .render(),
+                            ),
                     )
                     .child(kit.keycap("/")),
             )
@@ -797,7 +856,7 @@ impl Focusable for RemoveAppView {
 }
 
 impl Render for RemoveAppView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = current_palette();
         self.list.sync(self.matches.len());
         div()
@@ -811,7 +870,7 @@ impl Render for RemoveAppView {
             .bg(rgb(palette.panel_bg))
             .text_color(rgb(palette.text_primary))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
-            .child(self.render_body())
+            .child(self.render_body(window))
     }
 }
 
