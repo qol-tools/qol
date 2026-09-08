@@ -392,11 +392,9 @@ impl EditorView {
         clamp: bool,
     ) -> Option<(NormalizedPoint, f32)> {
         let bounds = self.image_bounds.get()?;
-        let local_x = (position.x - bounds.origin.x).to_f64() as f32;
-        let local_y = (position.y - bounds.origin.y).to_f64() as f32;
         let width = bounds.size.width.to_f64() as f32;
         let height = bounds.size.height.to_f64() as f32;
-        render::normalized_pointer(local_x, local_y, width, height, clamp)
+        render::normalized_pointer(bounds, position, clamp)
             .map(|point| (point, self.pen_width.screen_px() / width.min(height)))
     }
 

@@ -279,7 +279,7 @@ fn control_layout(profile: ControllerProfile) -> ControlLayout {
 }
 
 fn at(bounds: Bounds<Pixels>, x: f32, y: f32) -> Point<Pixels> {
-    bounds.origin + point(scaled(x), scaled(y))
+    crate::canvas::at(bounds, x * SCALE, y * SCALE)
 }
 
 fn scaled(value: f32) -> Pixels {

@@ -1,5 +1,6 @@
 pub mod activity_animation;
 pub mod artifact;
+pub mod canvas;
 pub mod color_wheel;
 pub mod command_loop;
 pub mod deck;
