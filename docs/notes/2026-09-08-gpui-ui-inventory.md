@@ -22,7 +22,7 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 |---|---|---|
 | A1 `WindowOptions` at 7 sites | `PopupWindowOptions` builder + 6 sites migrated (cli-sessions' site removed by A2) | `1b71928d3`, `7fcb7504a` |
 | A2 cli-sessions hand-rolled panel | `SurfaceKind::OverlayPanel` + `OpenedSurface::update_view`, cli-sessions moved onto `Surface` | `5ee5b33b1` |
-| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated (atlas-registry promotion outstanding) | `1b71928d3`, `7fcb7504a` |
+| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated | `1b71928d3`, `7fcb7504a` |
 | B2 cli-sessions toast 380x76 | sends `style = "compact"`; host derives 340x76 | `139773965` |
 | B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `139773965` |
 | B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated | `fea1353c9` |
@@ -37,6 +37,12 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 | B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `43478cd38` |
 | B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed | `7c9485589` |
 | B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `0a1394378` |
+| A5 text input | `text_edit::TextField` owns cursor, anchor, motion, delete and paste; `TextFieldElement` renders the caret/selection window; launcher, removeapp and native_tools hold one field each, and the editable chrome is a `SettingsTextField` recipe | `416fc4fdf`, `491abfbe3` |
+| B5 settings opener name | `qol_apps::desktop_integration::open_plugin_settings_via_tray` at ~18 call sites, so it no longer shares a name with the native panel opener | `542eedee6` |
+| B8 mirrored geometry | six consumer constants read their theme token (`RENDER_GAP`, `SEARCH_PAD`, `SEARCH_H`, `FAILBAR_H`, `EDGE`, `CHIP_TOP`); `RENDER_PAD_X/Y` and `ROW_H` stay local because no equal-valued token owns their meaning | `84c7d552a` |
+| B11 text width helpers | `qol_gpui::text::{shaped_width, truncate_to_width}`; launcher and alt-tab migrated | `930953bdf` |
+| B14 action-ring copy | shot editor and preview share one ring builder | `930953bdf` |
+| B21 hint-key copies | shot editor and launcher hint keys derive from the binding tables their handlers read | `930953bdf` |
 
 Guest verification of A2 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
 `SURFACE_REVEAL phase=opened hidden=true` -> `phase=frame-ready expected=observed=rendered=360x400` ->
@@ -54,6 +60,13 @@ Guest verification of A3 (`linux/mint-cinnamon`, artifact-backed lane, debug bun
 cli-sessions and removeapp gives `phase=frame-ready ... content_rendered=true` -> `phase=revealed`
 -> `phase=ready focus=true` (removeapp `first_paint_latency_ms=1`); the exempt selector still gives
 `SHOT_SELECT_REVEAL state=presented`, `SHOT_SELECT_VIEWPORT aligned=true`, and a 600x400 capture.
+
+Guest verification of A5 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle): launcher typing
+through the tray action route gives `LAUNCHER_INPUT ... q="fire" q_len=4 cursor=4` with result counts
+falling 22 -> 15 -> 8; `shift+left` twice gives `selection=3-4` then `selection=2-4`; `ctrl+a` gives
+`selection=0-4`; `backspace` clears to `q="" q_len=0 cursor=0`; typing `ch` then `left` leaves
+`q="ch" cursor=1`. removeapp takes the same field through open, two typed characters, `backspace`,
+`ctrl+a` and `backspace` with zero panics in the guest log and a rendered window.
 
 Line counts in scope: `libs/gpui` 33,259 (70 files); GPUI-touching consumer code 7,832 (launcher),
 8,755 (alt-tab), 10,943 (shot), 6,999 (qol-tray), 2,197 (cli-sessions), 1,141 (removeapp).
