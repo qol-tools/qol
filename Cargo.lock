@@ -6863,6 +6863,7 @@ dependencies = [
  "qol-apps",
  "qol-artifact",
  "qol-build-identity",
+ "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-dev-build",

@@ -35,7 +35,7 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 | B6 removeapp palette | removeapp reads only `RemoveAppPalette` | `43478cd38` |
 | B10 alt-tab hint fitting | hint bar built through `fit_hints` | `0a1394378` |
 | B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `43478cd38` |
-| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed | `7c9485589` |
+| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed; `ToastPresenter` crate-private, `tile_tone`/`focus_ring_for` private | `7c9485589` |
 | B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `0a1394378` |
 | A5 text input | `text_edit::TextField` owns cursor, anchor, motion, delete and paste; `TextFieldElement` renders the caret/selection window; launcher, removeapp and native_tools hold one field each, and the editable chrome is a `SettingsTextField` recipe | `416fc4fdf`, `491abfbe3` |
 | B5 settings opener name | `qol_apps::desktop_integration::open_plugin_settings_via_tray` at ~18 call sites, so it no longer shares a name with the native panel opener | `542eedee6` |
@@ -43,6 +43,21 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 | B11 text width helpers | `qol_gpui::text::{shaped_width, truncate_to_width}`; launcher and alt-tab migrated | `930953bdf` |
 | B14 action-ring copy | shot editor and preview share one ring builder | `930953bdf` |
 | B21 hint-key copies | shot editor and launcher hint keys derive from the binding tables their handlers read | `930953bdf` |
+| A4 active-monitor ownership | `monitor.rs` owns the only active-monitor cache and names the three precedence policies (active-first, focus-first, cached-first); ghost and alt-tab keep intent, not a second answer, and every call site keeps the policy it had | `270ce597a` |
+| B1 cli-sessions selection | `Selection` wraps `ScrollList`; the id anchor only restores position through one function | `e41a8e62a` |
+| B9 two ghost-hide mechanisms | stopped, not approximated: the title-keyed native hide and the handle-keyed view hide cannot share one API without erasing the typed handle or threading `&mut App` into title-only callers | — |
+| B12 shot warm pools | one `WarmWindowPool` serves the pin and selector caches, keyed by window kind + monitor topology + size, dropping entries whose topology no longer matches the live set | `4f721077c` |
+
+### Residual, deliberately not changed
+
+| Item | Decision |
+|---|---|
+| A4 multi-monitor magnitude | Ownership is unified and the single-monitor paths are guest-verified; whether focus-first and active-first should ever disagree is a precedence product question, and the available guest is single-monitor. |
+| A9 shot cross-monitor move | Deliberate sticky-placement policy; a contract question, not duplication. |
+| B7 spacing literals | The 41 literals and 8 off-ladder values are a design-system decision: snapping them changes pixels, extending the ladder changes the system. |
+| B16 gpui re-export | One dependency line per crate against an import rewrite across six crates. |
+| B20 alt-tab scrollbar | A UX addition, not duplication. |
+| B22 launcher examples palette | Teaching material. |
 
 Guest verification of A2 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
 `SURFACE_REVEAL phase=opened hidden=true` -> `phase=frame-ready expected=observed=rendered=360x400` ->
@@ -67,6 +82,15 @@ falling 22 -> 15 -> 8; `shift+left` twice gives `selection=3-4` then `selection=
 `selection=0-4`; `backspace` clears to `q="" q_len=0 cursor=0`; typing `ch` then `left` leaves
 `q="ch" cursor=1`. removeapp takes the same field through open, two typed characters, `backspace`,
 `ctrl+a` and `backspace` with zero panics in the guest log and a rendered window.
+
+Guest verification of A4 and B12 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
+launcher open/type/dismiss keeps `SHOW_GHOST`/`HIDE_WIN`/`FOCUS_RETURN` and reports
+`GHOSTDUMP ... active_mon=Some(ActiveMonitor { inner: MonitorBounds { x: 0.0, y: 0.0, width: 1280.0,
+height: 800.0 } })` through the new owner; the shot selector reuses its warm window
+(`SHOT_SELECT_WINDOW state=reuse`, `SHOT_SELECT_OPEN result=reuse`), the pin reuses a pooled window
+(`SHOT_PIN_OPEN path=reuse ms=6`, `SHOT_PIN_REVEAL ... action_ms=77 state=presented`) and returns it
+(`SHOT_PIN_RECYCLE result=ok`), and no `SHOT_WARM_INVALIDATE` fires while the topology is unchanged.
+cli-sessions selection is covered by the workspace tests, which pass unchanged.
 
 Line counts in scope: `libs/gpui` 33,259 (70 files); GPUI-touching consumer code 7,832 (launcher),
 8,755 (alt-tab), 10,943 (shot), 6,999 (qol-tray), 2,197 (cli-sessions), 1,141 (removeapp).
