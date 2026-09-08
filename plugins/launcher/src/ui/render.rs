@@ -46,7 +46,7 @@ impl Render for LauncherView {
                 "launcher",
                 &self.focus_handle,
                 window,
-                |this: &Self| this.blur_guard_until,
+                |this: &Self| this.blur_guard.guard_until(),
                 |this: &Self| this.is_showing,
                 |_| qol_gpui::popup_window::input_held(),
                 cx,

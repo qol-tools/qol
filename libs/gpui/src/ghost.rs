@@ -334,6 +334,37 @@ fn schedule_debounced_dismiss<V: 'static>(
     .detach();
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BlurGuard {
+    guard_until: std::time::Instant,
+}
+
+impl BlurGuard {
+    pub fn new() -> Self {
+        Self {
+            guard_until: std::time::Instant::now(),
+        }
+    }
+
+    pub fn arm(&mut self, duration: std::time::Duration) {
+        self.guard_until = std::time::Instant::now() + duration;
+    }
+
+    pub fn is_armed(&self) -> bool {
+        std::time::Instant::now() < self.guard_until
+    }
+
+    pub fn guard_until(&self) -> std::time::Instant {
+        self.guard_until
+    }
+}
+
+impl Default for BlurGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
     label: &'static str,
     focus_handle: &gpui::FocusHandle,
@@ -624,7 +655,7 @@ fn track_dismiss_confirmed_with_held<V: gpui::Focusable + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{debounce_verdict, DebounceVerdict};
+    use super::{debounce_verdict, BlurGuard, DebounceVerdict};
 
     #[test]
     fn debounce_recheck_dismisses_only_when_truly_inactive() {
@@ -754,5 +785,41 @@ mod tests {
                 "case: {case}"
             );
         }
+    }
+
+    #[test]
+    fn blur_guard_new_is_not_armed() {
+        let guard = BlurGuard::new();
+        assert!(!guard.is_armed());
+        assert!(guard.guard_until() <= std::time::Instant::now());
+    }
+
+    #[test]
+    fn blur_guard_arm_arms_for_the_duration() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::from_secs(60));
+        assert!(guard.is_armed());
+        assert!(guard.guard_until() > std::time::Instant::now());
+        let bound = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        assert!(guard.guard_until() <= bound);
+    }
+
+    #[test]
+    fn blur_guard_zero_duration_is_not_armed() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::ZERO);
+        assert!(!guard.is_armed());
+    }
+
+    #[test]
+    fn blur_guard_guard_until_is_monotonic_per_arm() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::from_millis(10));
+        let first = guard.guard_until();
+        assert_eq!(guard.guard_until(), first);
+        guard.arm(std::time::Duration::from_secs(1));
+        let second = guard.guard_until();
+        assert!(second > first);
+        assert_eq!(guard.guard_until(), second);
     }
 }
