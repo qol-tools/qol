@@ -12,12 +12,17 @@ use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
 
 mod platform;
+mod reveal;
 
 use self::platform::{Platform, SurfacePlatform};
 
+pub use self::reveal::{
+    await_reveal_readiness, schedule_fresh_frame, schedule_fresh_frame_in, FreshFrame,
+    RevealOutcome, RevealProof,
+};
+
 const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
 const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
-const VIEWPORT_TOLERANCE: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
@@ -389,20 +394,9 @@ impl Surface {
             }
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
-                let bounds_subscription =
-                    cx.observe_window_bounds(window, |root: &mut SurfaceRoot<V>, window, cx| {
-                        root.layout_epoch
-                            .set(root.layout_epoch.get().wrapping_add(1));
-                        root.observed_viewport.set(window.viewport_size());
-                        cx.notify();
-                    });
+                let bounds_subscription = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
                 SurfaceRoot {
                     inner,
-                    render_epoch: Rc::new(Cell::new(0)),
-                    layout_epoch: Rc::new(Cell::new(0)),
-                    rendered_layout_epoch: Rc::new(Cell::new(0)),
-                    observed_viewport: Rc::new(Cell::new(size(px(0.0), px(0.0)))),
-                    rendered_viewport: Rc::new(Cell::new(size(px(0.0), px(0.0)))),
                     _bounds_subscription: bounds_subscription,
                 }
             })
@@ -537,20 +531,11 @@ impl Surface {
 
 pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
-    render_epoch: Rc<Cell<u64>>,
-    layout_epoch: Rc<Cell<u64>>,
-    rendered_layout_epoch: Rc<Cell<u64>>,
-    observed_viewport: Rc<Cell<Size<Pixels>>>,
-    rendered_viewport: Rc<Cell<Size<Pixels>>>,
     _bounds_subscription: Subscription,
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_epoch
-            .set(self.render_epoch.get().wrapping_add(1));
-        self.rendered_layout_epoch.set(self.layout_epoch.get());
-        self.rendered_viewport.set(window.viewport_size());
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div().size_full().child(self.inner.clone())
     }
 }
@@ -713,26 +698,30 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         dismiss_state,
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let reveal = await_reveal_readiness(
+        let outcome = await_reveal_readiness(
             cx,
-            handle,
             &title,
-            anchor,
             &fresh_frame,
-            &dismiss_state,
-            dismiss_generation,
+            |_| reveal_cancelled(&dismiss_state, dismiss_generation),
+            || Some(anchor.origin_for(dismiss_state.size.get())),
         )
         .await;
-        let readiness = reveal.readiness;
-        let attempts = reveal.attempts;
+        let readiness = RevealReadiness {
+            moved: outcome.moved,
+            layout_confirmed: outcome.proof.layout_confirmed,
+            viewport_ready: outcome.proof.viewport_ready,
+            fresh_frame: outcome.proof.fresh_frame,
+            content_rendered: outcome.proof.content_rendered,
+        };
+        let attempts = outcome.attempts;
         #[cfg(not(debug_assertions))]
         let _ = &attempts;
-        if reveal.cancelled {
+        if outcome.cancelled {
             reveal_pending.set(false);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=cancelled attempts={attempts} session={} reason=dismissed",
-                reveal.geometry_session.is_some()
+                outcome.session_connected()
             );
             return;
         }
@@ -753,17 +742,17 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             readiness.viewport_ready,
             readiness.fresh_frame,
             readiness.content_rendered,
-            fresh_frame.layout_epoch.get(),
-            fresh_frame.required_layout_epoch,
-            fresh_frame.render_epoch.get(),
-            fresh_frame.required_render_epoch,
-            fresh_frame.presented_render_epoch.get(),
-            fresh_frame.expected_viewport.get().width.to_f64(),
-            fresh_frame.expected_viewport.get().height.to_f64(),
-            fresh_frame.observed_viewport.get().width.to_f64(),
-            fresh_frame.observed_viewport.get().height.to_f64(),
-            fresh_frame.rendered_viewport.get().width.to_f64(),
-            fresh_frame.rendered_viewport.get().height.to_f64()
+            outcome.proof.layout_epoch,
+            outcome.proof.required_layout_epoch,
+            outcome.proof.render_epoch,
+            outcome.proof.required_render_epoch,
+            outcome.proof.presented_epoch,
+            outcome.proof.expected_viewport.width.to_f64(),
+            outcome.proof.expected_viewport.height.to_f64(),
+            outcome.proof.observed_viewport.width.to_f64(),
+            outcome.proof.observed_viewport.height.to_f64(),
+            outcome.proof.rendered_viewport.width.to_f64(),
+            outcome.proof.rendered_viewport.height.to_f64()
         );
         if !readiness.ready() {
             reveal_pending.set(false);
@@ -847,11 +836,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             if reveal_cancelled(&dismiss_state, dismiss_generation) {
                 break;
             }
-            reposition_reveal_window(
-                reveal.geometry_session.as_ref(),
-                &title,
-                anchor.origin_for(dismiss_state.size.get()),
-            );
+            outcome.reposition(&title, anchor.origin_for(dismiss_state.size.get()));
         }
         let _ = cx.update(|cx| trace_ready(title, false, cx));
     })
@@ -865,13 +850,6 @@ struct RevealReadiness {
     viewport_ready: bool,
     fresh_frame: bool,
     content_rendered: bool,
-}
-
-struct RevealWait {
-    readiness: RevealReadiness,
-    attempts: usize,
-    geometry_session: Option<crate::popup_window::WindowGeometrySession>,
-    cancelled: bool,
 }
 
 #[cfg(debug_assertions)]
@@ -905,113 +883,6 @@ impl RevealReadiness {
     }
 }
 
-#[derive(Clone)]
-struct FreshFrame {
-    render_epoch: Rc<Cell<u64>>,
-    required_render_epoch: u64,
-    layout_epoch: Rc<Cell<u64>>,
-    required_layout_epoch: u64,
-    rendered_layout_epoch: Rc<Cell<u64>>,
-    observed_viewport: Rc<Cell<Size<Pixels>>>,
-    rendered_viewport: Rc<Cell<Size<Pixels>>>,
-    expected_viewport: Rc<Cell<Size<Pixels>>>,
-    presented_render_epoch: Rc<Cell<u64>>,
-    presented_layout_epoch: Rc<Cell<u64>>,
-}
-
-impl FreshFrame {
-    fn layout_confirmed(&self) -> bool {
-        Platform::layout_confirmed(
-            self.layout_epoch.get(),
-            self.required_layout_epoch,
-            self.observed_viewport.get(),
-            self.expected_viewport.get(),
-            VIEWPORT_TOLERANCE,
-        )
-    }
-
-    fn viewport_ready(&self) -> bool {
-        viewport_matches(self.rendered_viewport.get(), self.expected_viewport.get())
-    }
-
-    fn presented(&self) -> bool {
-        self.presented_render_epoch.get() >= self.required_render_epoch
-            && self.presented_layout_epoch.get() >= self.required_layout_epoch
-    }
-
-    fn content_rendered(&self) -> bool {
-        self.render_epoch.get() >= self.required_render_epoch
-            && self.rendered_layout_epoch.get() >= self.required_layout_epoch
-            && self.viewport_ready()
-    }
-
-    fn request<V: Render + 'static>(
-        &self,
-        root: &mut SurfaceRoot<V>,
-        window: &mut Window,
-        cx: &mut Context<SurfaceRoot<V>>,
-    ) {
-        let render_epoch = self.render_epoch.clone();
-        let rendered_layout_epoch = self.rendered_layout_epoch.clone();
-        let presented_render_epoch = self.presented_render_epoch.clone();
-        let presented_layout_epoch = self.presented_layout_epoch.clone();
-        window.on_next_frame(move |_, _| {
-            presented_render_epoch.set(render_epoch.get());
-            presented_layout_epoch.set(rendered_layout_epoch.get());
-        });
-        root.inner.update(cx, |_, cx| cx.notify());
-        cx.notify();
-        window.refresh();
-    }
-}
-
-fn schedule_fresh_frame<V: Render + 'static>(
-    handle: WindowHandle<SurfaceRoot<V>>,
-    expected_viewport: Rc<Cell<Size<Pixels>>>,
-    cx: &mut App,
-) -> Option<FreshFrame> {
-    let mut request = None;
-    handle
-        .update(cx, |root, window, cx| {
-            let fresh_frame = FreshFrame {
-                render_epoch: root.render_epoch.clone(),
-                required_render_epoch: root.render_epoch.get().wrapping_add(1),
-                layout_epoch: root.layout_epoch.clone(),
-                required_layout_epoch: required_layout_epoch(root.layout_epoch.get()),
-                rendered_layout_epoch: root.rendered_layout_epoch.clone(),
-                observed_viewport: root.observed_viewport.clone(),
-                rendered_viewport: root.rendered_viewport.clone(),
-                expected_viewport,
-                presented_render_epoch: Rc::new(Cell::new(0)),
-                presented_layout_epoch: Rc::new(Cell::new(0)),
-            };
-            fresh_frame.request(root, window, cx);
-            request = Some(fresh_frame);
-        })
-        .ok()?;
-    request
-}
-
-fn required_layout_epoch(current: u64) -> u64 {
-    Platform::required_layout_epoch(current)
-}
-
-fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>) -> bool {
-    Platform::viewport_matches(actual, expected, VIEWPORT_TOLERANCE)
-}
-
-fn request_pending_frame<V: Render + 'static>(
-    handle: WindowHandle<SurfaceRoot<V>>,
-    fresh_frame: &FreshFrame,
-    cx: &mut App,
-) -> bool {
-    handle
-        .update(cx, |root, window, cx| {
-            fresh_frame.request(root, window, cx);
-        })
-        .is_ok()
-}
-
 fn request_surface_repaint<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
     cx: &mut App,
@@ -1025,114 +896,8 @@ fn request_surface_repaint<V: Render + 'static>(
         .is_ok()
 }
 
-async fn await_reveal_readiness<V: Render + 'static>(
-    cx: &mut AsyncApp,
-    handle: WindowHandle<SurfaceRoot<V>>,
-    title: &str,
-    anchor: RevealAnchor,
-    fresh_frame: &FreshFrame,
-    dismiss_state: &DismissState,
-    dismiss_generation: u64,
-) -> RevealWait {
-    let mut readiness = RevealReadiness::default();
-    let mut geometry_session = None;
-    for attempt in 1..=40 {
-        if reveal_cancelled(dismiss_state, dismiss_generation) {
-            return RevealWait {
-                readiness,
-                attempts: attempt - 1,
-                geometry_session,
-                cancelled: true,
-            };
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(15))
-            .await;
-        if reveal_cancelled(dismiss_state, dismiss_generation) {
-            return RevealWait {
-                readiness,
-                attempts: attempt,
-                geometry_session,
-                cancelled: true,
-            };
-        }
-        if geometry_session.is_none() {
-            let session_title = title.to_owned();
-            geometry_session = cx
-                .background_spawn(async move {
-                    crate::popup_window::window_geometry_session(&session_title)
-                })
-                .await;
-            qol_runtime::probe!(
-                "SURFACE_REVEAL",
-                "title={title} phase=geometry-session attempt={attempt} connected={}",
-                geometry_session.is_some()
-            );
-            if reveal_cancelled(dismiss_state, dismiss_generation) {
-                return RevealWait {
-                    readiness,
-                    attempts: attempt,
-                    geometry_session,
-                    cancelled: true,
-                };
-            }
-        }
-        readiness.moved |= reposition_reveal_window(
-            geometry_session.as_ref(),
-            title,
-            anchor.origin_for(dismiss_state.size.get()),
-        );
-        readiness.layout_confirmed = fresh_frame.layout_confirmed();
-        readiness.viewport_ready = fresh_frame.viewport_ready();
-        readiness.fresh_frame = fresh_frame.presented();
-        readiness.content_rendered = fresh_frame.content_rendered();
-        if readiness.ready() {
-            return RevealWait {
-                readiness,
-                attempts: attempt,
-                geometry_session,
-                cancelled: false,
-            };
-        }
-        let frame_requested = cx
-            .update(|cx| request_pending_frame(handle, fresh_frame, cx))
-            .unwrap_or(false);
-        if !frame_requested {
-            return RevealWait {
-                readiness,
-                attempts: attempt,
-                geometry_session,
-                cancelled: false,
-            };
-        }
-    }
-    RevealWait {
-        readiness,
-        attempts: 40,
-        geometry_session,
-        cancelled: false,
-    }
-}
-
 fn reveal_cancelled(dismiss_state: &DismissState, dismiss_generation: u64) -> bool {
     dismiss_state.generation.get() != dismiss_generation
-}
-
-fn reposition_reveal_window(
-    geometry_session: Option<&crate::popup_window::WindowGeometrySession>,
-    title: &str,
-    origin: Point<Pixels>,
-) -> bool {
-    geometry_session.map_or_else(
-        || {
-            crate::popup_window::reposition_window_by_title(
-                title,
-                origin.x.to_f64(),
-                origin.y.to_f64(),
-            )
-        },
-        |session| session.reposition(origin.x.to_f64() as i32, origin.y.to_f64() as i32),
-    )
 }
 
 impl<V> OpenedSurface<V> {
@@ -1275,26 +1040,30 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         dismiss_state,
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let reveal = await_reveal_readiness(
+        let outcome = await_reveal_readiness(
             cx,
-            handle,
             &title,
-            anchor,
             &fresh_frame,
-            &dismiss_state,
-            dismiss_generation,
+            |_| reveal_cancelled(&dismiss_state, dismiss_generation),
+            || Some(anchor.origin_for(dismiss_state.size.get())),
         )
         .await;
-        let readiness = reveal.readiness;
-        let attempts = reveal.attempts;
+        let readiness = RevealReadiness {
+            moved: outcome.moved,
+            layout_confirmed: outcome.proof.layout_confirmed,
+            viewport_ready: outcome.proof.viewport_ready,
+            fresh_frame: outcome.proof.fresh_frame,
+            content_rendered: outcome.proof.content_rendered,
+        };
+        let attempts = outcome.attempts;
         #[cfg(not(debug_assertions))]
         let _ = &attempts;
-        if reveal.cancelled {
+        if outcome.cancelled {
             reveal_pending.set(false);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=cancelled attempts={attempts} reused=true session={} reason=dismissed",
-                reveal.geometry_session.is_some()
+                outcome.session_connected()
             );
             return;
         }
@@ -1315,17 +1084,17 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             readiness.viewport_ready,
             readiness.fresh_frame,
             readiness.content_rendered,
-            fresh_frame.layout_epoch.get(),
-            fresh_frame.required_layout_epoch,
-            fresh_frame.render_epoch.get(),
-            fresh_frame.required_render_epoch,
-            fresh_frame.presented_render_epoch.get(),
-            fresh_frame.expected_viewport.get().width.to_f64(),
-            fresh_frame.expected_viewport.get().height.to_f64(),
-            fresh_frame.observed_viewport.get().width.to_f64(),
-            fresh_frame.observed_viewport.get().height.to_f64(),
-            fresh_frame.rendered_viewport.get().width.to_f64(),
-            fresh_frame.rendered_viewport.get().height.to_f64()
+            outcome.proof.layout_epoch,
+            outcome.proof.required_layout_epoch,
+            outcome.proof.render_epoch,
+            outcome.proof.required_render_epoch,
+            outcome.proof.presented_epoch,
+            outcome.proof.expected_viewport.width.to_f64(),
+            outcome.proof.expected_viewport.height.to_f64(),
+            outcome.proof.observed_viewport.width.to_f64(),
+            outcome.proof.observed_viewport.height.to_f64(),
+            outcome.proof.rendered_viewport.width.to_f64(),
+            outcome.proof.rendered_viewport.height.to_f64()
         );
         if !readiness.ready() {
             reveal_pending.set(false);
@@ -1442,9 +1211,10 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 
 #[cfg(test)]
 mod tests {
+    use super::platform::SurfacePlatform;
     use super::{
-        resolved_app_id, reveal_cancelled, state_restore_needs_retry, viewport_matches,
-        DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        resolved_app_id, reveal_cancelled, state_restore_needs_retry, DragGestureState,
+        RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
     };
     use crate::placement::MonitorPlacement;
     use gpui::{point, px, size, Pixels, WindowKind};
@@ -1601,7 +1371,11 @@ mod tests {
         ];
 
         for (name, actual, matches) in cases {
-            assert_eq!(viewport_matches(actual, expected), matches, "{name}");
+            assert_eq!(
+                super::platform::Platform::viewport_matches(actual, expected, 1.0),
+                matches,
+                "{name}"
+            );
         }
     }
 

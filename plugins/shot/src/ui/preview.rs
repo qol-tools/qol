@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use anyhow::Result;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -912,21 +912,68 @@ impl PreviewView {
         self.scheduled_reveal_seq = Some(seq);
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_seq(seq);
-            });
+            self.schedule_reveal_proof(window, cx, seq);
             return;
         }
         self.parked_reveal = true;
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-mapped");
         if super::schedule_parked_reveal(&self.title, cx) {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_seq(seq);
-            });
+            self.schedule_reveal_proof(window, cx, seq);
             return;
         }
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-deferred");
         cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_reveal_proof(&mut self, window: &mut Window, cx: &mut Context<Self>, seq: u64) {
+        let (width, height) = window_dims(self.thumb.0, self.thumb.1, control_count());
+        let expected = Rc::new(Cell::new(size(px(width), px(height))));
+        let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
+        else {
+            self.reveal_presented_seq(seq);
+            return;
+        };
+        let title = self.title.clone();
+        let this = cx.entity().downgrade();
+        let cancelled = {
+            let this = this.clone();
+            move |cx: &AsyncApp| {
+                this.read_with(cx, |view, _| view.seq != seq)
+                    .unwrap_or(true)
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = qol_gpui::surface::await_reveal_readiness(
+                cx,
+                &title,
+                &fresh_frame,
+                cancelled,
+                || None,
+            )
+            .await;
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_REVEAL",
+                "seq={seq} state=proof ready={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={} expected={}x{} observed={}x{} rendered={}x{}",
+                outcome.proof.ready(),
+                outcome.proof.layout_confirmed,
+                outcome.proof.viewport_ready,
+                outcome.proof.fresh_frame,
+                outcome.proof.content_rendered,
+                outcome.attempts,
+                outcome.proof.expected_viewport.width.to_f64(),
+                outcome.proof.expected_viewport.height.to_f64(),
+                outcome.proof.observed_viewport.width.to_f64(),
+                outcome.proof.observed_viewport.height.to_f64(),
+                outcome.proof.rendered_viewport.width.to_f64(),
+                outcome.proof.rendered_viewport.height.to_f64()
+            );
             let _ = cx.update(|cx| {
                 if let Some(view) = this.upgrade() {
                     view.update(cx, |view, _cx| view.reveal_presented_seq(seq));

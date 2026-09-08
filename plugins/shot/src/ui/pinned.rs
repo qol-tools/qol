@@ -1,6 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -65,6 +66,7 @@ struct PinnedWindowSpec {
 struct PinReveal {
     origin: (f64, f64),
     source_preview: Option<String>,
+    size: Size<Pixels>,
 }
 
 type FullResolutionImage = anyhow::Result<(Arc<RenderImage>, u32, u32)>;
@@ -147,6 +149,7 @@ pub fn open(
     let reveal = PinReveal {
         origin: (native.x, native.y),
         source_preview,
+        size: placement.logical_bounds().size,
     };
     if platform::pin_cache_enabled() {
         let cache_empty = PIN_CACHE.with(|cache| cache.borrow().is_empty());
@@ -474,9 +477,7 @@ impl PinnedView {
             self.title
         );
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_generation(generation);
-            });
+            self.schedule_reveal_proof(window, cx, generation);
             return;
         }
         qol_runtime::probe!(
@@ -485,9 +486,7 @@ impl PinnedView {
             self.title
         );
         if super::schedule_parked_reveal(&self.title, cx) {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_generation(generation);
-            });
+            self.schedule_reveal_proof(window, cx, generation);
             return;
         }
         qol_runtime::probe!(
@@ -496,6 +495,64 @@ impl PinnedView {
             self.title
         );
         cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_reveal_proof(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        generation: u64,
+    ) {
+        let expected = match self.pending_reveal.as_ref() {
+            Some(reveal) => Rc::new(Cell::new(reveal.size)),
+            None => return,
+        };
+        let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
+        else {
+            self.reveal_presented_generation(generation);
+            return;
+        };
+        let title = self.title.clone();
+        let this = cx.entity().downgrade();
+        let cancelled = {
+            let this = this.clone();
+            move |cx: &AsyncApp| {
+                this.read_with(cx, |view, _| view.reveal_generation != generation)
+                    .unwrap_or(true)
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = qol_gpui::surface::await_reveal_readiness(
+                cx,
+                &title,
+                &fresh_frame,
+                cancelled,
+                || None,
+            )
+            .await;
+            qol_runtime::probe!(
+                "SHOT_PIN_REVEAL",
+                "title={title} generation={generation} state=proof ready={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={} expected={}x{} observed={}x{} rendered={}x{}",
+                outcome.proof.ready(),
+                outcome.proof.layout_confirmed,
+                outcome.proof.viewport_ready,
+                outcome.proof.fresh_frame,
+                outcome.proof.content_rendered,
+                outcome.attempts,
+                outcome.proof.expected_viewport.width.to_f64(),
+                outcome.proof.expected_viewport.height.to_f64(),
+                outcome.proof.observed_viewport.width.to_f64(),
+                outcome.proof.observed_viewport.height.to_f64(),
+                outcome.proof.rendered_viewport.width.to_f64(),
+                outcome.proof.rendered_viewport.height.to_f64()
+            );
             let _ = cx.update(|cx| {
                 if let Some(view) = this.upgrade() {
                     view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
