@@ -143,6 +143,11 @@ fn control_count() -> usize {
     ShotAction::ALL.len() + 2
 }
 
+pub(crate) fn wrap_index(current: usize, delta: isize, count: usize) -> usize {
+    let count = count as isize;
+    (((current as isize + delta) % count + count) % count) as usize
+}
+
 type Completion = Arc<Mutex<Option<Result<()>>>>;
 type DismissSub = (Subscription, Subscription, Option<Task<()>>);
 
@@ -1011,8 +1016,7 @@ impl PreviewView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = control_count() as isize;
-        self.selected = (((self.selected as isize + delta) % n + n) % n) as usize;
+        self.selected = wrap_index(self.selected, delta, control_count());
         cx.notify();
     }
 

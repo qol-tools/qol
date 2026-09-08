@@ -3,6 +3,7 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
+use qol_gpui::text::shaped_width;
 use qol_gpui::theme::{
     launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO, TEXT_NANO,
     TEXT_TITLE,
@@ -216,26 +217,6 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .nth(char_idx)
         .map(|(i, _)| i)
         .unwrap_or(s.len())
-}
-
-fn shaped_width(window: &mut gpui::Window, text: &str, run_font: Font, font_size: f32) -> f32 {
-    window
-        .text_system()
-        .shape_line(
-            SharedString::from(text.to_owned()),
-            px(font_size),
-            &[TextRun {
-                len: text.len(),
-                font: run_font,
-                color: Hsla::default(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        )
-        .width
-        .into()
 }
 
 fn visible_char_count(available_px: f32, advance_px: f32) -> usize {
@@ -642,17 +623,83 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .collect()
 }
 
+struct LauncherHint {
+    keystrokes: &'static [&'static str],
+    label: &'static str,
+    priority: u8,
+    pinned: bool,
+}
+
+enum LauncherHintSlot {
+    Hint(LauncherHint),
+    ModeChip,
+    Spacer,
+}
+
+const LAUNCHER_HINTS: &[LauncherHintSlot] = &[
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["enter"],
+        label: "open",
+        priority: 2,
+        pinned: false,
+    }),
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["up", "down"],
+        label: "move",
+        priority: 2,
+        pinned: false,
+    }),
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["tab"],
+        label: "mode",
+        priority: 1,
+        pinned: false,
+    }),
+    LauncherHintSlot::ModeChip,
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &[],
+        label: "search",
+        priority: 0,
+        pinned: false,
+    }),
+    LauncherHintSlot::Spacer,
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["esc", "escape"],
+        label: "dismiss",
+        priority: 0,
+        pinned: true,
+    }),
+];
+
+fn keycap(keystrokes: &[&'static str]) -> &'static str {
+    match keystrokes {
+        [] => "type",
+        ["enter"] => "\u{23CE}",
+        ["up", "down"] => "\u{2191}\u{2193}",
+        ["tab"] => "\u{21E5}",
+        [key, ..] => key,
+    }
+}
+
+fn hint_descriptor(hint: &LauncherHint) -> HintDescriptor {
+    let key = keycap(hint.keystrokes);
+    if hint.pinned {
+        HintDescriptor::pinned(key, hint.label)
+    } else {
+        HintDescriptor::new(key, hint.label, hint.priority)
+    }
+}
+
 pub fn hint_bar(mode: SearchMode) -> Div {
     let kit = qol_gpui::kit::kit();
-    let items = [
-        BarItem::Hint(HintDescriptor::new("\u{23CE}", "open", 2)),
-        BarItem::Hint(HintDescriptor::new("\u{2191}\u{2193}", "move", 2)),
-        BarItem::Hint(HintDescriptor::new("\u{21E5}", "mode", 1)),
-        BarItem::FixedWidth(estimated_chip_width(mode.label())),
-        BarItem::Hint(HintDescriptor::new("type", "search", 0)),
-        BarItem::Spacer,
-        BarItem::Hint(HintDescriptor::pinned("esc", "dismiss")),
-    ];
+    let items: Vec<BarItem> = LAUNCHER_HINTS
+        .iter()
+        .map(|slot| match slot {
+            LauncherHintSlot::Hint(hint) => BarItem::Hint(hint_descriptor(hint)),
+            LauncherHintSlot::ModeChip => BarItem::FixedWidth(estimated_chip_width(mode.label())),
+            LauncherHintSlot::Spacer => BarItem::Spacer,
+        })
+        .collect();
     let mut bar = kit.hint_bar();
     for item in fit_hints(WINDOW_WIDTH, &items) {
         bar = match item {
@@ -670,8 +717,11 @@ pub fn bg_color() -> gpui::Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_lead, search_window, visible_char_count};
+    use super::{answer_lead, search_window, visible_char_count, LauncherHintSlot, LAUNCHER_HINTS};
     use crate::flow::FlowRow;
+    use crate::ui::input::InputEffect;
+    use crate::ui::state::LauncherState;
+    use gpui::Modifiers;
 
     fn flow_row(kind: &str) -> FlowRow {
         FlowRow {
@@ -706,6 +756,24 @@ mod tests {
     #[test]
     fn visible_char_count_zero_advance_holds_eight() {
         assert_eq!(visible_char_count(300.0, 0.0), 8);
+    }
+
+    #[test]
+    fn advertised_hint_keystrokes_reach_the_handler() {
+        for slot in LAUNCHER_HINTS {
+            let LauncherHintSlot::Hint(hint) = slot else {
+                continue;
+            };
+            for &keystroke in hint.keystrokes {
+                let mut state = LauncherState::new();
+                assert_ne!(
+                    state.apply_key(keystroke, &Modifiers::none(), 1),
+                    InputEffect::Ignore,
+                    "hint {:?} advertises {keystroke:?}",
+                    hint.label
+                );
+            }
+        }
     }
 
     #[test]

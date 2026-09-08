@@ -147,17 +147,22 @@ impl EditorView {
 
     fn render_hint_bar(&self, window_width: f32) -> Div {
         let kit = qol_gpui::kit::kit();
-        let items = [
-            BarItem::Hint(HintDescriptor::new("\u{23CE}", "activate", 3)),
-            BarItem::Hint(HintDescriptor::new("\u{2190}\u{2192}", "move", 2)),
-            BarItem::Hint(HintDescriptor::new("H", "hue", 2)),
-            BarItem::Hint(HintDescriptor::new("W", "width", 2)),
-            BarItem::Hint(HintDescriptor::new("U", "undo", 1)),
-            BarItem::Hint(HintDescriptor::new("S", "save", 1)),
-            BarItem::Hint(HintDescriptor::new("drag", "draw", 0)),
-            BarItem::Spacer,
-            BarItem::Hint(HintDescriptor::pinned("esc", "close")),
-        ];
+        let mut items = Vec::new();
+        let mut spacer = false;
+        for row in EDITOR_KEY_ROWS {
+            let Some(hint) = row.hint else {
+                continue;
+            };
+            if hint.pinned && !spacer {
+                items.push(BarItem::Spacer);
+                spacer = true;
+            }
+            items.push(BarItem::Hint(if hint.pinned {
+                HintDescriptor::pinned(hint.key, hint.label)
+            } else {
+                HintDescriptor::new(hint.key, hint.label, hint.priority)
+            }));
+        }
         let mut bar = kit.hint_bar();
         for item in fit_hints(window_width, &items) {
             bar = match item {

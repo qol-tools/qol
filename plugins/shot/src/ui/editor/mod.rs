@@ -12,7 +12,7 @@ use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
 use crate::capture::actions::ShotAction;
 use crate::capture::annotation::{save_strokes, NormalizedPoint, PenStroke};
 use crate::config::CopyCommand;
-use crate::ui::preview::current_palette;
+use crate::ui::preview::{current_palette, wrap_index};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 
 mod render;
@@ -220,6 +220,124 @@ fn editor_controls(default_copy_action: CopyCommand) -> [EditorControl; CONTROL_
     ]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorCommand {
+    Close,
+    MovePrevious,
+    MoveNext,
+    Activate,
+    Undo,
+    Redo,
+    Save,
+    Hue,
+    Width,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct EditorHint {
+    pub(crate) key: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) priority: u8,
+    pub(crate) pinned: bool,
+}
+
+pub(crate) struct EditorKeyRow {
+    pub(crate) hint: Option<EditorHint>,
+    bindings: &'static [(&'static str, EditorCommand)],
+}
+
+pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "\u{23CE}",
+            label: "activate",
+            priority: 3,
+            pinned: false,
+        }),
+        bindings: &[
+            ("enter", EditorCommand::Activate),
+            ("return", EditorCommand::Activate),
+            ("space", EditorCommand::Activate),
+        ],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "\u{2190}\u{2192}",
+            label: "move",
+            priority: 2,
+            pinned: false,
+        }),
+        bindings: &[
+            ("left", EditorCommand::MovePrevious),
+            ("up", EditorCommand::MovePrevious),
+            ("right", EditorCommand::MoveNext),
+            ("down", EditorCommand::MoveNext),
+            ("tab", EditorCommand::MoveNext),
+        ],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "H",
+            label: "hue",
+            priority: 2,
+            pinned: false,
+        }),
+        bindings: &[("h", EditorCommand::Hue)],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "W",
+            label: "width",
+            priority: 2,
+            pinned: false,
+        }),
+        bindings: &[("w", EditorCommand::Width)],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "U",
+            label: "undo",
+            priority: 1,
+            pinned: false,
+        }),
+        bindings: &[("u", EditorCommand::Undo)],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "S",
+            label: "save",
+            priority: 1,
+            pinned: false,
+        }),
+        bindings: &[("s", EditorCommand::Save)],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "drag",
+            label: "draw",
+            priority: 0,
+            pinned: false,
+        }),
+        bindings: &[],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
+            key: "esc",
+            label: "close",
+            priority: 0,
+            pinned: true,
+        }),
+        bindings: &[
+            ("escape", EditorCommand::Close),
+            ("esc", EditorCommand::Close),
+        ],
+    },
+    EditorKeyRow {
+        hint: None,
+        bindings: &[("r", EditorCommand::Redo)],
+    },
+];
+
 struct EditorView {
     document: EditorDocument,
     layout: EditorLayout,
@@ -410,8 +528,7 @@ impl EditorView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = CONTROL_COUNT as isize;
-        self.selected = (((self.selected as isize + delta) % count + count) % count) as usize;
+        self.selected = wrap_index(self.selected, delta, CONTROL_COUNT);
         cx.notify();
     }
 
@@ -644,19 +761,21 @@ impl EditorView {
         if event.keystroke.modifiers.modified() {
             return;
         }
-        match event.keystroke.key.as_str() {
-            "escape" | "esc" => self.close(cx),
-            "left" | "up" => self.move_selection(-1, cx),
-            "right" | "down" | "tab" => self.move_selection(1, cx),
-            "enter" | "return" | "space" => {
+        let Some(command) = editor_command_for_key(event.keystroke.key.as_str()) else {
+            return;
+        };
+        match command {
+            EditorCommand::Close => self.close(cx),
+            EditorCommand::MovePrevious => self.move_selection(-1, cx),
+            EditorCommand::MoveNext => self.move_selection(1, cx),
+            EditorCommand::Activate => {
                 self.activate_control(self.controls[self.selected], window, cx)
             }
-            "u" => self.change_history(HistoryAction::Undo, cx),
-            "r" => self.change_history(HistoryAction::Redo, cx),
-            "s" => self.finish(EditorOutput::Save, cx),
-            "h" => self.open_color_wheel(window, cx),
-            "w" => self.cycle_pen_width(cx),
-            _ => {}
+            EditorCommand::Undo => self.change_history(HistoryAction::Undo, cx),
+            EditorCommand::Redo => self.change_history(HistoryAction::Redo, cx),
+            EditorCommand::Save => self.finish(EditorOutput::Save, cx),
+            EditorCommand::Hue => self.open_color_wheel(window, cx),
+            EditorCommand::Width => self.cycle_pen_width(cx),
         }
     }
 }
@@ -691,6 +810,14 @@ fn editor_shortcut(key: &str, modifiers: Modifiers) -> Option<EditorShortcut> {
         return Some(EditorShortcut::Output(EditorOutput::Save));
     }
     None
+}
+
+fn editor_command_for_key(key: &str) -> Option<EditorCommand> {
+    EDITOR_KEY_ROWS
+        .iter()
+        .flat_map(|row| row.bindings.iter())
+        .find(|binding| binding.0 == key)
+        .map(|binding| binding.1)
 }
 
 #[cfg(test)]

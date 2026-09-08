@@ -570,7 +570,15 @@ fn render_single_label(
     window: &Window,
     cx: &App,
 ) -> Div {
-    let label = truncate_label(label, width_px, font_weight, window, cx);
+    let label = qol_gpui::text::truncate_to_width(
+        &label,
+        window.text_style().font(),
+        TEXT_CAPTION,
+        font_weight,
+        width_px,
+        "…",
+        cx,
+    );
     div()
         .w(px(width_px))
         .max_w(px(width_px))
@@ -584,25 +592,6 @@ fn render_single_label(
         .truncate()
         .overflow_hidden()
         .child(label)
-}
-
-fn truncate_label(
-    label: String,
-    max_width_px: f32,
-    font_weight: FontWeight,
-    window: &Window,
-    cx: &App,
-) -> SharedString {
-    if label.is_empty() {
-        return SharedString::from(label);
-    }
-
-    let mut text_style = window.text_style();
-    text_style.font_weight = font_weight;
-    let mut runs = vec![text_style.to_run(label.len())];
-    cx.text_system()
-        .line_wrapper(text_style.font(), px(TEXT_CAPTION))
-        .truncate_line(SharedString::from(label), px(max_width_px), "…", &mut runs)
 }
 
 fn preview_tile(
