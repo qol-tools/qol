@@ -1,43 +1,13 @@
-use std::sync::Mutex;
-
 use gpui::*;
 
-use crate::monitor::ActiveMonitor;
+use crate::monitor::{
+    active_monitor, record_active_monitor, refresh_active_monitor_from_state,
+    resolve_active_monitor, ActiveMonitor,
+};
 use crate::popup_window;
 use crate::protocol::RuntimeEvent;
 
 pub use crate::popup_window::{hide_invisible, sync_window_layout};
-
-static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
-
-pub fn record_active_monitor(event: &RuntimeEvent) -> Option<ActiveMonitor> {
-    let monitor = ActiveMonitor::from_event(event)?;
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = Some(monitor.clone());
-    }
-    Some(monitor)
-}
-
-pub fn active_monitor() -> Option<ActiveMonitor> {
-    ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
-}
-
-pub fn resolve_active_monitor() -> Option<ActiveMonitor> {
-    active_monitor().or_else(|| {
-        crate::PlatformStateClient::from_env()
-            .get_state()
-            .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds))
-    })
-}
-
-pub fn refresh_active_monitor_from_state() {
-    let fresh = crate::PlatformStateClient::from_env()
-        .get_state()
-        .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds));
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = fresh;
-    }
-}
 
 pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> String {
     format!(

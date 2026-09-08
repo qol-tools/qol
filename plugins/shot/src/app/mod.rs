@@ -501,7 +501,7 @@ fn spawn_active_monitor_cache(cx: &mut App) {
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
         |_cx, event| {
-            qol_gpui::ghost::record_active_monitor(event);
+            qol_gpui::monitor::record_active_monitor(event);
         },
     );
 }

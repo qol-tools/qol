@@ -111,7 +111,7 @@ fn reposition_idle_ghost(
     if let qol_gpui::protocol::RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
         qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
     }
-    qol_gpui::ghost::record_active_monitor(event);
+    qol_gpui::monitor::record_active_monitor(event);
     if any_showing(active, cx) {
         return;
     }
