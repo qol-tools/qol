@@ -1,6 +1,6 @@
 # GPUI UI inventory and duplication audit
 
-Investigation: 2026-09-08, HEAD `1f6926873`, clean worktree.
+Investigation: 2026-09-08, HEAD `9222cfd38`, clean worktree.
 Scope: every crate that compiles GPUI UI code — `libs/gpui` (crate `qol-gpui`) and its six consumers
 `apps/qol-tray`, `plugins/{alt-tab,cli-sessions,launcher,removeapp,shot}`.
 Method: five read-only research lanes (no edits, no builds), each inventorying one slice against the
@@ -20,33 +20,33 @@ the items below. Every commit passed `cargo fmt --all --check`, `cargo clippy --
 
 | Finding | Fix | Commit |
 |---|---|---|
-| A1 `WindowOptions` at 7 sites | `PopupWindowOptions` builder + 6 sites migrated (cli-sessions' site removed by A2) | `1b71928d3`, `7fcb7504a` |
-| A2 cli-sessions hand-rolled panel | `SurfaceKind::OverlayPanel` + `OpenedSurface::update_view`, cli-sessions moved onto `Surface` | `5ee5b33b1` |
-| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated | `1b71928d3`, `7fcb7504a` |
-| B2 cli-sessions toast 380x76 | sends `style = "compact"`; host derives 340x76 | `139773965` |
-| B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `139773965` |
-| B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated | `fea1353c9` |
-| B17 bluetooth dead `qol-gpui` dep | both target legs removed; `gpui = true` kept (host-rendered settings) | `139773965` |
-| A3 shot reveal copies | public `surface::reveal` (`schedule_fresh_frame`, `await_reveal_readiness`, `RevealProof`); `Surface` refactored onto it; preview and pinned migrated; selector exempt (pre-created reused full-screen window never emits a per-reveal bounds epoch) | `86b4c6224` |
-| A6 blur guard | `ghost::BlurGuard` owns the arm/expiry state machine; per-surface durations stay local | `8f1fd46ae` |
-| A7 atlas registry | `RenderImage` atlas registry promoted from alt-tab to `qol_gpui::image_registry`; alt-tab drops `image`/`smallvec` | `7c9485589` |
-| A8 Linux ghost title | alt-tab Linux picker title calls `ghost::ghost_window_title` | `0a1394378` |
-| B3 native_tools form nav | `settings_panel::form_nav` exported; hosted panel and native_tools share it | `aa9059fea` |
-| B6 removeapp palette | removeapp reads only `RemoveAppPalette` | `43478cd38` |
-| B10 alt-tab hint fitting | hint bar built through `fit_hints` | `0a1394378` |
-| B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `43478cd38` |
-| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed; `ToastPresenter` crate-private, `tile_tone`/`focus_ring_for` private | `7c9485589` |
-| B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `0a1394378` |
-| A5 text input | `text_edit::TextField` owns cursor, anchor, motion, delete and paste; `TextFieldElement` renders the caret/selection window; launcher, removeapp and native_tools hold one field each, and the editable chrome is a `SettingsTextField` recipe | `416fc4fdf`, `491abfbe3` |
-| B5 settings opener name | `qol_apps::desktop_integration::open_plugin_settings_via_tray` at ~18 call sites, so it no longer shares a name with the native panel opener | `542eedee6` |
-| B8 mirrored geometry | six consumer constants read their theme token (`RENDER_GAP`, `SEARCH_PAD`, `SEARCH_H`, `FAILBAR_H`, `EDGE`, `CHIP_TOP`); `RENDER_PAD_X/Y` and `ROW_H` stay local because no equal-valued token owns their meaning | `84c7d552a` |
-| B11 text width helpers | `qol_gpui::text::{shaped_width, truncate_to_width}`; launcher and alt-tab migrated | `930953bdf` |
-| B14 action-ring copy | shot editor and preview share one ring builder | `930953bdf` |
-| B21 hint-key copies | shot editor and launcher hint keys derive from the binding tables their handlers read | `930953bdf` |
-| A4 active-monitor ownership | `monitor.rs` owns the only active-monitor cache and names the three precedence policies (active-first, focus-first, cached-first); ghost and alt-tab keep intent, not a second answer, and every call site keeps the policy it had | `270ce597a` |
-| B1 cli-sessions selection | `Selection` wraps `ScrollList`; the id anchor only restores position through one function | `e41a8e62a` |
+| A1 `WindowOptions` at 7 sites | `PopupWindowOptions` builder + 6 sites migrated (cli-sessions' site removed by A2) | `a8df5be15`, `6e1886a25` |
+| A2 cli-sessions hand-rolled panel | `SurfaceKind::OverlayPanel` + `OpenedSurface::update_view`, cli-sessions moved onto `Surface` | `c0ca88c3f` |
+| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated | `a8df5be15`, `6e1886a25` |
+| B2 cli-sessions toast 380x76 | sends `style = "compact"`; host derives 340x76 | `5e3f781ad` |
+| B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `5e3f781ad` |
+| B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated | `1373daab5` |
+| B17 bluetooth dead `qol-gpui` dep | both target legs removed; `gpui = true` kept (host-rendered settings) | `5e3f781ad` |
+| A3 shot reveal copies | public `surface::reveal` (`schedule_fresh_frame`, `await_reveal_readiness`, `RevealProof`); `Surface` refactored onto it; preview and pinned migrated; selector exempt (pre-created reused full-screen window never emits a per-reveal bounds epoch) | `e0d3a61af` |
+| A6 blur guard | `ghost::BlurGuard` owns the arm/expiry state machine; per-surface durations stay local | `9ea31bb1d` |
+| A7 atlas registry | `RenderImage` atlas registry promoted from alt-tab to `qol_gpui::image_registry`; alt-tab drops `image`/`smallvec` | `253890b4c` |
+| A8 Linux ghost title | alt-tab Linux picker title calls `ghost::ghost_window_title` | `5234402e5` |
+| B3 native_tools form nav | `settings_panel::form_nav` exported; hosted panel and native_tools share it | `4151f2364` |
+| B6 removeapp palette | removeapp reads only `RemoveAppPalette` | `9d12e0676` |
+| B10 alt-tab hint fitting | hint bar built through `fit_hints` | `5234402e5` |
+| B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `9d12e0676` |
+| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed; `ToastPresenter` crate-private, `tile_tone`/`focus_ring_for` private | `253890b4c` |
+| B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `5234402e5` |
+| A5 text input | `text_edit::TextField` owns cursor, anchor, motion, delete and paste; `TextFieldElement` renders the caret/selection window; launcher, removeapp and native_tools hold one field each, and the editable chrome is a `SettingsTextField` recipe | `e11bd0310`, `de0726a24` |
+| B5 settings opener name | `qol_apps::desktop_integration::open_plugin_settings_via_tray` at ~18 call sites, so it no longer shares a name with the native panel opener | `f6b1b08a1` |
+| B8 mirrored geometry | six consumer constants read their theme token (`RENDER_GAP`, `SEARCH_PAD`, `SEARCH_H`, `FAILBAR_H`, `EDGE`, `CHIP_TOP`); `RENDER_PAD_X/Y` and `ROW_H` stay local because no equal-valued token owns their meaning | `659b6b511` |
+| B11 text width helpers | `qol_gpui::text::{shaped_width, truncate_to_width}`; launcher and alt-tab migrated | `e15179367` |
+| B14 action-ring copy | shot editor and preview share one ring builder | `e15179367` |
+| B21 hint-key copies | shot editor and launcher hint keys derive from the binding tables their handlers read | `e15179367` |
+| A4 active-monitor ownership | `monitor.rs` owns the only active-monitor cache and names the three precedence policies (active-first, focus-first, cached-first); ghost and alt-tab keep intent, not a second answer, and every call site keeps the policy it had | `186c1a179` |
+| B1 cli-sessions selection | `Selection` wraps `ScrollList`; the id anchor only restores position through one function | `8ae81aa93` |
 | B9 two ghost-hide mechanisms | stopped, not approximated: the title-keyed native hide and the handle-keyed view hide cannot share one API without erasing the typed handle or threading `&mut App` into title-only callers | — |
-| B12 shot warm pools | one `WarmWindowPool` serves the pin and selector caches, keyed by window kind + monitor topology + size, dropping entries whose topology no longer matches the live set | `4f721077c` |
+| B12 shot warm pools | one `WarmWindowPool` serves the pin and selector caches, keyed by window kind + monitor topology + size, dropping entries whose topology no longer matches the live set | `d7accc4f8` |
 
 ### Residual, deliberately not changed
 
@@ -283,7 +283,7 @@ proven defect. Severity medium, confidence high.
 - **`qol-gpui`'s `image` dependency is real** (prior audit): `color_wheel.rs` constructs gpui's
   public `RenderImage` from `image::Frame`.
 - **Standards drift (side finding).** `gpui-conventions` and `qol-plugin-gpui-surfaces` still point
-  at `libs/qol-gpui`, which no longer exists after `0a381bda4` renamed the folder to `libs/gpui`
+  at `libs/qol-gpui`, which no longer exists after `49d3ff07f` renamed the folder to `libs/gpui`
   (crate name remains `qol-gpui`). Both skills should be corrected before the next session follows
   a dead path.
 
