@@ -30,10 +30,8 @@ pub fn send(notice: &Notice) {
         &notice.title,
         &notice.body,
         Some(NotificationLayout {
-            anchor: Some("bottom-right".to_string()),
-            width: Some(380.0),
-            height: Some(76.0),
             style: Some("compact".to_string()),
+            ..Default::default()
         }),
     );
 }

@@ -892,7 +892,7 @@ impl PinnedView {
             return;
         }
 
-        let steps = scroll_steps(&mut self.scroll_remainder, notches);
+        let steps = qol_gpui::scroll_list::accumulate_steps(&mut self.scroll_remainder, notches);
         if steps == 0 {
             return;
         }
@@ -1205,26 +1205,6 @@ fn scale_rect(rect: PinRect, factor: f32) -> PinRect {
     }
 }
 
-fn scroll_steps(remainder: &mut f32, notches: f32) -> i32 {
-    if !notches.is_finite() || notches == 0.0 {
-        return 0;
-    }
-    if *remainder != 0.0 && remainder.signum() != notches.signum() {
-        *remainder = 0.0;
-    }
-    *remainder += notches;
-    let steps = remainder.trunc() as i32;
-    if steps == 0 {
-        return 0;
-    }
-    if !(-1..=1).contains(&steps) {
-        *remainder = 0.0;
-        return steps.signum();
-    }
-    *remainder -= steps as f32;
-    steps
-}
-
 fn drag_bounds(
     start: PinRect,
     edge: Option<ResizeEdge>,
@@ -1327,7 +1307,7 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 mod tests {
     use super::{
         action_row_fits, clamp_scale_factor, controls_visible, drag_bounds, hover_after_event,
-        resize_rect, scroll_steps, PinRect,
+        resize_rect, PinRect,
     };
     use gpui::ResizeEdge;
 
@@ -1515,7 +1495,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_steps_emit_at_most_one_increment_per_event() {
+    fn accumulate_steps_emit_at_most_one_increment_per_event() {
         let mut remainder = 0.0;
         let cases = [
             (0.6, 0, 0.6),
@@ -1528,7 +1508,10 @@ mod tests {
             (f32::NAN, 0, 0.0),
         ];
         for (notches, expected_steps, expected_remainder) in cases {
-            assert_eq!(scroll_steps(&mut remainder, notches), expected_steps);
+            assert_eq!(
+                qol_gpui::scroll_list::accumulate_steps(&mut remainder, notches),
+                expected_steps
+            );
             assert!((remainder - expected_remainder).abs() < 0.001);
         }
     }
