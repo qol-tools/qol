@@ -329,12 +329,6 @@ fn compute_slab_height(rows: &[SlabSnapshotRow], expanded: bool) -> f32 {
     slab_height(live_rows, visible, header, summary)
 }
 
-pub trait ToastPresenter {
-    fn show(&self, toast: Toast, cx: &mut App) -> anyhow::Result<()>;
-    fn dismiss(&self, cx: &mut App);
-    fn is_idle(&self) -> bool;
-}
-
 struct ActiveToast {
     surface: OpenedSurface<BannerToastView>,
     layout: ToastLayout,
@@ -427,20 +421,6 @@ impl BannerPresenter {
             let _ = cx.update(|cx| presenter.dismiss(cx));
         })
         .detach();
-    }
-}
-
-impl ToastPresenter for BannerPresenter {
-    fn show(&self, toast: Toast, cx: &mut App) -> anyhow::Result<()> {
-        BannerPresenter::show(self, toast, cx)
-    }
-
-    fn dismiss(&self, cx: &mut App) {
-        BannerPresenter::dismiss(self, cx)
-    }
-
-    fn is_idle(&self) -> bool {
-        self.active.borrow().is_none()
     }
 }
 
@@ -776,21 +756,6 @@ impl SlabPresenter {
             .surface
             .as_ref()
             .map(|surface| surface.anchored_origin(content))
-    }
-}
-
-impl ToastPresenter for SlabPresenter {
-    fn show(&self, toast: Toast, cx: &mut App) -> anyhow::Result<()> {
-        SlabPresenter::show(self, toast, cx)
-    }
-
-    fn dismiss(&self, cx: &mut App) {
-        SlabPresenter::dismiss(self, cx)
-    }
-
-    fn is_idle(&self) -> bool {
-        let state = self.state.borrow();
-        state.surface.is_none() && state.rows.is_empty()
     }
 }
 

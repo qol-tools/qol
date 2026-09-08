@@ -659,7 +659,8 @@ fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
     ]
 }
 
-pub fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
+#[cfg(test)]
+fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
     Kit::new(mode, palette).focus_ring()
 }
 
@@ -724,7 +725,7 @@ pub fn alpha(color: u32, opacity: u8) -> u32 {
 
 const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
 
-pub fn tile_tone(name: &str) -> u32 {
+fn tile_tone(name: &str) -> u32 {
     let hash = name.bytes().fold(0u32, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(byte.into())
     });
