@@ -133,7 +133,7 @@ fn workspace_path_deps(plugin_path: &Path) -> HashMap<String, PathBuf> {
         .collect()
 }
 
-fn workspace_manifest(plugin_path: &Path) -> Option<(PathBuf, toml::Table)> {
+pub(super) fn workspace_manifest(plugin_path: &Path) -> Option<(PathBuf, toml::Table)> {
     plugin_path.ancestors().find_map(|root| {
         let manifest = cargo_manifest(root)?;
         manifest

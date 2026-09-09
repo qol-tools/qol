@@ -28,6 +28,15 @@ pub(crate) fn fingerprint_plugin_with_cache(
     for dep_contents in path_deps::collect_path_dep_contents(path, cache) {
         inputs.extend(dep_contents);
     }
+    if let Some((workspace_root, _)) = path_deps::workspace_manifest(path) {
+        let workspace_input = vec![(
+            PathBuf::from("__workspace__/Cargo.toml"),
+            workspace_root.join("Cargo.toml"),
+        )];
+        if let Ok(contents) = hash::read_inputs(workspace_input) {
+            inputs.extend(contents);
+        }
+    }
     hash::hash_contents(inputs)
 }
 
@@ -70,6 +79,39 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(cache.dependency_contents.len(), 1);
         assert_eq!(cache.dependency_reads, 1);
+    }
+
+    #[test]
+    fn workspace_root_manifest_is_fingerprinted() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = tmp.path().join("plugin-a");
+        write_workspace_root(tmp.path(), 1);
+        write_plugin(&plugin, "plugin-a", "fn main() { println!(\"a\"); }\n");
+
+        let first = fingerprint_plugin(&plugin).unwrap();
+        assert_eq!(first, fingerprint_plugin(&plugin).unwrap());
+
+        write_workspace_root(tmp.path(), 2);
+        assert_ne!(first, fingerprint_plugin(&plugin).unwrap());
+    }
+
+    #[test]
+    fn plugin_outside_a_workspace_still_fingerprints() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = tmp.path().join("plugin-a");
+        write_plugin(&plugin, "plugin-a", "fn main() { println!(\"a\"); }\n");
+
+        assert!(fingerprint_plugin(&plugin).is_ok());
+    }
+
+    fn write_workspace_root(path: &Path, opt_level: u8) {
+        fs::write(
+            path.join("Cargo.toml"),
+            format!(
+                "[workspace]\nresolver = \"2\"\nmembers = [\"plugin-a\"]\n\n[profile.dev.package.png]\nopt-level = {opt_level}\n"
+            ),
+        )
+        .unwrap();
     }
 
     fn write_plugin(path: &Path, name: &str, source: &str) {
