@@ -101,6 +101,7 @@ impl Render for LauncherView {
             }
 
             return div()
+                .font_family(qol_gpui::theme::font_ui())
                 .id("launcher")
                 .track_focus(&self.focus_handle)
                 .w(px(WINDOW_WIDTH))
@@ -247,6 +248,7 @@ impl Render for LauncherView {
             .as_ref()
             .is_some_and(|session| session.pending);
         div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))

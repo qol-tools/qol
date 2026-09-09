@@ -545,7 +545,10 @@ pub(crate) struct SurfaceRoot<V> {
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.inner.clone())
+        div()
+            .size_full()
+            .font_family(qol_theme::font_ui())
+            .child(self.inner.clone())
     }
 }
 

@@ -172,6 +172,7 @@ impl Render for AltTabApp {
         let grid = render_grid(&d.windows, &render_context);
 
         let panel = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
             .flex()

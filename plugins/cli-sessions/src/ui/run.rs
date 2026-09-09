@@ -93,6 +93,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
     Application::new().run(move |cx| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 

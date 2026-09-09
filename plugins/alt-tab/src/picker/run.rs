@@ -92,6 +92,7 @@ pub(crate) fn run_app(
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::keepalive::open_keepalive(cx, Some(crate::config::PLUGIN_ID));
         super::platform::set_accessory_policy();
 

@@ -160,6 +160,7 @@ where
 {
     let (tx, rx) = mpsc::channel();
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::platform::set_accessory_policy();
         open_selector(tx, cx);
     });
@@ -1090,6 +1091,7 @@ impl Render for RegionSelector {
         let guide_bounds = self.guide_bounds();
         let selection = self.selection_bounds();
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-region-selector")
             .track_focus(&self.focus_handle)
             .size_full()

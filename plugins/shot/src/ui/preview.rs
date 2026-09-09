@@ -337,6 +337,7 @@ fn show_with_completion(
     let run_completion = completion.clone();
 
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::platform::set_accessory_policy();
         if open_quit_window(
             path.clone(),
@@ -1558,6 +1559,7 @@ impl Render for PreviewView {
         let palette = current_palette();
 
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))

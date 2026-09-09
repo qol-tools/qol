@@ -34,6 +34,7 @@ pub fn run(intent: StartupIntent) {
     eprintln!("[launcher] daemon listener started");
 
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         #[cfg(debug_assertions)]
         eprintln!("[launcher] run: pid={}", std::process::id());
 

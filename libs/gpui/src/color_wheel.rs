@@ -202,6 +202,7 @@ impl Focusable for ColorWheelPopup {
 impl Render for ColorWheelPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .font_family(qol_theme::font_ui())
             .id("qol-color-wheel-popup")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

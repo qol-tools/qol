@@ -1134,6 +1134,7 @@ impl Render for PinnedView {
                     .border_color(rgb(palette.thumb_border));
             }
             return div()
+                .font_family(qol_gpui::theme::font_ui())
                 .id("shot-pin")
                 .track_focus(&self.focus_handle)
                 .on_key_down(cx.listener(Self::on_key))
@@ -1156,6 +1157,7 @@ impl Render for PinnedView {
             window.is_window_hovered(),
         );
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-pin")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
