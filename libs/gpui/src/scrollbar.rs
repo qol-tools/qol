@@ -5,8 +5,9 @@ pub const SEAM_TRACK_INSET: f32 = 2.0;
 pub const SEAM_THUMB_MIN: f32 = 24.0;
 
 pub const OVERFLOW_FADE_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
-pub const OVERFLOW_DISC_SIZE: f32 = qol_theme::HEIGHT_INLINE;
-pub const OVERFLOW_DISC_INSET: f32 = qol_theme::SPACE_INSET;
+pub const OVERFLOW_STREAK_WIDTH: f32 = 180.0;
+pub const OVERFLOW_STREAK_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - qol_theme::SPACE_TIGHT;
+pub const OVERFLOW_CUE_CENTRE: f32 = qol_theme::SPACE_GUTTER;
 pub const OVERFLOW_CHEVRON_WIDTH: f32 = qol_theme::SPACE_PAD;
 pub const OVERFLOW_CHEVRON_RISE: f32 = qol_theme::SPACE_SNUG;
 pub const OVERFLOW_CHEVRON_STROKE: f32 = 2.0;
@@ -52,7 +53,6 @@ pub struct OverflowFadeStyle {
     pub surface_rgb: u32,
     pub ink_rgba: u32,
     pub wash_rgba: u32,
-    pub hairline_rgba: u32,
 }
 
 pub fn overflow_fade(handle: ScrollHandle, style: OverflowFadeStyle) -> impl IntoElement {
@@ -83,39 +83,29 @@ fn paint_overflow_edge(
     style: OverflowFadeStyle,
 ) {
     let fade_h = px(OVERFLOW_FADE_HEIGHT).min(bounds.size.height);
-    let disc = px(OVERFLOW_DISC_SIZE);
-    let half_disc = px(OVERFLOW_DISC_SIZE / 2.0);
-    let inset = px(OVERFLOW_DISC_INSET);
     let rise = px(OVERFLOW_CHEVRON_RISE);
     let half_chevron = px(OVERFLOW_CHEVRON_WIDTH / 2.0);
-    let (band_top, disc_top, tip_y, wing_y, band_start, band_end, wash_start, wash_end) = match edge
-    {
+    let (band_top, centre_y, tip_y, wing_y, band_start, band_end) = match edge {
         OverflowEdge::Top => {
-            let disc_top = bounds.top() + inset;
-            let centre_y = disc_top + half_disc;
+            let centre_y = bounds.top() + px(OVERFLOW_CUE_CENTRE);
             (
                 bounds.top(),
-                disc_top,
+                centre_y,
                 centre_y - rise * 0.5,
                 centre_y + rise * 0.5,
                 0xff,
                 0x00,
-                style.wash_rgba,
-                style.wash_rgba & 0xffff_ff00,
             )
         }
         OverflowEdge::Bottom => {
-            let disc_top = bounds.bottom() - inset - disc;
-            let centre_y = disc_top + half_disc;
+            let centre_y = bounds.bottom() - px(OVERFLOW_CUE_CENTRE);
             (
                 bounds.bottom() - fade_h,
-                disc_top,
+                centre_y,
                 centre_y + rise * 0.5,
                 centre_y - rise * 0.5,
                 0x00,
                 0xff,
-                style.wash_rgba & 0xffff_ff00,
-                style.wash_rgba,
             )
         }
     };
@@ -130,23 +120,28 @@ fn paint_overflow_edge(
             linear_color_stop(rgba(crate::kit::alpha(style.surface_rgb, band_end)), 1.0),
         ),
     ));
-    window.paint_quad(quad(
-        Bounds::new(
-            point(bounds.center().x - half_disc, disc_top),
-            size(disc, disc),
-        ),
-        Corners::all(half_disc),
+    let clear = style.wash_rgba & 0xffff_ff00;
+    let half_streak = px(OVERFLOW_STREAK_WIDTH / 2.0);
+    let streak_size = size(half_streak, px(OVERFLOW_STREAK_HEIGHT));
+    let streak_top = centre_y - px(OVERFLOW_STREAK_HEIGHT / 2.0);
+    let center_x = bounds.center().x;
+    window.paint_quad(fill(
+        Bounds::new(point(center_x - half_streak, streak_top), streak_size),
         linear_gradient(
-            180.0,
-            linear_color_stop(rgba(wash_start), 0.0),
-            linear_color_stop(rgba(wash_end), 1.0),
+            90.0,
+            linear_color_stop(rgba(clear), 0.0),
+            linear_color_stop(rgba(style.wash_rgba), 1.0),
         ),
-        Edges::all(px(1.0)),
-        rgba(style.hairline_rgba),
-        BorderStyle::default(),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(point(center_x, streak_top), streak_size),
+        linear_gradient(
+            90.0,
+            linear_color_stop(rgba(style.wash_rgba), 0.0),
+            linear_color_stop(rgba(clear), 1.0),
+        ),
     ));
     let mut path = PathBuilder::stroke(px(OVERFLOW_CHEVRON_STROKE));
-    let center_x = bounds.center().x;
     path.move_to(point(center_x - half_chevron, wing_y));
     path.line_to(point(center_x, tip_y));
     path.line_to(point(center_x + half_chevron, wing_y));

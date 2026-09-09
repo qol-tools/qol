@@ -4454,8 +4454,7 @@ impl SettingsPanelView {
                         crate::scrollbar::OverflowFadeStyle {
                             surface_rgb: self.palette.window_bg,
                             ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
-                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1a),
-                            hairline_rgba: crate::kit::alpha(self.palette.panel_border, 0x48),
+                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1f),
                         },
                     ))
                 })
