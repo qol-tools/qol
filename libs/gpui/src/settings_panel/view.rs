@@ -2706,7 +2706,9 @@ impl SettingsPanelView {
     fn sync_scroll(&mut self) {
         let selected = self.level().selected;
         let child = self.body_child_index(selected);
-        self.level().body_scroll.follow(child);
+        self.level()
+            .body_scroll
+            .follow(child, px(crate::scrollbar::OVERFLOW_FADE_HEIGHT));
     }
 
     fn body_child_index(&self, row: usize) -> Option<usize> {
@@ -4446,6 +4448,17 @@ impl SettingsPanelView {
                 .flex_col()
                 .child(body)
                 .when(front, |frame| frame.child(frame_bounds))
+                .when(front && !has_custom_view, |frame| {
+                    frame.child(crate::scrollbar::overflow_fade(
+                        self.stack[level_index].body_scroll.handle().clone(),
+                        crate::scrollbar::OverflowFadeStyle {
+                            surface_rgb: self.palette.window_bg,
+                            ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
+                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1a),
+                            hairline_rgba: crate::kit::alpha(self.palette.panel_border, 0x48),
+                        },
+                    ))
+                })
                 .when(front && !has_custom_view, |frame| {
                     frame.child(crate::scrollbar::seam_track(
                         self.stack[level_index].body_scroll.handle().clone(),

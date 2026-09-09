@@ -4,8 +4,8 @@ use gpui::ScrollHandle;
 ///
 /// A container that scrolls itself with `overflow_y_scroll` has no idea which
 /// child is selected, so the selection walks off the bottom while the viewport
-/// stays put. This reissues a scroll only when the selection actually moves,
-/// which leaves wheel and trackpad scrolling alone in between.
+/// stays put. This reissues a scroll only when the selection moves, and the
+/// margin keeps it clear of overlays along the viewport's top and bottom edges.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionScroll {
     handle: ScrollHandle,
@@ -21,13 +21,28 @@ impl SelectionScroll {
         &self.handle
     }
 
-    pub fn follow(&self, selected: Option<usize>) {
+    pub fn follow(&self, selected: Option<usize>, edge_margin: gpui::Pixels) {
         if self.followed.get() == selected {
             return;
         }
         self.followed.set(selected);
-        if let Some(index) = selected {
-            self.handle.scroll_to_item(index);
+        let Some(index) = selected else {
+            return;
+        };
+        let viewport = self.handle.bounds();
+        match self.handle.bounds_for_item(index) {
+            Some(item) if viewport.size.height > gpui::px(0.) => {
+                let mut offset = self.handle.offset();
+                let top_limit = viewport.top() + edge_margin;
+                let bottom_limit = viewport.bottom() - edge_margin;
+                if item.top() + offset.y < top_limit {
+                    offset.y = top_limit - item.top();
+                } else if item.bottom() + offset.y > bottom_limit {
+                    offset.y = bottom_limit - item.bottom();
+                }
+                self.handle.set_offset(offset);
+            }
+            _ => self.handle.scroll_to_item(index),
         }
     }
 
@@ -230,20 +245,20 @@ mod tests {
     fn selection_scroll_reissues_only_when_the_selection_moves() {
         let scroll = SelectionScroll::new();
 
-        scroll.follow(Some(4));
+        scroll.follow(Some(4), gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(4));
 
-        scroll.follow(Some(4));
+        scroll.follow(Some(4), gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             Some(4),
             "a repeat render is not a move"
         );
 
-        scroll.follow(Some(9));
+        scroll.follow(Some(9), gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(9));
 
-        scroll.follow(None);
+        scroll.follow(None, gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             None,
@@ -254,11 +269,11 @@ mod tests {
     #[test]
     fn rewinding_lets_the_same_index_be_followed_again() {
         let scroll = SelectionScroll::new();
-        scroll.follow(Some(3));
+        scroll.follow(Some(3), gpui::px(0.));
         scroll.rewind();
         assert_eq!(scroll.followed.get(), None);
 
-        scroll.follow(Some(3));
+        scroll.follow(Some(3), gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(3));
     }
 
