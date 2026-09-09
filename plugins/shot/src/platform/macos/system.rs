@@ -283,6 +283,7 @@ pub fn prepare_pin_window(_title: &str, _origin: (f64, f64)) -> bool {
 
 pub fn configure_pin_window(title: String, _origin: (f64, f64), source_preview: Option<String>) {
     qol_gpui::popup_window::configure_pinned_window(&title);
+    qol_gpui::popup_window::show_window_interactive_by_title(&title);
     if let Some(source_preview) = source_preview {
         qol_gpui::popup_window::hide_invisible(&source_preview);
         qol_gpui::popup_window::restore_composite(&source_preview);
