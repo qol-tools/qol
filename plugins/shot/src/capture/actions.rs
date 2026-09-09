@@ -59,6 +59,14 @@ impl ShotAction {
             ShotAction::OpenFolder => "Opened screenshot folder",
         }
     }
+
+    pub fn error_message(self) -> &'static str {
+        match self {
+            ShotAction::Copy => "Could not copy screenshot",
+            ShotAction::CopyPath => "Could not copy screenshot path",
+            ShotAction::OpenFolder => "Could not open screenshot folder",
+        }
+    }
 }
 
 pub fn perform_on_latest(action: ShotAction) -> Result<PathBuf> {
@@ -97,6 +105,7 @@ pub(crate) fn perform_when_file_ready(
     );
     if let Err(error) = &result {
         eprintln!("[qol-shot] {surface} action failed: {error:#}");
+        crate::platform::show_notification(action.error_message(), &error.to_string(), 3000);
     }
     result
 }
