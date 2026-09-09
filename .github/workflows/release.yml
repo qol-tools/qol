@@ -111,13 +111,19 @@ jobs:
           BIN_NAME: ${{ needs.setup.outputs.bin_name }}
           EXT: ${{ matrix.ext }}
           ARTIFACT_NAME: ${{ matrix.artifact_name }}
+          PACKAGE: ${{ needs.setup.outputs.package }}
         run: |
           cp "target/$TARGET/release/$BIN_NAME$EXT" "$ARTIFACT_NAME$EXT"
+          if cargo tree -p "$PACKAGE" --target "$TARGET" -e normal --prefix none | grep -q '^qol-gpui v'; then
+            cp libs/gpui/assets/fonts/OFL.txt IBM-Plex-OFL.txt
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}*
+          path: |
+            ${{ matrix.artifact_name }}*
+            IBM-Plex-OFL.txt
           retention-days: 90
           if-no-files-found: error
 

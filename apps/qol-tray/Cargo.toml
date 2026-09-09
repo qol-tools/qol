@@ -197,5 +197,6 @@ assets = [
     ["scripts/installer/platform/linux/desktop/qol-tray.desktop", "usr/share/applications/", "644"],
     ["scripts/installer/platform/linux/desktop/qol-tray.desktop", "etc/xdg/autostart/", "644"],
     ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/qol-tray.png", "644"],
+    ["../../libs/gpui/assets/fonts/OFL.txt", "usr/share/doc/qol-tray/IBM-Plex-OFL.txt", "644"],
 ]
 maintainer-scripts = "scripts/installer/platform/linux/debian/"

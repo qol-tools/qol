@@ -6543,6 +6543,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "taffy",
+ "ttf-parser 0.25.1",
  "tungstenite 0.26.2",
  "workspace-hack",
  "x11rb",

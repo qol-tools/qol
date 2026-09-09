@@ -2,9 +2,11 @@ use std::borrow::Cow;
 
 use gpui::App;
 
+pub(crate) const SANS_MEDIUM: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf");
+
 const FACES: [&[u8]; 7] = [
     include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
-    include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf"),
+    SANS_MEDIUM,
     include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
     include_bytes!("../assets/fonts/IBMPlexSans-Bold.ttf"),
     include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),

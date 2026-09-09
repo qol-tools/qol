@@ -534,7 +534,7 @@ impl SettingsPanelView {
             true => visible.first().copied().unwrap_or(selected),
             false => clamp_selected(&visible, selected),
         };
-        self.sync_scroll();
+        self.resync_scroll();
     }
 
     fn open_filter(&mut self, seed: Option<String>) {
@@ -545,6 +545,7 @@ impl SettingsPanelView {
         if let Some(seed) = seed {
             self.set_panel_filter(seed);
         }
+        self.resync_scroll();
     }
 
     fn handle_panel_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
@@ -559,6 +560,7 @@ impl SettingsPanelView {
             }
             "enter" | "tab" => {
                 self.filter_open = false;
+                self.resync_scroll();
                 true
             }
             "backspace" => {
@@ -2706,9 +2708,16 @@ impl SettingsPanelView {
     fn sync_scroll(&mut self) {
         let selected = self.level().selected;
         let child = self.body_child_index(selected);
-        self.level()
-            .body_scroll
-            .follow(child, px(crate::scrollbar::OVERFLOW_FADE_HEIGHT));
+        let margin = match self.filter_open {
+            true => crate::scrollbar::OVERFLOW_FADE_HEIGHT.max(FILTER_OVERLAY_HEIGHT),
+            false => crate::scrollbar::OVERFLOW_FADE_HEIGHT,
+        };
+        self.level().body_scroll.follow(child, px(margin));
+    }
+
+    fn resync_scroll(&mut self) {
+        self.level().body_scroll.refollow();
+        self.sync_scroll();
     }
 
     fn body_child_index(&self, row: usize) -> Option<usize> {
@@ -4411,6 +4420,7 @@ impl SettingsPanelView {
         items: Vec<AnyElement>,
         custom_view: Option<AnyView>,
     ) -> Div {
+        let children = items.len();
         let front = level_index + 1 == self.stack.len();
         let has_custom_view = custom_view.is_some();
         let body = if let Some(custom_view) = custom_view {
@@ -4451,6 +4461,7 @@ impl SettingsPanelView {
                 .when(front && !has_custom_view, |frame| {
                     frame.child(crate::scrollbar::overflow_fade(
                         self.stack[level_index].body_scroll.handle().clone(),
+                        children,
                         crate::scrollbar::OverflowFadeStyle {
                             surface_rgb: self.palette.window_bg,
                             ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),

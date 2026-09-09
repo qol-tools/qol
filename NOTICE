@@ -1,0 +1,9 @@
+Third-party assets bundled into qol binaries
+
+IBM Plex Sans and IBM Plex Mono
+Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+Licensed under the SIL Open Font License 1.1 (SPDX OFL-1.1) and embedded
+unmodified into every binary that links the qol-gpui crate: qol-tray, alt-tab,
+cli-sessions, launcher, removeapp and qol-shot. The license text ships beside
+each artifact as IBM-Plex-OFL.txt and lives in the tree at
+libs/gpui/assets/fonts/OFL.txt.
