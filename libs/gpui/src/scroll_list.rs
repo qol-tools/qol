@@ -4,12 +4,29 @@ use gpui::ScrollHandle;
 ///
 /// A container that scrolls itself with `overflow_y_scroll` has no idea which
 /// child is selected, so the selection walks off the bottom while the viewport
-/// stays put. This reissues a scroll only when the selection actually moves,
-/// which leaves wheel and trackpad scrolling alone in between.
+/// stays put. This reissues a scroll only when the selection moves, and the
+/// margin keeps it clear of overlays along the viewport's top and bottom edges.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionScroll {
     handle: ScrollHandle,
     followed: std::cell::Cell<Option<usize>>,
+}
+
+pub fn follow_offset_y(
+    viewport: gpui::Bounds<gpui::Pixels>,
+    item: gpui::Bounds<gpui::Pixels>,
+    current: gpui::Pixels,
+    margin: gpui::Pixels,
+) -> gpui::Pixels {
+    let top_limit = viewport.top() + margin;
+    let bottom_limit = viewport.bottom() - margin;
+    if item.top() + current < top_limit {
+        top_limit - item.top()
+    } else if item.bottom() + current > bottom_limit {
+        bottom_limit - item.bottom()
+    } else {
+        current
+    }
 }
 
 impl SelectionScroll {
@@ -21,14 +38,31 @@ impl SelectionScroll {
         &self.handle
     }
 
-    pub fn follow(&self, selected: Option<usize>) {
+    pub fn follow(&self, selected: Option<usize>, edge_margin: gpui::Pixels) {
         if self.followed.get() == selected {
             return;
         }
         self.followed.set(selected);
-        if let Some(index) = selected {
+        let Some(index) = selected else {
+            return;
+        };
+        if edge_margin <= gpui::px(0.) {
             self.handle.scroll_to_item(index);
+            return;
         }
+        let viewport = self.handle.bounds();
+        match self.handle.bounds_for_item(index) {
+            Some(item) if viewport.size.height > gpui::px(0.) => {
+                let mut offset = self.handle.offset();
+                offset.y = follow_offset_y(viewport, item, offset.y, edge_margin);
+                self.handle.set_offset(offset);
+            }
+            _ => self.handle.scroll_to_item(index),
+        }
+    }
+
+    pub fn refollow(&self) {
+        self.followed.set(None);
     }
 
     pub fn rewind(&self) {
@@ -230,20 +264,20 @@ mod tests {
     fn selection_scroll_reissues_only_when_the_selection_moves() {
         let scroll = SelectionScroll::new();
 
-        scroll.follow(Some(4));
+        scroll.follow(Some(4), gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(4));
 
-        scroll.follow(Some(4));
+        scroll.follow(Some(4), gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             Some(4),
             "a repeat render is not a move"
         );
 
-        scroll.follow(Some(9));
+        scroll.follow(Some(9), gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(9));
 
-        scroll.follow(None);
+        scroll.follow(None, gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             None,
@@ -254,11 +288,113 @@ mod tests {
     #[test]
     fn rewinding_lets_the_same_index_be_followed_again() {
         let scroll = SelectionScroll::new();
-        scroll.follow(Some(3));
+        scroll.follow(Some(3), gpui::px(0.));
         scroll.rewind();
         assert_eq!(scroll.followed.get(), None);
 
-        scroll.follow(Some(3));
+        scroll.follow(Some(3), gpui::px(0.));
+        assert_eq!(scroll.followed.get(), Some(3));
+    }
+
+    fn viewport() -> gpui::Bounds<gpui::Pixels> {
+        gpui::Bounds::new(gpui::point(px(0.), px(0.)), gpui::size(px(300.), px(400.)))
+    }
+
+    fn item(top: f32, height: f32) -> gpui::Bounds<gpui::Pixels> {
+        gpui::Bounds::new(
+            gpui::point(px(0.), px(top)),
+            gpui::size(px(300.), px(height)),
+        )
+    }
+
+    #[test]
+    fn follow_offset_moves_a_row_above_the_top_down() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(-100., 52.), px(0.), px(40.)),
+            px(140.),
+            "a row cut off above the viewport is pulled down by the margin"
+        );
+    }
+
+    #[test]
+    fn follow_offset_moves_a_row_below_the_bottom_up() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(500., 52.), px(0.), px(40.)),
+            px(-192.),
+            "a row cut off below the viewport is pulled up by the margin"
+        );
+    }
+
+    #[test]
+    fn follow_offset_leaves_a_visible_row_alone() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(100., 52.), px(0.), px(40.)),
+            px(0.),
+            "a row inside the limits keeps the offset"
+        );
+        assert_eq!(
+            follow_offset_y(viewport(), item(100., 52.), px(-30.), px(40.)),
+            px(-30.),
+            "a scrolled row inside the limits keeps the offset"
+        );
+    }
+
+    #[test]
+    fn follow_offset_boundaries_are_strict() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(40., 52.), px(0.), px(40.)),
+            px(0.),
+            "a row top exactly at the top limit is left alone"
+        );
+        assert_eq!(
+            follow_offset_y(viewport(), item(308., 52.), px(0.), px(40.)),
+            px(0.),
+            "a row bottom exactly at the bottom limit is left alone"
+        );
+        assert_eq!(
+            follow_offset_y(viewport(), item(39., 52.), px(0.), px(40.)),
+            px(1.),
+            "one pixel above the top limit moves by one pixel"
+        );
+        assert_eq!(
+            follow_offset_y(viewport(), item(309., 52.), px(0.), px(40.)),
+            px(-1.),
+            "one pixel below the bottom limit moves by one pixel"
+        );
+    }
+
+    #[test]
+    fn follow_offset_aligns_a_row_taller_than_the_viewport_to_the_top() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(0., 800.), px(-300.), px(40.)),
+            px(40.),
+            "an oversized row pins its top to the top limit"
+        );
+    }
+
+    #[test]
+    fn follow_offset_with_zero_margin_touches_the_edges() {
+        assert_eq!(
+            follow_offset_y(viewport(), item(-10., 52.), px(0.), px(0.)),
+            px(10.),
+            "a zero margin reveals a row just past the viewport top"
+        );
+    }
+
+    #[test]
+    fn a_zero_margin_follow_defers_to_scroll_to_item() {
+        let scroll = SelectionScroll::new();
+        scroll.follow(Some(2), px(0.));
+        assert_eq!(scroll.followed.get(), Some(2));
+    }
+
+    #[test]
+    fn refollow_lets_the_same_index_be_followed_again_without_rewinding() {
+        let scroll = SelectionScroll::new();
+        scroll.follow(Some(3), px(40.));
+        scroll.refollow();
+        assert_eq!(scroll.followed.get(), None, "refollow clears the latch");
+        scroll.follow(Some(3), px(40.));
         assert_eq!(scroll.followed.get(), Some(3));
     }
 

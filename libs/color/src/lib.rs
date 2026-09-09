@@ -9,6 +9,15 @@ pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+pub fn normalize_hex(hex: &str) -> Option<String> {
+    let body = hex.trim();
+    let body = body.strip_prefix('#').unwrap_or(body);
+    if body.len() != 6 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", body.to_ascii_lowercase()))
+}
+
 pub fn rgb24(red: u8, green: u8, blue: u8) -> u32 {
     ((red as u32) << 16) | ((green as u32) << 8) | (blue as u32)
 }
@@ -72,6 +81,30 @@ mod tests {
         ];
         for (input, expected) in cases {
             assert_eq!(parse_hex_color(input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn normalize_hex_returns_lowercase_hash_prefixed() {
+        let cases = [
+            ("#203040", Some("#203040")),
+            ("203040", Some("#203040")),
+            ("#FF8040", Some("#ff8040")),
+            ("FF8040", Some("#ff8040")),
+            ("#123", None),
+            ("123", None),
+            ("#12345678", None),
+            ("", None),
+            ("#", None),
+            ("#zzzzzz", None),
+            ("gggggg", None),
+            ("#12 3456", None),
+            ("#aäxyz", None),
+            ("  #FF8800  ", Some("#ff8800")),
+            ("   ", None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(normalize_hex(input).as_deref(), expected, "input: {input}");
         }
     }
 

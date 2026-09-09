@@ -147,17 +147,22 @@ impl EditorView {
 
     fn render_hint_bar(&self, window_width: f32) -> Div {
         let kit = qol_gpui::kit::kit();
-        let items = [
-            BarItem::Hint(HintDescriptor::new("\u{23CE}", "activate", 3)),
-            BarItem::Hint(HintDescriptor::new("\u{2190}\u{2192}", "move", 2)),
-            BarItem::Hint(HintDescriptor::new("H", "hue", 2)),
-            BarItem::Hint(HintDescriptor::new("W", "width", 2)),
-            BarItem::Hint(HintDescriptor::new("U", "undo", 1)),
-            BarItem::Hint(HintDescriptor::new("S", "save", 1)),
-            BarItem::Hint(HintDescriptor::new("drag", "draw", 0)),
-            BarItem::Spacer,
-            BarItem::Hint(HintDescriptor::pinned("esc", "close")),
-        ];
+        let mut items = Vec::new();
+        let mut spacer = false;
+        for row in EDITOR_KEY_ROWS {
+            let Some(hint) = row.hint else {
+                continue;
+            };
+            if hint.pinned && !spacer {
+                items.push(BarItem::Spacer);
+                spacer = true;
+            }
+            items.push(BarItem::Hint(if hint.pinned {
+                HintDescriptor::pinned(hint.key, hint.label)
+            } else {
+                HintDescriptor::new(hint.key, hint.label, hint.priority)
+            }));
+        }
         let mut bar = kit.hint_bar();
         for item in fit_hints(window_width, &items) {
             bar = match item {
@@ -262,21 +267,23 @@ fn fit_image(width: u32, height: u32, max_width: f32, max_height: f32) -> (f32, 
 }
 
 pub(super) fn normalized_pointer(
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    bounds: Bounds<Pixels>,
+    position: Point<Pixels>,
     clamp: bool,
 ) -> Option<NormalizedPoint> {
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    if !clamp && (x < 0.0 || x > width || y < 0.0 || y > height) {
+    let normalized = qol_gpui::canvas::to_normalized(bounds, position)?;
+    let local_x = position.x - bounds.origin.x;
+    let local_y = position.y - bounds.origin.y;
+    let outside_bounds = local_x < px(0.0)
+        || local_x > bounds.size.width
+        || local_y < px(0.0)
+        || local_y > bounds.size.height;
+    if !clamp && outside_bounds {
         return None;
     }
     Some(NormalizedPoint {
-        x: (x / width).clamp(0.0, 1.0),
-        y: (y / height).clamp(0.0, 1.0),
+        x: normalized.x.clamp(0.0, 1.0),
+        y: normalized.y.clamp(0.0, 1.0),
     })
 }
 
@@ -288,27 +295,25 @@ fn display_paths(strokes: &[PenStroke], bounds: Bounds<Pixels>) -> Vec<(gpui::Pa
         .filter_map(|stroke| {
             let first = *stroke.points.first()?;
             let mut builder = PathBuilder::stroke(px(stroke.width * width.min(height)));
-            builder.move_to(display_point(first, bounds));
+            let start = qol_gpui::canvas::from_normalized(bounds, gpui::point(first.x, first.y));
+            builder.move_to(start);
             if stroke.points.len() == 1 {
-                let point = display_point(first, bounds);
-                builder.line_to(point + gpui::point(px(0.1), px(0.1)));
+                builder.line_to(start + gpui::point(px(0.1), px(0.1)));
             }
-            for point in stroke.points.iter().copied().skip(1) {
-                builder.line_to(display_point(point, bounds));
+            for normalized in stroke.points.iter().copied().skip(1) {
+                let target = gpui::point(normalized.x, normalized.y);
+                builder.line_to(qol_gpui::canvas::from_normalized(bounds, target));
             }
             builder.build().ok().map(|path| (path, stroke.color))
         })
         .collect()
 }
 
-fn display_point(point: NormalizedPoint, bounds: Bounds<Pixels>) -> Point<Pixels> {
-    bounds.origin + gpui::point(bounds.size.width * point.x, bounds.size.height * point.y)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{editor_layout, fit_image, normalized_pointer};
     use crate::capture::annotation::NormalizedPoint;
+    use gpui::{point, px, size, Bounds};
 
     #[test]
     fn editor_layout_preserves_aspect_and_stays_inside_monitor() {
@@ -337,6 +342,7 @@ mod tests {
 
     #[test]
     fn normalized_pointer_rejects_new_strokes_outside_and_clamps_dragging() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(100.0), px(100.0)));
         let cases = [
             (-10.0, 50.0, false, None),
             (-10.0, 50.0, true, Some(NormalizedPoint { x: 0.0, y: 0.5 })),
@@ -350,7 +356,7 @@ mod tests {
         ];
         for (x, y, clamp, expected) in cases {
             assert_eq!(
-                normalized_pointer(x, y, 100.0, 100.0, clamp),
+                normalized_pointer(bounds, point(px(x), px(y)), clamp),
                 expected,
                 "x={x} y={y} clamp={clamp}"
             );

@@ -12,7 +12,7 @@ mod view;
 mod window_host;
 
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::*;
 
@@ -44,7 +44,7 @@ pub(crate) struct LauncherView {
     click_away_arm: click_away::ArmState,
     pub(crate) is_showing: bool,
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
-    blur_guard_until: Instant,
+    blur_guard: qol_gpui::ghost::BlurGuard,
     pub(crate) window_title: String,
     pub(crate) window_origin: Point<Pixels>,
     #[cfg(debug_assertions)]
@@ -57,6 +57,8 @@ impl LauncherView {
             .lock()
             .map(|g| g.entries.clone())
             .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()));
+        let mut blur_guard = qol_gpui::ghost::BlurGuard::new();
+        blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
         Self {
             state: LauncherState::new(),
             store: EntryStore::new(
@@ -77,7 +79,7 @@ impl LauncherView {
             click_away_arm: click_away::ArmState::default(),
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
+            blur_guard,
             window_title: title,
             window_origin: point(px(0.0), px(0.0)),
             #[cfg(debug_assertions)]
@@ -122,7 +124,7 @@ impl LauncherView {
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_for_show was={} q=\"{}\" title={}",
                 self.state.scroll_list.selected,
-                self.state.query,
+                self.state.query.text(),
                 self.window_title,
             );
         }
@@ -131,7 +133,7 @@ impl LauncherView {
         self.dismiss_requested = false;
         self.dismiss_requested_from = "requested";
         self.set_showing(true);
-        self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
+        self.blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
         #[cfg(debug_assertions)]
         {
             self.last_render_trace = None;

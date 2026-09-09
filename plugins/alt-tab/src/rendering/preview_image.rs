@@ -1,6 +1,3 @@
-use gpui::RenderImage;
-use std::sync::Arc;
-
 /// Sample ~1KB of evenly-spaced pixels for a fast content-change check.
 pub(crate) fn fast_pixel_hash(data: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -13,12 +10,6 @@ pub(crate) fn fast_pixel_hash(data: &[u8]) -> u64 {
         i += stride;
     }
     hasher.finish()
-}
-
-pub(crate) fn bgra_to_render_image(data: Vec<u8>, w: usize, h: usize) -> Option<Arc<RenderImage>> {
-    let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, data)?;
-    let frame = image::Frame::new(buf);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
 }
 
 pub(crate) fn shot_request_dims(window_w: f32, window_h: f32) -> (usize, usize) {

@@ -77,6 +77,7 @@ pub fn run() {
     }
 
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_runtime::probe!("SHOT_DAEMON_APP", "state=running");
         qol_gpui::platform::set_accessory_policy();
         qol_gpui::popup_window::set_unmap_hide(true);
@@ -501,7 +502,7 @@ fn spawn_active_monitor_cache(cx: &mut App) {
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
         |_cx, event| {
-            qol_gpui::ghost::record_active_monitor(event);
+            qol_gpui::monitor::record_active_monitor(event);
         },
     );
 }

@@ -31,8 +31,11 @@ impl LauncherView {
         }
         let flow_active = self.state.flow.is_some();
         if !flow_active {
-            self.store
-                .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+            self.store.ensure_filtered(
+                self.state.query.text(),
+                self.state.mode,
+                self.state.fuzziness,
+            );
         }
         let result_count = if flow_active {
             self.state.flow_result_count()
@@ -84,7 +87,7 @@ impl LauncherView {
                 self.adjust_selected_boost(delta);
                 self.store.invalidate_cache();
                 self.store.ensure_filtered(
-                    &self.state.query,
+                    self.state.query.text(),
                     self.state.mode,
                     self.state.fuzziness,
                 );
@@ -140,16 +143,17 @@ impl LauncherView {
     }
 
     fn copy_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.state.selection_text() else {
+        let Some(text) = self.state.query.selection_text() else {
             return;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     fn cut_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.state.cut_selection() else {
+        let Some(text) = self.state.query.cut_selection() else {
             return;
         };
+        self.state.clear_launch_error();
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.state.reset_results_position();
         cx.notify();
@@ -159,7 +163,8 @@ impl LauncherView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        if self.state.paste_text(&text) {
+        if self.state.query.paste(&text) {
+            self.state.clear_launch_error();
             self.state.reset_results_position();
             cx.notify();
         }
@@ -182,8 +187,11 @@ impl LauncherView {
         #[cfg(not(debug_assertions))]
         let started = ();
         trace::launch(self, "start", started);
-        self.store
-            .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+        self.store.ensure_filtered(
+            self.state.query.text(),
+            self.state.mode,
+            self.state.fuzziness,
+        );
         let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
             eprintln!(
                 "[controller] launch_selected: no scored item at index {}",
@@ -235,7 +243,7 @@ impl LauncherView {
         flow.verification_deadline = None;
         let epoch = flow.epoch;
         let generation = flow.generation;
-        if self.state.query.trim().is_empty() {
+        if self.state.query.text().trim().is_empty() {
             flow.rows.clear();
             flow.verdict = crate::flow::FlowVerdict::Answered;
             flow.pending = false;
@@ -267,7 +275,7 @@ impl LauncherView {
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
-        let text = self.state.query.clone();
+        let text = self.state.query.text().to_owned();
         if text.trim().is_empty() {
             return;
         }
@@ -365,7 +373,7 @@ impl LauncherView {
         let Some(key) = row.raw.get("key").and_then(|value| value.as_str()) else {
             return;
         };
-        let query = self.state.query.trim().to_string();
+        let query = self.state.query.text().trim().to_string();
         if query.is_empty() {
             return;
         }

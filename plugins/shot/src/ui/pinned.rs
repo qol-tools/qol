@@ -1,6 +1,6 @@
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,26 +11,32 @@ use gpui::*;
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
-use crate::ui::preview::{current_palette, surface_shadow, PREVIEW_APP_ID};
+use crate::ui::preview::{
+    current_palette, live_topology, surface_shadow, MonitorTopology, WarmWindowKey, WarmWindowPool,
+    PREVIEW_APP_ID,
+};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
+use qol_gpui::window_options::PopupWindowOptions;
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
-const EDGE: f32 = 8.0;
+const EDGE: f32 = qol_gpui::theme::SPACE_INSET;
 const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
 const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
 const PIN_CACHE_CAPACITY: usize = 2;
 const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
+const PIN_CACHE_SIZE_KEY: (i32, i32) = (PIN_CACHE_SIZE.0 as i32, PIN_CACHE_SIZE.1 as i32);
+const PIN_WINDOW_KIND: &str = "pin";
 
 static PIN_SEQ: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
-    static PIN_CACHE: RefCell<VecDeque<WindowHandle<PinnedView>>> =
-        const { RefCell::new(VecDeque::new()) };
+    static PIN_POOL: WarmWindowPool<PinnedView> =
+        const { WarmWindowPool::new(PIN_WINDOW_KIND, PIN_CACHE_CAPACITY) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,12 +64,14 @@ struct PinnedWindowSpec {
     focus: bool,
     show: bool,
     cacheable: bool,
+    pool_key: Option<WarmWindowKey>,
 }
 
 #[derive(Clone)]
 struct PinReveal {
     origin: (f64, f64),
     source_preview: Option<String>,
+    size: Size<Pixels>,
 }
 
 type FullResolutionImage = anyhow::Result<(Arc<RenderImage>, u32, u32)>;
@@ -86,7 +94,10 @@ fn spawn_full_resolution_load(
     Ok(receiver)
 }
 
-fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
+fn create_parked(
+    topology: &MonitorTopology,
+    cx: &mut App,
+) -> Option<(WarmWindowKey, WindowHandle<PinnedView>)> {
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
     let origin = point(px(-100.0), px(-100.0));
@@ -101,6 +112,7 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         file_ready: CaptureFileReady::ready(),
         started_at: Instant::now(),
     };
+    let key = PIN_POOL.with(|pool| pool.key(topology, PIN_CACHE_SIZE_KEY));
     let spec = PinnedWindowSpec {
         title: title.clone(),
         bounds,
@@ -111,6 +123,7 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         focus: false,
         show: false,
         cacheable: true,
+        pool_key: Some(key.clone()),
     };
     let handle = open_window(content, spec, cx)?;
     if !platform::prepare_pin_window(&title, (-100.0, -100.0)) {
@@ -118,21 +131,23 @@ fn create_parked(cx: &mut App) -> Option<WindowHandle<PinnedView>> {
         return None;
     }
     platform::reassert_parked(&title, cx);
-    Some(handle)
+    Some((key, handle))
 }
 
 pub fn pre_create(cx: &mut App) {
     if !platform::pin_cache_enabled() {
         return;
     }
+    let topology = live_topology(cx);
     for _ in 0..PIN_CACHE_CAPACITY {
-        if let Some(handle) = create_parked(cx) {
-            PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+        if let Some((key, handle)) = create_parked(&topology, cx) {
+            if !PIN_POOL.with(|pool| pool.put(key, handle)) {
+                let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            }
         }
     }
-    PIN_CACHE.with(|cache| {
-        qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={}", cache.borrow().len());
-    });
+    let windows = PIN_POOL.with(|pool| pool.len());
+    qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={windows}");
 }
 
 pub fn open(
@@ -146,17 +161,30 @@ pub fn open(
     let reveal = PinReveal {
         origin: (native.x, native.y),
         source_preview,
+        size: placement.logical_bounds().size,
     };
     if platform::pin_cache_enabled() {
-        let cache_empty = PIN_CACHE.with(|cache| cache.borrow().is_empty());
-        if cache_empty {
-            if let Some(handle) = create_parked(cx) {
-                PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+        let topology = live_topology(cx);
+        if PIN_POOL
+            .with(|pool| pool.peek(PIN_CACHE_SIZE_KEY, &topology, cx))
+            .is_none()
+        {
+            if let Some((key, handle)) = create_parked(&topology, cx) {
+                PIN_POOL.with(|pool| pool.put(key, handle));
                 qol_runtime::probe!("SHOT_PIN_CACHE", "state=refilled");
             }
         }
-        if cache::open(content.clone(), dismiss, reveal.clone(), &placement, cx) {
-            return true;
+        if let Some(handle) = PIN_POOL.with(|pool| pool.take(PIN_CACHE_SIZE_KEY, &topology, cx)) {
+            if cache::open(
+                handle,
+                content.clone(),
+                dismiss,
+                reveal.clone(),
+                &placement,
+                cx,
+            ) {
+                return true;
+            }
         }
     }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -173,6 +201,7 @@ pub fn open(
         focus: false,
         show: false,
         cacheable: false,
+        pool_key: None,
     };
     let opened_at = Instant::now();
     let Some(handle) = open_window(content, spec, cx) else {
@@ -215,18 +244,14 @@ fn open_window(
     spec: PinnedWindowSpec,
     cx: &mut App,
 ) -> Option<WindowHandle<PinnedView>> {
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
-        titlebar: None,
-        window_decorations: Some(WindowDecorations::Client),
-        kind: qol_gpui::popup_window::pinned_window_kind(),
-        focus: spec.focus,
-        show: spec.show,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(PREVIEW_APP_ID.to_string()),
-        ..Default::default()
-    };
+    let options = PopupWindowOptions::new()
+        .bounds(spec.bounds)
+        .decorations(WindowDecorations::Client)
+        .kind(qol_gpui::popup_window::pinned_window_kind())
+        .focus(spec.focus)
+        .show(spec.show)
+        .app_id(PREVIEW_APP_ID)
+        .build();
     let focus = spec.focus;
     let handle = cx
         .open_window(options, move |window, cx| {
@@ -249,6 +274,7 @@ mod cache {
     use super::*;
 
     pub fn open(
+        handle: WindowHandle<PinnedView>,
         content: PinnedContent,
         dismiss: PinnedDismiss,
         reveal: PinReveal,
@@ -256,9 +282,6 @@ mod cache {
         cx: &mut App,
     ) -> bool {
         let opened_at = Instant::now();
-        let Some(handle) = PIN_CACHE.with(|cache| cache.borrow_mut().pop_front()) else {
-            return false;
-        };
         let config = crate::config::load();
         let border = config.capture.pin_border;
         let title = handle
@@ -366,6 +389,7 @@ pub struct PinnedView {
     scheduled_reveal_generation: Option<u64>,
     pending_reveal: Option<PinReveal>,
     cacheable: bool,
+    pool_key: Option<WarmWindowKey>,
     handle: Option<WindowHandle<PinnedView>>,
     focus_handle: FocusHandle,
 }
@@ -401,6 +425,7 @@ impl PinnedView {
             scheduled_reveal_generation: None,
             pending_reveal: spec.reveal,
             cacheable: spec.cacheable,
+            pool_key: spec.pool_key,
             handle: None,
             focus_handle: cx.focus_handle(),
         }
@@ -477,9 +502,7 @@ impl PinnedView {
             self.title
         );
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_generation(generation);
-            });
+            self.schedule_reveal_proof(window, cx, generation);
             return;
         }
         qol_runtime::probe!(
@@ -488,9 +511,7 @@ impl PinnedView {
             self.title
         );
         if super::schedule_parked_reveal(&self.title, cx) {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_generation(generation);
-            });
+            self.schedule_reveal_proof(window, cx, generation);
             return;
         }
         qol_runtime::probe!(
@@ -499,6 +520,64 @@ impl PinnedView {
             self.title
         );
         cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_reveal_proof(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        generation: u64,
+    ) {
+        let expected = match self.pending_reveal.as_ref() {
+            Some(reveal) => Rc::new(Cell::new(reveal.size)),
+            None => return,
+        };
+        let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
+        else {
+            self.reveal_presented_generation(generation);
+            return;
+        };
+        let title = self.title.clone();
+        let this = cx.entity().downgrade();
+        let cancelled = {
+            let this = this.clone();
+            move |cx: &AsyncApp| {
+                this.read_with(cx, |view, _| view.reveal_generation != generation)
+                    .unwrap_or(true)
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = qol_gpui::surface::await_reveal_readiness(
+                cx,
+                &title,
+                &fresh_frame,
+                cancelled,
+                || None,
+            )
+            .await;
+            qol_runtime::probe!(
+                "SHOT_PIN_REVEAL",
+                "title={title} generation={generation} state=proof ready={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={} expected={}x{} observed={}x{} rendered={}x{}",
+                outcome.proof.ready(),
+                outcome.proof.layout_confirmed,
+                outcome.proof.viewport_ready,
+                outcome.proof.fresh_frame,
+                outcome.proof.content_rendered,
+                outcome.attempts,
+                outcome.proof.expected_viewport.width.to_f64(),
+                outcome.proof.expected_viewport.height.to_f64(),
+                outcome.proof.observed_viewport.width.to_f64(),
+                outcome.proof.observed_viewport.height.to_f64(),
+                outcome.proof.rendered_viewport.width.to_f64(),
+                outcome.proof.rendered_viewport.height.to_f64()
+            );
             let _ = cx.update(|cx| {
                 if let Some(view) = this.upgrade() {
                     view.update(cx, |view, _cx| view.reveal_presented_generation(generation));
@@ -765,6 +844,10 @@ impl PinnedView {
             window.remove_window();
             return;
         };
+        let Some(key) = self.pool_key.clone() else {
+            window.remove_window();
+            return;
+        };
         self.active = false;
         self.placed = false;
         self.image = None;
@@ -784,15 +867,8 @@ impl PinnedView {
             window.remove_window();
             return;
         }
-        let cached = PIN_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if cache.len() >= PIN_CACHE_CAPACITY {
-                return false;
-            }
-            cache.push_back(handle);
-            true
-        });
-        if !cached {
+        let pooled = PIN_POOL.with(|pool| pool.put(key, handle));
+        if !pooled {
             window.remove_window();
             return;
         }
@@ -892,7 +968,7 @@ impl PinnedView {
             return;
         }
 
-        let steps = scroll_steps(&mut self.scroll_remainder, notches);
+        let steps = qol_gpui::scroll_list::accumulate_steps(&mut self.scroll_remainder, notches);
         if steps == 0 {
             return;
         }
@@ -1058,6 +1134,7 @@ impl Render for PinnedView {
                     .border_color(rgb(palette.thumb_border));
             }
             return div()
+                .font_family(qol_gpui::theme::font_ui())
                 .id("shot-pin")
                 .track_focus(&self.focus_handle)
                 .on_key_down(cx.listener(Self::on_key))
@@ -1080,6 +1157,7 @@ impl Render for PinnedView {
             window.is_window_hovered(),
         );
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-pin")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
@@ -1205,26 +1283,6 @@ fn scale_rect(rect: PinRect, factor: f32) -> PinRect {
     }
 }
 
-fn scroll_steps(remainder: &mut f32, notches: f32) -> i32 {
-    if !notches.is_finite() || notches == 0.0 {
-        return 0;
-    }
-    if *remainder != 0.0 && remainder.signum() != notches.signum() {
-        *remainder = 0.0;
-    }
-    *remainder += notches;
-    let steps = remainder.trunc() as i32;
-    if steps == 0 {
-        return 0;
-    }
-    if !(-1..=1).contains(&steps) {
-        *remainder = 0.0;
-        return steps.signum();
-    }
-    *remainder -= steps as f32;
-    steps
-}
-
 fn drag_bounds(
     start: PinRect,
     edge: Option<ResizeEdge>,
@@ -1327,7 +1385,7 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 mod tests {
     use super::{
         action_row_fits, clamp_scale_factor, controls_visible, drag_bounds, hover_after_event,
-        resize_rect, scroll_steps, PinRect,
+        resize_rect, PinRect,
     };
     use gpui::ResizeEdge;
 
@@ -1515,7 +1573,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_steps_emit_at_most_one_increment_per_event() {
+    fn accumulate_steps_emit_at_most_one_increment_per_event() {
         let mut remainder = 0.0;
         let cases = [
             (0.6, 0, 0.6),
@@ -1528,7 +1586,10 @@ mod tests {
             (f32::NAN, 0, 0.0),
         ];
         for (notches, expected_steps, expected_remainder) in cases {
-            assert_eq!(scroll_steps(&mut remainder, notches), expected_steps);
+            assert_eq!(
+                qol_gpui::scroll_list::accumulate_steps(&mut remainder, notches),
+                expected_steps
+            );
             assert!((remainder - expected_remainder).abs() < 0.001);
         }
     }

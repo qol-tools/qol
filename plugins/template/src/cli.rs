@@ -16,7 +16,7 @@ fn app() -> HeadlessApp {
     app_with_handlers(
         |_| Ok(PlainTextOutput::text("Hello from My Plugin")),
         |_| {
-            qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+            qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                 .context("failed to open settings URL")?;
             Ok(PlainTextOutput::empty())
         },

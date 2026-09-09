@@ -1,6 +1,6 @@
 # GPUI UI inventory and duplication audit
 
-Investigation: 2026-09-08, HEAD `1f6926873`, clean worktree.
+Investigation: 2026-09-08, HEAD `9222cfd38`, clean worktree.
 Scope: every crate that compiles GPUI UI code — `libs/gpui` (crate `qol-gpui`) and its six consumers
 `apps/qol-tray`, `plugins/{alt-tab,cli-sessions,launcher,removeapp,shot}`.
 Method: five read-only research lanes (no edits, no builds), each inventorying one slice against the
@@ -9,8 +9,100 @@ source. Full lane reports: `/tmp/qol-gpui-inventory/{kit,pickers,shot,panels,sha
 Markers: **[V]** = architect-verified in source for this report, **[L]** = lane-reported with
 file:line evidence, not independently re-read here.
 
-Baseline: `cargo clippy --workspace --all-targets` exits 0 with no warnings (only the upstream
+Baseline: `cargo clippy --workspace --all-targets` (debug profile) exits 0 with no warnings (only the upstream
 `proc-macro-error2` future-incompat note). Nothing in this audit is a lint-level defect.
+
+## 0. Delivery status
+
+Branch `gpui-dedup` (worktree `/media/kmrh47/WD_SN850X/Git/worktrees/gpui-dedup/qol-monorepo`) fixes
+the items below. Every commit passed the debug-profile gates: `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets`, the workspace nextest suite (6150 tests) and `qol check`
+(9/9 stages). CI's release-profile build (`RUSTFLAGS=-D warnings cargo build --release --locked`)
+was red from `9ea31bb1d` until the review fix on the branch tip: that commit moved every
+release-profile use of `Instant` in alt-tab's `app/mod.rs` behind `cfg(debug_assertions)` and left
+the import unconditional. `qol check` builds the debug profile only, so release-profile changes are
+verified with `RUSTFLAGS="-D warnings" cargo check --workspace --release`.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| A1 `WindowOptions` at 7 sites | `PopupWindowOptions` builder + 6 sites migrated (cli-sessions' site removed by A2) | `a8df5be15`, `6e1886a25` |
+| A2 cli-sessions hand-rolled panel | `SurfaceKind::OverlayPanel` + `OpenedSurface::update_view`, cli-sessions moved onto `Surface` | `c0ca88c3f` |
+| A7 `RenderImage` construction x5 | `qol_gpui::image::{render_image,render_image_rgba}` + 5 sites migrated | `a8df5be15`, `6e1886a25` |
+| B2 cli-sessions toast 380x76 | sends `style = "compact"`; host derives 340x76 | `5e3f781ad` |
+| B4 `pinned::scroll_steps` copy | calls `scroll_list::accumulate_steps` | `5e3f781ad` |
+| B13 canvas origin-offset copies | `qol_gpui::canvas` + gamepad/shot editor migrated (partial, see residual) | `1373daab5` |
+| B17 bluetooth dead `qol-gpui` dep | both target legs removed; `gpui = true` kept (host-rendered settings) | `5e3f781ad` |
+| A3 shot reveal copies | public `surface::reveal` (`schedule_fresh_frame`, `await_reveal_readiness`, `RevealProof`); `Surface` refactored onto it; preview and pinned migrated; selector exempt (pre-created reused full-screen window never emits a per-reveal bounds epoch) (partial, see residual) | `e0d3a61af` |
+| A6 blur guard | `ghost::BlurGuard` owns the arm/expiry state machine; per-surface durations stay local (partial, see residual) | `9ea31bb1d` |
+| A7 atlas registry | `RenderImage` atlas registry promoted from alt-tab to `qol_gpui::image_registry`; alt-tab drops `image`/`smallvec` | `253890b4c` |
+| A8 Linux ghost title | alt-tab Linux picker title calls `ghost::ghost_window_title` | `5234402e5` |
+| B3 native_tools form nav | `settings_panel::form_nav` exported; hosted panel and native_tools share it | `4151f2364` |
+| B6 removeapp palette | removeapp reads only `RemoveAppPalette` (partial, see residual) | `9d12e0676` |
+| B10 alt-tab hint fitting | hint bar built through `fit_hints` | `5234402e5` |
+| B15 hex validation | `qol_color::normalize_hex`; tray depends on `qol-color` directly (not the linux/macos-only `qol-gpui` leg) | `9d12e0676` |
+| B18 dead kit surface | 15 uncalled `Kit` builders, `pinned_order` and 3 unused height constants removed; `ToastPresenter` crate-private, `tile_tone`/`focus_ring_for` private (partial, see residual) | `253890b4c` |
+| B19 alt-tab keepalive id | passes `config::PLUGIN_ID` | `5234402e5` |
+| A5 text input | `text_edit::TextField` owns cursor, anchor, motion, delete and paste; `TextFieldElement` renders the caret/selection window; launcher, removeapp and native_tools hold one field each, and the editable chrome is a `SettingsTextField` recipe (partial, see residual) | `e11bd0310`, `de0726a24` |
+| B5 settings opener name | `qol_apps::desktop_integration::open_plugin_settings_via_tray` at ~18 call sites, so it no longer shares a name with the native panel opener | `f6b1b08a1` |
+| B8 mirrored geometry | six consumer constants read their theme token (`RENDER_GAP`, `SEARCH_PAD`, `SEARCH_H`, `FAILBAR_H`, `EDGE`, `CHIP_TOP`); `RENDER_PAD_X/Y` and `ROW_H` stay local because no equal-valued token owns their meaning | `659b6b511` |
+| B11 text width helpers | `qol_gpui::text::{shaped_width, truncate_to_width}`; launcher and alt-tab migrated | `e15179367` |
+| B14 action-ring copy | shot editor and preview share one ring builder | `e15179367` |
+| B21 hint-key copies | shot editor and launcher hint keys derive from the binding tables their handlers read | `e15179367` |
+| A4 active-monitor ownership | `monitor.rs` owns the only active-monitor answer and names the three precedence policies (active-first, focus-first, cached-first); ghost and alt-tab keep intent, not a second answer, and every call site keeps the policy it had | `186c1a179` |
+| B1 cli-sessions selection | `Selection` wraps `ScrollList`; the id anchor only restores position through one function | `8ae81aa93` |
+| B9 two ghost-hide mechanisms | stopped, not approximated: the title-keyed native hide and the handle-keyed view hide cannot share one API without erasing the typed handle or threading `&mut App` into title-only callers | — |
+| B12 shot warm pools | one `WarmWindowPool` serves the pin and selector caches, keyed by window kind + monitor topology + size, dropping entries whose topology no longer matches the live set | `d7accc4f8` |
+
+### Residual, deliberately not changed
+
+| Item | Decision |
+|---|---|
+| A4 multi-monitor magnitude | Ownership is unified and the single-monitor paths are guest-verified; whether focus-first and active-first should ever disagree is a precedence product question, and the available guest is single-monitor. |
+| A9 shot cross-monitor move | Deliberate sticky-placement policy; a contract question, not duplication. |
+| B7 spacing literals | The 41 literals and 8 off-ladder values are a design-system decision: snapping them changes pixels, extending the ladder changes the system. |
+| B16 gpui re-export | One dependency line per crate against an import rewrite across six crates. |
+| B20 alt-tab scrollbar | A UX addition, not duplication. |
+| B22 launcher examples palette | Teaching material. |
+| A3 shot reveal orchestration | preview.rs:1068-1165 and pinned.rs:489-600 keep two copies of the generation-guarded reveal driver around the shared gate (63 identical lines; RevealProof trace formatting at four sites). The base copies were single on_next_frame reveals, so the migration added the bounds/render/viewport gate to both; extracting the driver into surface::reveal is a follow-up. |
+| A5 hosted settings panel text edit | settings_panel/view.rs:272,1382,1388 ActiveControl::Edit(String) still edits with pop/push_str; only launcher, removeapp and native_tools moved onto TextField. |
+| A6 shot preview blur windows | preview.rs:947,1025,1056,1168,1521 keep raw blur_guard_until timestamps beside ghost::BlurGuard. |
+| B6 cli-sessions palette reads | render.rs:246,291,332,334,357 still read kit.palette directly. |
+| B13 tracked-bounds cells | color_wheel.rs:58,281-287 and settings_panel/view.rs:286,3995 keep their own tracked-bounds cells; only the origin math moved to qol_gpui::canvas. |
+| B18 status-dot owners | kit.rs:258,273 and status_indicator both still draw a status dot. |
+| A4 picker placement memo | alt-tab ACTIVE_PICKER_MONITOR (app/mod.rs:20) survives as the memo of the chosen placement target, cleared on dismiss; monitor.rs answers which monitor is active, the memo records where the picker was put. |
+
+Guest verification of A2 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
+`SURFACE_REVEAL phase=opened hidden=true` -> `phase=frame-ready expected=observed=rendered=360x400` ->
+`SHOW_WIN_STATE presentation=Overlay` -> `phase=state-restored overlay_configured=true` ->
+`phase=ready focus=true`; `xprop` shows `_NET_WM_STATE_ABOVE, _NET_WM_STATE_SKIP_TASKBAR,
+_NET_WM_STATE_SKIP_PAGER` with `_MOTIF_WM_HINTS` decorations off and `WM_NORMAL_HINTS` 360x400
+min=max; Escape gives `CLI_SESSIONS_DISMISS hidden=true` with the window unmapped and focus returned;
+reopen repeats the full reveal on a new window; collapse/expand give 360x52 and 360x400 with the
+overlay state preserved.
+
+Guest verification of A3 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle): preview
+`SHOT_PREVIEW_REVEAL state=proof ready=true ... expected=396x329 observed=396x329 rendered=396x329`
+-> `state=presented preview_ms=108`; pinned `SHOT_PIN_REVEAL state=proof ready=true ... 360x240` ->
+`action_ms=98 state=presented` -> `SHOT_PIN_TRANSITION focused=true`; the refactored `Surface` on
+cli-sessions and removeapp gives `phase=frame-ready ... content_rendered=true` -> `phase=revealed`
+-> `phase=ready focus=true` (removeapp `first_paint_latency_ms=1`); the exempt selector still gives
+`SHOT_SELECT_REVEAL state=presented`, `SHOT_SELECT_VIEWPORT aligned=true`, and a 600x400 capture.
+
+Guest verification of A5 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle): launcher typing
+through the tray action route gives `LAUNCHER_INPUT ... q="fire" q_len=4 cursor=4` with result counts
+falling 22 -> 15 -> 8; `shift+left` twice gives `selection=3-4` then `selection=2-4`; `ctrl+a` gives
+`selection=0-4`; `backspace` clears to `q="" q_len=0 cursor=0`; typing `ch` then `left` leaves
+`q="ch" cursor=1`. removeapp takes the same field through open, two typed characters, `backspace`,
+`ctrl+a` and `backspace` with zero panics in the guest log and a rendered window.
+
+Guest verification of A4 and B12 (`linux/mint-cinnamon`, artifact-backed lane, debug bundle):
+launcher open/type/dismiss keeps `SHOW_GHOST`/`HIDE_WIN`/`FOCUS_RETURN` and reports
+`GHOSTDUMP ... active_mon=Some(ActiveMonitor { inner: MonitorBounds { x: 0.0, y: 0.0, width: 1280.0,
+height: 800.0 } })` through the new owner; the shot selector reuses its warm window
+(`SHOT_SELECT_WINDOW state=reuse`, `SHOT_SELECT_OPEN result=reuse`), the pin reuses a pooled window
+(`SHOT_PIN_OPEN path=reuse ms=6`, `SHOT_PIN_REVEAL ... action_ms=77 state=presented`) and returns it
+(`SHOT_PIN_RECYCLE result=ok`), and no `SHOT_WARM_INVALIDATE` fires while the topology is unchanged.
+cli-sessions selection is covered by the workspace tests, which pass unchanged.
 
 Line counts in scope: `libs/gpui` 33,259 (70 files); GPUI-touching consumer code 7,832 (launcher),
 8,755 (alt-tab), 10,943 (shot), 6,999 (qol-tray), 2,197 (cli-sessions), 1,141 (removeapp).
@@ -203,7 +295,7 @@ proven defect. Severity medium, confidence high.
 - **`qol-gpui`'s `image` dependency is real** (prior audit): `color_wheel.rs` constructs gpui's
   public `RenderImage` from `image::Frame`.
 - **Standards drift (side finding).** `gpui-conventions` and `qol-plugin-gpui-surfaces` still point
-  at `libs/qol-gpui`, which no longer exists after `0a381bda4` renamed the folder to `libs/gpui`
+  at `libs/qol-gpui`, which no longer exists after `49d3ff07f` renamed the folder to `libs/gpui`
   (crate name remains `qol-gpui`). Both skills should be corrected before the next session follows
   a dead path.
 

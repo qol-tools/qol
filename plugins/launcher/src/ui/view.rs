@@ -3,6 +3,8 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
+use qol_gpui::text::shaped_width;
+use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{
     launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO, TEXT_NANO,
     TEXT_TITLE,
@@ -28,12 +30,9 @@ pub fn palette() -> LauncherPalette {
     current_palette()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn search_bar(
-    query: &str,
+    field: &TextField,
     launch_error: Option<&str>,
-    cursor: usize,
-    selection: Option<(usize, usize)>,
     selected: usize,
     result_count: usize,
     pending: bool,
@@ -55,7 +54,7 @@ pub fn search_bar(
         shaped_width(window, &counter, mono_font, TEXT_NANO)
     };
     let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
-    let visible = visible_char_count(
+    let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
             - 2.0 * qol_gpui::theme::SPACE_PAD
             - chevron_width
@@ -101,16 +100,28 @@ pub fn search_bar(
                         .h(px(18.))
                         .overflow_hidden()
                         .text_size(px(TEXT_BODY))
+                        .text_color(rgb(current_palette().text))
                         .flex()
                         .items_center()
-                        .child(search_bar_content(
-                            query,
-                            cursor,
-                            selection,
-                            placeholder,
-                            visible,
-                            mono_advance,
-                        )),
+                        .child(
+                            TextFieldElement::new(field, visible, mono_advance)
+                                .selection(
+                                    rgb(current_palette().bg_selected).into(),
+                                    Some(rgb(current_palette().text).into()),
+                                )
+                                .caret(CaretStyle {
+                                    color: rgb(current_palette().highlight).into(),
+                                    width: CARET_WIDTH,
+                                    height: 16.0,
+                                    top: 1.0,
+                                    radius: 1.0,
+                                })
+                                .placeholder(
+                                    placeholder.to_owned(),
+                                    rgb(current_palette().text_muted).into(),
+                                )
+                                .render(),
+                        ),
                 )
                 .when_some(launch_error, |field, error| {
                     field.child(
@@ -139,125 +150,6 @@ pub fn search_bar(
 }
 
 const CARET_WIDTH: f32 = 2.0;
-
-fn caret(x: f32) -> Div {
-    div()
-        .absolute()
-        .left(px((x - 1.0).max(0.0)))
-        .top(px(1.0))
-        .w(px(CARET_WIDTH))
-        .h(px(16.0))
-        .rounded_full()
-        .bg(rgb(current_palette().highlight))
-}
-
-fn search_bar_content(
-    query: &str,
-    cursor: usize,
-    selection: Option<(usize, usize)>,
-    placeholder: &str,
-    visible: usize,
-    advance: f32,
-) -> AnyElement {
-    if query.is_empty() {
-        return div()
-            .relative()
-            .text_color(rgb(current_palette().text_muted))
-            .child(placeholder.to_owned())
-            .child(caret(0.0))
-            .into_any_element();
-    }
-
-    let char_count = query.chars().count();
-    let (view_start, view_end) = search_window(char_count, cursor, visible);
-
-    let start_byte = char_to_byte(query, view_start);
-    let end_byte = char_to_byte(query, view_end);
-    let visible = &query[start_byte..end_byte];
-
-    let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
-
-    if let Some((sel_start, sel_end)) = selection {
-        let adj_start = sel_start
-            .saturating_sub(view_start)
-            .min(view_end - view_start);
-        let adj_end = sel_end
-            .saturating_sub(view_start)
-            .min(view_end - view_start);
-        let start = char_to_byte(visible, adj_start);
-        let end = char_to_byte(visible, adj_end);
-        if start < end {
-            highlights.push((
-                start..end,
-                HighlightStyle {
-                    color: Some(rgb(current_palette().text).into()),
-                    background_color: Some(rgb(current_palette().bg_selected).into()),
-                    ..HighlightStyle::default()
-                },
-            ));
-        }
-    }
-
-    let styled =
-        StyledText::new(SharedString::from(visible.to_owned())).with_highlights(highlights);
-    div()
-        .relative()
-        .text_color(rgb(current_palette().text))
-        .child(styled)
-        .when(selection.is_none(), |field| {
-            let adj_cursor = cursor.saturating_sub(view_start).min(view_end - view_start);
-            field.child(caret(adj_cursor as f32 * advance))
-        })
-        .into_any_element()
-}
-
-fn char_to_byte(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len())
-}
-
-fn shaped_width(window: &mut gpui::Window, text: &str, run_font: Font, font_size: f32) -> f32 {
-    window
-        .text_system()
-        .shape_line(
-            SharedString::from(text.to_owned()),
-            px(font_size),
-            &[TextRun {
-                len: text.len(),
-                font: run_font,
-                color: Hsla::default(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        )
-        .width
-        .into()
-}
-
-fn visible_char_count(available_px: f32, advance_px: f32) -> usize {
-    let fits = if advance_px > 0.0 {
-        (available_px / advance_px).floor() as usize
-    } else {
-        0
-    };
-    fits.max(8)
-}
-
-fn search_window(char_count: usize, cursor: usize, visible: usize) -> (usize, usize) {
-    let view_start = if char_count <= visible {
-        0
-    } else {
-        cursor
-            .saturating_sub(visible.saturating_sub(2))
-            .min(char_count.saturating_sub(visible))
-    };
-    let view_end = (view_start + visible).min(char_count);
-    (view_start, view_end)
-}
 
 pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) -> Div {
     let kit = qol_gpui::kit::kit();
@@ -642,17 +534,83 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .collect()
 }
 
+struct LauncherHint {
+    keystrokes: &'static [&'static str],
+    label: &'static str,
+    priority: u8,
+    pinned: bool,
+}
+
+enum LauncherHintSlot {
+    Hint(LauncherHint),
+    ModeChip,
+    Spacer,
+}
+
+const LAUNCHER_HINTS: &[LauncherHintSlot] = &[
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["enter"],
+        label: "open",
+        priority: 2,
+        pinned: false,
+    }),
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["up", "down"],
+        label: "move",
+        priority: 2,
+        pinned: false,
+    }),
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["tab"],
+        label: "mode",
+        priority: 1,
+        pinned: false,
+    }),
+    LauncherHintSlot::ModeChip,
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &[],
+        label: "search",
+        priority: 0,
+        pinned: false,
+    }),
+    LauncherHintSlot::Spacer,
+    LauncherHintSlot::Hint(LauncherHint {
+        keystrokes: &["esc", "escape"],
+        label: "dismiss",
+        priority: 0,
+        pinned: true,
+    }),
+];
+
+fn keycap(keystrokes: &[&'static str]) -> &'static str {
+    match keystrokes {
+        [] => "type",
+        ["enter"] => "\u{23CE}",
+        ["up", "down"] => "\u{2191}\u{2193}",
+        ["tab"] => "\u{21E5}",
+        [key, ..] => key,
+    }
+}
+
+fn hint_descriptor(hint: &LauncherHint) -> HintDescriptor {
+    let key = keycap(hint.keystrokes);
+    if hint.pinned {
+        HintDescriptor::pinned(key, hint.label)
+    } else {
+        HintDescriptor::new(key, hint.label, hint.priority)
+    }
+}
+
 pub fn hint_bar(mode: SearchMode) -> Div {
     let kit = qol_gpui::kit::kit();
-    let items = [
-        BarItem::Hint(HintDescriptor::new("\u{23CE}", "open", 2)),
-        BarItem::Hint(HintDescriptor::new("\u{2191}\u{2193}", "move", 2)),
-        BarItem::Hint(HintDescriptor::new("\u{21E5}", "mode", 1)),
-        BarItem::FixedWidth(estimated_chip_width(mode.label())),
-        BarItem::Hint(HintDescriptor::new("type", "search", 0)),
-        BarItem::Spacer,
-        BarItem::Hint(HintDescriptor::pinned("esc", "dismiss")),
-    ];
+    let items: Vec<BarItem> = LAUNCHER_HINTS
+        .iter()
+        .map(|slot| match slot {
+            LauncherHintSlot::Hint(hint) => BarItem::Hint(hint_descriptor(hint)),
+            LauncherHintSlot::ModeChip => BarItem::FixedWidth(estimated_chip_width(mode.label())),
+            LauncherHintSlot::Spacer => BarItem::Spacer,
+        })
+        .collect();
     let mut bar = kit.hint_bar();
     for item in fit_hints(WINDOW_WIDTH, &items) {
         bar = match item {
@@ -670,8 +628,11 @@ pub fn bg_color() -> gpui::Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_lead, search_window, visible_char_count};
+    use super::{answer_lead, LauncherHintSlot, LAUNCHER_HINTS};
     use crate::flow::FlowRow;
+    use crate::ui::input::InputEffect;
+    use crate::ui::state::LauncherState;
+    use gpui::Modifiers;
 
     fn flow_row(kind: &str) -> FlowRow {
         FlowRow {
@@ -692,32 +653,20 @@ mod tests {
     }
 
     #[test]
-    fn visible_char_count_floors_the_advance() {
-        assert_eq!(visible_char_count(300.0, 10.0), 30);
-        assert_eq!(visible_char_count(309.0, 10.0), 30);
-    }
-
-    #[test]
-    fn visible_char_count_never_below_eight() {
-        assert_eq!(visible_char_count(79.0, 10.0), 8);
-        assert_eq!(visible_char_count(0.0, 10.0), 8);
-    }
-
-    #[test]
-    fn visible_char_count_zero_advance_holds_eight() {
-        assert_eq!(visible_char_count(300.0, 0.0), 8);
-    }
-
-    #[test]
-    fn search_window_shows_short_query_whole() {
-        assert_eq!(search_window(10, 3, 25), (0, 10));
-        assert_eq!(search_window(25, 25, 25), (0, 25));
-    }
-
-    #[test]
-    fn search_window_follows_the_cursor() {
-        assert_eq!(search_window(60, 5, 25), (0, 25));
-        assert_eq!(search_window(60, 30, 25), (7, 32));
-        assert_eq!(search_window(60, 60, 25), (35, 60));
+    fn advertised_hint_keystrokes_reach_the_handler() {
+        for slot in LAUNCHER_HINTS {
+            let LauncherHintSlot::Hint(hint) = slot else {
+                continue;
+            };
+            for &keystroke in hint.keystrokes {
+                let mut state = LauncherState::new();
+                assert_ne!(
+                    state.apply_key(keystroke, &Modifiers::none(), 1),
+                    InputEffect::Ignore,
+                    "hint {:?} advertises {keystroke:?}",
+                    hint.label
+                );
+            }
+        }
     }
 }

@@ -7,7 +7,7 @@ use axum::{
 };
 
 use crate::dev::state::DiscoveryStatus;
-use crate::dev::{normalize_ghost_debug_color, GpuiRuntimeConfig};
+use crate::dev::GpuiRuntimeConfig;
 
 use super::dev_services;
 use super::dev_validation::sanitize_monitored_plugin_ids;
@@ -84,7 +84,7 @@ fn persist_runtime_gpui(payload: RuntimeGpuiPayload) -> anyhow::Result<()> {
         cfg.ghost_opacity = clamp_payload_opacity(Some(field));
     }
     if let Some(field) = payload.ghost_debug_color.as_deref() {
-        cfg.ghost_debug_color = normalize_ghost_debug_color(Some(field));
+        cfg.ghost_debug_color = qol_color::normalize_hex(field);
     }
     cfg.save()
 }

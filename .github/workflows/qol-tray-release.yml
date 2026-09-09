@@ -93,6 +93,7 @@ jobs:
           BUNDLE="qol-tray-linux-${ARCH}"
           mkdir -p "${BUNDLE}"
           cp target/release/qol-tray "${BUNDLE}/"
+          cp libs/gpui/assets/fonts/OFL.txt "${BUNDLE}/IBM-Plex-OFL.txt"
           tar czf "${BUNDLE}.tar.gz" "${BUNDLE}"
           cp "${BUNDLE}.tar.gz" dist/
           ls -lh dist/
@@ -155,6 +156,7 @@ jobs:
 
           chmod +x "${MACOS_DIR}/qol-tray"
           cp apps/qol-tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
+          cp libs/gpui/assets/fonts/OFL.txt "${RESOURCES_DIR}/IBM-Plex-OFL.txt"
 
           cat > "${CONTENTS_DIR}/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>

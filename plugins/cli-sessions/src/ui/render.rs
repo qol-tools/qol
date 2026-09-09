@@ -168,8 +168,8 @@ fn panel_controls(collapsed: bool, cx: &mut Context<SessionsView>) -> impl IntoE
         .child(header_control(
             "hide-panel-button",
             qol_gpui::kit::WindowControlIcon::Close,
-            |this, _, _| {
-                this.dismiss_with_reason("hide-button");
+            |this, _, cx| {
+                this.dismiss_with_reason("hide-button", cx);
             },
             cx,
         ))
@@ -409,7 +409,7 @@ impl SessionsView {
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
         if body_visible {
-            self.list_scroll.follow(highlight);
+            self.list_scroll.follow(highlight, px(0.));
         }
         let row_els: Vec<_> = rows
             .iter()
@@ -440,7 +440,7 @@ impl SessionsView {
                             cx.stop_propagation();
                         }
                         Some(StripAction::Dismiss) => {
-                            this.dismiss_with_reason(STRIP_ESCAPE_REASON);
+                            this.dismiss_with_reason(STRIP_ESCAPE_REASON, cx);
                         }
                         None => {}
                     }
@@ -485,14 +485,14 @@ impl SessionsView {
                         }
                     }
                     "w" if ev.keystroke.modifiers.platform => {
-                        this.dismiss_with_reason(CLOSE_KEY_REASON);
+                        this.dismiss_with_reason(CLOSE_KEY_REASON, cx);
                     }
                     "s" if ev.keystroke.modifiers.alt => {
                         this.collapse_panel(window, cx);
                         cx.notify();
                     }
                     "escape" => {
-                        this.dismiss_with_reason(ESCAPE_REASON);
+                        this.dismiss_with_reason(ESCAPE_REASON, cx);
                     }
                     _ => {}
                 }

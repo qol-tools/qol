@@ -1,6 +1,7 @@
 use super::layout::MAX_VISIBLE;
 use crate::discovery::search::{Fuzziness, SearchMode};
 use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
+use qol_gpui::text_edit::TextField;
 use std::time::{Duration, Instant};
 
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
@@ -70,9 +71,7 @@ pub struct FlowSession {
 pub struct LauncherState {
     pub mode: SearchMode,
     pub fuzziness: Fuzziness,
-    pub query: String,
-    pub cursor: usize,
-    pub selection_anchor: Option<usize>,
+    pub query: TextField,
     pub scroll_list: qol_gpui::scroll_list::ScrollList,
     pub previous_selected: Option<usize>,
     pub edge_hit: Option<EdgeHit>,
@@ -96,9 +95,7 @@ impl LauncherState {
         Self {
             mode: SearchMode::Apps,
             fuzziness: Fuzziness::Balanced,
-            query: String::new(),
-            cursor: 0,
-            selection_anchor: None,
+            query: TextField::new(),
             scroll_list: qol_gpui::scroll_list::ScrollList::new(MAX_VISIBLE),
             previous_selected: None,
             edge_hit: None,
@@ -131,8 +128,6 @@ impl LauncherState {
             detail: false,
         });
         self.query.clear();
-        self.cursor = 0;
-        self.clear_selection();
         self.clear_launch_error();
         self.reset_results_position();
     }
@@ -140,8 +135,6 @@ impl LauncherState {
     pub fn exit_flow(&mut self) {
         self.flow = None;
         self.query.clear();
-        self.cursor = 0;
-        self.clear_selection();
         self.clear_launch_error();
         self.reset_results_position();
     }
@@ -210,10 +203,6 @@ impl LauncherState {
             .unwrap_or(FlowVerdict::Answered)
     }
 
-    pub fn query_len(&self) -> usize {
-        self.query.chars().count()
-    }
-
     pub fn cycle_mode(&mut self, _reverse: bool) {
         self.mode = self.mode.next();
         self.clear_launch_error();
@@ -231,66 +220,6 @@ impl LauncherState {
         self.fuzziness != before
     }
 
-    pub fn selected_range(&self) -> Option<(usize, usize)> {
-        let anchor = self.selection_anchor?;
-        if anchor == self.cursor {
-            None
-        } else {
-            Some((anchor.min(self.cursor), anchor.max(self.cursor)))
-        }
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.selection_anchor = None;
-    }
-
-    pub fn selection_text(&self) -> Option<String> {
-        let (start, end) = self.selected_range()?;
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, end);
-        Some(self.query[start_b..end_b].to_string())
-    }
-
-    pub fn cut_selection(&mut self) -> Option<String> {
-        let selected = self.selection_text()?;
-        self.delete_selection();
-        Some(selected)
-    }
-
-    pub fn paste_text(&mut self, text: &str) -> bool {
-        if text.is_empty() {
-            return false;
-        }
-
-        self.delete_selection();
-        let idx = Self::char_to_byte_index(&self.query, self.cursor);
-        self.query.insert_str(idx, text);
-        self.cursor += text.chars().count();
-        self.clear_selection();
-        self.clear_launch_error();
-        true
-    }
-
-    pub(crate) fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
-        s.char_indices()
-            .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
-    }
-
-    pub(crate) fn delete_selection(&mut self) -> bool {
-        let Some((start, end)) = self.selected_range() else {
-            return false;
-        };
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, end);
-        self.query.replace_range(start_b..end_b, "");
-        self.cursor = start;
-        self.clear_selection();
-        self.clear_launch_error();
-        true
-    }
-
     pub fn set_launch_error(&mut self, error: String) {
         self.launch_error = Some(error);
     }
@@ -306,7 +235,7 @@ impl LauncherState {
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_position was={} q=\"{}\"",
                 self.scroll_list.selected,
-                self.query,
+                self.query.text(),
             );
         }
         self.scroll_list.reset();
@@ -330,7 +259,7 @@ impl LauncherState {
                 before,
                 self.scroll_list.selected,
                 result_count,
-                self.query,
+                self.query.text(),
             );
         }
     }
@@ -501,20 +430,18 @@ mod tests {
     #[test]
     fn enter_flow_clears_query_and_exit_flow_clears_session() {
         let mut state = LauncherState::new();
-        state.query = "leftover".to_string();
-        state.cursor = 8;
+        state.query = TextField::with_text("leftover");
         state.set_launch_error("stale".to_string());
 
         state.enter_flow(flow_entry("qol memory"));
         assert!(state.flow.is_some());
         assert_eq!(state.flow_result_count(), 0);
         assert!(state.query.is_empty());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.query.cursor(), 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
 
-        state.query = "look".to_string();
-        state.cursor = 4;
+        state.query = TextField::with_text("look");
         if let Some(session) = state.flow.as_mut() {
             session.rows.push(FlowRow {
                 title: "LookPose".to_string(),
@@ -529,7 +456,7 @@ mod tests {
         assert!(state.flow.is_none());
         assert_eq!(state.flow_result_count(), 0);
         assert!(state.query.is_empty());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.query.cursor(), 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
     }

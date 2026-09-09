@@ -89,23 +89,11 @@ pub const SPACE_LADDER: [f32; 7] = [
 ];
 
 pub fn font_ui() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "SF Pro Text"
-    } else if cfg!(target_os = "windows") {
-        "Segoe UI"
-    } else {
-        "DejaVu Sans"
-    }
+    "IBM Plex Sans"
 }
 
 pub fn font_mono() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "SF Mono"
-    } else if cfg!(target_os = "windows") {
-        "Cascadia Mono"
-    } else {
-        "DejaVu Sans Mono"
-    }
+    "IBM Plex Mono"
 }
 
 pub const DARK_ACCENT_PRESETS: [AccentPreset; 6] = [

@@ -5,10 +5,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::{
-    px, size, AppContext, Application, AsyncApp, Bounds, Focusable, Pixels,
-    WindowBackgroundAppearance, WindowBounds, WindowOptions,
-};
+use gpui::{px, size, App, AppContext, Application, AsyncApp};
+use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
@@ -37,9 +35,14 @@ const VISIBLE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
 const HIDDEN_ACTIVE_RECONCILE_INTERVAL: Duration = Duration::from_secs(3);
 const HIDDEN_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
-type PanelHandle = gpui::WindowHandle<SessionsView>;
-type SharedPanel = Rc<RefCell<Option<PanelHandle>>>;
+type SharedPanel = Rc<RefCell<Option<OpenedSurface<SessionsView>>>>;
 type AttentionCursor = Arc<Mutex<Option<SessionId>>>;
+
+#[derive(Clone)]
+struct PanelPlacement {
+    tracker: MonitorTracker,
+    corner: Corner,
+}
 
 struct ReconcileRuntime {
     interpreter: Arc<CliSessionInterpreter>,
@@ -90,12 +93,20 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
     Application::new().run(move |cx| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 
+        let tracker = MonitorTracker::start(cx);
         let panel: SharedPanel = Rc::new(RefCell::new(None));
         if show_on_start {
-            *panel.borrow_mut() = open_panel(reg_for_app.clone(), host_for_app.clone(), corner, cx);
+            *panel.borrow_mut() = open_panel(
+                &tracker,
+                reg_for_app.clone(),
+                host_for_app.clone(),
+                corner,
+                cx,
+            );
         }
         let attention_cursor: AttentionCursor = Arc::new(Mutex::new(None));
         spawn_reconcile_timer(
@@ -117,7 +128,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
             reg_for_app.clone(),
             host_for_app.clone(),
             attention_cursor,
-            corner,
+            PanelPlacement { tracker, corner },
             cx,
         );
     });
@@ -152,61 +163,37 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
     }
 }
 
-fn panel_bounds(corner: Corner, cx: &mut gpui::App) -> Bounds<Pixels> {
-    let win_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
-    match MonitorTracker::start(cx).snapshot_monitor() {
-        Some(monitor) => qol_gpui::placement::MonitorPlacement::corner(corner, CORNER_MARGIN)
-            .bounds(monitor.bounds(), win_size),
-        None => Bounds::centered(None, win_size, cx),
-    }
-}
-
-fn panel_window_options(corner: Corner, cx: &mut gpui::App) -> WindowOptions {
-    let bounds = panel_bounds(corner, cx);
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: None,
-        window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),
-        kind: gpui::WindowKind::Normal,
-        focus: true,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(APP_ID.to_string()),
-        ..Default::default()
-    }
-}
-
 fn open_panel(
+    tracker: &MonitorTracker,
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
     corner: Corner,
-    cx: &mut gpui::App,
-) -> Option<PanelHandle> {
-    let options = panel_window_options(corner, cx);
-    let title = WINDOW_TITLE.to_string();
-    let result = qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
-        window.set_window_title(WINDOW_TITLE);
-        SessionsView::new(registry, host, corner, cx)
-    });
-    let handle = match result {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("[cli-sessions] open_panel failed: {e}");
+    cx: &mut App,
+) -> Option<OpenedSurface<SessionsView>> {
+    let result = Surface::new(SurfaceKind::OverlayPanel)
+        .title(WINDOW_TITLE)
+        .app_id(APP_ID)
+        .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .placement(qol_gpui::placement::MonitorPlacement::corner(
+            corner,
+            CORNER_MARGIN,
+        ))
+        .show_focused(tracker, cx, move |dismisser, _window, cx| {
+            SessionsView::new(registry, host, corner, dismisser, cx)
+        });
+    let opened = match result {
+        Ok(opened) => opened,
+        Err(error) => {
+            eprintln!("[cli-sessions] open_panel failed: {error}");
             #[cfg(debug_assertions)]
-            qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=false err={e}");
+            qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=false err={error}");
             return None;
         }
     };
-    qol_gpui::popup_window::configure_overlay_window(&title);
     #[cfg(debug_assertions)]
-    qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={title}");
-    let _ = handle.update(cx, |view, window, cx| {
-        view.set_showing(true);
-        window.activate_window();
-        window.focus(&view.focus_handle(cx));
-    });
+    qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={WINDOW_TITLE}");
     cx.activate(true);
-    Some(handle)
+    Some(opened)
 }
 
 fn spawn_reconcile_timer(
@@ -269,7 +256,7 @@ fn spawn_command_poll(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
     attention_cursor: AttentionCursor,
-    corner: Corner,
+    placement: PanelPlacement,
     cx: &mut gpui::App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, cmd_rx, move |cx, cmd| {
@@ -277,13 +264,14 @@ fn spawn_command_poll(
         let registry = registry.clone();
         let host = host.clone();
         let attention_cursor = attention_cursor.clone();
+        let placement = placement.clone();
         async move {
             match cmd {
                 Command::Open => {
                     #[cfg(debug_assertions)]
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=open");
                     let _ = cx.update(move |cx| {
-                        open_or_show_panel(&panel, registry, host, corner, cx);
+                        open_or_show_panel(&panel, registry, host, &placement, cx);
                     });
                     LoopFlow::Continue
                 }
@@ -330,10 +318,6 @@ fn spawn_command_poll(
     });
 }
 
-fn panel_handle(panel: &SharedPanel) -> Option<PanelHandle> {
-    *panel.borrow()
-}
-
 fn clear_panel(panel: &SharedPanel) {
     *panel.borrow_mut() = None;
 }
@@ -356,77 +340,100 @@ fn active_session_exists(registry: &Arc<Mutex<Registry>>) -> bool {
     })
 }
 
-fn notify_panel_if_showing(panel: &SharedPanel, cx: &mut gpui::App) -> bool {
-    let Some(handle) = panel_handle(panel) else {
-        return false;
-    };
-    let Ok(showing) = handle.update(cx, |view, _, cx| {
-        if view.is_showing() {
-            cx.notify();
+fn notify_panel_if_showing(panel: &SharedPanel, cx: &mut App) -> bool {
+    let showing = panel.borrow().as_ref().and_then(|opened| {
+        opened.update_view(cx, |view, _, cx| {
+            if view.is_showing() {
+                cx.notify();
+            }
+            view.is_showing()
+        })
+    });
+    match showing {
+        Some(showing) => showing,
+        None => {
+            clear_panel(panel);
+            false
         }
-        view.is_showing()
-    }) else {
-        clear_panel(panel);
-        return false;
-    };
-    showing
+    }
 }
 
 fn open_or_show_panel(
     panel: &SharedPanel,
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
-    corner: Corner,
-    cx: &mut gpui::App,
+    placement: &PanelPlacement,
+    cx: &mut App,
 ) {
-    if let Some(handle) = panel_handle(panel) {
-        if show_panel(handle, cx) {
+    if panel.borrow().is_some() {
+        if show_panel(panel, &placement.tracker, cx) {
             return;
         }
         clear_panel(panel);
     }
-    *panel.borrow_mut() = open_panel(registry, host, corner, cx);
+    *panel.borrow_mut() = open_panel(&placement.tracker, registry, host, placement.corner, cx);
 }
 
 fn expand_on_open(collapsed: bool) -> bool {
     collapsed
 }
 
-fn show_panel(handle: PanelHandle, cx: &mut gpui::App) -> bool {
+fn expand_panel_for_open(panel: &SharedPanel, cx: &mut App) -> bool {
+    panel
+        .borrow()
+        .as_ref()
+        .and_then(|opened| {
+            opened.update_view(cx, |view, window, cx| {
+                if !expand_on_open(view.is_collapsed()) {
+                    return true;
+                }
+                view.expand_panel(window, cx)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn show_panel(panel: &SharedPanel, tracker: &MonitorTracker, cx: &mut App) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("open-command");
-    let shown = qol_gpui::popup_window::show_window_by_title(WINDOW_TITLE);
-    trace::open_command(shown);
-    if !shown {
+    if !expand_panel_for_open(panel, cx) {
+        trace::open_command(false);
         return false;
     }
-    let updated = handle
-        .update(cx, |view, window, cx| {
-            if expand_on_open(view.is_collapsed()) && !view.expand_panel(window, cx) {
-                return false;
-            }
-            view.set_showing(true);
-            window.activate_window();
-            window.focus(&view.focus_handle(cx));
-            cx.notify();
-            true
+    let presented = panel
+        .borrow_mut()
+        .as_mut()
+        .is_some_and(|opened| opened.present(tracker, cx));
+    trace::open_command(presented);
+    if !presented {
+        return false;
+    }
+    let updated = panel
+        .borrow()
+        .as_ref()
+        .and_then(|opened| {
+            opened.update_view(cx, |view, _, cx| {
+                view.set_showing(true);
+                cx.notify();
+            })
         })
-        .unwrap_or(false);
+        .is_some();
     if updated {
         cx.activate(true);
     }
     updated
 }
 
-fn jump_to_next_attention_in_panel(panel: &SharedPanel, cx: &mut gpui::App) -> bool {
-    let Some(handle) = panel_handle(panel) else {
-        return false;
-    };
-    let updated = handle
-        .update(cx, |view, _window, cx| {
-            view.jump_to_next_attention(cx);
-            cx.notify();
+fn jump_to_next_attention_in_panel(panel: &SharedPanel, cx: &mut App) -> bool {
+    let updated = panel
+        .borrow()
+        .as_ref()
+        .and_then(|opened| {
+            opened.update_view(cx, |view, _, cx| {
+                view.jump_to_next_attention(cx);
+                cx.notify();
+            })
         })
-        .is_ok();
+        .is_some();
     if updated {
         return true;
     }

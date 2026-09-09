@@ -23,6 +23,7 @@ pub fn run() -> anyhow::Result<()> {
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 

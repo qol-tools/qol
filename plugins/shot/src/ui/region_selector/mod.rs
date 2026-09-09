@@ -15,6 +15,7 @@ use qol_gpui::theme::{
     font_mono, runtime_theme, shot_selector_runtime, ShotSelectorPalette, TEXT_MICRO,
 };
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
+use qol_gpui::window_options::PopupWindowOptions;
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
@@ -24,7 +25,7 @@ const LABEL_MIN_H: f32 = 80.0;
 const CAPTURE_AREA_LABEL: &str = "Capture area";
 const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
-const CHIP_TOP: f32 = 12.0;
+const CHIP_TOP: f32 = qol_gpui::theme::SPACE_CELL;
 const SELECTOR_STATE_POLL_MS: u64 = 16;
 const MIN_DRAG_DISTANCE_PX: f64 = 6.0;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -139,20 +140,17 @@ impl SelectorWindow {
     }
 
     fn options(&self) -> WindowOptions {
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(self.bounds)),
-            titlebar: None,
-            window_decorations: Some(self.decorations),
-            kind: self.kind,
-            focus: self.focus,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: self.display_id,
-            window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some(SELECTOR_APP_ID.to_string()),
-            ..Default::default()
-        }
+        PopupWindowOptions::new()
+            .bounds(self.bounds)
+            .decorations(self.decorations)
+            .kind(self.kind)
+            .focus(self.focus)
+            .movable(false)
+            .resizable(false)
+            .minimizable(false)
+            .display_id(self.display_id)
+            .app_id(SELECTOR_APP_ID)
+            .build()
     }
 }
 
@@ -162,6 +160,7 @@ where
 {
     let (tx, rx) = mpsc::channel();
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::platform::set_accessory_policy();
         open_selector(tx, cx);
     });
@@ -1092,6 +1091,7 @@ impl Render for RegionSelector {
         let guide_bounds = self.guide_bounds();
         let selection = self.selection_bounds();
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-region-selector")
             .track_focus(&self.focus_handle)
             .size_full()

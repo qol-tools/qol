@@ -19,7 +19,9 @@ fn app<A>(adapter: A) -> HeadlessApp
 where
     A: PlatformAdapter,
 {
-    app_with_handlers(adapter, launch_settings_page)
+    app_with_handlers(adapter, || {
+        qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+    })
 }
 
 fn app_with_handlers<A, Settings>(adapter: A, settings: Settings) -> HeadlessApp
@@ -86,10 +88,6 @@ where
         )
         .command(settings_command(settings))
         .doctor_checks(doctor_checks(adapter))
-}
-
-fn launch_settings_page() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
 }
 
 fn settings_command(settings: impl Fn() -> std::io::Result<()> + Send + Sync + 'static) -> Command {

@@ -1,8 +1,11 @@
 use std::error::Error;
 use std::fmt;
+use std::sync::Mutex;
 
 use gpui::*;
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, PlatformStateClient};
+
+use crate::window::MonitorKey;
 
 #[derive(Debug)]
 pub struct CursorAnchor {
@@ -135,12 +138,86 @@ impl ActiveMonitor {
         (self.inner.width, self.inner.height)
     }
 
+    pub fn from_key(key: MonitorKey) -> Option<Self> {
+        if key.width <= 0 || key.height <= 0 {
+            return None;
+        }
+        Some(Self::from_bounds(MonitorBounds {
+            x: key.x as f32,
+            y: key.y as f32,
+            width: key.width as f32,
+            height: key.height as f32,
+        }))
+    }
+
     pub fn bounds(&self) -> Bounds<Pixels> {
         Bounds::new(
             point(px(self.inner.x), px(self.inner.y)),
             size(px(self.inner.width), px(self.inner.height)),
         )
     }
+}
+
+static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
+
+pub fn record_active_monitor(event: &crate::protocol::RuntimeEvent) -> Option<ActiveMonitor> {
+    let monitor = ActiveMonitor::from_event(event)?;
+    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
+        *slot = Some(monitor.clone());
+    }
+    Some(monitor)
+}
+
+pub fn active_monitor() -> Option<ActiveMonitor> {
+    ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
+}
+
+pub fn refresh_active_monitor_from_state() {
+    let fresh = PlatformStateClient::from_env()
+        .get_state()
+        .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds));
+    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
+        *slot = fresh;
+    }
+}
+
+pub fn resolve_active_monitor() -> Option<ActiveMonitor> {
+    cached_first_monitor(
+        active_monitor(),
+        PlatformStateClient::from_env().get_state().as_ref(),
+    )
+}
+
+pub fn active_first_monitor(state: &PlatformState) -> Option<MonitorBounds> {
+    if state.monitors.is_empty() {
+        return None;
+    }
+    state
+        .active_monitor()
+        .or_else(|| state.cursor_monitor())
+        .or_else(|| state.monitors.first().copied())
+}
+
+pub fn focus_first_monitor(state: &PlatformState) -> Option<MonitorBounds> {
+    if state.monitors.is_empty() {
+        return None;
+    }
+    state
+        .focus_monitor()
+        .or_else(|| state.active_monitor())
+        .or_else(|| state.cursor_monitor())
+        .or_else(|| state.monitors.first().copied())
+}
+
+pub fn cached_first_monitor(
+    cached: Option<ActiveMonitor>,
+    state: Option<&PlatformState>,
+) -> Option<ActiveMonitor> {
+    cached.or_else(|| {
+        state
+            .and_then(PlatformState::active_monitor)
+            .map(ActiveMonitor::from_bounds)
+    })
 }
 
 #[derive(Clone)]
@@ -159,16 +236,15 @@ impl MonitorTracker {
         self.snapshot().map(|(monitor, _)| monitor)
     }
 
+    pub fn monitor_for_key(&self, key: MonitorKey) -> Option<ActiveMonitor> {
+        self.all_monitors()
+            .into_iter()
+            .find(|monitor| MonitorKey::from_bounds(&monitor.bounds()) == key)
+    }
+
     pub fn snapshot_monitor_focus_first(&self) -> Option<ActiveMonitor> {
         let state = self.client.get_state()?;
-        if state.monitors.is_empty() {
-            return None;
-        }
-        let monitor = state
-            .focus_monitor()
-            .or_else(|| state.active_monitor())
-            .or_else(|| state.cursor_monitor())
-            .unwrap_or(state.monitors[0]);
+        let monitor = focus_first_monitor(&state)?;
         #[cfg(debug_assertions)]
         eprintln!(
             "[monitor] focus-first snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} -> ({}, {})",
@@ -195,18 +271,11 @@ impl MonitorTracker {
 
     pub fn snapshot(&self) -> Option<(ActiveMonitor, Option<usize>)> {
         let state = self.client.get_state()?;
+        let monitor = active_first_monitor(&state)?;
 
-        if state.monitors.is_empty() {
-            return None;
-        }
         if state.monitors.len() == 1 {
-            return Some((ActiveMonitor::from_bounds(state.monitors[0]), Some(0)));
+            return Some((ActiveMonitor::from_bounds(monitor), Some(0)));
         }
-
-        let monitor = state
-            .active_monitor()
-            .or_else(|| state.cursor_monitor())
-            .unwrap_or(state.monitors[0]);
 
         #[cfg(debug_assertions)]
         eprintln!(
@@ -262,7 +331,10 @@ fn resolve_cursor_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_cursor_snapshot, validate_cursor_anchor, CursorAnchorError};
+    use super::{
+        active_first_monitor, cached_first_monitor, focus_first_monitor, resolve_cursor_snapshot,
+        validate_cursor_anchor, ActiveMonitor, CursorAnchorError,
+    };
     use qol_runtime::{CursorPos, MonitorBounds, PlatformState};
 
     fn monitor(x: f32) -> MonitorBounds {
@@ -273,6 +345,35 @@ mod tests {
             height: 1080.0,
         }
     }
+
+    fn policy_state(
+        monitors: Vec<MonitorBounds>,
+        cursor_monitor_idx: Option<usize>,
+        focus_monitor_idx: Option<usize>,
+        active_monitor_idx: Option<usize>,
+    ) -> PlatformState {
+        PlatformState {
+            cursor: None,
+            monitors,
+            cursor_monitor_idx,
+            focus_monitor_idx,
+            active_monitor_idx,
+            focused_window: None,
+        }
+    }
+
+    fn three_monitors() -> Vec<MonitorBounds> {
+        vec![monitor(0.0), monitor(1920.0), monitor(3840.0)]
+    }
+
+    type ActiveFirstCase = (&'static str, Option<usize>, Option<usize>, Option<f32>);
+    type FocusFirstCase = (
+        &'static str,
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+        Option<f32>,
+    );
 
     #[test]
     fn cursor_snapshot_prefers_cursor_monitor_and_preserves_position() {
@@ -587,5 +688,131 @@ mod tests {
             validate_cursor_anchor(&bottom_edge),
             Err(CursorAnchorError::CursorOutsideMonitors)
         ));
+    }
+
+    #[test]
+    fn active_first_monitor_prefers_active_then_cursor_then_first() {
+        let cases: [ActiveFirstCase; 6] = [
+            ("active wins over cursor", Some(1), Some(2), Some(1920.0)),
+            ("cursor when no active", None, Some(2), Some(3840.0)),
+            ("first when neither is reported", None, None, Some(0.0)),
+            (
+                "invalid active falls to cursor",
+                Some(9),
+                Some(1),
+                Some(1920.0),
+            ),
+            (
+                "active wins over missing cursor",
+                Some(2),
+                None,
+                Some(3840.0),
+            ),
+            ("invalid cursor falls to first", None, Some(9), Some(0.0)),
+        ];
+        for (case, active, cursor, expected) in cases {
+            let state = policy_state(three_monitors(), cursor, None, active);
+            assert_eq!(
+                active_first_monitor(&state).map(|bounds| bounds.x),
+                expected,
+                "case: {case}"
+            );
+        }
+        assert_eq!(
+            active_first_monitor(&policy_state(Vec::new(), Some(0), Some(0), Some(0))),
+            None
+        );
+    }
+
+    #[test]
+    fn focus_first_monitor_prefers_focus_then_active_then_cursor_then_first() {
+        let cases: [FocusFirstCase; 7] = [
+            ("focus wins", Some(2), Some(1), Some(0), Some(3840.0)),
+            ("active when no focus", None, Some(2), Some(0), Some(3840.0)),
+            (
+                "cursor when no focus or active",
+                None,
+                None,
+                Some(2),
+                Some(3840.0),
+            ),
+            (
+                "first when nothing is reported",
+                None,
+                None,
+                None,
+                Some(0.0),
+            ),
+            (
+                "invalid focus falls to active",
+                Some(9),
+                Some(1),
+                Some(0),
+                Some(1920.0),
+            ),
+            (
+                "invalid focus and active fall to cursor",
+                Some(9),
+                Some(9),
+                Some(2),
+                Some(3840.0),
+            ),
+            (
+                "active wins over cursor",
+                None,
+                Some(1),
+                Some(2),
+                Some(1920.0),
+            ),
+        ];
+        for (case, focus, active, cursor, expected) in cases {
+            let state = policy_state(three_monitors(), cursor, focus, active);
+            assert_eq!(
+                focus_first_monitor(&state).map(|bounds| bounds.x),
+                expected,
+                "case: {case}"
+            );
+        }
+        assert_eq!(
+            focus_first_monitor(&policy_state(Vec::new(), Some(0), Some(0), Some(0))),
+            None
+        );
+    }
+
+    #[test]
+    fn cached_first_monitor_prefers_the_cache_then_the_active_monitor() {
+        let cached = ActiveMonitor::from_bounds(monitor(5000.0));
+        let active_second = policy_state(vec![monitor(0.0), monitor(1920.0)], None, None, Some(1));
+        let active_first = policy_state(
+            vec![monitor(0.0), monitor(1920.0)],
+            Some(1),
+            Some(1),
+            Some(0),
+        );
+        let invalid_active = policy_state(
+            vec![monitor(0.0), monitor(1920.0)],
+            Some(1),
+            Some(1),
+            Some(9),
+        );
+        let no_active = policy_state(vec![monitor(0.0), monitor(1920.0)], Some(1), Some(0), None);
+        let empty = policy_state(Vec::new(), None, None, Some(0));
+        let cases: [(Option<ActiveMonitor>, Option<&PlatformState>, Option<f32>); 7] = [
+            (Some(cached.clone()), Some(&active_second), Some(5000.0)),
+            (Some(cached), None, Some(5000.0)),
+            (None, Some(&active_second), Some(1920.0)),
+            (None, Some(&active_first), Some(0.0)),
+            (None, Some(&invalid_active), None),
+            (None, Some(&no_active), None),
+            (None, Some(&empty), None),
+        ];
+        for (cache, state, expected) in cases {
+            assert_eq!(
+                cached_first_monitor(cache, state)
+                    .map(|active| active.bounds().origin.x.to_f64() as f32),
+                expected,
+                "expected {expected:?}"
+            );
+        }
     }
 }

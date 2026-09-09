@@ -23,7 +23,7 @@ pub const PREVIEW_MAX_HEIGHT: usize =
     (BASE_CARD_WIDTH * MAX_CARD_SCALE * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W + 1.0) as usize;
 const RENDER_PAD_X: f32 = 40.0;
 const RENDER_PAD_Y: f32 = 36.0;
-const RENDER_GAP: f32 = 16.0;
+const RENDER_GAP: f32 = qol_gpui::theme::SPACE_PAD;
 /// Slack added to the panel width so float rounding in the flex-wrap pass
 /// can never wrap the last card of a row early.
 const WIDTH_SLACK: f32 = 1.0;

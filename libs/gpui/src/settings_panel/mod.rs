@@ -1,3 +1,4 @@
+mod form_nav;
 mod navigation;
 mod object_array_row;
 mod persistence;
@@ -7,6 +8,9 @@ mod view;
 
 pub mod components;
 pub use components::{settings_action_spinner, settings_busy_message, settings_query_spinner};
+pub use form_nav::{
+    adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
+};
 pub use navigation::{CustomPanelInvalidator, CustomSettingsBreadcrumbs, SettingsDestination};
 
 use std::rc::Rc;
@@ -767,27 +771,27 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
 
 fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
     let show_section_headers = sections.len() <= 1;
-    let body = sections
-        .iter()
-        .map(|section| {
-            let visible = section
-                .rows
-                .iter()
-                .copied()
-                .filter(|index| rows::row_is_visible(rows, *index))
-                .collect::<Vec<_>>();
-            if visible.is_empty() {
-                return 0.0;
-            }
-            let rows_height = visible
-                .iter()
-                .map(|index| view::row_height(&rows[*index], show_section_headers))
-                .sum::<f32>();
-            let gaps = (visible.len().saturating_sub(1)) as f32 * PANEL_COLUMN_GAP;
-            PANEL_GROUP_HEADER_HEIGHT + rows_height + gaps
-        })
-        .sum::<f32>();
-    chrome_height(sections) + body
+    let mut children = 0usize;
+    let mut body = 0.0;
+    for section in sections {
+        let visible = section
+            .rows
+            .iter()
+            .copied()
+            .filter(|index| rows::row_is_visible(rows, *index))
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            continue;
+        }
+        let rows_height = visible
+            .iter()
+            .map(|index| view::row_height(&rows[*index], show_section_headers))
+            .sum::<f32>();
+        children += 1 + visible.len();
+        body += PANEL_GROUP_HEADER_HEIGHT + rows_height;
+    }
+    let gaps = children.saturating_sub(1) as f32 * PANEL_COLUMN_GAP;
+    chrome_height(sections) + body + gaps + qol_theme::SPACE_PAD
 }
 
 /// Sized against the same predicate the view opens the rail with, so a panel
@@ -879,8 +883,11 @@ mod tests {
             rows: vec![0],
             source: 0,
         }];
-        let expected =
-            super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
+        let expected = super::chrome_height(&sections)
+            + super::PANEL_GROUP_HEADER_HEIGHT
+            + PANEL_ROW_HEIGHT
+            + super::PANEL_COLUMN_GAP
+            + qol_theme::SPACE_PAD;
         assert_eq!(panel_height(&toggle, &sections), expected);
         assert_eq!(panel_height(&color, &sections), expected);
     }
@@ -900,6 +907,8 @@ mod tests {
                 + super::PANEL_HINT_BAR_HEIGHT
                 + super::PANEL_GROUP_HEADER_HEIGHT
                 + PANEL_ROW_HEIGHT
+                + super::PANEL_COLUMN_GAP
+                + qol_theme::SPACE_PAD
         );
         assert_eq!(
             super::chrome_height(&sections),
@@ -977,6 +986,8 @@ mod tests {
             panel_height(&rows, &sections),
             super::chrome_height(&sections)
                 + 3.0 * (super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT)
+                + 5.0 * super::PANEL_COLUMN_GAP
+                + qol_theme::SPACE_PAD
         );
         assert_eq!(rail_width(2), super::PANEL_RAIL_WIDTH);
         assert_eq!(rail_width(1), 0.0);
@@ -995,7 +1006,11 @@ mod tests {
 
         assert_eq!(
             panel_height(&rows, &sections),
-            super::chrome_height(&sections) + super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT
+            super::chrome_height(&sections)
+                + super::PANEL_GROUP_HEADER_HEIGHT
+                + PANEL_ROW_HEIGHT
+                + super::PANEL_COLUMN_GAP
+                + qol_theme::SPACE_PAD
         );
     }
 
@@ -1016,10 +1031,38 @@ mod tests {
         ];
 
         let first = super::PANEL_GROUP_HEADER_HEIGHT + PANEL_ROW_HEIGHT;
-        let second = super::PANEL_GROUP_HEADER_HEIGHT + 11.0 * PANEL_ROW_HEIGHT + 10.0 * 4.0;
+        let second = super::PANEL_GROUP_HEADER_HEIGHT + 11.0 * PANEL_ROW_HEIGHT;
         assert_eq!(
             panel_height(&rows, &sections),
-            super::chrome_height(&sections) + first + second
+            super::chrome_height(&sections)
+                + first
+                + second
+                + 13.0 * super::PANEL_COLUMN_GAP
+                + qol_theme::SPACE_PAD
+        );
+    }
+
+    #[test]
+    fn the_page_height_counts_every_gap_and_the_bottom_padding() {
+        let rows = vec![
+            row(RowControl::Toggle(false)),
+            row(RowControl::Toggle(false)),
+            row(RowControl::Toggle(false)),
+        ];
+        let sections = vec![RowSection {
+            label: "General".into(),
+            description: None,
+            rows: vec![0, 1, 2],
+            source: 0,
+        }];
+
+        assert_eq!(
+            panel_height(&rows, &sections),
+            super::chrome_height(&sections)
+                + super::PANEL_GROUP_HEADER_HEIGHT
+                + 3.0 * PANEL_ROW_HEIGHT
+                + 3.0 * super::PANEL_COLUMN_GAP
+                + qol_theme::SPACE_PAD
         );
     }
 

@@ -21,5 +21,5 @@ pub use qol_dev_build::{
     default_build_application_service, BuildApplicationService, BuildResult, BuildRun,
     PluginBuildProgress,
 };
-pub use runtime_gpui::{normalize_color as normalize_ghost_debug_color, GpuiRuntimeConfig};
+pub use runtime_gpui::GpuiRuntimeConfig;
 pub use self_build::{build_qol_tray_self_with_progress, resolve_qol_tray_self_root};

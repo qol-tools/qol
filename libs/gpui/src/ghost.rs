@@ -1,43 +1,13 @@
-use std::sync::Mutex;
-
 use gpui::*;
 
-use crate::monitor::ActiveMonitor;
+use crate::monitor::{
+    active_monitor, record_active_monitor, refresh_active_monitor_from_state,
+    resolve_active_monitor, ActiveMonitor,
+};
 use crate::popup_window;
 use crate::protocol::RuntimeEvent;
 
 pub use crate::popup_window::{hide_invisible, sync_window_layout};
-
-static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
-
-pub fn record_active_monitor(event: &RuntimeEvent) -> Option<ActiveMonitor> {
-    let monitor = ActiveMonitor::from_event(event)?;
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = Some(monitor.clone());
-    }
-    Some(monitor)
-}
-
-pub fn active_monitor() -> Option<ActiveMonitor> {
-    ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
-}
-
-pub fn resolve_active_monitor() -> Option<ActiveMonitor> {
-    active_monitor().or_else(|| {
-        crate::PlatformStateClient::from_env()
-            .get_state()
-            .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds))
-    })
-}
-
-pub fn refresh_active_monitor_from_state() {
-    let fresh = crate::PlatformStateClient::from_env()
-        .get_state()
-        .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds));
-    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
-        *slot = fresh;
-    }
-}
 
 pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> String {
     format!(
@@ -334,6 +304,37 @@ fn schedule_debounced_dismiss<V: 'static>(
     .detach();
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BlurGuard {
+    guard_until: std::time::Instant,
+}
+
+impl BlurGuard {
+    pub fn new() -> Self {
+        Self {
+            guard_until: std::time::Instant::now(),
+        }
+    }
+
+    pub fn arm(&mut self, duration: std::time::Duration) {
+        self.guard_until = std::time::Instant::now() + duration;
+    }
+
+    pub fn is_armed(&self) -> bool {
+        std::time::Instant::now() < self.guard_until
+    }
+
+    pub fn guard_until(&self) -> std::time::Instant {
+        self.guard_until
+    }
+}
+
+impl Default for BlurGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
     label: &'static str,
     focus_handle: &gpui::FocusHandle,
@@ -624,7 +625,7 @@ fn track_dismiss_confirmed_with_held<V: gpui::Focusable + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{debounce_verdict, DebounceVerdict};
+    use super::{debounce_verdict, BlurGuard, DebounceVerdict};
 
     #[test]
     fn debounce_recheck_dismisses_only_when_truly_inactive() {
@@ -754,5 +755,41 @@ mod tests {
                 "case: {case}"
             );
         }
+    }
+
+    #[test]
+    fn blur_guard_new_is_not_armed() {
+        let guard = BlurGuard::new();
+        assert!(!guard.is_armed());
+        assert!(guard.guard_until() <= std::time::Instant::now());
+    }
+
+    #[test]
+    fn blur_guard_arm_arms_for_the_duration() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::from_secs(60));
+        assert!(guard.is_armed());
+        assert!(guard.guard_until() > std::time::Instant::now());
+        let bound = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        assert!(guard.guard_until() <= bound);
+    }
+
+    #[test]
+    fn blur_guard_zero_duration_is_not_armed() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::ZERO);
+        assert!(!guard.is_armed());
+    }
+
+    #[test]
+    fn blur_guard_guard_until_is_monotonic_per_arm() {
+        let mut guard = BlurGuard::new();
+        guard.arm(std::time::Duration::from_millis(10));
+        let first = guard.guard_until();
+        assert_eq!(guard.guard_until(), first);
+        guard.arm(std::time::Duration::from_secs(1));
+        let second = guard.guard_until();
+        assert!(second > first);
+        assert_eq!(guard.guard_until(), second);
     }
 }

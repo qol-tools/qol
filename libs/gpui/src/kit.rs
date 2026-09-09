@@ -12,9 +12,6 @@ pub const DISABLED_OPACITY: f32 = 0.4;
 
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
-pub const ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
-pub const ROW_DESCRIBED_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
-pub const ROW_TIGHT_HEIGHT: f32 = 32.0;
 pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
 pub const LAMP_SIZE: f32 = 10.0;
 pub const ROW_METADATA_WIDTH: f32 = 48.0;
@@ -84,16 +81,6 @@ impl Kit {
         focus_ring_from(self.palette.accent, self.washes.accent_halo.packed())
     }
 
-    pub fn panel(&self) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .rounded(px(qol_theme::RADIUS_WINDOW))
-            .overflow_hidden()
-            .shadow(float_shadow(self.palette.text_primary))
-            .bg(rgb(self.palette.surface_elevated))
-    }
-
     pub fn header(&self, title: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
@@ -141,23 +128,11 @@ impl Kit {
             )
     }
 
-    pub fn row(&self) -> Div {
-        self.row_of_height(ROW_HEIGHT)
-    }
-
-    pub fn row_described(&self) -> Div {
-        self.row_of_height(ROW_DESCRIBED_HEIGHT)
-    }
-
     pub fn row_compact_described(&self) -> Div {
         self.row_of_height(qol_theme::LIST_ENTRY_HEIGHTS[1])
             .h(px(qol_theme::LIST_ENTRY_HEIGHTS[1]))
             .py(px(qol_theme::SPACE_TIGHT))
             .line_height(gpui::relative(1.0))
-    }
-
-    pub fn row_tight(&self) -> Div {
-        self.row_of_height(ROW_TIGHT_HEIGHT)
     }
 
     fn row_of_height(&self, height: f32) -> Div {
@@ -182,15 +157,6 @@ impl Kit {
                 RowState::Resting
             },
         )
-    }
-
-    pub fn row_selected_tinted<E: Styled + ParentElement>(
-        &self,
-        row: E,
-        selected: bool,
-        tone: u32,
-    ) -> E {
-        self.row_selected_tinted_after(row, selected, tone, 0.0)
     }
 
     pub fn row_selected_tinted_after<E: Styled + ParentElement>(
@@ -267,35 +233,10 @@ impl Kit {
         }
     }
 
-    pub fn label(&self, text: impl Into<SharedString>) -> Div {
-        div()
-            .truncate()
-            .text_size(px(qol_theme::TEXT_BODY))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(self.palette.text_primary))
-            .child(text.into())
-    }
-
-    pub fn description(&self, text: impl Into<SharedString>) -> Div {
-        div()
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .text_color(rgb(self.palette.text_muted))
-            .child(text.into())
-    }
-
     pub fn value(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
             .text_size(px(qol_theme::TEXT_BODY))
-            .text_color(rgb(self.palette.text_secondary))
-            .child(text.into())
-    }
-
-    pub fn mono(&self, text: impl Into<SharedString>) -> Div {
-        div()
-            .flex_none()
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_CAPTION))
             .text_color(rgb(self.palette.text_secondary))
             .child(text.into())
     }
@@ -531,22 +472,6 @@ impl Kit {
             .bg(rgba(self.washes.separator.packed()))
     }
 
-    pub fn lamp(&self, tone: u32) -> Div {
-        div()
-            .flex_none()
-            .w(px(LAMP_SIZE))
-            .h(px(LAMP_SIZE))
-            .rounded_full()
-            .bg(rgb(tone))
-    }
-
-    pub fn button_primary(&self, text: impl Into<SharedString>) -> Div {
-        self.button_base(text)
-            .bg(rgb(self.palette.solid_fill))
-            .text_color(rgb(self.palette.solid_ink))
-            .shadow(raised_shadow(self.palette.text_primary))
-    }
-
     pub fn button_ghost(&self, text: impl Into<SharedString>) -> Div {
         self.button_base(text)
             .bg(rgb(self.palette.surface_raised))
@@ -626,12 +551,6 @@ impl Kit {
             .child(text.into())
     }
 
-    pub fn button_danger(&self, text: impl Into<SharedString>) -> Div {
-        self.button_base(text)
-            .bg(rgba(alpha(self.palette.danger, 0x29)))
-            .text_color(rgb(self.palette.danger))
-    }
-
     fn button_base(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
@@ -643,56 +562,6 @@ impl Kit {
             .text_size(px(qol_theme::TEXT_CAPTION))
             .font_weight(FontWeight::SEMIBOLD)
             .child(text.into())
-    }
-
-    pub fn radio(&self, selected: bool) -> Div {
-        let outer = div()
-            .flex_none()
-            .w(px(15.0))
-            .h(px(15.0))
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgb(self.palette.surface_raised))
-            .border(px(1.5))
-            .border_color(rgb(if selected {
-                self.palette.accent
-            } else {
-                self.palette.border_subtle
-            }));
-        if !selected {
-            return outer;
-        }
-        outer.child(
-            div()
-                .w(px(7.0))
-                .h(px(7.0))
-                .rounded_full()
-                .bg(rgb(self.palette.accent)),
-        )
-    }
-
-    pub fn check(&self, selected: bool) -> Div {
-        let base = div()
-            .flex_none()
-            .w(px(15.0))
-            .h(px(15.0))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .flex()
-            .items_center()
-            .justify_center();
-        if selected {
-            base.bg(rgb(self.palette.accent))
-                .text_color(rgb(self.palette.surface_raised))
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .font_weight(FontWeight::EXTRA_BOLD)
-                .child("\u{2713}")
-        } else {
-            base.bg(rgb(self.palette.surface_raised))
-                .border(px(1.5))
-                .border_color(rgb(self.palette.border_subtle))
-        }
     }
 
     pub fn action_circle(&self, size: ActionCircleSize, state: ActionCircleState) -> Div {
@@ -764,22 +633,6 @@ impl Kit {
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.surface_hovered))
     }
-
-    pub fn segmented(&self, options: &[SharedString], selected: usize) -> Div {
-        let mut group = self.segmented_group();
-        for (index, option) in options.iter().enumerate() {
-            group = group.child(self.segment(option.clone(), index == selected));
-        }
-        group
-    }
-
-    pub fn divider(&self) -> Div {
-        div()
-            .flex_none()
-            .w_full()
-            .h(px(1.0))
-            .bg(rgb(self.palette.border_subtle))
-    }
 }
 
 pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
@@ -806,7 +659,8 @@ fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
     ]
 }
 
-pub fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
+#[cfg(test)]
+fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
     Kit::new(mode, palette).focus_ring()
 }
 
@@ -871,7 +725,7 @@ pub fn alpha(color: u32, opacity: u8) -> u32 {
 
 const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
 
-pub fn tile_tone(name: &str) -> u32 {
+fn tile_tone(name: &str) -> u32 {
     let hash = name.bytes().fold(0u32, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(byte.into())
     });

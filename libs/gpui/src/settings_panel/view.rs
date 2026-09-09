@@ -12,6 +12,7 @@ use super::components::{
     settings_label_group, settings_page, settings_query_spinner, SettingsFeedback,
     SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
 };
+use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
 use super::object_array_row::{
     shared_key_chip, Chip, ChipTone, DraftField, DraftValue, ItemChips, ObjectArrayOutcome,
     ObjectArrayState,
@@ -533,7 +534,7 @@ impl SettingsPanelView {
             true => visible.first().copied().unwrap_or(selected),
             false => clamp_selected(&visible, selected),
         };
-        self.sync_scroll();
+        self.resync_scroll();
     }
 
     fn open_filter(&mut self, seed: Option<String>) {
@@ -544,6 +545,7 @@ impl SettingsPanelView {
         if let Some(seed) = seed {
             self.set_panel_filter(seed);
         }
+        self.resync_scroll();
     }
 
     fn handle_panel_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
@@ -558,6 +560,7 @@ impl SettingsPanelView {
             }
             "enter" | "tab" => {
                 self.filter_open = false;
+                self.resync_scroll();
                 true
             }
             "backspace" => {
@@ -1375,6 +1378,7 @@ impl SettingsPanelView {
                 self.sync_scroll();
             }
             Intent::Activate => self.activate(window, cx),
+            Intent::Tab => return,
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
                 if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
@@ -2704,7 +2708,16 @@ impl SettingsPanelView {
     fn sync_scroll(&mut self) {
         let selected = self.level().selected;
         let child = self.body_child_index(selected);
-        self.level().body_scroll.follow(child);
+        let margin = match self.filter_open {
+            true => crate::scrollbar::OVERFLOW_FADE_HEIGHT.max(FILTER_OVERLAY_HEIGHT),
+            false => crate::scrollbar::OVERFLOW_FADE_HEIGHT,
+        };
+        self.level().body_scroll.follow(child, px(margin));
+    }
+
+    fn resync_scroll(&mut self) {
+        self.level().body_scroll.refollow();
+        self.sync_scroll();
     }
 
     fn body_child_index(&self, row: usize) -> Option<usize> {
@@ -4407,6 +4420,7 @@ impl SettingsPanelView {
         items: Vec<AnyElement>,
         custom_view: Option<AnyView>,
     ) -> Div {
+        let children = items.len();
         let front = level_index + 1 == self.stack.len();
         let has_custom_view = custom_view.is_some();
         let body = if let Some(custom_view) = custom_view {
@@ -4444,6 +4458,17 @@ impl SettingsPanelView {
                 .flex_col()
                 .child(body)
                 .when(front, |frame| frame.child(frame_bounds))
+                .when(front && !has_custom_view, |frame| {
+                    frame.child(crate::scrollbar::overflow_fade(
+                        self.stack[level_index].body_scroll.handle().clone(),
+                        children,
+                        crate::scrollbar::OverflowFadeStyle {
+                            surface_rgb: self.palette.window_bg,
+                            ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
+                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1f),
+                        },
+                    ))
+                })
                 .when(front && !has_custom_view, |frame| {
                     frame.child(crate::scrollbar::seam_track(
                         self.stack[level_index].body_scroll.handle().clone(),
@@ -5232,18 +5257,6 @@ fn list_action_affordance(primary: &str, action_count: usize) -> String {
     primary.to_string()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Intent {
-    Up,
-    Down,
-    Activate,
-    CommitEdit,
-    Backspace,
-    Insert(String),
-    Close,
-    CancelEdit,
-}
-
 #[derive(Clone, Copy)]
 struct ModChipSlot {
     row: usize,
@@ -5294,24 +5307,6 @@ fn action_shows_spinner(row: &Row) -> bool {
             ..
         } => row.variant.as_deref() != Some("toggle"),
         _ => false,
-    }
-}
-
-fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
-    if editing {
-        return match key {
-            "enter" | "return" => Some(Intent::CommitEdit),
-            "escape" => Some(Intent::CancelEdit),
-            "backspace" => Some(Intent::Backspace),
-            _ => key_char.map(|ch| Intent::Insert(ch.to_string())),
-        };
-    }
-    match key {
-        "up" => Some(Intent::Up),
-        "down" => Some(Intent::Down),
-        "enter" | "return" | "space" => Some(Intent::Activate),
-        "escape" => Some(Intent::Close),
-        _ => None,
     }
 }
 
@@ -5990,27 +5985,6 @@ fn pop_level(stack: &mut Vec<Level>) -> Option<Level> {
     stack.pop()
 }
 
-#[derive(Debug, PartialEq)]
-enum EscapeStep {
-    CloseFilter,
-    PopCard,
-    AscendRail,
-    Dismiss,
-}
-
-fn escape_step(depth: usize, filter_open: bool, rail_can_ascend: bool) -> EscapeStep {
-    if filter_open {
-        return EscapeStep::CloseFilter;
-    }
-    if depth > 0 {
-        return EscapeStep::PopCard;
-    }
-    if rail_can_ascend {
-        return EscapeStep::AscendRail;
-    }
-    EscapeStep::Dismiss
-}
-
 fn focus_enters_the_body(plugin_id: &str) -> bool {
     plugin_id != qol_conventions::CORE_PANEL_ID
 }
@@ -6072,18 +6046,6 @@ fn qr_module_px(modules: &[bool]) -> f32 {
     let side = qr_side(modules);
     let module = super::PANEL_QR_CODE_HEIGHT / side as f32;
     module.clamp(2.0, 4.0)
-}
-
-fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) -> usize {
-    let Some(position) = visible.iter().position(|index| *index == selected) else {
-        return visible.first().copied().unwrap_or(0);
-    };
-    let next = if direction < 0 {
-        position.saturating_sub(1)
-    } else {
-        (position + 1).min(visible.len() - 1)
-    };
-    visible[next]
 }
 
 #[cfg(test)]
@@ -7005,6 +6967,7 @@ default = "visible"
         let cases = [
             ("up", None, false, Some(Intent::Up)),
             ("down", None, false, Some(Intent::Down)),
+            ("tab", Some("\t"), false, Some(Intent::Tab)),
             ("left", None, false, None),
             ("right", None, false, None),
             ("space", None, false, Some(Intent::Activate)),
@@ -7036,6 +6999,11 @@ default = "visible"
         assert_eq!(intent("enter", None, false), Some(Intent::Activate));
         assert_eq!(intent("right", None, false), None);
         assert_eq!(intent("left", None, false), None);
+        assert_eq!(intent("tab", Some("\t"), false), Some(Intent::Tab));
+        assert_eq!(
+            intent("tab", Some("\t"), true),
+            Some(Intent::Insert("\t".into()))
+        );
         assert_eq!(
             intent("space", Some(" "), true),
             Some(Intent::Insert(" ".into()))

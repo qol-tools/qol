@@ -69,7 +69,9 @@ impl Runtime {
             glide: None,
             glide_speed: 1200.0,
             store: FileMinimizedStateStore::new(crate::platform::state_file_path()),
-            open_settings: open_settings_page,
+            open_settings: || {
+                qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::cli::PLUGIN_ID)
+            },
         }
     }
 
@@ -161,10 +163,6 @@ pub(crate) fn run() -> Result<(), String> {
     core_daemon::cleanup(&CONFIG);
     trace_daemon_lifecycle("stop");
     Ok(())
-}
-
-fn open_settings_page() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(crate::cli::PLUGIN_ID)
 }
 
 fn receive_command(rx: &Receiver<Command>, glide_is_active: bool) -> Result<Option<Command>, ()> {

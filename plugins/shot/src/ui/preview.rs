@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use anyhow::Result;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +14,6 @@ use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
-use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
     font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
@@ -25,6 +24,7 @@ use qol_gpui::window::{
     target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
     WindowPlacement,
 };
+use qol_gpui::window_options::PopupWindowOptions;
 
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
@@ -60,6 +60,163 @@ pub(super) fn surface_shadow() -> Vec<BoxShadow> {
         blur_radius: px(0.0),
         spread_radius: px(0.0),
     }]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MonitorTopology {
+    monitors: Vec<MonitorKey>,
+}
+
+impl MonitorTopology {
+    fn from_monitors(monitors: &[ActiveMonitor]) -> Self {
+        let mut monitors = monitors
+            .iter()
+            .map(|monitor| MonitorKey::from_bounds(&monitor.bounds()))
+            .collect::<Vec<_>>();
+        monitors.sort_by_key(|monitor| (monitor.x, monitor.y, monitor.width, monitor.height));
+        monitors.dedup();
+        Self { monitors }
+    }
+
+    fn matches(&self, live: &Self) -> bool {
+        self.monitors.is_empty() || live.monitors.is_empty() || self.monitors == live.monitors
+    }
+}
+
+pub(crate) fn live_topology(cx: &App) -> MonitorTopology {
+    MonitorTopology::from_monitors(&MonitorTracker::start(cx).all_monitors_or_snapshot())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WarmWindowKey {
+    kind: &'static str,
+    topology: MonitorTopology,
+    size: (i32, i32),
+}
+
+struct WarmWindow<T> {
+    key: WarmWindowKey,
+    handle: WindowHandle<T>,
+}
+
+pub(crate) struct WarmWindowPool<T> {
+    kind: &'static str,
+    capacity: usize,
+    entries: RefCell<Vec<WarmWindow<T>>>,
+}
+
+impl<T> WarmWindowPool<T> {
+    pub(crate) const fn new(kind: &'static str, capacity: usize) -> Self {
+        Self {
+            kind,
+            capacity,
+            entries: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn key(&self, topology: &MonitorTopology, size: (i32, i32)) -> WarmWindowKey {
+        WarmWindowKey {
+            kind: self.kind,
+            topology: topology.clone(),
+            size,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.borrow().len()
+    }
+}
+
+impl<T: Render + 'static> WarmWindowPool<T> {
+    pub(crate) fn take(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let mut entries = self.entries.borrow_mut();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries.remove(index).handle)
+    }
+
+    pub(crate) fn peek(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let entries = self.entries.borrow();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries[index].handle)
+    }
+
+    pub(crate) fn put(&self, key: WarmWindowKey, handle: WindowHandle<T>) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        if entries.len() >= self.capacity {
+            return false;
+        }
+        entries.push(WarmWindow { key, handle });
+        true
+    }
+
+    fn retain_live(&self, topology: &MonitorTopology, cx: &mut App) {
+        let stale = {
+            let mut entries = self.entries.borrow_mut();
+            let mut stale = Vec::new();
+            entries.retain(|entry| {
+                if entry.key.topology.matches(topology) {
+                    return true;
+                }
+                stale.push(entry.handle);
+                false
+            });
+            stale
+        };
+        if stale.is_empty() {
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_WARM_INVALIDATE",
+            "kind={} monitors={} dropped={}",
+            self.kind,
+            topology.monitors.len(),
+            stale.len()
+        );
+        Self::remove_windows(stale, cx);
+    }
+
+    fn remove_windows(handles: Vec<WindowHandle<T>>, cx: &mut App) {
+        for handle in handles {
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        }
+    }
+
+    fn index_for(
+        &self,
+        entries: &[WarmWindow<T>],
+        size: (i32, i32),
+        topology: &MonitorTopology,
+    ) -> Option<usize> {
+        let mut fallback = None;
+        for (index, entry) in entries.iter().enumerate() {
+            if !self.reusable(entry, topology) {
+                continue;
+            }
+            if entry.key.size == size {
+                return Some(index);
+            }
+            if fallback.is_none() {
+                fallback = Some(index);
+            }
+        }
+        fallback
+    }
+
+    fn reusable(&self, entry: &WarmWindow<T>, topology: &MonitorTopology) -> bool {
+        entry.key.kind == self.kind && entry.key.topology.matches(topology)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +300,11 @@ fn control_count() -> usize {
     ShotAction::ALL.len() + 2
 }
 
+pub(crate) fn wrap_index(current: usize, delta: isize, count: usize) -> usize {
+    let count = count as isize;
+    (((current as isize + delta) % count + count) % count) as usize
+}
+
 type Completion = Arc<Mutex<Option<Result<()>>>>;
 type DismissSub = (Subscription, Subscription, Option<Task<()>>);
 
@@ -175,6 +337,7 @@ fn show_with_completion(
     let run_completion = completion.clone();
 
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::platform::set_accessory_policy();
         if open_quit_window(
             path.clone(),
@@ -427,7 +590,7 @@ impl GhostContent {
     fn from_capture(capture: PreviewCapture) -> Result<Self> {
         let image = capture.pixels.and_then(|pixels| {
             let (data, w, h) = pixels.into_bgra_parts();
-            bgra_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
+            qol_gpui::image::render_image(data, w, h).map(|render_image| (render_image, w, h))
         });
         let (thumb, render_image) = match image {
             Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
@@ -634,19 +797,10 @@ fn open_ghost_window(
 }
 
 fn ghost_window_options(placement: &WindowPlacement) -> WindowOptions {
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
-        display_id: placement.display_id,
-        titlebar: None,
-        window_decorations: Some(ghost_window_decorations(false)),
-        kind: ghost_window_kind(),
-        focus: false,
-        show: false,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some(PREVIEW_APP_ID.to_string()),
-        ..Default::default()
-    }
+    PopupWindowOptions::from_placement(placement)
+        .show(false)
+        .app_id(PREVIEW_APP_ID)
+        .build()
 }
 
 fn open_quit_window(
@@ -670,16 +824,11 @@ fn open_quit_window(
         }
     };
     let provisional = Bounds::new(point(px(0.0), px(0.0)), token.logical_size());
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(provisional)),
-        titlebar: None,
-        window_decorations: Some(ghost_window_decorations(false)),
-        kind: ghost_window_kind(),
-        focus: false,
-        show: false,
-        window_background: WindowBackgroundAppearance::Opaque,
-        ..Default::default()
-    };
+    let options = PopupWindowOptions::new()
+        .bounds(provisional)
+        .background(WindowBackgroundAppearance::Opaque)
+        .show(false)
+        .build();
 
     let content = GhostContent {
         path,
@@ -742,19 +891,6 @@ fn open_quit_window(
     true
 }
 
-fn bgra_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
-    let frame = image::Frame::new(buffer);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
-}
-
-fn rgba_to_render_image(mut data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    for pixel in data.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    bgra_to_render_image(data, w, h)
-}
-
 fn read_thumb(path: &Path) -> Result<(f32, f32)> {
     let started = Instant::now();
     let (width, height) = image::image_dimensions(path)
@@ -788,7 +924,7 @@ pub(super) fn read_render_image(path: &Path) -> Result<(Arc<RenderImage>, u32, u
         .with_context(|| format!("failed to read preview image: {}", path.display()))?;
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let render_image = rgba_to_render_image(rgba.into_raw(), width, height)
+    let render_image = qol_gpui::image::render_image_rgba(rgba.into_raw(), width, height)
         .with_context(|| format!("failed to prepare preview image: {}", path.display()))?;
     Ok((render_image, width, height))
 }
@@ -939,21 +1075,68 @@ impl PreviewView {
         self.scheduled_reveal_seq = Some(seq);
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
         if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_seq(seq);
-            });
+            self.schedule_reveal_proof(window, cx, seq);
             return;
         }
         self.parked_reveal = true;
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-mapped");
         if super::schedule_parked_reveal(&self.title, cx) {
-            cx.on_next_frame(window, move |view, _window, _cx| {
-                view.reveal_presented_seq(seq);
-            });
+            self.schedule_reveal_proof(window, cx, seq);
             return;
         }
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-deferred");
         cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_reveal_proof(&mut self, window: &mut Window, cx: &mut Context<Self>, seq: u64) {
+        let (width, height) = window_dims(self.thumb.0, self.thumb.1, control_count());
+        let expected = Rc::new(Cell::new(size(px(width), px(height))));
+        let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
+        else {
+            self.reveal_presented_seq(seq);
+            return;
+        };
+        let title = self.title.clone();
+        let this = cx.entity().downgrade();
+        let cancelled = {
+            let this = this.clone();
+            move |cx: &AsyncApp| {
+                this.read_with(cx, |view, _| view.seq != seq)
+                    .unwrap_or(true)
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = qol_gpui::surface::await_reveal_readiness(
+                cx,
+                &title,
+                &fresh_frame,
+                cancelled,
+                || None,
+            )
+            .await;
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_REVEAL",
+                "seq={seq} state=proof ready={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={} expected={}x{} observed={}x{} rendered={}x{}",
+                outcome.proof.ready(),
+                outcome.proof.layout_confirmed,
+                outcome.proof.viewport_ready,
+                outcome.proof.fresh_frame,
+                outcome.proof.content_rendered,
+                outcome.attempts,
+                outcome.proof.expected_viewport.width.to_f64(),
+                outcome.proof.expected_viewport.height.to_f64(),
+                outcome.proof.observed_viewport.width.to_f64(),
+                outcome.proof.observed_viewport.height.to_f64(),
+                outcome.proof.rendered_viewport.width.to_f64(),
+                outcome.proof.rendered_viewport.height.to_f64()
+            );
             let _ = cx.update(|cx| {
                 if let Some(view) = this.upgrade() {
                     view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
@@ -991,8 +1174,7 @@ impl PreviewView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = control_count() as isize;
-        self.selected = (((self.selected as isize + delta) % n + n) % n) as usize;
+        self.selected = wrap_index(self.selected, delta, control_count());
         cx.notify();
     }
 
@@ -1377,6 +1559,7 @@ impl Render for PreviewView {
         let palette = current_palette();
 
         let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
@@ -1514,7 +1697,7 @@ mod tests {
     use super::{
         combine_focus_truth, missing_monitors, preview_control_for_keystroke, preview_controls,
         read_render_image, reveal_blur_guard, thumbnail_size, window_dims, ActiveMonitor,
-        PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
+        MonitorTopology, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1726,5 +1909,30 @@ mod tests {
         let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
         let existing: Vec<_> = monitors.iter().map(key).collect();
         assert!(missing_monitors(&existing, monitors).is_empty());
+    }
+
+    #[test]
+    fn monitor_topology_matches_known_equal_sets_only() {
+        let single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let same_single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let pair = MonitorTopology::from_monitors(&[monitor(0.0, 0.0), monitor(1920.0, 0.0)]);
+        let reversed_pair =
+            MonitorTopology::from_monitors(&[monitor(1920.0, 0.0), monitor(0.0, 0.0)]);
+        let unknown = MonitorTopology::from_monitors(&[]);
+        let cases = [
+            (single.clone(), same_single, true),
+            (pair.clone(), reversed_pair, true),
+            (single.clone(), pair.clone(), false),
+            (single.clone(), unknown.clone(), true),
+            (unknown.clone(), pair, true),
+            (unknown, single, true),
+        ];
+        for (stored, live, expected) in cases {
+            assert_eq!(
+                stored.matches(&live),
+                expected,
+                "stored={stored:?} live={live:?}"
+            );
+        }
     }
 }

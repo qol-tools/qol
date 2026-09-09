@@ -346,6 +346,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
         process_elapsed_ms().map_or_else(|| "unavailable".to_owned(), |ms| ms.to_string())
     );
     Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
         qol_gpui::platform::set_accessory_policy();
         qol_gpui::keepalive::open_keepalive(cx, Some(qol_conventions::SETTINGS_SURFACE_APP_ID));
         let tracker = MonitorTracker::start(cx);

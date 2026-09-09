@@ -202,6 +202,7 @@ impl Focusable for ColorWheelPopup {
 impl Render for ColorWheelPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .font_family(qol_theme::font_ui())
             .id("qol-color-wheel-popup")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -506,11 +507,7 @@ fn disc_bgra() -> Vec<u8> {
 
 fn disc_image() -> Arc<RenderImage> {
     let size = DISC_SIZE as u32;
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(size, size, disc_bgra())
-        .expect("disc buffer dimensions are static");
-    Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
-        buffer
-    )]))
+    crate::image::render_image(disc_bgra(), size, size).expect("disc buffer dimensions are static")
 }
 
 #[cfg(test)]

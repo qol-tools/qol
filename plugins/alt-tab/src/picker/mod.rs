@@ -20,7 +20,6 @@ use gpui::*;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::theme::resolve_surface_override;
 use qol_gpui::window::{MonitorKey, PopupPlacement};
-use qol_gpui::MonitorBounds;
 use run::{SharedPreviewCache, WindowCache};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -116,9 +115,7 @@ fn resolve_placement(
         return stabilize_placement(placement, current, "visible-no-active-target");
     };
     tracker
-        .all_monitors()
-        .into_iter()
-        .find(|m| MonitorKey::from_bounds(&m.bounds()) == active_target)
+        .monitor_for_key(active_target)
         .map(|monitor| PopupPlacement::from_monitor(Some(monitor)))
         .or_else(|| placement_from_key(active_target, "visible-active-target"))
         .unwrap_or_else(|| stabilize_placement(placement, current, "visible"))
@@ -142,9 +139,7 @@ fn stabilize_placement(
 }
 
 fn placement_from_key(key: MonitorKey, _reason: &'static str) -> Option<PopupPlacement> {
-    if key.width <= 0 || key.height <= 0 {
-        return None;
-    }
+    let monitor = ActiveMonitor::from_key(key)?;
     qol_runtime::probe!(
         "PLACEMENT_FALLBACK",
         "reason={_reason} source=existing target={},{},{}x{}",
@@ -153,14 +148,7 @@ fn placement_from_key(key: MonitorKey, _reason: &'static str) -> Option<PopupPla
         key.width,
         key.height,
     );
-    Some(PopupPlacement::from_monitor(Some(
-        ActiveMonitor::from_bounds(MonitorBounds {
-            x: key.x as f32,
-            y: key.y as f32,
-            width: key.width as f32,
-            height: key.height as f32,
-        }),
-    )))
+    Some(PopupPlacement::from_monitor(Some(monitor)))
 }
 
 fn try_cycle_existing(
