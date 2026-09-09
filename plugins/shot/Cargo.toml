@@ -42,3 +42,4 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+toml.workspace = true

@@ -179,3 +179,21 @@ opt-level = 2
 
 [profile.dev.package.qol-memory]
 opt-level = 2
+
+[profile.dev.package.image]
+opt-level = 2
+
+[profile.dev.package.png]
+opt-level = 2
+
+[profile.dev.package.fdeflate]
+opt-level = 2
+
+[profile.dev.package.flate2]
+opt-level = 2
+
+[profile.dev.package.miniz_oxide]
+opt-level = 2
+
+[profile.dev.package.simd-adler32]
+opt-level = 2

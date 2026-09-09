@@ -371,6 +371,65 @@ class VersionBumpCommitTests(unittest.TestCase):
             pv.verified_version_bump_parent(self.root, sha)
 
 
+class RootManifestImpactTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            "[profile.dev.package.png]\nopt-level = 2\n"
+        )
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "feat: baseline")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_root(self, text: str) -> None:
+        (self.root / "Cargo.toml").write_text(text)
+
+    def commit(self) -> str:
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "chore: root manifest")
+        return git(self.root, "rev-parse", "HEAD")
+
+    def test_root_profile_change_affects_all(self):
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            "[profile.dev.package.png]\nopt-level = 1\n"
+        )
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertTrue(impact.affects_all)
+        self.assertEqual(impact.dependencies, frozenset())
+
+    def test_root_profile_entry_removal_affects_all(self):
+        self.write_root('[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n')
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertTrue(impact.affects_all)
+
+    def test_root_workspace_dependency_change_is_classified(self):
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            '[workspace.dependencies]\nqol-fs = { path = "libs/fs" }\n\n'
+            "[profile.dev.package.png]\nopt-level = 2\n"
+        )
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertFalse(impact.affects_all)
+        self.assertEqual(impact.dependencies, frozenset({"qol-fs"}))
+
+
 class HighestVersionTagTests(unittest.TestCase):
     def test_picks_highest_semver_for_prefix(self):
         cases = [
