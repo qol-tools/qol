@@ -257,7 +257,6 @@ pub(super) struct SettingsPanelView {
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    page_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub(super) struct SettingsPanelState {
@@ -399,7 +398,6 @@ impl SettingsPanelView {
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
             body_bounds: Rc::new(Cell::new(None)),
-            page_bounds: Rc::new(Cell::new(None)),
         };
         let parent = cx.weak_entity();
         let parent_for_change = parent.clone();
@@ -4420,7 +4418,6 @@ impl SettingsPanelView {
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .child(custom_view)
         } else {
-            let page_bounds = Rc::clone(&self.page_bounds);
             settings_page()
                 .id(("settings-panel-body", level_index))
                 .track_scroll(self.stack[level_index].body_scroll.handle())
@@ -4428,14 +4425,6 @@ impl SettingsPanelView {
                 .when(front && self.filter_open, |body| {
                     body.pt(px(FILTER_OVERLAY_HEIGHT))
                 })
-                .child(
-                    canvas(
-                        move |bounds, _, _| page_bounds.set(Some(bounds)),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
                 .children(items)
         };
         let body_bounds = Rc::clone(&self.body_bounds);
@@ -4926,7 +4915,10 @@ impl SettingsPanelView {
         #[cfg(debug_assertions)]
         let body_bounds = Rc::clone(&self.body_bounds);
         #[cfg(debug_assertions)]
-        let page_bounds = Rc::clone(&self.page_bounds);
+        let page_scroll = self
+            .stack
+            .last()
+            .map(|level| level.body_scroll.handle().clone());
         canvas(
             |_, _, _| (),
             move |_bounds, _, window, cx| {
@@ -4938,7 +4930,7 @@ impl SettingsPanelView {
                     window.viewport_size().height,
                     target,
                     body_bounds.get(),
-                    page_bounds.get()
+                    page_scroll.as_ref().map(ScrollHandle::bounds)
                 );
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
