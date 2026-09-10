@@ -1129,6 +1129,7 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
         column = column.child(
             div()
                 .w_full()
+                .min_w_0()
                 .truncate()
                 .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_secondary))
@@ -1139,11 +1140,9 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
 }
 
 fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
-    div()
-        .min_w_0()
-        .flex()
-        .flex_row()
-        .child(
+    let mut line = div().w_full().min_w_0().flex().flex_row().overflow_hidden();
+    if !head.is_empty() {
+        line = line.child(
             div()
                 .min_w_0()
                 .flex_1()
@@ -1151,15 +1150,17 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
                 .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_secondary))
                 .child(SharedString::from(head)),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .text_color(rgb(palette.text_secondary))
-                .child(SharedString::from(tail)),
-        )
+        );
+    }
+    line.child(
+        div()
+            .min_w_0()
+            .flex_1()
+            .truncate()
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .text_color(rgb(palette.text_secondary))
+            .child(SharedString::from(tail)),
+    )
 }
 
 fn dismiss_control(
@@ -1516,5 +1517,175 @@ mod tests {
             routed_presentation(&Toast::new("t", "m", ToastLayout::compact())),
             Presentation::Slab
         ));
+    }
+
+    #[test]
+    fn a_long_message_stays_inside_the_slab_bounds() {
+        use taffy::geometry::{Point, Size as TaffySize};
+        use taffy::style::{Dimension, FlexDirection, Overflow, Style};
+        use taffy::{AvailableSpace, TaffyTree};
+
+        let mut tree: TaffyTree<()> = TaffyTree::new();
+        let preview = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::length(super::PREVIEW_WIDTH),
+                    height: Dimension::length(super::ROW_HEIGHT),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let gutter = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::length(super::GUTTER),
+                    height: Dimension::length(super::ROW_HEIGHT),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let dismiss = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::length(super::DISMISS_WIDTH),
+                    height: Dimension::length(super::ROW_HEIGHT),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let head = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::length(480.0),
+                    height: Dimension::length(16.0),
+                },
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                min_size: TaffySize {
+                    width: Dimension::length(0.0),
+                    height: Dimension::auto(),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let tail = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::length(4096.0),
+                    height: Dimension::length(16.0),
+                },
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                min_size: TaffySize {
+                    width: Dimension::length(0.0),
+                    height: Dimension::auto(),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let path_line = tree
+            .new_with_children(
+                Style {
+                    size: TaffySize {
+                        width: Dimension::percent(1.0),
+                        height: Dimension::auto(),
+                    },
+                    flex_direction: FlexDirection::Row,
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Default::default()
+                },
+                &[head, tail],
+            )
+            .unwrap();
+        let message = tree
+            .new_leaf(Style {
+                size: TaffySize {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(16.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let text_column = tree
+            .new_with_children(
+                Style {
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    min_size: TaffySize {
+                        width: Dimension::length(0.0),
+                        height: Dimension::auto(),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Default::default()
+                },
+                &[path_line, message],
+            )
+            .unwrap();
+        let slab = tree
+            .new_with_children(
+                Style {
+                    size: TaffySize {
+                        width: Dimension::length(super::SLAB_WIDTH),
+                        height: Dimension::length(super::ROW_HEIGHT),
+                    },
+                    flex_direction: FlexDirection::Row,
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Default::default()
+                },
+                &[preview, text_column, gutter, dismiss],
+            )
+            .unwrap();
+        tree.compute_layout(
+            slab,
+            TaffySize {
+                width: AvailableSpace::Definite(super::SLAB_WIDTH),
+                height: AvailableSpace::Definite(super::ROW_HEIGHT),
+            },
+        )
+        .unwrap();
+
+        let column = tree.layout(text_column).unwrap();
+        let line = tree.layout(path_line).unwrap();
+        let head = tree.layout(head).unwrap();
+        let tail = tree.layout(tail).unwrap();
+        let message = tree.layout(message).unwrap();
+        assert!(
+            column.location.x + column.size.width <= super::SLAB_WIDTH,
+            "the text column stays inside the slab"
+        );
+        assert!(
+            line.location.x + line.size.width <= column.size.width,
+            "the path line is bounded by the text column"
+        );
+        assert!(
+            head.location.x + head.size.width <= line.size.width,
+            "the path head stays inside the path line"
+        );
+        assert!(
+            tail.location.x + tail.size.width <= line.size.width,
+            "the long path tail stays inside the path line"
+        );
+        assert!(
+            tail.size.width < 4096.0,
+            "the long path tail must shrink into the line"
+        );
+        assert!(
+            message.location.x + message.size.width <= column.size.width,
+            "the message line stays inside the text column"
+        );
     }
 }

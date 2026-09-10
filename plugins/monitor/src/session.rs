@@ -1078,6 +1078,12 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 continue;
             };
             if let Err(error) = self.control.set_mode(&handle, &selected) {
+                qol_runtime::probe!(
+                    "MONITOR_DISPLAY_WRITE",
+                    "event=rejected op=restore display={} error=\"{}\"",
+                    qol_runtime::probe::token(handle.id()),
+                    qol_runtime::probe::quoted(&error.to_string(), 160)
+                );
                 eprintln!(
                     "[plugin-monitor] mode restore failed on {}: {error}",
                     handle.connector()
@@ -1127,6 +1133,11 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             return report;
         }
         if let Err(error) = self.control.set_layout(&placements) {
+            qol_runtime::probe!(
+                "MONITOR_DISPLAY_WRITE",
+                "event=rejected op=restore display=none error=\"{}\"",
+                qol_runtime::probe::quoted(&error.to_string(), 160)
+            );
             eprintln!("[plugin-monitor] layout restore failed: {error}");
             report.record(RestoreOutcome::Failed);
             return report;

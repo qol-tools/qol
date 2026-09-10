@@ -582,7 +582,8 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
         | FieldKind::List
         | FieldKind::Status
         | FieldKind::QrCode
-        | FieldKind::Gamepad => false,
+        | FieldKind::Gamepad
+        | FieldKind::DisplayLayout => false,
     }
 }
 

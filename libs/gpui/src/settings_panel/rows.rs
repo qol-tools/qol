@@ -5,6 +5,7 @@ use qol_config::contract::{
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
 
+use super::display_layout::{DisplayLayoutBindings, DisplayLayoutState};
 use super::object_array_row::ObjectArrayState;
 use crate::gamepad::GamepadMonitor;
 use crate::scroll_list::ScrollList;
@@ -141,6 +142,7 @@ pub(super) enum RowControl {
         query: String,
         monitor: GamepadMonitor,
     },
+    DisplayLayout(Box<DisplayLayoutState>),
     ObjectArray(ObjectArrayState),
     Unsupported {
         kind: FieldKind,
@@ -500,6 +502,20 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 reason: "gamepad field declares no query".into(),
             },
         },
+        FieldKind::DisplayLayout => match field.query.as_deref() {
+            Some(query) => RowControl::DisplayLayout(Box::new(DisplayLayoutState::new(
+                DisplayLayoutBindings::new(
+                    query,
+                    field.active_query.clone(),
+                    field.action.clone().unwrap_or_default(),
+                    field.active_action.clone(),
+                ),
+            ))),
+            None => RowControl::Unsupported {
+                kind: FieldKind::DisplayLayout,
+                reason: "display_layout field declares no query".into(),
+            },
+        },
         FieldKind::ObjectArray => match &field.value {
             FieldDefault::ObjectArray(items) => RowControl::ObjectArray(ObjectArrayState::list(
                 item_schema(field.item.as_ref(), items),
@@ -691,6 +707,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         | RowControl::Status { .. }
         | RowControl::Gamepad { .. }
         | RowControl::QrCode { .. }
+        | RowControl::DisplayLayout(_)
         | RowControl::Unsupported { .. } => None,
     }
 }
@@ -730,6 +747,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
         | RowControl::List { .. }
         | RowControl::Gamepad { .. }
         | RowControl::QrCode { .. }
+        | RowControl::DisplayLayout(_)
         | RowControl::Unsupported { .. } => None,
     }
 }
@@ -759,6 +777,12 @@ pub(super) fn row_query_names(row: &Row) -> Vec<&str> {
         } => std::iter::once(query.as_str())
             .chain(active_query.as_deref())
             .collect(),
+        RowControl::DisplayLayout(state) => {
+            let bindings = state.bindings();
+            std::iter::once(bindings.query.as_str())
+                .chain(bindings.active_query.as_deref())
+                .collect()
+        }
         RowControl::QrCode { query, .. } if !query.is_empty() => vec![query.as_str()],
         _ => Vec::new(),
     }
@@ -911,6 +935,22 @@ pub(super) fn apply_runtime_query(
                 query: row_query,
                 monitor,
             } if row_query == query => monitor.apply_query(result.clone()),
+            RowControl::DisplayLayout(state) => {
+                let layout_query = state.bindings().query.clone();
+                let modes_query = state.bindings().active_query.clone();
+                if layout_query.as_str() == query {
+                    match &result {
+                        Ok(value) => state.load_layout(value),
+                        Err(message) => state.set_error(Some(message.clone())),
+                    }
+                }
+                if modes_query.as_deref() == Some(query) {
+                    match &result {
+                        Ok(value) => state.load_modes(value),
+                        Err(message) => state.set_error(Some(message.clone())),
+                    }
+                }
+            }
             RowControl::QrCode {
                 query: row_query,
                 value_from,
@@ -3005,5 +3045,139 @@ default = 5
             pending: false,
             error: None,
         }
+    }
+
+    const DISPLAY_LAYOUT_SPEC: &str = r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+label = "Arrangement"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+"#;
+
+    fn layout_rows() -> Vec<Row> {
+        let spec = qol_config::contract::parse_spec_str(DISPLAY_LAYOUT_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        rows_from_resolved(&resolved, 0)
+    }
+
+    #[test]
+    fn display_layout_maps_both_queries_and_both_actions() {
+        let rows = layout_rows();
+        assert_eq!(runtime_query_names(&rows), ["layout", "modes"]);
+        let RowControl::DisplayLayout(state) = &rows[0].control else {
+            panic!("expected a display layout row, got {:?}", rows[0].control);
+        };
+        assert_eq!(state.bindings().query, "layout");
+        assert_eq!(state.bindings().active_query.as_deref(), Some("modes"));
+        assert_eq!(state.bindings().action, "arrange");
+        assert_eq!(state.bindings().active_action.as_deref(), Some("set_mode"));
+        assert!(row_value_json(&rows[0].control).is_none());
+        assert_eq!(
+            merged_config(&serde_json::json!({ "other": 1 }), &rows),
+            serde_json::json!({ "other": 1 }),
+            "display layout rows carry no stored value"
+        );
+    }
+
+    #[test]
+    fn apply_runtime_query_loads_layout_and_modes_into_the_canvas_state() {
+        let mut rows = layout_rows();
+        apply_query(
+            &mut rows,
+            "layout",
+            Ok(serde_json::json!([
+                {
+                    "id": "alpha",
+                    "connector": "card0-DP-1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 3840,
+                    "height": 2160,
+                    "refresh_hz": 60,
+                    "primary": true,
+                },
+                {
+                    "id": "beta",
+                    "connector": "card0-DP-2",
+                    "x": 3840,
+                    "y": 0,
+                    "width": 1920,
+                    "height": 1080,
+                    "refresh_hz": 60,
+                    "primary": false,
+                }
+            ])),
+        );
+        apply_query(
+            &mut rows,
+            "modes",
+            Ok(serde_json::json!([{
+                "id": "beta#7",
+                "display_id": "beta",
+                "connector": "card0-DP-2",
+                "token": 7,
+                "width": 2560,
+                "height": 1440,
+                "refresh_hz": 60,
+                "label": "2560x1440@60",
+                "detail": "available mode",
+                "current": false,
+                "writable": true,
+                "selectable": true,
+            }])),
+        );
+        let RowControl::DisplayLayout(state) = &rows[0].control else {
+            panic!("expected a display layout row, got {:?}", rows[0].control);
+        };
+        assert_eq!(state.displays().len(), 2);
+        assert_eq!(state.selected_id(), Some("alpha"));
+        assert_eq!(state.modes_for("beta").len(), 1);
+
+        let RowControl::DisplayLayout(state) = &mut rows[0].control else {
+            unreachable!();
+        };
+        assert!(state.select("beta"));
+        assert!(state.nudge(0, 18));
+        apply_query(
+            &mut rows,
+            "layout",
+            Ok(serde_json::json!([
+                {
+                    "id": "alpha",
+                    "connector": "card0-DP-1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 3840,
+                    "height": 2160,
+                    "refresh_hz": 60,
+                    "primary": true,
+                },
+                {
+                    "id": "beta",
+                    "connector": "card0-DP-2",
+                    "x": 3840,
+                    "y": 0,
+                    "width": 1920,
+                    "height": 1080,
+                    "refresh_hz": 60,
+                    "primary": false,
+                }
+            ])),
+        );
+        let RowControl::DisplayLayout(state) = &rows[0].control else {
+            panic!("expected a display layout row");
+        };
+        let beta = state
+            .displays()
+            .iter()
+            .find(|display| display.id == "beta")
+            .expect("beta");
+        assert_eq!(state.rect_of(beta).y, 18, "a poll keeps the staged nudge");
     }
 }

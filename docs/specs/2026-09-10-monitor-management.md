@@ -410,8 +410,9 @@ regression test named in the review finding.
 - `LayoutPosition` derives `PartialEq, Eq` and every field is serde-defaulted
   (`x`/`y` 0, `primary` false); `DeviceConfig` regains `PartialEq, Eq` and its
   tests compare directly again.
-- `DisplayError::Io` and `MonitorError::Display` must not double the
-  "display enumeration failed" prefix.
+- `DisplayError::Io` renders the inner error alone; IO errors are never
+  mislabelled as enumeration failures, and `MonitorError::Display` must not
+  add or repeat an enumeration prefix.
 
 ### 13.3 Daemon and session (lane B1)
 
@@ -430,6 +431,14 @@ regression test named in the review finding.
 - `reassert_gamma`: with `lut.is_some() && mutations > 0`, write the current
   adjustment unconditionally, identity included, so a ramp reset is repaired;
   `restore_layout` re-asserts gamma for every display it moved before returning.
+- Display state is restored after every successful display write, not only on
+  restore: a mode, primary, arrange, or apply-layout write re-asserts gamma for
+  every connected display (a mode write resets the whole screen's ramps, not
+  only the target output) and immediately re-evaluates night mode with force,
+  so the gamma tint or the host night light comes back at once instead of at
+  the next tick. One `MONITOR_SESSION event=display_reassert op=... displays=...
+  restored=... failed=... night_active=...` trace names the operation. A refused
+  write restores nothing and writes nothing extra.
 - `apply_layout` with an empty configured map claims nothing and writes nothing.
 - `claim_layout` may replace a snapshot whose recorded displays are all absent
   from the current topology.

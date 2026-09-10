@@ -125,50 +125,12 @@ description = "Show a notification with the new brightness level whenever bright
 label = "Arrangement"
 description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
 
-[field.layout]
-type = "list"
-label = "Layout"
+[field.arrangement]
+type = "display_layout"
+label = "Arrangement"
 section = "arrangement"
 query = "layout"
-row_label = "{connector}"
-row_subtitle = "{detail}"
-empty_message = "No displays connected."
-
-[field.layout.row_action]
-action = "set_primary"
-label = "Set primary"
-when = "settable"
-input = { id = "{id}" }
-
-[field.modes]
-type = "list"
-label = "Modes"
-section = "arrangement"
-query = "modes"
-row_label = "{connector} {label}"
-row_subtitle = "{detail}"
-empty_message = "No modes reported."
-
-[field.modes.row_action]
-action = "set_mode"
-label = "Set"
-when = "selectable"
-input = { id = "{display_id}", token = "{token}", width = "{width}", height = "{height}", refresh = "{refresh_hz}" }
-
-[field.layout_position]
-type = "object_map"
-config_key = "layout_position"
-label = "Positions"
-section = "arrangement"
-key_label = "Display ID"
-default = {}
-description = "Absolute positions and the primary flag for each display, applied by the Apply positions action."
-entry_fields = { x = "number", y = "number", primary = "boolean" }
-
-[field.apply_layout]
-type = "action"
-label = "Apply positions"
-section = "arrangement"
-action = "apply_layout"
-variant = "primary"
-description = "Apply the configured display positions and primary flag immediately."
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."

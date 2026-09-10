@@ -160,7 +160,7 @@ impl std::fmt::Display for DisplayError {
             DisplayError::LayoutInvalid { reason } => {
                 write!(f, "display layout is invalid: {reason}")
             }
-            DisplayError::Io(error) => write!(f, "display enumeration failed: {error}"),
+            DisplayError::Io(error) => write!(f, "{error}"),
         }
     }
 }
@@ -205,6 +205,17 @@ mod tests {
         };
         assert!(error.to_string().contains("card0-DP-1"));
         assert!(std::error::Error::source(&error).is_none());
+    }
+
+    #[test]
+    fn display_error_io_renders_without_an_enumeration_prefix() {
+        let error = DisplayError::Io(std::io::Error::other(
+            "the X11 server rejected the CRTC configuration for card0-DP-1",
+        ));
+        assert_eq!(
+            error.to_string(),
+            "the X11 server rejected the CRTC configuration for card0-DP-1"
+        );
     }
 
     #[test]

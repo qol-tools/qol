@@ -74,6 +74,7 @@ fn app_with_config_root(
             config_root.clone(),
         ))
         .command(daemon_command())
+        .command(open_command())
         .command(grant_command(Arc::clone(&grant)))
         .command(revoke_command(Arc::clone(&grant)))
         .command(settings_command())
@@ -563,6 +564,24 @@ fn daemon_command() -> Command {
         })
 }
 
+fn open_command() -> Command {
+    Command::new("open")
+        .about("Open the plugin settings.")
+        .usage(format!("{BINARY_NAME} open"))
+        .detail("Convenience alias for the settings command.")
+        .output("No stdout on success.")
+        .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
+        .run_plain_text(|_| {
+            open_tray_settings()?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn open_tray_settings() -> Result<()> {
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+        .context("failed to open settings URL")
+}
+
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the plugin settings.")
@@ -570,8 +589,7 @@ fn settings_command() -> Command {
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
         .run_plain_text(|_| {
-            qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-                .context("failed to open settings URL")?;
+            open_tray_settings()?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -1666,6 +1684,13 @@ mod tests {
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(execution.stdout.contains("resident daemon"));
         assert!(execution.stdout.contains("hotkeys"));
+    }
+
+    #[test]
+    fn open_command_is_registered_and_points_at_settings() {
+        let execution = fake_app().execute(["help".to_string(), "open".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert!(execution.stdout.contains("settings"));
     }
 
     #[test]

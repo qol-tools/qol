@@ -12,6 +12,7 @@ pub fn validate_contracts(
     for (id, field) in &config.fields {
         validate_runable_ref(id, field, runtime, &mut errors);
         validate_runtime_active_refs(id, field, runtime, &mut errors);
+        validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
     }
@@ -38,6 +39,7 @@ fn validate_runtime_active_refs(
     match field.kind {
         FieldKind::Action => validate_action_active_refs(id, field, runtime, errors),
         FieldKind::List => validate_list_active_refs(id, field, runtime, errors),
+        FieldKind::DisplayLayout => {}
         _ => errors.push(ValidationError::new(
             format!("field.{id}"),
             "runtime active state is only valid for action and list fields",
@@ -118,6 +120,89 @@ fn validate_active_query_refs(
             format!("references undeclared query: {query}"),
         ));
     }
+}
+
+fn validate_display_layout_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::DisplayLayout {
+        return;
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            format!(
+                "kind {:?} requires qol-runtime.toml but none is present",
+                field.kind
+            ),
+        ));
+        return;
+    };
+    validate_declared_query_ref(id, field.query.as_deref(), "query", runtime, errors);
+    validate_declared_query_ref(
+        id,
+        field.active_query.as_deref(),
+        "active_query",
+        runtime,
+        errors,
+    );
+    validate_declared_action_ref(id, field.action.as_deref(), "action", runtime, errors);
+    validate_declared_action_ref(
+        id,
+        field.active_action.as_deref(),
+        "active_action",
+        runtime,
+        errors,
+    );
+}
+
+fn validate_declared_query_ref(
+    id: &str,
+    name: Option<&str>,
+    key: &str,
+    runtime: &RuntimeSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(name) = name else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.{key}"),
+            "is required for display_layout fields",
+        ));
+        return;
+    };
+    if runtime.queries.contains_key(name) {
+        return;
+    }
+    errors.push(ValidationError::new(
+        format!("field.{id}.{key}"),
+        format!("references undeclared query: {name}"),
+    ));
+}
+
+fn validate_declared_action_ref(
+    id: &str,
+    name: Option<&str>,
+    key: &str,
+    runtime: &RuntimeSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(name) = name else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.{key}"),
+            "is required for display_layout fields",
+        ));
+        return;
+    };
+    if runtime.actions.contains_key(name) {
+        return;
+    }
+    errors.push(ValidationError::new(
+        format!("field.{id}.{key}"),
+        format!("references undeclared action: {name}"),
+    ));
 }
 
 fn validate_runable_ref(
@@ -695,6 +780,138 @@ poll_interval_ms = 32
         .expect("parse runtime");
 
         assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    fn display_layout_config() -> ConfigSpec {
+        parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+"#,
+        )
+        .expect("parse config")
+    }
+
+    fn display_layout_runtime(missing: Option<&str>) -> RuntimeSpec {
+        let mut runtime = String::from("schema_version = 1\n");
+        for name in ["layout", "modes"] {
+            if missing == Some(name) {
+                continue;
+            }
+            runtime.push_str(&format!(
+                "\n[query.{name}]\ndescription = \"runtime query\"\npoll_interval_ms = 1000\n"
+            ));
+        }
+        for name in ["arrange", "set_mode"] {
+            if missing == Some(name) {
+                continue;
+            }
+            runtime.push_str(&format!(
+                "\n[action.{name}]\ndescription = \"runtime action\"\n"
+            ));
+        }
+        parse_runtime_spec_str(&runtime).expect("parse runtime")
+    }
+
+    #[test]
+    fn accepts_display_layout_with_all_references() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(None);
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_query() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("layout"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared layout query");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.query"
+                    && error.message.contains("layout")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_active_query() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("modes"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared modes query");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.active_query"
+                    && error.message.contains("modes")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_action() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("arrange"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared arrange action");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.action"
+                    && error.message.contains("arrange")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_active_action() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("set_mode"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared set_mode action");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.active_action"
+                    && error.message.contains("set_mode")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_missing_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+"#,
+        )
+        .expect("parse config");
+        let runtime = display_layout_runtime(None);
+        let errors = validate_contracts(&config, Some(&runtime)).expect_err("missing references");
+        for path in [
+            "field.arrangement.query",
+            "field.arrangement.active_query",
+            "field.arrangement.action",
+            "field.arrangement.active_action",
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.path == path && error.message.contains("required")),
+                "missing {path}: {errors:?}"
+            );
+        }
     }
 
     #[test]

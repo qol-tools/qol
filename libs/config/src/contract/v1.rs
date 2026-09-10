@@ -192,13 +192,19 @@ pub enum FieldKind {
     Status,
     QrCode,
     Gamepad,
+    DisplayLayout,
 }
 
 impl FieldKind {
     pub fn has_stored_value(self) -> bool {
         !matches!(
             self,
-            Self::Action | Self::List | Self::Status | Self::QrCode | Self::Gamepad
+            Self::Action
+                | Self::List
+                | Self::Status
+                | Self::QrCode
+                | Self::Gamepad
+                | Self::DisplayLayout
         )
     }
 
@@ -217,6 +223,7 @@ impl FieldKind {
             Self::Status => "status",
             Self::QrCode => "qr_code",
             Self::Gamepad => "gamepad",
+            Self::DisplayLayout => "display_layout",
         }
     }
 }
@@ -637,5 +644,29 @@ description = "Press a button to begin."
         assert_eq!(field.kind, FieldKind::Gamepad);
         assert!(!field.kind.has_stored_value());
         assert_eq!(field.label.as_deref(), Some("Input Test"));
+    }
+
+    #[test]
+    fn parses_display_layout_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+label = "Arrangement"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("arrangement").expect("field present");
+        assert_eq!(field.kind, FieldKind::DisplayLayout);
+        assert!(!field.kind.has_stored_value());
+        assert_eq!(field.kind.name(), "display_layout");
+        assert_eq!(field.query.as_deref(), Some("layout"));
+        assert_eq!(field.active_query.as_deref(), Some("modes"));
+        assert_eq!(field.action.as_deref(), Some("arrange"));
+        assert_eq!(field.active_action.as_deref(), Some("set_mode"));
     }
 }

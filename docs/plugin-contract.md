@@ -212,7 +212,7 @@ Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
   buttons referencing runtime action names). Order preserved.
 - `[field.<id>]`: required `type` (`FieldKind`, snake_case: `boolean`, `string`,
   `number`, `select`, `string_array`, `object_array`, `object_map`, `color`,
-  `action`, `list`, `status`, `qr_code`), plus `config_key`, `label`,
+  `action`, `list`, `status`, `qr_code`, `display_layout`), plus `config_key`, `label`,
   `description`, `placeholder`, `section`, `default`, `show_when`, `align`, `span`.
 
 Per-kind rules (validated, not ignored):
@@ -223,7 +223,7 @@ Per-kind rules (validated, not ignored):
 - `object_array`: `[field.<id>.item.fields]`; `object_map`: `key_label` +
   `[field.<id>.entry_fields]`.
 - `color`: hex string, optional `alpha`; streamable.
-- **`action` / `list` / `status` / `qr_code` hold no stored value**: they must NOT
+- **`action` / `list` / `status` / `qr_code` / `display_layout` hold no stored value**: they must NOT
   have a `default`, and they require a matching `qol-runtime.toml` declaration. Every
   other kind **must** have a `default`.
 - `config_key` (dotted, e.g. `"audio.enabled"`) routes the value into a nested JSON
@@ -295,7 +295,9 @@ as today. The plain routes
 header into `input["agent_home"]` when the runable declares it.
 
 Cross-file: an `action` field's `action` and a `list`/`status`/`qr_code` field's
-`query` must reference a declared runtime entry; a `stream = "..."` attribute is
+`query` must reference a declared runtime entry; a `display_layout` field's
+`query` and `active_query` must reference declared queries and its `action` and
+`active_action` must reference declared actions; a `stream = "..."` attribute is
 allowed only on `color`/`number` fields.
 
 ---
@@ -321,7 +323,7 @@ Source: `libs/config/src/lib.rs` (`load_plugin_config_from_env`,
   rather than erroring. Define `T: Deserialize + Default`.
 - The host writes that file from the editor form (`PUT /api/plugins/{id}/config`),
   merging on write to preserve daemon-owned fields, then signals reload (section 9.1).
-- `list`/`status`/`qr_code`/`action` fields are never serialized into `config.json`;
+- `list`/`status`/`qr_code`/`action`/`display_layout` fields are never serialized into `config.json`;
   they are driven live over the daemon socket (sections 4 and 9.1).
 
 ---
@@ -757,7 +759,7 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
   dispatch target.
 - The native tray menu does not surface plugin actions; the dashboard does.
 - `config_key` defaults to the field id - renaming an id moves storage silently.
-- `action`/`list`/`status`/`qr_code` config fields must omit `default` and need a
+- `action`/`list`/`status`/`qr_code`/`display_layout` config fields must omit `default` and need a
   `qol-runtime.toml` declaration.
 - `qol-config/docs/v1.md` is stale; trust the structs.
 - `qol-plugin-daemon` is Unix-only (`compile_error!`); do not add a non-Unix

@@ -35,6 +35,7 @@ const FIELD_MAP = {
     status: StatusField,
     qr_code: QrCodeField,
     gamepad: GamepadField,
+    display_layout: UnsupportedField,
 };
 
 export function renderField(field) {

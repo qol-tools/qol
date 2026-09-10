@@ -94,11 +94,28 @@ struct RandrState {
 enum RandrWrite {
     Applied,
     InvalidConfigTime,
+    Failed(randr::SetConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CrtcWriteContext {
+    connector: String,
+    x: i32,
+    y: i32,
+    mode: u64,
+}
+
+fn crtc_rejected(context: &CrtcWriteContext, status: randr::SetConfig) -> DisplayError {
+    DisplayError::Io(std::io::Error::other(format!(
+        "the X11 server rejected the CRTC configuration for {} at ({}, {}) with mode {}: {status:?}",
+        context.connector, context.x, context.y, context.mode
+    )))
 }
 
 trait RandrBus {
     fn read_state(&mut self) -> Result<RandrState, DisplayError>;
 
+    #[allow(clippy::too_many_arguments)]
     fn set_crtc(
         &mut self,
         crtc: u32,
@@ -107,6 +124,7 @@ trait RandrBus {
         mode: u64,
         outputs: &[u32],
         config_timestamp: u32,
+        context: &CrtcWriteContext,
     ) -> Result<RandrWrite, DisplayError>;
 
     fn set_primary(&mut self, root: u32, output: u32) -> Result<(), DisplayError>;
@@ -226,6 +244,7 @@ impl RandrBus for X11Bus {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn set_crtc(
         &mut self,
         crtc: u32,
@@ -234,6 +253,7 @@ impl RandrBus for X11Bus {
         mode: u64,
         outputs: &[u32],
         config_timestamp: u32,
+        context: &CrtcWriteContext,
     ) -> Result<RandrWrite, DisplayError> {
         let reply = randr::set_crtc_config(
             &self.conn,
@@ -252,9 +272,8 @@ impl RandrBus for X11Bus {
         match reply.status {
             randr::SetConfig::SUCCESS => Ok(RandrWrite::Applied),
             randr::SetConfig::INVALID_CONFIG_TIME => Ok(RandrWrite::InvalidConfigTime),
-            status => Err(DisplayError::Io(std::io::Error::other(format!(
-                "the X11 server rejected the CRTC configuration: {status:?}"
-            )))),
+            randr::SetConfig::FAILED => Ok(RandrWrite::Failed(randr::SetConfig::FAILED)),
+            status => Err(crtc_rejected(context, status)),
         }
     }
 
@@ -373,6 +392,7 @@ struct CrtcWrite {
     y: i32,
     mode: u64,
     outputs: Vec<u32>,
+    connector: String,
 }
 
 fn not_found(capability: &'static str, handle: &DisplayHandle) -> DisplayError {
@@ -423,7 +443,8 @@ fn write_mode_with_retry<B: RandrBus>(
     handle: &DisplayHandle,
     token: u64,
 ) -> Result<CrtcWrite, DisplayError> {
-    let mut retried = false;
+    let mut invalid_config_time_retried = false;
+    let mut failed_retried = false;
     loop {
         let state = bus.read_state()?;
         let output = output_for(&state, handle).ok_or_else(|| not_found("modes", handle))?;
@@ -439,6 +460,13 @@ fn write_mode_with_retry<B: RandrBus>(
             y: crtc.y,
             mode: crtc.mode,
             outputs: crtc.outputs.clone(),
+            connector: handle.connector().to_string(),
+        };
+        let context = CrtcWriteContext {
+            connector: handle.connector().to_string(),
+            x: crtc.x,
+            y: crtc.y,
+            mode: token,
         };
         match bus.set_crtc(
             crtc.crtc,
@@ -447,14 +475,19 @@ fn write_mode_with_retry<B: RandrBus>(
             token,
             &crtc.outputs,
             state.config_timestamp,
+            &context,
         )? {
             RandrWrite::Applied => return Ok(pre),
-            RandrWrite::InvalidConfigTime if !retried => retried = true,
+            RandrWrite::InvalidConfigTime if !invalid_config_time_retried => {
+                invalid_config_time_retried = true;
+            }
             RandrWrite::InvalidConfigTime => {
                 return Err(DisplayError::Io(std::io::Error::other(
                     "the X11 server rejected the configuration with INVALID_CONFIG_TIME twice",
                 )));
             }
+            RandrWrite::Failed(_) if !failed_retried => failed_retried = true,
+            RandrWrite::Failed(status) => return Err(crtc_rejected(&context, status)),
         }
     }
 }
@@ -463,7 +496,8 @@ fn write_placement_with_retry<B: RandrBus>(
     bus: &mut B,
     placement: &DisplayPlacement,
 ) -> Result<CrtcWrite, DisplayError> {
-    let mut retried = false;
+    let mut invalid_config_time_retried = false;
+    let mut failed_retried = false;
     loop {
         let state = bus.read_state()?;
         let Some(output) = output_for(&state, &placement.handle) else {
@@ -478,6 +512,13 @@ fn write_placement_with_retry<B: RandrBus>(
             y: crtc.y,
             mode: crtc.mode,
             outputs: crtc.outputs.clone(),
+            connector: placement.handle.connector().to_string(),
+        };
+        let context = CrtcWriteContext {
+            connector: placement.handle.connector().to_string(),
+            x: placement.x,
+            y: placement.y,
+            mode: crtc.mode,
         };
         match bus.set_crtc(
             crtc.crtc,
@@ -486,21 +527,33 @@ fn write_placement_with_retry<B: RandrBus>(
             crtc.mode,
             &crtc.outputs,
             state.config_timestamp,
+            &context,
         )? {
             RandrWrite::Applied => return Ok(pre),
-            RandrWrite::InvalidConfigTime if !retried => retried = true,
+            RandrWrite::InvalidConfigTime if !invalid_config_time_retried => {
+                invalid_config_time_retried = true;
+            }
             RandrWrite::InvalidConfigTime => {
                 return Err(DisplayError::Io(std::io::Error::other(format!(
                     "the X11 server rejected the configuration for {} with INVALID_CONFIG_TIME twice",
                     placement.handle.connector()
                 ))));
             }
+            RandrWrite::Failed(_) if !failed_retried => failed_retried = true,
+            RandrWrite::Failed(status) => return Err(crtc_rejected(&context, status)),
         }
     }
 }
 
 fn write_captured<B: RandrBus>(bus: &mut B, target: &CrtcWrite) -> Result<(), DisplayError> {
-    let mut retried = false;
+    let mut invalid_config_time_retried = false;
+    let mut failed_retried = false;
+    let context = CrtcWriteContext {
+        connector: target.connector.clone(),
+        x: target.x,
+        y: target.y,
+        mode: target.mode,
+    };
     loop {
         let config_timestamp = bus.read_state()?.config_timestamp;
         match bus.set_crtc(
@@ -510,14 +563,19 @@ fn write_captured<B: RandrBus>(bus: &mut B, target: &CrtcWrite) -> Result<(), Di
             target.mode,
             &target.outputs,
             config_timestamp,
+            &context,
         )? {
             RandrWrite::Applied => return Ok(()),
-            RandrWrite::InvalidConfigTime if !retried => retried = true,
+            RandrWrite::InvalidConfigTime if !invalid_config_time_retried => {
+                invalid_config_time_retried = true;
+            }
             RandrWrite::InvalidConfigTime => {
                 return Err(DisplayError::Io(std::io::Error::other(
                     "the X11 server rejected the rollback with INVALID_CONFIG_TIME twice",
                 )));
             }
+            RandrWrite::Failed(_) if !failed_retried => failed_retried = true,
+            RandrWrite::Failed(status) => return Err(crtc_rejected(&context, status)),
         }
     }
 }
@@ -1010,6 +1068,8 @@ mod tests {
         primary_failed: bool,
         fail_rollback: bool,
         invalid_config_time: Vec<(u32, u32)>,
+        failed: Vec<(u32, u32)>,
+        rejected: Option<(u32, randr::SetConfig)>,
         stale_on_invalid: Option<u32>,
         readback_override: Option<(u32, u64)>,
         readback_position_override: Option<(u32, i32, i32)>,
@@ -1026,6 +1086,8 @@ mod tests {
             primary_failed: false,
             fail_rollback: false,
             invalid_config_time: Vec::new(),
+            failed: Vec::new(),
+            rejected: None,
             stale_on_invalid: None,
             readback_override: None,
             readback_position_override: None,
@@ -1039,6 +1101,7 @@ mod tests {
             Ok(self.state.clone())
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn set_crtc(
             &mut self,
             crtc: u32,
@@ -1047,6 +1110,7 @@ mod tests {
             mode: u64,
             _outputs: &[u32],
             config_timestamp: u32,
+            context: &CrtcWriteContext,
         ) -> Result<RandrWrite, DisplayError> {
             self.writes.push(FakeWrite {
                 crtc,
@@ -1066,6 +1130,11 @@ mod tests {
                     "the fake rollback write failed",
                 )));
             }
+            if let Some((rejected_crtc, status)) = self.rejected {
+                if rejected_crtc == crtc {
+                    return Err(crtc_rejected(context, status));
+                }
+            }
             let mut invalid_answer = false;
             for (id, count) in self.invalid_config_time.iter_mut() {
                 if *id == crtc && *count > 0 {
@@ -1084,6 +1153,17 @@ mod tests {
             }
             if invalid_answer {
                 return Ok(RandrWrite::InvalidConfigTime);
+            }
+            let mut failed_answer = false;
+            for (id, count) in self.failed.iter_mut() {
+                if *id == crtc && *count > 0 {
+                    *count -= 1;
+                    failed_answer = true;
+                    break;
+                }
+            }
+            if failed_answer {
+                return Ok(RandrWrite::Failed(randr::SetConfig::FAILED));
             }
             if let Some(entry) = self.state.crtcs.iter_mut().find(|entry| entry.crtc == crtc) {
                 entry.x = x;
@@ -1472,6 +1552,136 @@ mod tests {
             .calls
             .iter()
             .all(|call| !matches!(call, FakeCall::Primary(_))));
+    }
+
+    #[test]
+    fn set_layout_reports_the_rejected_display_geometry_and_status() {
+        let mut bus = fake_bus(fake_state());
+        bus.rejected = Some((200, randr::SetConfig::INVALID_TIME));
+        let placements = vec![fake_placement("card0-DP-1", 100, 0, true)];
+        let error = set_layout_from(&mut bus, &placements).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("the X11 server rejected the CRTC configuration"));
+        assert!(text.contains("card0-DP-1"));
+        assert!(text.contains("(100, 0)"));
+        assert!(text.contains("mode 10"));
+        assert!(text.contains(&format!("{:?}", randr::SetConfig::INVALID_TIME)));
+        assert_eq!(bus.writes.len(), 1);
+    }
+
+    #[test]
+    fn set_layout_retries_once_when_the_server_refuses_with_failed() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 1)];
+        let placements = vec![fake_placement("card0-DP-1", 100, 0, true)];
+        set_layout_from(&mut bus, &placements).unwrap();
+        assert_eq!(bus.writes.len(), 2);
+        assert!(bus.writes[1].config_timestamp > bus.writes[0].config_timestamp);
+        let crtc = bus
+            .state
+            .crtcs
+            .iter()
+            .find(|crtc| crtc.crtc == 200)
+            .unwrap();
+        assert_eq!((crtc.x, crtc.y, crtc.mode), (100, 0, 10));
+    }
+
+    #[test]
+    fn set_layout_reports_the_detailed_error_after_two_failed_answers() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 2)];
+        let placements = vec![fake_placement("card0-DP-1", 100, 0, true)];
+        let error = set_layout_from(&mut bus, &placements).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("card0-DP-1"));
+        assert!(text.contains("(100, 0)"));
+        assert!(text.contains("mode 10"));
+        assert!(text.contains(&format!("{:?}", randr::SetConfig::FAILED)));
+        assert_eq!(bus.writes.len(), 2);
+        assert!(bus.writes[1].config_timestamp > bus.writes[0].config_timestamp);
+    }
+
+    #[test]
+    fn set_mode_retries_once_when_the_server_refuses_with_failed() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 1)];
+        let handle = fake_handle("card0-DP-1");
+        let requested = DisplayMode {
+            token: 11,
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        set_mode_from(&mut bus, &handle, &requested).unwrap();
+        assert_eq!(bus.writes.len(), 2);
+        assert!(bus.writes[1].config_timestamp > bus.writes[0].config_timestamp);
+        assert_eq!(bus.writes[1].mode, 11);
+    }
+
+    #[test]
+    fn set_mode_names_the_requested_token_when_the_server_refuses() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 2)];
+        let handle = fake_handle("card0-DP-1");
+        let requested = DisplayMode {
+            token: 11,
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let error = set_mode_from(&mut bus, &handle, &requested).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("card0-DP-1"));
+        assert!(text.contains("mode 11"));
+        assert!(!text.contains("mode 10"));
+        assert!(text.contains(&format!("{:?}", randr::SetConfig::FAILED)));
+    }
+
+    #[test]
+    fn write_captured_retries_once_when_the_server_refuses_with_failed() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 1)];
+        let target = CrtcWrite {
+            crtc: 200,
+            x: 50,
+            y: 25,
+            mode: 10,
+            outputs: vec![100],
+            connector: "card0-DP-1".into(),
+        };
+        write_captured(&mut bus, &target).unwrap();
+        assert_eq!(bus.reads, 2);
+        assert_eq!(bus.writes.len(), 2);
+        assert!(bus.writes[1].config_timestamp > bus.writes[0].config_timestamp);
+        let crtc = bus
+            .state
+            .crtcs
+            .iter()
+            .find(|crtc| crtc.crtc == 200)
+            .unwrap();
+        assert_eq!((crtc.x, crtc.y, crtc.mode), (50, 25, 10));
+    }
+
+    #[test]
+    fn write_captured_names_the_display_after_two_failed_answers() {
+        let mut bus = fake_bus(fake_state());
+        bus.failed = vec![(200, 2)];
+        let target = CrtcWrite {
+            crtc: 200,
+            x: 50,
+            y: 25,
+            mode: 10,
+            outputs: vec![100],
+            connector: "card0-DP-1".into(),
+        };
+        let error = write_captured(&mut bus, &target).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("card0-DP-1"));
+        assert!(text.contains("(50, 25)"));
+        assert!(text.contains("mode 10"));
+        assert!(text.contains(&format!("{:?}", randr::SetConfig::FAILED)));
+        assert_eq!(bus.reads, 2);
+        assert_eq!(bus.writes.len(), 2);
     }
 
     #[test]

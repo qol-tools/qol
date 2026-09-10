@@ -387,13 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn display_error_does_not_repeat_the_enumeration_prefix() {
+    fn display_error_io_carries_no_enumeration_prefix() {
         let error =
             MonitorError::Display(DisplayError::Io(std::io::Error::other("the bus closed")));
-        assert_eq!(
-            error.to_string(),
-            "display enumeration failed: the bus closed"
-        );
+        assert_eq!(error.to_string(), "the bus closed");
     }
 
     #[test]

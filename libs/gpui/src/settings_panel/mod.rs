@@ -1,3 +1,4 @@
+mod display_layout;
 mod form_nav;
 mod navigation;
 mod object_array_row;
@@ -53,6 +54,7 @@ fn chrome_height(_sections: &[RowSection]) -> f32 {
     PANEL_BAND_HEIGHT + PANEL_HINT_BAR_HEIGHT
 }
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
+const PANEL_DISPLAY_LAYOUT_HEIGHT: f32 = 368.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelSourceGroup {
@@ -828,6 +830,7 @@ fn row_wants_a_wide_panel(row: &Row) -> bool {
             | RowControl::ObjectArray(_)
             | RowControl::List { .. }
             | RowControl::QrCode { .. }
+            | RowControl::DisplayLayout(_)
     ) {
         return true;
     }
@@ -852,6 +855,7 @@ mod tests {
         PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_WIDTH,
     };
     use crate::gamepad::GamepadMonitor;
+    use crate::settings_panel::display_layout::{DisplayLayoutBindings, DisplayLayoutState};
     use crate::settings_panel::rows::RowControl;
 
     fn row(control: RowControl) -> Row {
@@ -956,11 +960,19 @@ mod tests {
         let mut verbose = row(RowControl::Toggle(false));
         verbose.description = Some("x".repeat(super::PANEL_WIDE_DESCRIPTION_CHARS + 1));
         let listy = vec![row(RowControl::TextList(Vec::new()))];
+        let layout_state = DisplayLayoutState::new(DisplayLayoutBindings::new(
+            "layout",
+            Some("modes".to_string()),
+            "arrange",
+            Some("set_mode".to_string()),
+        ));
+        let layout = vec![row(RowControl::DisplayLayout(Box::new(layout_state)))];
 
         assert_eq!(panel_width(&bare), super::PANEL_COMPACT_WIDTH);
         assert_eq!(panel_width(&[described]), PANEL_WIDTH);
         assert_eq!(panel_width(&[verbose]), super::PANEL_WIDE_WIDTH);
         assert_eq!(panel_width(&listy), super::PANEL_WIDE_WIDTH);
+        assert_eq!(panel_width(&layout), super::PANEL_WIDE_WIDTH);
     }
 
     #[test]

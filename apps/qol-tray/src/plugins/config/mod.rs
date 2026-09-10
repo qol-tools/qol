@@ -1171,6 +1171,7 @@ fn field_default_matches_kind(
         | FieldKind::List
         | FieldKind::Status
         | FieldKind::QrCode
-        | FieldKind::Gamepad => false,
+        | FieldKind::Gamepad
+        | FieldKind::DisplayLayout => false,
     }
 }

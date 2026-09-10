@@ -104,145 +104,6 @@ mod tests {
         );
     }
 
-    fn modes_row_actions(
-        row: &plugin_monitor::monitor::layout::ModeRow,
-    ) -> Vec<qol_config::contract::ResolvedRowAction> {
-        let spec =
-            qol_config::contract::parse_spec("qol-config.toml").expect("qol-config.toml invalid");
-        let field = spec.field("modes").expect("the modes field must exist");
-        assert_eq!(field.row_label.as_deref(), Some("{connector} {label}"));
-        let row_json = serde_json::to_value(row).unwrap();
-        qol_config::contract::resolve_row_actions(
-            field.row_action.as_ref(),
-            &field.row_actions,
-            &row_json,
-        )
-    }
-
-    fn modes_row_action_input(
-        row: &plugin_monitor::monitor::layout::ModeRow,
-    ) -> qol_config::contract::ResolvedRowAction {
-        modes_row_actions(row)
-            .into_iter()
-            .find(|action| action.action == "set_mode")
-            .expect("the modes row action must be set_mode")
-    }
-
-    #[test]
-    fn modes_row_action_round_trips_into_the_daemon_set_mode_command() {
-        let row = plugin_monitor::monitor::layout::ModeRow {
-            id: "id-alpha#11".into(),
-            display_id: "id-alpha".into(),
-            connector: "card0-DP-1".into(),
-            token: 11,
-            width: 1280,
-            height: 720,
-            refresh_hz: 75,
-            label: "1280x720@75".into(),
-            detail: "available mode".into(),
-            current: false,
-            writable: true,
-            selectable: true,
-        };
-        let action = modes_row_action_input(&row);
-        assert_eq!(action.label, "Set");
-        let request = qol_runtime::protocol::DaemonRequest {
-            action: action.action.clone(),
-            input: action.input.clone(),
-        };
-        match plugin_monitor::daemon::parse_request(&request) {
-            qol_plugin_daemon::daemon::ReadResult::Command(
-                plugin_monitor::daemon::Command::SetMode {
-                    display,
-                    token,
-                    width,
-                    height,
-                    refresh,
-                },
-            ) => {
-                assert_eq!(display, "id-alpha");
-                assert_eq!(token, Some(11));
-                assert_eq!((width, height, refresh), (1280, 720, Some(75)));
-            }
-            _ => panic!("the modes row action must parse as set_mode"),
-        }
-    }
-
-    #[test]
-    fn mode_rows_address_each_row_by_its_own_token() {
-        use qol_windowing::display::{DisplayHandle, DisplayMode, DisplaySnapshot};
-        use std::collections::BTreeMap;
-
-        let snapshot = DisplaySnapshot {
-            handle: DisplayHandle::new("id-alpha".into(), "card0-DP-1".into(), None, false),
-            bounds: qol_windowing::MonitorBounds {
-                x: 0.0,
-                y: 0.0,
-                width: 1920.0,
-                height: 1080.0,
-            },
-            primary: true,
-            mode: Some(DisplayMode {
-                token: 10,
-                width: 1920,
-                height: 1080,
-                refresh_hz: 60,
-            }),
-        };
-        let modes = BTreeMap::from([(
-            "card0-DP-1".to_string(),
-            vec![
-                DisplayMode {
-                    token: 10,
-                    width: 1920,
-                    height: 1080,
-                    refresh_hz: 60,
-                },
-                DisplayMode {
-                    token: 11,
-                    width: 1920,
-                    height: 1080,
-                    refresh_hz: 60,
-                },
-            ],
-        )]);
-        let rows = plugin_monitor::monitor::layout::mode_rows(&[snapshot], &modes, true);
-        assert_eq!(rows.len(), 2);
-        assert_ne!(rows[0].id, rows[1].id, "every mode row needs a unique id");
-        assert_eq!(
-            rows[0].label, rows[1].label,
-            "colliding labels stay distinct"
-        );
-        assert_eq!(rows.iter().filter(|row| row.selectable).count(), 1);
-        for row in &rows {
-            if !row.selectable {
-                assert!(
-                    modes_row_actions(row).is_empty(),
-                    "the non-selectable current mode row must offer no row action"
-                );
-                continue;
-            }
-            let action = modes_row_action_input(row);
-            assert_eq!(
-                action.input["id"],
-                serde_json::json!(row.display_id),
-                "{}",
-                row.id
-            );
-            assert_eq!(action.input["token"], serde_json::json!(row.token));
-            let request = qol_runtime::protocol::DaemonRequest {
-                action: action.action.clone(),
-                input: action.input.clone(),
-            };
-            match plugin_monitor::daemon::parse_request(&request) {
-                qol_plugin_daemon::daemon::ReadResult::Command(
-                    plugin_monitor::daemon::Command::SetMode { token, .. },
-                ) => assert_eq!(token, Some(row.token), "row {}", row.id),
-                _ => panic!("row {} must parse as set_mode", row.id),
-            }
-        }
-    }
-
     #[test]
     fn arrangement_actions_align_labels_and_verbs_across_the_contracts() {
         let manifest =
@@ -253,14 +114,38 @@ mod tests {
             .expect("qol-runtime.toml invalid");
         qol_config::contract::validate_contracts(&config, Some(&runtime))
             .expect("qol-config.toml and qol-runtime.toml must validate together");
-        let apply_layout = config
-            .field("apply_layout")
-            .and_then(|field| field.label.clone())
-            .expect("the apply_layout field needs a label");
-        assert_eq!(
-            apply_layout, manifest.actions["apply_layout"].label,
-            "the apply_layout label must match across plugin.toml and qol-config.toml"
-        );
+        let arrangement = config
+            .field("arrangement")
+            .expect("the arrangement field must exist");
+        assert_eq!(arrangement.label.as_deref(), Some("Arrangement"));
+        assert_eq!(arrangement.query.as_deref(), Some("layout"));
+        assert_eq!(arrangement.active_query.as_deref(), Some("modes"));
+        assert_eq!(arrangement.action.as_deref(), Some("arrange"));
+        assert_eq!(arrangement.active_action.as_deref(), Some("set_mode"));
+        for query in ["layout", "modes"] {
+            assert!(
+                runtime.queries.contains_key(query),
+                "query: {query} must stay declared in qol-runtime.toml"
+            );
+        }
+        for action in ["arrange", "set_mode"] {
+            assert!(
+                runtime.actions.contains_key(action),
+                "action: {action} must stay declared in qol-runtime.toml"
+            );
+        }
+        for (action, label) in [
+            ("set_mode", "Set Display Mode"),
+            ("set_primary", "Set Primary Display"),
+            ("arrange", "Arrange Displays"),
+        ] {
+            assert_eq!(manifest.actions[action].label, label, "action: {action}");
+            assert!(
+                runtime.actions.contains_key(action),
+                "action: {action} must stay declared in qol-runtime.toml"
+            );
+        }
+        assert!(manifest.actions.contains_key("apply_layout"));
         assert!(
             runtime.actions["apply_layout"]
                 .description
