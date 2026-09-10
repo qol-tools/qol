@@ -500,8 +500,13 @@ impl McpSessionServer {
 
     fn tool_close(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
-        let outcome = super::close::execute(self.terminals.as_ref(), &self.pending, &binding)
-            .map_err(|error| error.to_string())?;
+        let outcome = super::close::execute(
+            self.terminals.as_ref(),
+            &self.pending,
+            &self.reports_dir,
+            &binding,
+        )
+        .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 

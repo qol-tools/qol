@@ -596,7 +596,7 @@ fn interrupt(args: &[OsString]) -> Result<()> {
 fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let pending = bridge::PendingBridgeStore::system()?;
     let terminals = service()?;
-    let reaped = close::reap_orphaned_rounds(&terminals, &pending)?;
+    let reaped = close::reap_orphaned_rounds(&terminals, &pending, &bridge::trace_dir())?;
     let rounds = if args.is_empty() {
         pending.pending_rounds()?
     } else {
@@ -774,6 +774,7 @@ fn discard(args: &[OsString]) -> Result<()> {
     let removed = discard_checkpoint(
         &service()?,
         &bridge::PendingBridgeStore::system()?,
+        &bridge::trace_dir(),
         &binding,
     )?;
     println!(
@@ -786,6 +787,7 @@ fn discard(args: &[OsString]) -> Result<()> {
 fn discard_checkpoint(
     terminals: &TerminalSessionService,
     pending: &bridge::PendingBridgeStore,
+    trace_dir: &std::path::Path,
     binding: &SessionBinding,
 ) -> Result<BridgeCheckpoint> {
     if terminals
@@ -798,7 +800,18 @@ fn discard_checkpoint(
             "session `{binding}` still has a live terminal; `qol sessions discard` only removes the checkpoint of a session whose terminal is gone"
         );
     }
-    pending.discard(binding)
+    let round = pending.pending_round(binding)?;
+    let removed = pending.discard(binding)?;
+    if let Some(round) = round {
+        watch::settle_orphaned_group_round(
+            terminals,
+            pending,
+            trace_dir,
+            &round,
+            "_(no report: the round was discarded before it reported)_",
+        )?;
+    }
+    Ok(removed)
 }
 
 fn parse_send_args(args: &[OsString]) -> Result<(String, String, bool)> {
@@ -1072,7 +1085,7 @@ mod tests {
             .unwrap();
         let (terminals, _) = fake_terminals(vec![fake_facts("7", 123)]);
 
-        let error = discard_checkpoint(&terminals, &store, &binding)
+        let error = discard_checkpoint(&terminals, &store, root.path(), &binding)
             .unwrap_err()
             .to_string();
         assert!(error.contains("still has a live terminal"), "{error}");
@@ -1095,7 +1108,7 @@ mod tests {
             .unwrap();
         let (terminals, _) = fake_terminals(Vec::new());
 
-        let removed = discard_checkpoint(&terminals, &store, &binding).unwrap();
+        let removed = discard_checkpoint(&terminals, &store, root.path(), &binding).unwrap();
         assert_eq!(removed.completion_marker, "QOL_BRIDGE_DONE_round");
         assert!(store.pending_round(&binding).unwrap().is_none());
     }
@@ -1107,7 +1120,7 @@ mod tests {
         let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
         let (terminals, _) = fake_terminals(Vec::new());
 
-        let error = discard_checkpoint(&terminals, &store, &binding)
+        let error = discard_checkpoint(&terminals, &store, root.path(), &binding)
             .unwrap_err()
             .to_string();
         assert!(error.contains("no pending bridge checkpoint"), "{error}");

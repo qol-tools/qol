@@ -1363,6 +1363,7 @@ pub(super) enum GroupOutcome {
     Markerless,
     Stalled,
     Gone,
+    Discarded,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1470,6 +1471,55 @@ fn settle_group_member(
     )
 }
 
+pub(super) fn settle_orphaned_group_round(
+    terminals: &TerminalSessionService,
+    pending: &PendingBridgeStore,
+    trace_dir: &std::path::Path,
+    round: &PendingRound,
+    reason: &str,
+) -> Result<()> {
+    let Some(group) = round.group.as_deref() else {
+        return Ok(());
+    };
+    let label = round.label.as_deref();
+    if round.completed {
+        if let Some(screen) = round.screen.as_deref().filter(|screen| !screen.is_empty()) {
+            write_group_fragment(trace_dir, group, &round.session, screen, label)?;
+        }
+        settle_group_member(
+            trace_dir,
+            group,
+            &round.session,
+            label,
+            GroupOutcome::Completed,
+        )?;
+    } else {
+        let fragment = match round.screen.as_deref().filter(|screen| !screen.is_empty()) {
+            Some(screen) => format!("{reason}\n\n{screen}"),
+            None => reason.to_owned(),
+        };
+        write_group_fragment(trace_dir, group, &round.session, &fragment, label)?;
+        settle_group_member(
+            trace_dir,
+            group,
+            &round.session,
+            label,
+            GroupOutcome::Discarded,
+        )?;
+    }
+    maybe_deliver_group_combined(
+        pending,
+        terminals,
+        trace_dir,
+        group,
+        &round.session,
+        &round.driver,
+        round.silent_wake,
+        &mut |duration| std::thread::sleep(duration),
+    )?;
+    Ok(())
+}
+
 fn group_roster(
     pending: &PendingBridgeStore,
     round: &std::path::Path,
@@ -1546,9 +1596,12 @@ pub(super) fn maybe_deliver_group_combined(
     for member in &members {
         combined.push_str(&format!("## {}\n\n", member.session));
         let path = fragment_path(&dir, &member.session, member.label.as_deref());
-        if let Ok(encoded) = fs::read_to_string(&path) {
-            combined.push_str(&encoded);
-            combined.push('\n');
+        match fs::read_to_string(&path) {
+            Ok(encoded) => {
+                combined.push_str(&encoded);
+                combined.push('\n');
+            }
+            Err(_) => combined.push_str("_(no fragment recorded)_\n"),
         }
     }
     let combined_path = dir.join("combined.md");
@@ -1615,6 +1668,7 @@ fn grouped_message(
                 GroupOutcome::Markerless => "finished without a completion marker",
                 GroupOutcome::Stalled => "stalled without a completion marker",
                 GroupOutcome::Gone => "did not complete",
+                GroupOutcome::Discarded => "closed with a discarded round",
             };
             format!("- {name} ({status})\n")
         })
@@ -7048,6 +7102,176 @@ mod tests {
             lane.wakes().len(),
             1,
             "a second pass must never repeat the combined wake"
+        );
+    }
+
+    #[test]
+    fn sim_a_discarded_grouped_member_settles_the_group_with_its_reason() {
+        let sim = SessionSim::new();
+        let group = "discarded-member";
+        let reason = "_(no report: the lane was closed with a discarded round)_";
+        let mut lane_a = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("lane-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        lane_a.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
+        let lane_b = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("lane-b"),
+            Transcript::Working,
+            vec!["still thinking".to_owned(); 2],
+        );
+
+        lane_a.run(&sim);
+        assert!(lane_a.events().is_empty());
+        assert!(sim.combined(group).is_none());
+
+        let round = sim.pending.pending_round(&lane_b.binding).unwrap().unwrap();
+        sim.pending.discard(&lane_b.binding).unwrap();
+        settle_orphaned_group_round(
+            &lane_b.terminals,
+            &sim.pending,
+            sim.trace_dir(),
+            &round,
+            reason,
+        )
+        .unwrap();
+
+        let member = settling_round_dir(sim.trace_dir(), group)
+            .join("members")
+            .join(format!("{}.json", sanitize_token(&lane_b.binding.token())));
+        let recorded = std::fs::read_to_string(&member).unwrap();
+        assert!(
+            recorded.contains("\"outcome\":\"discarded\""),
+            "a discarded member must record a terminal outcome: {recorded}"
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        assert!(
+            combined.contains("report a"),
+            "the combined report must carry the completed member: {combined}"
+        );
+        assert!(
+            combined.contains(reason),
+            "the combined report must name the discarded reason: {combined}"
+        );
+        let wakes = lane_b.wakes();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("closed with a discarded round"),
+            "the wake must name the discarded member honestly: {:?}",
+            wakes[0]
+        );
+
+        let delivered = maybe_deliver_group_combined(
+            &sim.pending,
+            &lane_b.terminals,
+            sim.trace_dir(),
+            group,
+            &lane_b.binding.token(),
+            &round.driver,
+            false,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(
+            delivered.is_none(),
+            "the claim must refuse a second delivery"
+        );
+        assert_eq!(
+            lane_b.wakes().len(),
+            1,
+            "a discarded member must never produce a duplicate wake"
+        );
+    }
+
+    #[test]
+    fn sim_a_live_grouped_member_still_blocks_until_it_settles() {
+        let sim = SessionSim::new();
+        let group = "discarded-then-live";
+        let mut lane_a = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("lane-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        lane_a.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
+        let lane_b = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("lane-b"),
+            Transcript::Working,
+            vec!["still thinking".to_owned(); 2],
+        );
+        let mut lane_c = sim.lane(
+            "9",
+            300,
+            "QOL_BRIDGE_DONE_c",
+            true,
+            Some(group),
+            Some("lane-c"),
+            Transcript::Finished,
+            vec!["report c\nQOL_BRIDGE_DONE_c".to_owned(); 4],
+        );
+        lane_c.set_report(Some("report c\nQOL_BRIDGE_DONE_c".to_owned()), true);
+
+        lane_a.run(&sim);
+        let round = sim.pending.pending_round(&lane_b.binding).unwrap().unwrap();
+        sim.pending.discard(&lane_b.binding).unwrap();
+        settle_orphaned_group_round(
+            &lane_b.terminals,
+            &sim.pending,
+            sim.trace_dir(),
+            &round,
+            "_(no report: the lane was closed with a discarded round)_",
+        )
+        .unwrap();
+
+        assert!(
+            sim.combined(group).is_none(),
+            "a live unfinished member must still block the settled group"
+        );
+        assert!(
+            lane_b.wakes().is_empty(),
+            "no wake may reach the initiator while a member is unfinished"
+        );
+
+        lane_c.run(&sim);
+
+        let wakes = lane_c.wakes();
+        assert_eq!(wakes.len(), 1, "exactly one combined wake: {wakes:?}");
+        assert!(
+            wakes[0].contains("closed with a discarded round"),
+            "the wake must keep the discarded member's outcome: {:?}",
+            wakes[0]
+        );
+        let combined = sim.combined(group).expect("combined report written");
+        for fragment in ["report a", "report c"] {
+            assert!(
+                combined.contains(fragment),
+                "the combined report must carry {fragment}: {combined}"
+            );
+        }
+        assert_eq!(
+            combined.matches("## v1:fake:").count(),
+            3,
+            "every expected member gets a section: {combined}"
         );
     }
 

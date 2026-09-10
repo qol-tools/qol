@@ -12,6 +12,9 @@ use serde_json::Value;
 
 use super::bridge::{PendingBridgeStore, Role};
 
+const DISCARDED_ROUND_REASON: &str = "_(no report: the lane was closed with a discarded round)_";
+const REAPED_ROUND_REASON: &str = "_(no report: the terminal exited before the round reported)_";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TerminalCloseState {
@@ -54,6 +57,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let outcome = execute(
         &TerminalSessionService::system(),
         &PendingBridgeStore::system()?,
+        &super::bridge::trace_dir(),
         &binding,
     )?;
     println!(
@@ -162,6 +166,7 @@ pub(super) fn close_loop_siblings(
 pub(super) fn execute(
     terminals: &TerminalSessionService,
     pending: &PendingBridgeStore,
+    trace_dir: &Path,
     binding: &SessionBinding,
 ) -> Result<CloseOutcome> {
     let hung = match pending.pending_round(binding)? {
@@ -169,13 +174,21 @@ pub(super) fn execute(
             "session `{binding}` holds a completed round awaiting review (marker {}); review it and call session_loop_close",
             round.completion_marker
         ),
-        Some(round) => Some(round.completion_marker),
+        Some(round) => Some(round),
         None => None,
     };
     let mut outcome = close_spawned_terminal(terminals, binding)?;
-    if let Some(marker) = hung {
+    if let Some(round) = hung {
+        let marker = round.completion_marker.clone();
         pending.discard(binding)?;
         outcome.discarded_round = Some(marker);
+        super::watch::settle_orphaned_group_round(
+            terminals,
+            pending,
+            trace_dir,
+            &round,
+            DISCARDED_ROUND_REASON,
+        )?;
         qol_runtime::probe!(
             "CLI_SESSION_SPAWN",
             "event=close_discarded_hung_round session={}",
@@ -335,6 +348,7 @@ fn initiator_gone(terminals: &TerminalSessionService, driver: &str) -> bool {
 pub(super) fn reap_orphaned_rounds(
     terminals: &TerminalSessionService,
     pending: &PendingBridgeStore,
+    trace_dir: &Path,
 ) -> Result<Vec<String>> {
     let mut reaped = Vec::new();
     for round in pending.pending_rounds()? {
@@ -348,6 +362,13 @@ pub(super) fn reap_orphaned_rounds(
             continue;
         }
         pending.discard(&binding)?;
+        super::watch::settle_orphaned_group_round(
+            terminals,
+            pending,
+            trace_dir,
+            &round,
+            REAPED_ROUND_REASON,
+        )?;
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
             "event=reaped_orphan session={}",
@@ -361,16 +382,19 @@ pub(super) fn reap_orphaned_rounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use qol_terminal_sessions::{
-        BackendId, DeliveryMode, SessionCapabilities, SessionFacts, SessionFocus, SessionId,
-        TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+        BackendId, DeliveryMode, SessionCapabilities, SessionCloser, SessionFacts, SessionFocus,
+        SessionId, SpawnIdentity, SpawnKey, SpawnSurface, TerminalBackend, TerminalError,
+        TerminalSnapshot, TextInput,
     };
 
     struct InventoryOnlyBackend {
         id: BackendId,
         live: Vec<SessionFacts>,
+        sent: Mutex<Vec<(SessionBinding, String)>>,
+        closed: Mutex<Vec<SessionBinding>>,
     }
 
     impl SessionInventory for InventoryOnlyBackend {
@@ -397,14 +421,25 @@ mod tests {
     impl TextInput for InventoryOnlyBackend {
         fn send_text(
             &self,
-            _target: &SessionBinding,
-            _text: &str,
+            target: &SessionBinding,
+            text: &str,
             _mode: DeliveryMode,
         ) -> Result<(), TerminalError> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((target.clone(), text.to_owned()));
             Ok(())
         }
 
         fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl SessionCloser for InventoryOnlyBackend {
+        fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+            self.closed.lock().unwrap().push(target.clone());
             Ok(())
         }
     }
@@ -424,6 +459,10 @@ mod tests {
         fn id(&self) -> &BackendId {
             &self.id
         }
+
+        fn closer(&self) -> Option<&dyn SessionCloser> {
+            Some(self)
+        }
     }
 
     fn facts(native: &str, root_pid: i32) -> SessionFacts {
@@ -437,16 +476,32 @@ mod tests {
             foreground_basenames: Vec::new(),
             foreground_pids: Vec::new(),
             capabilities: SessionCapabilities::ALL,
-            spawn_identity: None,
+            spawn_identity: Some(SpawnIdentity {
+                key: SpawnKey::new(format!("key-{native}")).unwrap(),
+                tool: qol_terminal_sessions::cli::CliToolId::new("pi").unwrap(),
+                surface: SpawnSurface::Tab,
+            }),
         }
     }
 
     fn terminals(live: Vec<SessionFacts>) -> TerminalSessionService {
-        TerminalSessionService::from_backends([Arc::new(InventoryOnlyBackend {
+        terminals_with_backend(live).0
+    }
+
+    fn terminals_with_backend(
+        live: Vec<SessionFacts>,
+    ) -> (TerminalSessionService, Arc<InventoryOnlyBackend>) {
+        let backend = Arc::new(InventoryOnlyBackend {
             id: BackendId::new("fake").unwrap(),
             live,
-        }) as Arc<dyn TerminalBackend>])
-        .unwrap()
+            sent: Mutex::new(Vec::new()),
+            closed: Mutex::new(Vec::new()),
+        });
+        let service = TerminalSessionService::from_backends([
+            Arc::clone(&backend) as Arc<dyn TerminalBackend>
+        ])
+        .unwrap();
+        (service, backend)
     }
 
     fn store(root: &tempfile::TempDir) -> PendingBridgeStore {
@@ -475,7 +530,7 @@ mod tests {
         let orphan = open_round(&root, "1", 100);
         let service = terminals(Vec::new());
 
-        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+        let reaped = reap_orphaned_rounds(&service, &store(&root), root.path()).unwrap();
 
         assert_eq!(reaped, [orphan.token()]);
         assert!(store(&root).pending_round(&orphan).unwrap().is_none());
@@ -487,7 +542,7 @@ mod tests {
         let alive = open_round(&root, "1", 100);
         let service = terminals(vec![facts("1", 100)]);
 
-        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+        let reaped = reap_orphaned_rounds(&service, &store(&root), root.path()).unwrap();
 
         assert!(reaped.is_empty());
         assert!(store(&root).pending_round(&alive).unwrap().is_some());
@@ -502,7 +557,7 @@ mod tests {
             .unwrap();
         let service = terminals(vec![facts("initiator", 9)]);
 
-        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+        let reaped = reap_orphaned_rounds(&service, &store(&root), root.path()).unwrap();
 
         assert!(
             reaped.is_empty(),
@@ -520,7 +575,7 @@ mod tests {
             .unwrap();
         let service = terminals(Vec::new());
 
-        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+        let reaped = reap_orphaned_rounds(&service, &store(&root), root.path()).unwrap();
 
         assert_eq!(
             reaped,
@@ -542,7 +597,7 @@ mod tests {
         let alive = open_round(&root, "4", 400);
         let service = terminals(vec![facts("4", 400)]);
 
-        let reaped = reap_orphaned_rounds(&service, &store(&root)).unwrap();
+        let reaped = reap_orphaned_rounds(&service, &store(&root), root.path()).unwrap();
 
         assert_eq!(
             reaped,
@@ -552,5 +607,175 @@ mod tests {
         assert!(store(&root).pending_round(&gone_second).unwrap().is_none());
         assert!(store(&root).pending_round(&finished).unwrap().is_none());
         assert!(store(&root).pending_round(&alive).unwrap().is_some());
+    }
+
+    #[test]
+    fn closing_a_hung_group_member_settles_the_group_and_delivers_one_wake() {
+        let root = tempfile::TempDir::new().unwrap();
+        let group = "closed-member";
+        let driver: SessionBinding = "v1:fake:driver:900".parse().unwrap();
+        let lane: SessionBinding = "v1:fake:spawn-group-lane:200".parse().unwrap();
+        let done: SessionBinding = "v1:fake:spawn-group-done:300".parse().unwrap();
+        let pending = store(&root);
+        pending
+            .start_with_label(
+                &lane,
+                "QOL_BRIDGE_DONE_hung",
+                &driver.token(),
+                false,
+                Some(group),
+                Some("lane-hung"),
+                false,
+            )
+            .unwrap();
+        super::super::watch::register_group_member(
+            root.path(),
+            group,
+            &lane.token(),
+            Some("lane-hung"),
+        )
+        .unwrap();
+        super::super::watch::register_group_member(
+            root.path(),
+            group,
+            &done.token(),
+            Some("lane-done"),
+        )
+        .unwrap();
+        super::super::watch::settle_group_round(
+            root.path(),
+            group,
+            &done.token(),
+            Some("lane-done"),
+            "finished report body",
+        )
+        .unwrap();
+        let (service, backend) =
+            terminals_with_backend(vec![facts("spawn-group-lane", 200), facts("driver", 900)]);
+
+        let outcome = execute(&service, &pending, root.path(), &lane).unwrap();
+
+        assert!(outcome.closed);
+        assert_eq!(
+            outcome.discarded_round.as_deref(),
+            Some("QOL_BRIDGE_DONE_hung")
+        );
+        let member = super::super::watch::combined_report_path(root.path(), group)
+            .with_file_name("members")
+            .join("v1_fake_spawn-group-lane_200.json");
+        let recorded = std::fs::read_to_string(&member).unwrap();
+        assert!(
+            recorded.contains("\"outcome\":\"discarded\""),
+            "closing a hung grouped lane must record a terminal outcome: {recorded}"
+        );
+        let combined = std::fs::read_to_string(super::super::watch::combined_report_path(
+            root.path(),
+            group,
+        ))
+        .unwrap();
+        assert!(
+            combined.contains("finished report body"),
+            "the combined report must carry the finished member: {combined}"
+        );
+        assert!(
+            combined.contains(DISCARDED_ROUND_REASON),
+            "the combined report must name the discarded round's reason: {combined}"
+        );
+        let sent = backend.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1, "exactly one combined wake: {sent:?}");
+        assert_eq!(sent[0].0, driver, "the wake goes to the initiator");
+        assert!(
+            sent[0].1.contains(group) && sent[0].1.contains("closed with a discarded round"),
+            "the wake must name the group and the discarded member: {:?}",
+            sent[0].1
+        );
+        drop(sent);
+        assert!(pending.pending_round(&lane).unwrap().is_none());
+
+        let delivered = super::super::watch::maybe_deliver_group_combined(
+            &pending,
+            &service,
+            root.path(),
+            group,
+            &lane.token(),
+            &driver.token(),
+            false,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(delivered.is_none());
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            1,
+            "a settled group must never deliver a duplicate wake"
+        );
+    }
+
+    #[test]
+    fn reaping_a_gone_group_member_settles_its_group() {
+        let root = tempfile::TempDir::new().unwrap();
+        let group = "reaped-member";
+        let driver: SessionBinding = "v1:fake:driver:900".parse().unwrap();
+        let lane: SessionBinding = "v1:fake:spawn-group-lane:200".parse().unwrap();
+        let done: SessionBinding = "v1:fake:spawn-group-done:300".parse().unwrap();
+        let pending = store(&root);
+        pending
+            .start_with_label(
+                &lane,
+                "QOL_BRIDGE_DONE_gone",
+                &driver.token(),
+                false,
+                Some(group),
+                Some("lane-gone"),
+                false,
+            )
+            .unwrap();
+        super::super::watch::register_group_member(
+            root.path(),
+            group,
+            &lane.token(),
+            Some("lane-gone"),
+        )
+        .unwrap();
+        super::super::watch::register_group_member(
+            root.path(),
+            group,
+            &done.token(),
+            Some("lane-done"),
+        )
+        .unwrap();
+        super::super::watch::settle_group_round(
+            root.path(),
+            group,
+            &done.token(),
+            Some("lane-done"),
+            "finished report body",
+        )
+        .unwrap();
+        let (service, backend) = terminals_with_backend(vec![facts("driver", 900)]);
+
+        let reaped = reap_orphaned_rounds(&service, &pending, root.path()).unwrap();
+
+        assert_eq!(reaped, [lane.token()]);
+        let member = super::super::watch::combined_report_path(root.path(), group)
+            .with_file_name("members")
+            .join("v1_fake_spawn-group-lane_200.json");
+        let recorded = std::fs::read_to_string(&member).unwrap();
+        assert!(
+            recorded.contains("\"outcome\":\"discarded\""),
+            "reaping a gone grouped lane must record a terminal outcome: {recorded}"
+        );
+        let combined = std::fs::read_to_string(super::super::watch::combined_report_path(
+            root.path(),
+            group,
+        ))
+        .unwrap();
+        assert!(combined.contains("finished report body"));
+        assert!(combined.contains(REAPED_ROUND_REASON));
+        assert_eq!(
+            backend.sent.lock().unwrap().len(),
+            1,
+            "the reaped member's group must deliver exactly one wake"
+        );
     }
 }
