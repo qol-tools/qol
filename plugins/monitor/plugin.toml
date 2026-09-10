@@ -24,6 +24,22 @@ continuous = true
 label = "Set Brightness"
 args = ["set_brightness"]
 
+[action.set_mode]
+label = "Set Display Mode"
+args = ["set-mode"]
+
+[action.set_primary]
+label = "Set Primary Display"
+args = ["primary"]
+
+[action.arrange]
+label = "Arrange Displays"
+args = ["arrange"]
+
+[action.apply_layout]
+label = "Apply positions"
+args = ["apply-layout"]
+
 [action.apply]
 label = "Apply Preferred Brightness"
 args = ["apply"]

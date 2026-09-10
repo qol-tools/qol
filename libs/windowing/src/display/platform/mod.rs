@@ -1,7 +1,8 @@
-use crate::display::{DisplayError, DisplayHandle};
+use crate::display::{DisplayError, DisplayHandle, DisplaySnapshot};
 
 pub trait DisplayEnumerator {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, DisplayError>;
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, DisplayError>;
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

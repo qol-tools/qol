@@ -239,9 +239,9 @@ pub trait AvTransport: Send + Sync {
 
 #[cfg(target_os = "macos")]
 fn platform_identity(handle: &DisplayHandle) -> Result<Option<DisplayIdentity>, AvError> {
-    use crate::monitor::backends::cg_gamma::display_id_from_connector;
+    use qol_windowing::display::cg_display_id_from_connector;
 
-    let Some(display_id) = display_id_from_connector(handle.connector()) else {
+    let Some(display_id) = cg_display_id_from_connector(handle.connector()) else {
         return Ok(None);
     };
     Ok(Some(DisplayIdentity {

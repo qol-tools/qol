@@ -13,7 +13,10 @@ pub mod display;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-pub use display::{DisplayEnumerator, DisplayHandle, Platform};
+pub use display::{
+    validate_layout, DisplayEnumerator, DisplayHandle, DisplayMode, DisplayOps, DisplayPlacement,
+    DisplaySnapshot, Platform,
+};
 pub use geometry::{MonitorBounds, WindowRect};
 pub use ops::WindowOps;
 pub use window_id::WindowId;

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
-    DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome, HDR_REASON,
-    MODES_REASON,
+    DisplayMode, DisplaySnapshot, GammaState, GammaStateControl, HdrState, MonitorError,
+    RestoreOutcome, HDR_REASON, MODES_REASON,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -137,6 +137,10 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> PolicyControl<D, G> {
 impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for PolicyControl<D, G> {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
         self.ddc.enumerate()
+    }
+
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+        self.ddc.snapshot()
     }
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -727,6 +731,14 @@ mod tests {
             RestoreOutcome::ForeignLutPreserved
         );
         assert_eq!(*control.gamma.restore_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_control_without_a_display_backend_reports_no_displays() {
+        let ddc = FakeDdc::healthy(42);
+        assert!(ddc.snapshot().unwrap().is_empty());
+        let control = policy(FakeDdc::healthy(42), FakeGamma::new());
+        assert!(control.snapshot().unwrap().is_empty());
     }
 
     #[test]

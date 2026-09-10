@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use qol_profile_sync::{device_local_dir, SyncPaths};
 
+use crate::monitor::layout::LayoutPosition;
 use crate::monitor::night::{Minute, NightState, Schedule, ScheduleError, ScheduleMode};
 use crate::monitor::BrightnessPolicy;
 
@@ -23,6 +24,7 @@ const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub struct DeviceConfig {
     pub preferred_brightness: BTreeMap<String, BrightnessPreference>,
     pub policy: BTreeMap<String, PolicySelection>,
+    pub layout_position: BTreeMap<String, LayoutPosition>,
     #[serde(default = "default_true")]
     pub notify_on_change: bool,
     #[serde(default = "default_night_temperature")]
@@ -60,6 +62,7 @@ impl Default for DeviceConfig {
         Self {
             preferred_brightness: BTreeMap::new(),
             policy: BTreeMap::new(),
+            layout_position: BTreeMap::new(),
             notify_on_change: default_true(),
             night_temperature: default_night_temperature(),
             night_schedule: default_night_schedule(),
@@ -387,6 +390,10 @@ mod tests {
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert_eq!(defaults.preferred_brightness.len(), 0);
         assert_eq!(defaults.policy.len(), 0);
+        assert!(
+            defaults.layout_position.is_empty(),
+            "the contract carries no default display positions"
+        );
         assert_eq!(
             defaults,
             DeviceConfig::default(),
@@ -554,6 +561,9 @@ mod tests {
                 "id-a": { "policy": "gamma" },
                 "id-b": { "policy": "off" },
             },
+            "layout_position": {
+                "id-a": { "x": -1920, "y": 0, "primary": false },
+            },
             "notify_on_change": true,
             "night_temperature": 3500,
             "night_schedule": "off",
@@ -565,8 +575,66 @@ mod tests {
         assert_eq!(config.preferred_for("id-b"), Some(45));
         assert_eq!(config.policy_for("id-a"), BrightnessPolicy::Gamma);
         assert_eq!(config.policy_for("id-b"), BrightnessPolicy::Off);
+        let position = config.layout_position.get("id-a").unwrap();
+        assert_eq!(position.x, -1920);
+        assert_eq!(position.y, 0);
+        assert!(!position.primary);
         let round = serde_json::to_value(&config).unwrap();
         assert_eq!(round, json);
+    }
+
+    #[test]
+    fn layout_position_defaults_to_empty_and_parses_from_the_store() {
+        let config = parse_store(&serde_json::json!({})).unwrap();
+        assert!(config.layout_position.is_empty());
+        let config = parse_store(&serde_json::json!({
+            "layout_position": {
+                "id-a": { "x": 640, "y": 0, "primary": true },
+            }
+        }))
+        .unwrap();
+        let position = config.layout_position.get("id-a").unwrap();
+        assert_eq!(position.x, 640);
+        assert_eq!(position.y, 0);
+        assert!(position.primary);
+    }
+
+    #[test]
+    fn layout_position_partial_entries_keep_the_config_loadable() {
+        let config = parse_store(&serde_json::json!({
+            "preferred_brightness": { "id-a": { "brightness": 80 } },
+            "layout_position": {
+                "id-a": { "x": -1920 },
+                "id-b": { "primary": true },
+                "id-c": {},
+            }
+        }))
+        .unwrap();
+        assert_eq!(config.preferred_for("id-a"), Some(80));
+        assert_eq!(
+            config.layout_position["id-a"],
+            LayoutPosition {
+                x: -1920,
+                y: 0,
+                primary: false,
+            }
+        );
+        assert_eq!(
+            config.layout_position["id-b"],
+            LayoutPosition {
+                x: 0,
+                y: 0,
+                primary: true,
+            }
+        );
+        assert_eq!(
+            config.layout_position["id-c"],
+            LayoutPosition {
+                x: 0,
+                y: 0,
+                primary: false,
+            }
+        );
     }
 
     #[test]

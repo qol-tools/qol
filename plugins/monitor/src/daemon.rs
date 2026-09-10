@@ -12,16 +12,23 @@ use crate::config::{self, DeviceConfig};
 use crate::host_night_light::{
     HostNightLight, HostNightLightStatus, NoopHostNightLight, TakeoverOutcome,
 };
+use crate::monitor::layout::{
+    layout_rows, mode_lists, mode_rows, placements_from_snapshots, resolve_arrange,
+    resolve_config_layout, resolve_mode, snapshot_for, ArrangeRequest,
+};
 use crate::monitor::night::{
     self, Decision, Minute, NightState, Now, Reason, Schedule, ScheduleMode, Tint,
 };
 use crate::monitor::{
-    BrightnessState, DisplayControl, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
+    BrightnessState, DisplayControl, DisplayMode, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
     BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
 use crate::platform::MonitorControl;
-use crate::session::{LutProvider, RestoreMode, Session, SessionStore, Snapshot};
-use qol_windowing::display::DisplayHandle;
+use crate::session::{
+    LayoutSnapshot, LutProvider, ModeRecord, PlacementRecord, RestoreMode, Session, SessionStore,
+    Snapshot,
+};
+use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
 pub const NIGHT_TICK: Duration = Duration::from_secs(30);
@@ -61,10 +68,31 @@ impl Phase {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Command {
-    Brightness { direction: i8, phase: Phase },
-    SetBrightness { display: String, value: u8 },
+    Brightness {
+        direction: i8,
+        phase: Phase,
+    },
+    SetBrightness {
+        display: String,
+        value: u8,
+    },
+    SetMode {
+        display: String,
+        token: Option<u64>,
+        width: u32,
+        height: u32,
+        refresh: Option<u32>,
+    },
+    SetPrimary {
+        display: String,
+    },
+    Arrange {
+        placements: Vec<ArrangeRequest>,
+        primary: Option<String>,
+    },
+    ApplyLayout,
     Settings,
     ApplyPreferred,
     Reload,
@@ -73,7 +101,9 @@ pub enum Command {
     Kill,
     Evicted,
     Handoff,
-    HandoffSuccessor { generation: Option<String> },
+    HandoffSuccessor {
+        generation: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +139,37 @@ pub fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 Err(error) => ReadResult::Error(error),
             };
         }
-        "displays" | "status" | "night_mode" => return live_query(request.action.as_str()),
+        "set_mode" => {
+            return match parse_set_mode_input(&request.input) {
+                Ok(parsed) => ReadResult::Command(Command::SetMode {
+                    display: parsed.display,
+                    token: parsed.token,
+                    width: parsed.width,
+                    height: parsed.height,
+                    refresh: parsed.refresh,
+                }),
+                Err(error) => ReadResult::Error(error),
+            };
+        }
+        "set_primary" => {
+            return match parse_display_input("set_primary", &request.input) {
+                Ok(display) => ReadResult::Command(Command::SetPrimary { display }),
+                Err(error) => ReadResult::Error(error),
+            };
+        }
+        "arrange" => {
+            return match parse_arrange_input(&request.input) {
+                Ok((placements, primary)) => ReadResult::Command(Command::Arrange {
+                    placements,
+                    primary,
+                }),
+                Err(error) => ReadResult::Error(error),
+            };
+        }
+        "apply_layout" => return ReadResult::Command(Command::ApplyLayout),
+        "displays" | "status" | "night_mode" | "layout" | "modes" => {
+            return live_query(request.action.as_str())
+        }
         "brightness-up" => {
             return match Phase::parse(&request.input) {
                 Ok(phase) => ReadResult::Command(Command::Brightness {
@@ -154,28 +214,177 @@ fn parse_brightness_input(input: &serde_json::Value) -> Result<(String, u8), Str
     Ok((id, value))
 }
 
+fn parse_display_input(action: &str, input: &serde_json::Value) -> Result<String, String> {
+    input
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{action} input requires a display id"))
+}
+
+struct SetModeInput {
+    display: String,
+    token: Option<u64>,
+    width: u32,
+    height: u32,
+    refresh: Option<u32>,
+}
+
+fn parse_set_mode_input(input: &serde_json::Value) -> Result<SetModeInput, String> {
+    let display = parse_display_input("set_mode", input)?;
+    let token = match input.get("token") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .ok_or_else(|| "set_mode token must be a positive integer".to_string())?,
+        ),
+    };
+    let width = input
+        .get("width")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "set_mode input requires a positive width".to_string())?;
+    let height = input
+        .get("height")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "set_mode input requires a positive height".to_string())?;
+    let refresh = match input.get("refresh") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|raw| u32::try_from(raw).ok())
+                .filter(|hz| *hz > 0)
+                .ok_or_else(|| "set_mode refresh must be a positive integer".to_string())?,
+        ),
+    };
+    Ok(SetModeInput {
+        display,
+        token,
+        width,
+        height,
+        refresh,
+    })
+}
+
+fn parse_arrange_input(
+    input: &serde_json::Value,
+) -> Result<(Vec<ArrangeRequest>, Option<String>), String> {
+    let placements: Vec<ArrangeRequest> = match input.get("placements") {
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|error| format!("arrange placements are invalid: {error}"))?,
+        None => return Err("arrange input requires placements".to_string()),
+    };
+    if placements.is_empty() {
+        return Err("arrange input requires at least one placement".to_string());
+    }
+    let primary = match input.get("primary") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| "arrange primary must be a display id".to_string())?,
+        ),
+    };
+    Ok((placements, primary))
+}
+
 fn live_query(name: &str) -> ReadResult<Command> {
     let Some(live) = live_state() else {
         return ReadResult::Error("monitor daemon state is not ready".into());
     };
-    let Ok(runtime) = live.lock() else {
-        return ReadResult::Error("monitor daemon state is poisoned".into());
+    live_query_from(live, name)
+}
+
+fn live_query_from(
+    live: &Arc<Mutex<Runtime<dyn MonitorControl>>>,
+    name: &str,
+) -> ReadResult<Command> {
+    let (control, preferred, night_kelvin, night_payload, mut cache) = {
+        let Ok(runtime) = live.lock() else {
+            return ReadResult::Error("monitor daemon state is poisoned".into());
+        };
+        (
+            Arc::clone(runtime.session().control()),
+            runtime.preferred.clone(),
+            runtime.active_night_kelvin(),
+            runtime.night_payload(),
+            runtime.session.brightness_cache(),
+        )
     };
-    let control = Arc::clone(runtime.session().control());
-    let preferred = runtime.preferred.clone();
-    let night_kelvin = runtime.active_night_kelvin();
     let payload = match name {
-        "displays" => displays_payload(
-            &*control,
-            &preferred,
-            &mut runtime.session.brightness_states(),
-            night_kelvin,
-        ),
-        "status" => status_payload(&*control, &mut runtime.session.brightness_states()),
-        "night_mode" => runtime.night_payload(),
+        "displays" => displays_payload(&*control, &preferred, &mut cache, night_kelvin),
+        "status" => status_payload(&*control, &mut cache),
+        "night_mode" => night_payload,
+        "layout" => layout_payload(&*control),
+        "modes" => modes_payload(&*control),
         _ => unreachable!("live_query only handles declared queries"),
     };
+    if matches!(name, "displays" | "status") {
+        if let Ok(runtime) = live.lock() {
+            runtime.session.merge_brightness_cache(&cache);
+        }
+    }
     ReadResult::HandledWithData(payload)
+}
+
+fn layout_payload(control: &dyn MonitorControl) -> serde_json::Value {
+    match control.snapshot() {
+        Ok(snapshots) => serde_json::json!(layout_rows(&snapshots)),
+        Err(_) => serde_json::json!([]),
+    }
+}
+
+fn modes_payload(control: &dyn MonitorControl) -> serde_json::Value {
+    let Ok(snapshots) = control.snapshot() else {
+        return serde_json::json!([]);
+    };
+    let modes = mode_lists(&snapshots, |handle| control.list_modes(handle));
+    let writable = snapshots.iter().all(|snapshot| {
+        control
+            .probe(&snapshot.handle)
+            .map(|capabilities| capabilities.modes)
+            .unwrap_or(false)
+    });
+    serde_json::json!(mode_rows(&snapshots, &modes, writable))
+}
+
+fn resolve_requested_mode(
+    modes: &[DisplayMode],
+    token: Option<u64>,
+    width: u32,
+    height: u32,
+    refresh: Option<u32>,
+) -> Result<DisplayMode, MonitorError> {
+    let Some(token) = token else {
+        return resolve_mode(modes, width, height, refresh);
+    };
+    modes
+        .iter()
+        .find(|mode| mode.token == token)
+        .cloned()
+        .ok_or_else(|| {
+            let available = if modes.is_empty() {
+                "none".to_string()
+            } else {
+                modes
+                    .iter()
+                    .map(|mode| format!("{}x{}@{}", mode.width, mode.height, mode.refresh_hz))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            MonitorError::refused(
+                "modes",
+                format!("no mode matches token {token}; available: {available}"),
+            )
+        })
 }
 
 fn policy_config(config: &DeviceConfig) -> DeviceConfig {
@@ -201,6 +410,7 @@ pub(crate) fn displays_payload(
     night_kelvin: Option<u16>,
 ) -> serde_json::Value {
     let handles = control.enumerate().unwrap_or_default();
+    let snapshots = control.snapshot().unwrap_or_default();
     let rows: Vec<serde_json::Value> = handles
         .iter()
         .map(|handle| {
@@ -229,6 +439,30 @@ pub(crate) fn displays_payload(
                     ),
                 },
             };
+            if let Some(snapshot) = snapshots
+                .iter()
+                .find(|snapshot| snapshot.handle.id() == handle.id())
+                .or_else(|| {
+                    snapshots
+                        .iter()
+                        .find(|snapshot| snapshot.handle.connector() == handle.connector())
+                })
+            {
+                detail.push_str(&format!(
+                    " {:+}{:+}",
+                    snapshot.bounds.x.round() as i32,
+                    snapshot.bounds.y.round() as i32
+                ));
+                if let Some(mode) = &snapshot.mode {
+                    detail.push_str(&format!(
+                        " {}x{}@{}Hz",
+                        mode.width, mode.height, mode.refresh_hz
+                    ));
+                }
+                if snapshot.primary {
+                    detail.push_str(" primary");
+                }
+            }
             if let Some(kelvin) = night_kelvin {
                 detail.push_str(&format!(" warm {kelvin}K"));
             }
@@ -448,11 +682,23 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
 }
 
 impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
+    fn restore_layout(&self, mode: RestoreMode) {
+        let report = self.session.restore_layout(mode);
+        trace_layout_restore(&report);
+        if report.failed > 0 {
+            (self.notify)(
+                "Monitor",
+                "Display layout could not be restored; the saved layout is kept",
+            );
+        }
+    }
+
     pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
         let handoffs = self.startup_snapshots();
         let recovery = if self.is_resident() {
             crate::session::RestoreReport::default()
         } else {
+            self.restore_layout(RestoreMode::Recovery);
             let recovery = self.session.restore_all(RestoreMode::Recovery);
             self.surface_gamma_warnings(&recovery);
             if let Err(error) = self.host_night_light.release(RestoreMode::Recovery) {
@@ -474,6 +720,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         *self.config.lock().unwrap() = policy_config(config);
         self.preferred = config::load_preferred(self.config_root.as_deref());
         self.adopt_startup_snapshots(&handoffs);
+        self.session.adopt_layout_handoff();
         self.apply_preferred_map();
         self.night = config::load_night_state(self.config_root.as_deref());
         self.evaluate_night(true);
@@ -827,6 +1074,250 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         applied
     }
 
+    fn layout_snapshot(&self, snapshots: &[DisplaySnapshot]) -> LayoutSnapshot {
+        LayoutSnapshot {
+            schema_version: crate::session::LAYOUT_SCHEMA_VERSION,
+            layout_id: crate::session::LAYOUT_SNAPSHOT_ID.to_string(),
+            placements: snapshots
+                .iter()
+                .map(|snapshot| PlacementRecord {
+                    id: snapshot.handle.id().to_string(),
+                    connector: snapshot.handle.connector().to_string(),
+                    x: snapshot.bounds.x.round() as i32,
+                    y: snapshot.bounds.y.round() as i32,
+                    primary: snapshot.primary,
+                })
+                .collect(),
+            modes: snapshots
+                .iter()
+                .filter_map(|snapshot| {
+                    snapshot.mode.as_ref().map(|mode| ModeRecord {
+                        id: snapshot.handle.id().to_string(),
+                        connector: snapshot.handle.connector().to_string(),
+                        token: mode.token,
+                        width: mode.width,
+                        height: mode.height,
+                        refresh_hz: mode.refresh_hz,
+                    })
+                })
+                .collect(),
+            mutations: 0,
+            handoff: false,
+            adopt_generation: None,
+        }
+    }
+
+    fn display_snapshots(&self, failure_prefix: &str) -> Option<Vec<DisplaySnapshot>> {
+        match self.session.control().snapshot() {
+            Ok(snapshots) => Some(snapshots),
+            Err(error) => {
+                (self.notify)(
+                    "Monitor",
+                    &format!("{failure_prefix}: display state is unavailable: {error}"),
+                );
+                None
+            }
+        }
+    }
+
+    fn claim_layout(&self, snapshots: &[DisplaySnapshot], failure_prefix: &str) -> bool {
+        let capture = self.layout_snapshot(snapshots);
+        match self
+            .session
+            .store()
+            .claim_layout_in_topology(&capture, snapshots)
+        {
+            Ok(()) => true,
+            Err(error) => {
+                (self.notify)(
+                    "Monitor",
+                    &format!(
+                        "{failure_prefix}: the restore snapshot could not be written: {error:#}"
+                    ),
+                );
+                false
+            }
+        }
+    }
+
+    fn record_layout_mutation(&self, failure_prefix: &str) -> bool {
+        match self.session.store().touch_layout() {
+            Ok(()) => true,
+            Err(error) => {
+                (self.notify)(
+                    "Monitor",
+                    &format!(
+                        "{failure_prefix}: the restore snapshot could not be updated: {error:#}"
+                    ),
+                );
+                false
+            }
+        }
+    }
+
+    fn reassert_gamma(&self, handles: &[DisplayHandle]) {
+        let mut report = crate::session::RestoreReport::default();
+        for handle in handles {
+            report.record(self.session.reassert_gamma(handle));
+        }
+        trace_gamma_reassert(&report);
+        self.surface_gamma_warnings(&report);
+    }
+
+    fn apply_placements(
+        &self,
+        snapshots: &[DisplaySnapshot],
+        placements: &[DisplayPlacement],
+        failure_prefix: &str,
+    ) -> bool {
+        if !self.claim_layout(snapshots, failure_prefix) {
+            return false;
+        }
+        if !self.record_layout_mutation(failure_prefix) {
+            return false;
+        }
+        if let Err(error) = self.session.control().set_layout(placements) {
+            (self.notify)("Monitor", &format!("{failure_prefix}: {error}"));
+            return false;
+        }
+        let handles: Vec<DisplayHandle> = placements
+            .iter()
+            .map(|placement| placement.handle.clone())
+            .collect();
+        self.reassert_gamma(&handles);
+        true
+    }
+
+    fn apply_mode(
+        &self,
+        display: &str,
+        token: Option<u64>,
+        width: u32,
+        height: u32,
+        refresh: Option<u32>,
+    ) {
+        let Some(snapshots) = self.display_snapshots("Mode not set") else {
+            return;
+        };
+        let target = match snapshot_for(&snapshots, display) {
+            Ok(target) => target,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Mode not set: {error}"));
+                return;
+            }
+        };
+        let modes = match self.session.control().list_modes(&target.handle) {
+            Ok(modes) => modes,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Mode not set: {error}"));
+                return;
+            }
+        };
+        let mode = match resolve_requested_mode(&modes, token, width, height, refresh) {
+            Ok(mode) => mode,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Mode not set: {error}"));
+                return;
+            }
+        };
+        if !self.claim_layout(&snapshots, "Mode not set") {
+            return;
+        }
+        if !self.record_layout_mutation("Mode not set") {
+            return;
+        }
+        if let Err(error) = self.session.control().set_mode(&target.handle, &mode) {
+            (self.notify)("Monitor", &format!("Mode not set: {error}"));
+            return;
+        }
+        self.reassert_gamma(std::slice::from_ref(&target.handle));
+        if self.config().notify_on_change {
+            (self.notify)(
+                "Monitor",
+                &format!("Mode {}x{}@{}Hz", mode.width, mode.height, mode.refresh_hz),
+            );
+        }
+    }
+
+    fn apply_primary(&self, display: &str) {
+        let Some(snapshots) = self.display_snapshots("Primary not set") else {
+            return;
+        };
+        let target = match snapshot_for(&snapshots, display) {
+            Ok(target) => target,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Primary not set: {error}"));
+                return;
+            }
+        };
+        let mut placements = placements_from_snapshots(&snapshots);
+        for placement in &mut placements {
+            placement.primary = placement.handle.id() == target.handle.id();
+        }
+        if self.apply_placements(&snapshots, &placements, "Primary not set")
+            && self.config().notify_on_change
+        {
+            (self.notify)(
+                "Monitor",
+                &format!("Primary display is now {}", target.handle.connector()),
+            );
+        }
+    }
+
+    fn apply_arrange(&self, requested: &[ArrangeRequest], primary: Option<&str>) {
+        let Some(snapshots) = self.display_snapshots("Layout not applied") else {
+            return;
+        };
+        let placements = match resolve_arrange(&snapshots, requested, primary) {
+            Ok(placements) => placements,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Layout not applied: {error}"));
+                return;
+            }
+        };
+        if self.apply_placements(&snapshots, &placements, "Layout not applied")
+            && self.config().notify_on_change
+        {
+            (self.notify)(
+                "Monitor",
+                &format!(
+                    "Arranged {} display{}",
+                    placements.len(),
+                    if placements.len() == 1 { "" } else { "s" }
+                ),
+            );
+        }
+    }
+
+    fn apply_config_layout(&self) {
+        let layout = self.config().layout_position;
+        if layout.is_empty() {
+            return;
+        }
+        let Some(snapshots) = self.display_snapshots("Layout not applied") else {
+            return;
+        };
+        let placements = match resolve_config_layout(&snapshots, &layout) {
+            Ok(placements) => placements,
+            Err(error) => {
+                (self.notify)("Monitor", &format!("Layout not applied: {error}"));
+                return;
+            }
+        };
+        if self.apply_placements(&snapshots, &placements, "Layout not applied")
+            && self.config().notify_on_change
+        {
+            (self.notify)(
+                "Monitor",
+                &format!(
+                    "Applied the configured layout to {} display{}",
+                    placements.len(),
+                    if placements.len() == 1 { "" } else { "s" }
+                ),
+            );
+        }
+    }
+
     pub fn handle(&mut self, command: Command) -> bool {
         match command {
             Command::Brightness { direction, phase } => {
@@ -867,6 +1358,31 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if self.config().notify_on_change {
                     (self.notify)("Monitor", &format!("Brightness {value}%"));
                 }
+                true
+            }
+            Command::SetMode {
+                display,
+                token,
+                width,
+                height,
+                refresh,
+            } => {
+                self.apply_mode(&display, token, width, height, refresh);
+                true
+            }
+            Command::SetPrimary { display } => {
+                self.apply_primary(&display);
+                true
+            }
+            Command::Arrange {
+                placements,
+                primary,
+            } => {
+                self.apply_arrange(&placements, primary.as_deref());
+                true
+            }
+            Command::ApplyLayout => {
+                self.apply_config_layout();
                 true
             }
             Command::Settings => {
@@ -921,6 +1437,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             }
             Command::Kill => {
                 if !self.is_resident() {
+                    self.restore_layout(RestoreMode::Exit);
                     let report = self.session.restore_all(RestoreMode::Exit);
                     self.surface_gamma_warnings(&report);
                     if let Err(error) = self.host_night_light.release(RestoreMode::Exit) {
@@ -1158,12 +1675,12 @@ pub fn run() -> Result<(), String> {
     let config_root = config::config_root();
     let (device, _origin) = config::load_with_origin(config_root.as_deref());
     let runtime = Arc::new(Mutex::new(build_runtime(config_root, &device)));
-    let recovery = runtime.lock().unwrap().start(&device);
-    set_live_state(Arc::clone(&runtime));
     let (tx, rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx.clone(), parse_request) {
         return Err("failed to start plugin-monitor daemon listener".into());
     }
+    set_live_state(Arc::clone(&runtime));
+    let recovery = runtime.lock().unwrap().start(&device);
     trace_startup(&recovery);
     let _sigterm = install_signal_handlers(tx);
     run_loop(&runtime, &rx);
@@ -1229,6 +1746,33 @@ fn trace_startup(recovery: &crate::session::RestoreReport) {
     let _ = recovery;
 }
 
+fn trace_layout_restore(report: &crate::session::RestoreReport) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "MONITOR_SESSION",
+        "event=layout_restore restored={} skipped={} failed={}",
+        report.restored,
+        report.skipped_display_gone,
+        report.failed
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = report;
+}
+
+fn trace_gamma_reassert(report: &crate::session::RestoreReport) {
+    #[cfg(debug_assertions)]
+    if report.restored > 0 || report.failed > 0 {
+        qol_runtime::probe!(
+            "MONITOR_SESSION",
+            "event=gamma_reassert restored={} failed={}",
+            report.restored,
+            report.failed
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = report;
+}
+
 fn trace_night(
     decision: Decision,
     kelvin: u16,
@@ -1258,13 +1802,15 @@ mod tests {
     use super::*;
     use crate::config::{self, BrightnessPreference, PolicySelection};
     use crate::host_night_light::HostNightLightError;
+    use crate::monitor::layout::LayoutPosition;
     use crate::monitor::{
         BrightnessPolicy, BrightnessSource, DisplayCapabilities, DisplayMode, GammaState,
         GammaTable, HdrState, RestoreOutcome,
     };
     use crate::session::NoLutProvider;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex as StdMutex;
+    use qol_windowing::MonitorBounds;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex as StdMutex};
 
     static SIGNAL_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
@@ -1472,6 +2018,17 @@ mod tests {
         selections: StdMutex<Vec<(String, BrightnessPolicy)>>,
         tints: StdMutex<Vec<(String, Tint)>>,
         fail_neutral: AtomicUsize,
+        snapshots: StdMutex<Vec<DisplaySnapshot>>,
+        modes: StdMutex<BTreeMap<String, Vec<DisplayMode>>>,
+        mode_calls: StdMutex<Vec<(String, DisplayMode)>>,
+        layout_calls: StdMutex<Vec<Vec<DisplayPlacement>>>,
+        layout_fail: AtomicBool,
+        gamma_calls: StdMutex<Vec<(String, u8, Tint)>>,
+        snapshot_fail: AtomicBool,
+        claim_checks: StdMutex<Vec<Option<Option<u32>>>>,
+        layout_store: StdMutex<Option<SessionStore>>,
+        events: StdMutex<Vec<String>>,
+        snapshot_gate: StdMutex<Option<Arc<SnapshotGate>>>,
     }
 
     impl FakeControl {
@@ -1492,6 +2049,17 @@ mod tests {
                 selections: StdMutex::new(Vec::new()),
                 tints: StdMutex::new(Vec::new()),
                 fail_neutral: AtomicUsize::new(0),
+                snapshots: StdMutex::new(Vec::new()),
+                modes: StdMutex::new(BTreeMap::new()),
+                mode_calls: StdMutex::new(Vec::new()),
+                layout_calls: StdMutex::new(Vec::new()),
+                layout_fail: AtomicBool::new(false),
+                gamma_calls: StdMutex::new(Vec::new()),
+                snapshot_fail: AtomicBool::new(false),
+                claim_checks: StdMutex::new(Vec::new()),
+                layout_store: StdMutex::new(None),
+                events: StdMutex::new(Vec::new()),
+                snapshot_gate: StdMutex::new(None),
             }
         }
 
@@ -1501,6 +2069,107 @@ mod tests {
 
         fn tints(&self) -> Vec<(String, Tint)> {
             self.tints.lock().unwrap().clone()
+        }
+
+        fn with_snapshot(self, snapshot: DisplaySnapshot) -> Self {
+            self.snapshots.lock().unwrap().push(snapshot);
+            self
+        }
+
+        fn with_modes(self, id: &str, modes: Vec<DisplayMode>) -> Self {
+            self.modes.lock().unwrap().insert(id.to_string(), modes);
+            self
+        }
+
+        fn with_store(self, store: SessionStore) -> Self {
+            *self.layout_store.lock().unwrap() = Some(store);
+            self
+        }
+
+        fn with_snapshot_gate(self, gate: Arc<SnapshotGate>) -> Self {
+            *self.snapshot_gate.lock().unwrap() = Some(gate);
+            self
+        }
+
+        fn observe_claim(&self) {
+            let state = {
+                let store = self.layout_store.lock().unwrap();
+                store.as_ref().map(|store| {
+                    store
+                        .load_layout()
+                        .ok()
+                        .flatten()
+                        .map(|snapshot| snapshot.mutations)
+                })
+            };
+            self.claim_checks.lock().unwrap().push(state);
+        }
+
+        fn mode_calls(&self) -> Vec<(String, DisplayMode)> {
+            self.mode_calls.lock().unwrap().clone()
+        }
+
+        fn layout_calls(&self) -> Vec<Vec<DisplayPlacement>> {
+            self.layout_calls.lock().unwrap().clone()
+        }
+
+        fn gamma_calls(&self) -> Vec<(String, u8, Tint)> {
+            self.gamma_calls.lock().unwrap().clone()
+        }
+
+        fn claim_checks(&self) -> Vec<Option<Option<u32>>> {
+            self.claim_checks.lock().unwrap().clone()
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct SnapshotGate {
+        entered: (StdMutex<bool>, Condvar),
+        release: (StdMutex<bool>, Condvar),
+        armed: AtomicBool,
+    }
+
+    impl SnapshotGate {
+        fn new() -> Self {
+            Self {
+                entered: (StdMutex::new(false), Condvar::new()),
+                release: (StdMutex::new(false), Condvar::new()),
+                armed: AtomicBool::new(false),
+            }
+        }
+
+        fn block(&self) {
+            if self.armed.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            *self.entered.0.lock().unwrap() = true;
+            self.entered.1.notify_all();
+            let mut released = self.release.0.lock().unwrap();
+            while !*released {
+                released = self.release.1.wait(released).unwrap();
+            }
+        }
+
+        fn wait_entered(&self) -> bool {
+            let mut entered = self.entered.0.lock().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !*entered && Instant::now() < deadline {
+                let (guard, _) = self
+                    .entered
+                    .1
+                    .wait_timeout(entered, Duration::from_millis(25))
+                    .unwrap();
+                entered = guard;
+            }
+            *entered
+        }
+
+        fn release(&self) {
+            *self.release.0.lock().unwrap() = true;
+            self.release.1.notify_all();
         }
     }
 
@@ -1624,6 +2293,14 @@ mod tests {
             value: u8,
             tint: Tint,
         ) -> Result<(), MonitorError> {
+            self.gamma_calls
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), value, tint));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("gamma:{}", handle.id()));
             self.set_tint(handle, tint)?;
             if self.source == BrightnessSource::Gamma {
                 self.set_brightness(handle, value)?;
@@ -1639,16 +2316,35 @@ mod tests {
             Err(MonitorError::unsupported("gamma", "test"))
         }
 
-        fn list_modes(&self, _handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError> {
-            Err(MonitorError::unsupported("modes", "test"))
+        fn list_modes(&self, handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError> {
+            self.modes
+                .lock()
+                .unwrap()
+                .get(handle.id())
+                .cloned()
+                .ok_or_else(|| MonitorError::unsupported("modes", "test"))
         }
 
-        fn set_mode(
-            &self,
-            _handle: &DisplayHandle,
-            _mode: &DisplayMode,
-        ) -> Result<(), MonitorError> {
-            Err(MonitorError::unsupported("modes", "test"))
+        fn set_mode(&self, handle: &DisplayHandle, mode: &DisplayMode) -> Result<(), MonitorError> {
+            self.observe_claim();
+            self.mode_calls
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), mode.clone()));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("set_mode:{}", handle.id()));
+            if let Some(snapshot) = self
+                .snapshots
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|snapshot| snapshot.handle.id() == handle.id())
+            {
+                snapshot.mode = Some(mode.clone());
+            }
+            Ok(())
         }
 
         fn get_hdr(&self, _handle: &DisplayHandle) -> Result<HdrState, MonitorError> {
@@ -1657,6 +2353,42 @@ mod tests {
 
         fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
             Err(MonitorError::unsupported("hdr", "test"))
+        }
+
+        fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+            if let Some(gate) = self.snapshot_gate.lock().unwrap().clone() {
+                gate.block();
+            }
+            if self.snapshot_fail.load(Ordering::SeqCst) {
+                return Err(MonitorError::refused("layout", "snapshot unavailable"));
+            }
+            Ok(self.snapshots.lock().unwrap().clone())
+        }
+
+        fn set_layout(&self, placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+            self.observe_claim();
+            if self.layout_fail.load(Ordering::SeqCst) {
+                return Err(MonitorError::refused("layout", "injected"));
+            }
+            {
+                let mut snapshots = self.snapshots.lock().unwrap();
+                for snapshot in snapshots.iter_mut() {
+                    if let Some(placement) = placements
+                        .iter()
+                        .find(|placement| placement.handle.id() == snapshot.handle.id())
+                    {
+                        snapshot.bounds.x = placement.x as f32;
+                        snapshot.bounds.y = placement.y as f32;
+                        snapshot.primary = placement.primary;
+                    }
+                }
+            }
+            self.layout_calls.lock().unwrap().push(placements.to_vec());
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("set_layout:{}", placements.len()));
+            Ok(())
         }
     }
 
@@ -4045,5 +4777,1057 @@ mod tests {
         assert!(dir.is_dir(), "{} must exist", dir.display());
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "the /tmp fallback session dir must be private");
+    }
+
+    fn display_mode(token: u64, width: u32, height: u32, refresh_hz: u32) -> DisplayMode {
+        DisplayMode {
+            token,
+            width,
+            height,
+            refresh_hz,
+        }
+    }
+
+    fn display_snapshot(
+        id: &str,
+        connector: &str,
+        x: f32,
+        y: f32,
+        primary: bool,
+        mode: Option<DisplayMode>,
+    ) -> DisplaySnapshot {
+        DisplaySnapshot {
+            handle: handle(id, connector),
+            bounds: MonitorBounds {
+                x,
+                y,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            primary,
+            mode,
+        }
+    }
+
+    fn layout_runtime(
+        control: Arc<FakeControl>,
+        store: SessionStore,
+        resident: bool,
+    ) -> (Runtime<FakeControl>, Toasts) {
+        let toasts: Toasts = Arc::new(StdMutex::new(Vec::new()));
+        let sink = toasts.clone();
+        let runtime = Runtime::new(
+            control,
+            store,
+            Arc::new(NoLutProvider),
+            move |_title, body| {
+                sink.lock().unwrap().push(body.to_string());
+            },
+            None,
+            |_preferred| Ok(()),
+            move || resident,
+        );
+        (runtime, toasts)
+    }
+
+    fn layout_capture(placements: Vec<PlacementRecord>, modes: Vec<ModeRecord>) -> LayoutSnapshot {
+        LayoutSnapshot {
+            schema_version: crate::session::LAYOUT_SCHEMA_VERSION,
+            layout_id: crate::session::LAYOUT_SNAPSHOT_ID.to_string(),
+            placements,
+            modes,
+            mutations: 0,
+            handoff: false,
+            adopt_generation: None,
+        }
+    }
+
+    fn gamma_lut() -> GammaTable {
+        GammaTable {
+            red: vec![1000, 2000],
+            green: vec![1000, 2000],
+            blue: vec![1000, 2000],
+        }
+    }
+
+    #[test]
+    fn parses_set_mode_with_and_without_a_token_and_refresh() {
+        assert!(matches!(
+            parse_request(&request(
+                "set_mode",
+                serde_json::json!({ "id": "id-1", "width": 1920, "height": 1080 })
+            )),
+            ReadResult::Command(Command::SetMode { display, token, width, height, refresh })
+                if display == "id-1"
+                    && token.is_none()
+                    && width == 1920
+                    && height == 1080
+                    && refresh.is_none()
+        ));
+        assert!(matches!(
+            parse_request(&request(
+                "set_mode",
+                serde_json::json!({ "id": "id-1", "token": 11, "width": 1280, "height": 720, "refresh": 75 })
+            )),
+            ReadResult::Command(Command::SetMode {
+                token: Some(11),
+                refresh: Some(75),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_set_mode_with_missing_wrong_or_out_of_range_input() {
+        for input in [
+            serde_json::json!({ "width": 1920, "height": 1080 }),
+            serde_json::json!({ "id": "", "width": 1920, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "width": "1920", "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "width": 1920.5, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "width": 0, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "width": 4_294_967_296u64, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "width": 1920, "height": 1080, "refresh": 0 }),
+            serde_json::json!({ "id": "id-1", "width": 1920, "height": 1080, "refresh": "60" }),
+            serde_json::json!({ "id": "id-1", "token": 11, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "token": 11, "width": 1920 }),
+            serde_json::json!({ "id": "id-1", "token": "11", "width": 1920, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "token": -1, "width": 1920, "height": 1080 }),
+            serde_json::json!({ "id": "id-1", "token": 1.5, "width": 1920, "height": 1080 }),
+        ] {
+            assert!(
+                matches!(
+                    parse_request(&request("set_mode", input.clone())),
+                    ReadResult::Error(_)
+                ),
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_set_primary_and_rejects_a_missing_id() {
+        assert!(matches!(
+            parse_request(&request("set_primary", serde_json::json!({ "id": "id-1" }))),
+            ReadResult::Command(Command::SetPrimary { display }) if display == "id-1"
+        ));
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({ "id": "" }),
+            serde_json::json!({ "id": 4 }),
+        ] {
+            assert!(matches!(
+                parse_request(&request("set_primary", input.clone())),
+                ReadResult::Error(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn parses_arrange_with_and_without_a_primary() {
+        assert!(matches!(
+            parse_request(&request(
+                "arrange",
+                serde_json::json!({ "placements": [{ "id": "id-1", "x": 0, "y": 0 }] })
+            )),
+            ReadResult::Command(Command::Arrange { placements, primary: None })
+                if placements.len() == 1 && placements[0].id == "id-1"
+        ));
+        assert!(matches!(
+            parse_request(&request(
+                "arrange",
+                serde_json::json!({
+                    "placements": [{ "id": "id-1", "x": -1920, "y": 0 }],
+                    "primary": "id-1"
+                })
+            )),
+            ReadResult::Command(Command::Arrange { primary: Some(id), .. }) if id == "id-1"
+        ));
+    }
+
+    #[test]
+    fn rejects_arrange_with_missing_wrong_or_out_of_range_input() {
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({ "placements": [] }),
+            serde_json::json!({ "placements": [{ "id": "id-1", "x": 0 }] }),
+            serde_json::json!({ "placements": [{ "id": "id-1", "x": "0", "y": 0 }] }),
+            serde_json::json!({ "placements": [{ "id": "id-1", "x": 0, "y": 4_294_967_296u64 }] }),
+            serde_json::json!({ "placements": [{ "id": "id-1", "x": 0, "y": 0 }], "primary": "" }),
+        ] {
+            assert!(
+                matches!(
+                    parse_request(&request("arrange", input.clone())),
+                    ReadResult::Error(_)
+                ),
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn routes_apply_layout_as_a_command() {
+        assert!(matches!(
+            parse_request(&request("apply_layout", serde_json::Value::Null)),
+            ReadResult::Command(Command::ApplyLayout)
+        ));
+    }
+
+    #[test]
+    fn layout_query_reports_rows_and_unavailable_state() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        )
+        .with_snapshot(display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            100.0,
+            50.0,
+            true,
+            Some(display_mode(1, 1920, 1080, 60)),
+        ));
+        let payload = layout_payload(&control);
+        assert!(payload.is_array(), "layout payload must be a bare array");
+        assert_eq!(payload[0]["connector"], "card0-DP-1");
+        assert_eq!(payload[0]["x"], serde_json::json!(100));
+        assert_eq!(payload[0]["y"], serde_json::json!(50));
+        assert_eq!(payload[0]["primary"], serde_json::json!(true));
+        assert!(payload[0]["detail"].is_string());
+        control.snapshot_fail.store(true, Ordering::SeqCst);
+        let unavailable = layout_payload(&control);
+        assert_eq!(unavailable, serde_json::json!([]));
+    }
+
+    #[test]
+    fn modes_query_skips_a_display_whose_mode_list_fails() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+            70,
+            BrightnessSource::Ddc,
+        )
+        .with_snapshot(display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(1, 1920, 1080, 60)),
+        ))
+        .with_snapshot(display_snapshot(
+            "id-2",
+            "card0-HDMI-1",
+            1920.0,
+            0.0,
+            false,
+            None,
+        ))
+        .with_modes(
+            "id-1",
+            vec![
+                display_mode(1, 1920, 1080, 60),
+                display_mode(2, 1280, 720, 60),
+            ],
+        );
+        let payload = modes_payload(&control);
+        assert!(payload.is_array(), "modes payload must be a bare array");
+        let rows = payload.as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "only the display with a readable mode list contributes rows"
+        );
+        assert!(rows.iter().all(|row| row["connector"] == "card0-DP-1"));
+        let current = rows
+            .iter()
+            .filter(|row| row["current"] == serde_json::json!(true))
+            .count();
+        assert_eq!(current, 1, "the current mode is marked exactly once");
+    }
+
+    #[test]
+    fn displays_payload_appends_geometry_mode_and_primary() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        )
+        .with_snapshot(display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            100.0,
+            50.0,
+            true,
+            Some(display_mode(1, 1920, 1080, 60)),
+        ));
+        let rows = displays_payload(&control, &BTreeMap::new(), &mut BTreeMap::new(), None);
+        let detail = rows[0]["detail"].as_str().unwrap();
+        assert!(detail.contains("+100+50"), "detail: {detail}");
+        assert!(detail.contains("1920x1080@60Hz"), "detail: {detail}");
+        assert!(detail.contains("primary"), "detail: {detail}");
+    }
+
+    #[test]
+    fn set_mode_records_the_mutation_before_the_first_write() {
+        let (_dir, store) = runtime_store();
+        store
+            .write_snapshot(&crate::session::Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_lut()),
+                last_value: 40,
+                ..stale_snapshot("id-1", "card0-DP-1", 100, 40)
+            })
+            .unwrap();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(1, 1920, 1080, 60)),
+            ))
+            .with_modes(
+                "id-1",
+                vec![
+                    display_mode(1, 1920, 1080, 60),
+                    display_mode(2, 1280, 720, 60),
+                ],
+            )
+            .with_store(store.clone()),
+        );
+        let (mut runtime, _toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetMode {
+            display: "id-1".into(),
+            token: None,
+            width: 1280,
+            height: 720,
+            refresh: Some(60),
+        });
+        assert_eq!(
+            control.claim_checks(),
+            vec![Some(Some(1))],
+            "the mutation is recorded before the mode write"
+        );
+        assert_eq!(
+            control.mode_calls(),
+            vec![("id-1".to_string(), display_mode(2, 1280, 720, 60))]
+        );
+        assert_eq!(
+            control.events(),
+            vec!["set_mode:id-1".to_string(), "gamma:id-1".to_string()],
+            "the gamma re-assert runs after the mode write"
+        );
+        assert_eq!(
+            control.gamma_calls(),
+            vec![("id-1".to_string(), 40, Tint::NEUTRAL)]
+        );
+        let snapshot = store.load_layout().unwrap().unwrap();
+        assert_eq!(snapshot.mutations, 1);
+        assert_eq!(snapshot.placements[0].id, "id-1");
+        assert_eq!(snapshot.modes[0].token, 1);
+    }
+
+    #[test]
+    fn set_mode_refuses_an_ambiguous_resolution_without_claiming_or_writing() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(1, 1920, 1080, 60)),
+            ))
+            .with_modes(
+                "id-1",
+                vec![
+                    display_mode(1, 1920, 1080, 60),
+                    display_mode(2, 1920, 1080, 50),
+                ],
+            )
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetMode {
+            display: "id-1".into(),
+            token: None,
+            width: 1920,
+            height: 1080,
+            refresh: None,
+        });
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(control.mode_calls().is_empty());
+        assert!(toasts
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("ambiguous without a refresh rate"));
+    }
+
+    #[test]
+    fn set_mode_reports_an_unknown_display_without_claiming() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetMode {
+            display: "id-gone".into(),
+            token: None,
+            width: 1280,
+            height: 720,
+            refresh: None,
+        });
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(toasts.lock().unwrap().last().unwrap().contains("id-gone"));
+    }
+
+    #[test]
+    fn set_mode_prefers_the_token_over_a_colliding_label() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(10, 1920, 1080, 60)),
+            ))
+            .with_modes(
+                "id-1",
+                vec![
+                    display_mode(10, 1920, 1080, 60),
+                    display_mode(11, 1920, 1080, 60),
+                ],
+            )
+            .with_store(store.clone()),
+        );
+        let (mut runtime, _toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetMode {
+            display: "id-1".into(),
+            token: Some(11),
+            width: 1920,
+            height: 1080,
+            refresh: Some(60),
+        });
+        assert_eq!(
+            control.mode_calls(),
+            vec![("id-1".to_string(), display_mode(11, 1920, 1080, 60))],
+            "the second colliding row must address its own token"
+        );
+        assert_eq!(store.load_layout().unwrap().unwrap().mutations, 1);
+    }
+
+    #[test]
+    fn set_mode_refuses_an_unknown_token_without_claiming() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(10, 1920, 1080, 60)),
+            ))
+            .with_modes("id-1", vec![display_mode(10, 1920, 1080, 60)])
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetMode {
+            display: "id-1".into(),
+            token: Some(99),
+            width: 1920,
+            height: 1080,
+            refresh: Some(60),
+        });
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(control.mode_calls().is_empty());
+        assert!(toasts.lock().unwrap().last().unwrap().contains("token 99"));
+    }
+
+    #[test]
+    fn set_primary_applies_one_primary_layout_and_reasserts_gamma() {
+        let (_dir, store) = runtime_store();
+        store
+            .write_snapshot(&crate::session::Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_lut()),
+                last_value: 60,
+                ..stale_snapshot("id-2", "card0-HDMI-1", 100, 60)
+            })
+            .unwrap();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_snapshot(display_snapshot(
+                "id-2",
+                "card0-HDMI-1",
+                1920.0,
+                0.0,
+                false,
+                None,
+            ))
+            .with_store(store.clone()),
+        );
+        let (mut runtime, _toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetPrimary {
+            display: "id-2".into(),
+        });
+        let calls = control.layout_calls();
+        assert_eq!(calls.len(), 1);
+        assert!(!calls[0][0].primary);
+        assert!(calls[0][1].primary);
+        assert_eq!(control.claim_checks(), vec![Some(Some(1))]);
+        let snapshot = store.load_layout().unwrap().unwrap();
+        assert_eq!(snapshot.mutations, 1);
+        assert!(snapshot
+            .placements
+            .iter()
+            .any(|record| record.id == "id-1" && record.primary));
+        assert_eq!(
+            control.events(),
+            vec!["set_layout:2".to_string(), "gamma:id-2".to_string()],
+            "the gamma re-assert runs after the layout write"
+        );
+        assert_eq!(
+            control.gamma_calls(),
+            vec![("id-2".to_string(), 60, Tint::NEUTRAL)]
+        );
+    }
+
+    #[test]
+    fn arrange_unknown_display_refuses_without_claiming() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Arrange {
+            placements: vec![ArrangeRequest {
+                id: "id-gone".into(),
+                x: 0,
+                y: 0,
+            }],
+            primary: None,
+        });
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(control.layout_calls().is_empty());
+        assert!(toasts.lock().unwrap().last().unwrap().contains("id-gone"));
+    }
+
+    #[test]
+    fn apply_layout_uses_the_configured_positions() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_store(store.clone()),
+        );
+        let config = DeviceConfig {
+            layout_position: BTreeMap::from([(
+                "id-1".to_string(),
+                LayoutPosition {
+                    x: 640,
+                    y: 0,
+                    primary: true,
+                },
+            )]),
+            ..DeviceConfig::default()
+        };
+        let (mut runtime, _toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&config);
+        runtime.handle(Command::ApplyLayout);
+        let calls = control.layout_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0].x, 640);
+        assert_eq!(calls[0][0].y, 0);
+        assert!(calls[0][0].primary);
+        assert_eq!(store.load_layout().unwrap().unwrap().mutations, 1);
+    }
+
+    #[test]
+    fn apply_layout_without_a_primary_refuses_and_claims_nothing() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                false,
+                None,
+            ))
+            .with_store(store.clone()),
+        );
+        let config = DeviceConfig {
+            layout_position: BTreeMap::from([(
+                "id-1".to_string(),
+                LayoutPosition {
+                    x: 640,
+                    y: 0,
+                    primary: false,
+                },
+            )]),
+            ..DeviceConfig::default()
+        };
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&config);
+        runtime.handle(Command::ApplyLayout);
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(control.layout_calls().is_empty());
+        assert!(toasts.lock().unwrap().last().unwrap().contains("primary"));
+    }
+
+    #[test]
+    fn resident_start_and_kill_skip_layout_restore() {
+        let (_dir, store) = runtime_store();
+        store
+            .claim_layout(&layout_capture(
+                vec![PlacementRecord {
+                    id: "id-1".into(),
+                    connector: "card0-DP-1".into(),
+                    x: 3840,
+                    y: 0,
+                    primary: true,
+                }],
+                vec![],
+            ))
+            .unwrap();
+        store.touch_layout().unwrap();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_store(store.clone()),
+        );
+        let (mut runtime, _toasts) = layout_runtime(control.clone(), store.clone(), true);
+        runtime.start(&DeviceConfig::default());
+        assert!(control.layout_calls().is_empty());
+        assert!(control.claim_checks().is_empty());
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "a resident host leaves the pending layout snapshot alone"
+        );
+        assert!(!runtime.handle(Command::Kill));
+        assert!(control.layout_calls().is_empty());
+        assert!(store.load_layout().unwrap().is_some());
+    }
+
+    #[test]
+    fn reload_handoff_does_not_restore_the_layout_on_the_successor_start() {
+        let (_dir, store) = runtime_store();
+        let main = display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None);
+        let secondary = display_snapshot("id-2", "card0-HDMI-1", 1920.0, 0.0, false, None);
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(main)
+            .with_snapshot(secondary),
+        );
+        let mut predecessor = runtime_with_generation(control.clone(), store.clone(), "gen-a");
+        predecessor.start(&DeviceConfig::default());
+        predecessor.handle(Command::SetPrimary {
+            display: "id-2".into(),
+        });
+        assert_eq!(control.layout_calls().len(), 1);
+        assert_eq!(store.load_layout().unwrap().unwrap().mutations, 1);
+        assert!(
+            !predecessor.handle(Command::Handoff),
+            "SIGHUP ends the loop"
+        );
+        drop(predecessor);
+        assert!(
+            store.load_layout().unwrap().unwrap().handoff,
+            "SIGHUP must mark the layout handoff"
+        );
+
+        control.layout_calls.lock().unwrap().clear();
+        let mut successor = runtime_with_generation(control.clone(), store.clone(), "gen-a");
+        successor.start(&DeviceConfig::default());
+        assert!(
+            control.layout_calls().is_empty(),
+            "the reload successor must adopt the layout without restoring it"
+        );
+        assert!(
+            !store.load_layout().unwrap().unwrap().handoff,
+            "the successor clears the layout handoff marker"
+        );
+        assert!(!successor.handle(Command::Kill));
+        let restored = control.layout_calls();
+        assert_eq!(
+            restored.len(),
+            1,
+            "a real exit still restores the captured layout"
+        );
+        assert_eq!(restored[0][0].handle.id(), "id-1");
+        assert!(restored[0][0].primary);
+        assert_eq!(restored[0][1].handle.id(), "id-2");
+        assert!(!restored[0][1].primary);
+        assert!(
+            store.load_layout().unwrap().is_none(),
+            "the exit restore clears the snapshot"
+        );
+    }
+
+    #[test]
+    fn a_layout_capture_failure_aborts_before_the_write_with_the_operation_name() {
+        let (_dir, store) = runtime_store();
+        std::fs::create_dir_all(store.dir()).unwrap();
+        std::fs::write(store.dir().join("layout"), b"blocked").unwrap();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_modes(
+                "id-1",
+                vec![
+                    display_mode(1, 1920, 1080, 60),
+                    display_mode(2, 1280, 720, 60),
+                ],
+            )
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig {
+            notify_on_change: false,
+            ..DeviceConfig::default()
+        });
+        let commands = [
+            (
+                Command::SetMode {
+                    display: "id-1".into(),
+                    token: None,
+                    width: 1280,
+                    height: 720,
+                    refresh: Some(60),
+                },
+                "Mode not set",
+            ),
+            (
+                Command::SetPrimary {
+                    display: "id-1".into(),
+                },
+                "Primary not set",
+            ),
+            (
+                Command::Arrange {
+                    placements: vec![ArrangeRequest {
+                        id: "id-1".into(),
+                        x: 0,
+                        y: 0,
+                    }],
+                    primary: None,
+                },
+                "Layout not applied",
+            ),
+        ];
+        for (command, expected) in commands {
+            runtime.handle(command);
+            let bodies = toasts.lock().unwrap().clone();
+            assert!(
+                bodies.last().unwrap().contains(expected),
+                "expected `{expected}` in {bodies:?}"
+            );
+        }
+        assert!(control.mode_calls().is_empty());
+        assert!(control.layout_calls().is_empty());
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_layout_mutation_failure_aborts_with_the_operation_name() {
+        let (_dir, store) = runtime_store();
+        store
+            .claim_layout(&layout_capture(
+                vec![PlacementRecord {
+                    id: "id-1".into(),
+                    connector: "card0-DP-1".into(),
+                    x: 0,
+                    y: 0,
+                    primary: true,
+                }],
+                vec![],
+            ))
+            .unwrap();
+        let path = store.dir().join("layout").join("layout.json");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let (runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        assert!(!runtime.record_layout_mutation("Layout not applied"));
+        let bodies = toasts.lock().unwrap().clone();
+        assert!(
+            bodies.last().unwrap().contains("Layout not applied")
+                && bodies.last().unwrap().contains("could not be updated"),
+            "{bodies:?}"
+        );
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn a_failed_layout_write_keeps_the_recorded_mutation() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_store(store.clone()),
+        );
+        control.layout_fail.store(true, Ordering::SeqCst);
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::SetPrimary {
+            display: "id-1".into(),
+        });
+        let snapshot = store.load_layout().unwrap().unwrap();
+        assert_eq!(
+            snapshot.mutations, 1,
+            "the recorded mutation survives a refused hardware write"
+        );
+        assert!(toasts
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("Primary not set"));
+    }
+
+    #[test]
+    fn layout_write_success_toasts_honor_notify_on_change() {
+        for (notify_on_change, expected) in [(false, 0usize), (true, 2usize)] {
+            let (_dir, store) = runtime_store();
+            let control = Arc::new(
+                FakeControl::new(
+                    vec![handle("id-1", "card0-DP-1")],
+                    70,
+                    BrightnessSource::Ddc,
+                )
+                .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+                .with_modes(
+                    "id-1",
+                    vec![
+                        display_mode(1, 1920, 1080, 60),
+                        display_mode(2, 1280, 720, 60),
+                    ],
+                ),
+            );
+            let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+            runtime.start(&DeviceConfig {
+                notify_on_change,
+                ..DeviceConfig::default()
+            });
+            runtime.handle(Command::SetMode {
+                display: "id-1".into(),
+                token: None,
+                width: 1280,
+                height: 720,
+                refresh: Some(60),
+            });
+            runtime.handle(Command::SetPrimary {
+                display: "id-1".into(),
+            });
+            assert_eq!(
+                toasts.lock().unwrap().len(),
+                expected,
+                "notify_on_change {notify_on_change}"
+            );
+            assert_eq!(control.mode_calls().len(), 1);
+            assert_eq!(control.layout_calls().len(), 1);
+        }
+    }
+
+    #[test]
+    fn apply_layout_with_an_empty_config_map_claims_and_writes_nothing() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_store(store.clone()),
+        );
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::ApplyLayout);
+        assert!(store.load_layout().unwrap().is_none());
+        assert!(control.claim_checks().is_empty());
+        assert!(control.layout_calls().is_empty());
+        assert!(toasts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_layout_restore_notifies_and_keeps_the_snapshot() {
+        let (_dir, store) = runtime_store();
+        store
+            .claim_layout(&layout_capture(
+                vec![PlacementRecord {
+                    id: "id-1".into(),
+                    connector: "card0-DP-1".into(),
+                    x: 100,
+                    y: 0,
+                    primary: true,
+                }],
+                vec![],
+            ))
+            .unwrap();
+        store.touch_layout().unwrap();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                None,
+            )),
+        );
+        control.layout_fail.store(true, Ordering::SeqCst);
+        let (mut runtime, toasts) = layout_runtime(control.clone(), store.clone(), false);
+        runtime.start(&DeviceConfig::default());
+        let bodies = toasts.lock().unwrap().clone();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Display layout could not be restored")),
+            "{bodies:?}"
+        );
+        assert!(store.load_layout().unwrap().is_some());
+    }
+
+    #[test]
+    fn a_running_query_releases_the_runtime_lock_so_a_kill_is_not_starved() {
+        let (_dir, store) = runtime_store();
+        let gate = Arc::new(SnapshotGate::new());
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_snapshot_gate(gate.clone()),
+        );
+        let runtime: Arc<Mutex<Runtime<dyn MonitorControl>>> = Arc::new(Mutex::new(Runtime::new(
+            control.clone(),
+            store,
+            Arc::new(NoLutProvider),
+            |_title, _body| {},
+            None,
+            |_preferred| Ok(()),
+            || false,
+        )));
+        let query = {
+            let live = Arc::clone(&runtime);
+            std::thread::spawn(move || live_query_from(&live, "layout"))
+        };
+        assert!(gate.wait_entered(), "the query must reach display I/O");
+        let mut acquired = false;
+        for _ in 0..100_000 {
+            if let Ok(guard) = runtime.try_lock() {
+                drop(guard);
+                acquired = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        if acquired {
+            assert!(
+                !runtime.lock().unwrap().handle(Command::Kill),
+                "the kill must be handled while the query is blocked"
+            );
+        }
+        gate.release();
+        let payload = query.join().expect("the query thread must finish");
+        assert!(
+            acquired,
+            "the runtime mutex must be released before display I/O"
+        );
+        assert!(matches!(payload, ReadResult::HandledWithData(_)));
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use qol_windowing::display::cg_display_id_from_connector;
 use qol_windowing::DisplayEnumerator;
 
 use crate::monitor::backends::x11_randr_gamma::MISMATCH_WARN_AT;
@@ -13,12 +14,6 @@ use crate::monitor::{
 use crate::session::{LutProvider, LutRestoreOutcome};
 
 const MIN_PERCENT: u8 = 10;
-
-pub fn display_id_from_connector(connector: &str) -> Option<u32> {
-    let suffix = connector.strip_prefix("cg-")?;
-    let id = suffix.strip_suffix("-builtin").unwrap_or(suffix);
-    id.parse().ok()
-}
 
 #[cfg(test)]
 fn scaled_table(original: &GammaTable, percent: u8) -> GammaTable {
@@ -64,7 +59,7 @@ impl<T: CgGammaSeam> CgGammaControl<T> {
     }
 
     fn display_id(&self, handle: &DisplayHandle) -> Result<u32, MonitorError> {
-        display_id_from_connector(handle.connector()).ok_or_else(|| {
+        cg_display_id_from_connector(handle.connector()).ok_or_else(|| {
             MonitorError::unsupported(
                 "brightness",
                 format!("no CG display id parses from {}", handle.connector()),
@@ -225,7 +220,7 @@ impl<T: CgGammaSeam> DisplayControl for CgGammaControl<T> {
     }
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
-        let Some(display_id) = display_id_from_connector(handle.connector()) else {
+        let Some(display_id) = cg_display_id_from_connector(handle.connector()) else {
             return Ok(DisplayCapabilities::none());
         };
         let size = self
@@ -321,7 +316,7 @@ impl<T: CgGammaSeam> GammaStateControl for CgGammaControl<T> {
 
 impl<T: CgGammaSeam> LutProvider for CgGammaControl<T> {
     fn capture(&self, connector: &str) -> Option<GammaTable> {
-        let display_id = display_id_from_connector(connector)?;
+        let display_id = cg_display_id_from_connector(connector)?;
         self.seam.read_table(display_id)
     }
 
@@ -614,12 +609,5 @@ mod tests {
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
         let tables = backend.seam.tables.lock().unwrap();
         assert_eq!(tables[&1], foreign);
-    }
-
-    #[test]
-    fn display_id_from_connector_parses_cg_connectors() {
-        assert_eq!(display_id_from_connector("cg-123"), Some(123));
-        assert_eq!(display_id_from_connector("cg-7-builtin"), Some(7));
-        assert_eq!(display_id_from_connector("card0-DP-1"), None);
     }
 }

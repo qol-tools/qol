@@ -9,6 +9,18 @@ description = "Reload the device config from the host and apply changes at runti
 [action.set_brightness]
 description = "Set a display's brightness now: input requires a display id and a value between 0 and 100; id `all` writes every connected display"
 
+[action.set_mode]
+description = "Set a display's resolution and refresh rate now: input requires a display id, a width, a height, an optional token, and an optional refresh rate"
+
+[action.set_primary]
+description = "Set the primary display now: input requires a display id"
+
+[action.arrange]
+description = "Arrange displays at absolute positions now: input requires a placements list of display ids with x and y, and an optional primary display id"
+
+[action.apply_layout]
+description = "Apply the configured display positions and primary flag now"
+
 [action.night_toggle]
 description = "Toggle night mode manually"
 
@@ -21,6 +33,14 @@ description = "Turn night mode off manually"
 [query.displays]
 description = "Connected displays with live brightness, source, policy, and preferred value"
 poll_interval_ms = 2000
+
+[query.layout]
+description = "Connected displays with position, size, refresh rate, and the primary display"
+poll_interval_ms = 2000
+
+[query.modes]
+description = "Selectable modes for every connected display, with the current mode marked"
+poll_interval_ms = 5000
 
 [query.status]
 description = "Overall brightness control state"
