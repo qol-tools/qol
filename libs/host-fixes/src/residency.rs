@@ -32,13 +32,13 @@ impl HostResidency {
     }
 
     pub fn current() -> Self {
-        config_root()
-            .and_then(|root| {
-                current_device_id()
-                    .ok()
-                    .and_then(|id| Self::read_device(&root, &id).ok())
-            })
-            .unwrap_or_default()
+        Self::try_current().unwrap_or_default()
+    }
+
+    pub fn try_current() -> Result<Self> {
+        let root = config_root().context("no config directory to read residency from")?;
+        let id = current_device_id()?;
+        Self::read_device(&root, &id)
     }
 
     pub fn set(value: Self) -> Result<()> {
@@ -213,6 +213,39 @@ fn parse_platform_uuid(output: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::policy::test_support::serialized()
+    }
+
+    struct EnvRemap {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvRemap {
+        fn set(pairs: &[(&'static str, &str)]) -> Self {
+            let saved = pairs
+                .iter()
+                .map(|(key, value)| {
+                    let previous = std::env::var_os(key);
+                    std::env::set_var(key, value);
+                    (*key, previous)
+                })
+                .collect();
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvRemap {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     fn config_root_from(dir: &Path) -> PathBuf {
         dir.join("config").join("qol-tray")
     }
@@ -332,6 +365,67 @@ mod tests {
 
         assert_eq!(active_profile(&root), "default");
         assert!(residency_path(&root).starts_with(root.join("profile").join("default")));
+    }
+
+    #[test]
+    fn try_current_reads_the_resident_entry() {
+        let _lock = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("config");
+        let root_value = root.to_string_lossy().into_owned();
+        let _env = EnvRemap::set(&[
+            (CONFIG_DIR_REMAP, &root_value),
+            (DEVICE_ID_REMAP, "test-device"),
+        ]);
+        HostResidency::write_device(&root, "test-device", HostResidency::Resident).unwrap();
+
+        assert_eq!(
+            HostResidency::try_current().unwrap(),
+            HostResidency::Resident
+        );
+    }
+
+    #[test]
+    fn try_current_is_portable_when_the_residency_file_is_missing() {
+        let _lock = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("config");
+        let root_value = root.to_string_lossy().into_owned();
+        let _env = EnvRemap::set(&[
+            (CONFIG_DIR_REMAP, &root_value),
+            (DEVICE_ID_REMAP, "test-device"),
+        ]);
+
+        assert_eq!(
+            HostResidency::try_current().unwrap(),
+            HostResidency::Portable,
+            "a fresh host has no residency file and is portable"
+        );
+    }
+
+    #[test]
+    fn try_current_fails_closed_on_a_corrupt_residency_file() {
+        let _lock = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("config");
+        let root_value = root.to_string_lossy().into_owned();
+        let _env = EnvRemap::set(&[
+            (CONFIG_DIR_REMAP, &root_value),
+            (DEVICE_ID_REMAP, "test-device"),
+        ]);
+        let path = residency_path(&root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+
+        assert!(
+            HostResidency::try_current().is_err(),
+            "an unreadable residency file must not be read as portable"
+        );
+        assert_eq!(
+            HostResidency::current(),
+            HostResidency::Portable,
+            "the infallible helper keeps its documented portable default"
+        );
     }
 
     #[test]

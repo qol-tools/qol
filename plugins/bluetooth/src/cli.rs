@@ -385,6 +385,28 @@ fn managed_devices_check() -> Result<DoctorCheckResult> {
 }
 
 fn host_takeover_check() -> Result<DoctorCheckResult> {
+    let claimed = hostfix::claimed_managers();
+    if !claimed.is_empty() {
+        let names = claimed
+            .iter()
+            .map(|manager| manager.label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let fix = claimed
+            .iter()
+            .map(|manager| {
+                format!(
+                    "run: {BINARY_NAME} apply_host_fix {}",
+                    hostfix::release_manager_fix_id(manager.process)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Ok(
+            DoctorCheckResult::warn("host_takeover", format!("qol currently owns {names}"))
+                .with_fix(fix),
+        );
+    }
     if hostfix::orphaned_autostart_override() {
         return Ok(DoctorCheckResult::warn(
             "host_takeover",

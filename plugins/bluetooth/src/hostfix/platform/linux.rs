@@ -119,18 +119,25 @@ fn autostart_path() -> Result<std::path::PathBuf> {
     Ok(config_root.join("autostart").join(BLUEMAN_AUTOSTART))
 }
 
-pub(crate) fn read_autostart() -> Option<String> {
-    autostart_path()
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
+pub(crate) fn read_autostart() -> Result<Option<String>> {
+    let path = autostart_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(anyhow::anyhow!(
+            "failed to read {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 pub(crate) fn write_autostart(content: &str) -> Result<()> {
     let path = autostart_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    std::fs::write(&path, content)
+    qol_fs::atomic_write_durable(&path, content.as_bytes())
         .map_err(|error| anyhow::anyhow!("failed to write {}: {error}", path.display()))
 }
 

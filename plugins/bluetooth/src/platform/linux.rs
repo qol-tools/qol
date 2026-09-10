@@ -516,12 +516,14 @@ fn current_adapter_options() -> Result<Vec<DeviceOption>> {
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
     crate::hostfix::restore_claimed_managers();
+    notify_adopted_managers();
     let (listener_tx, listener_rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, listener_tx, parse_daemon_request) {
         bail!("plugin-bluetooth daemon listener failed to start");
     }
 
     let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let signal_tx = command_tx.clone();
     std::thread::Builder::new()
         .name("bluetooth-command-bridge".into())
         .spawn(move || {
@@ -533,8 +535,19 @@ pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
         })
         .context("failed to start Bluetooth command bridge")?;
 
-    let outcome = runtime()?.block_on(resilient_daemon_loop(config, command_rx));
-    crate::hostfix::restore_claimed_managers_on_exit();
+    let outcome = runtime()?.block_on(async move {
+        tokio::spawn(async move {
+            let Ok(mut terminate) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            else {
+                return;
+            };
+            let _ = terminate.recv().await;
+            let _ = signal_tx.send(DaemonCommand::Kill);
+        });
+        resilient_daemon_loop(config, command_rx).await
+    });
+    crate::hostfix::restore_claimed_managers();
     outcome
 }
 
@@ -1462,6 +1475,12 @@ fn spawn_host_fix(id: String) {
     }));
 }
 
+fn notify_adopted_managers() {
+    for message in crate::hostfix::adopt_competing_managers_if_resident() {
+        send_notification("Bluetooth", &message);
+    }
+}
+
 fn device_daemon_command(
     request: &DaemonRequest,
     command: fn(Address) -> DaemonCommand,
@@ -1536,6 +1555,7 @@ async fn wait_without_adapter(
     let delay = tokio::time::sleep(ADAPTER_RETRY_DELAY);
     tokio::pin!(delay);
     loop {
+        notify_adopted_managers();
         tokio::select! {
             _ = &mut delay => return Ok(false),
             command = commands.recv() => {
@@ -1936,6 +1956,7 @@ async fn daemon_loop(
                 attempt_due(&adapter, config, &mut retries).await;
             }
             _ = manager_reconcile.tick() => {
+                notify_adopted_managers();
                 crate::hostfix::reconcile_claimed_managers();
             }
             _ = audio_watch.tick() => {

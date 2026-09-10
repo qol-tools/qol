@@ -24,8 +24,8 @@ pub(super) fn restart_service() -> Result<()> {
     bail!("Bluetooth host fixes are not implemented on this platform")
 }
 
-pub(super) fn read_autostart() -> Option<String> {
-    None
+pub(super) fn read_autostart() -> Result<Option<String>> {
+    Ok(None)
 }
 
 pub(super) fn write_autostart(_content: &str) -> Result<()> {

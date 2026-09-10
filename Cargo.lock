@@ -5801,6 +5801,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-headless",
  "qol-host-fixes",
  "qol-plugin-api",
