@@ -5788,7 +5788,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-bluetooth"
-version = "0.35.2"
+version = "0.35.3"
 dependencies = [
  "anyhow",
  "bluer",
@@ -5844,7 +5844,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-controllers"
-version = "0.27.0"
+version = "0.27.1"
 dependencies = [
  "anyhow",
  "evdev",
@@ -5886,7 +5886,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-monitor"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5914,7 +5914,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-os-themes"
-version = "0.40.0"
+version = "0.40.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -6835,7 +6835,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.65.2"
+version = "3.65.3"
 dependencies = [
  "anyhow",
  "axum",
