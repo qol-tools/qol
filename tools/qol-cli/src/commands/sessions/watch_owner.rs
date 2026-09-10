@@ -26,6 +26,18 @@ fn sessions_dir() -> PathBuf {
 fn sanitize(token: &str) -> String {
     token.replace([':', '.'], "_")
 }
+
+pub(super) fn owner_state_file(dir: &std::path::Path, owner_key: &str) -> std::path::PathBuf {
+    dir.join(format!("watch-owner-{owner_key}.json"))
+}
+
+pub(super) fn read_owner_tokens(dir: &std::path::Path, owner_key: &str) -> Vec<String> {
+    match fs::read_to_string(owner_state_file(dir, owner_key)) {
+        Ok(encoded) => serde_json::from_str::<Vec<String>>(&encoded).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
 impl ClientWatcher {
     pub(super) fn for_terminal(terminals: &TerminalSessionService) -> Self {
         let owner_key = terminals
@@ -56,9 +68,18 @@ impl ClientWatcher {
         }
     }
 
+    #[cfg(all(test, unix))]
+    pub(super) fn with_program(dir: PathBuf, owner_key: String, program: PathBuf) -> Self {
+        Self {
+            dir,
+            owner_key,
+            program,
+            child: Arc::new(Mutex::new(None)),
+        }
+    }
+
     fn state_file(&self) -> PathBuf {
-        self.dir
-            .join(format!("watch-owner-{}.json", self.owner_key))
+        owner_state_file(&self.dir, &self.owner_key)
     }
 
     pub(super) fn wake_debug_log(&self, line: &str) {
@@ -73,10 +94,7 @@ impl ClientWatcher {
     }
 
     pub(super) fn read_tokens(&self) -> Vec<String> {
-        match fs::read_to_string(self.state_file()) {
-            Ok(encoded) => serde_json::from_str::<Vec<String>>(&encoded).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
+        read_owner_tokens(&self.dir, &self.owner_key)
     }
 
     pub(super) fn record_token(&self, token: &str, pending: &PendingBridgeStore) {
@@ -102,7 +120,7 @@ impl ClientWatcher {
             Ok(()) => self.wake_debug_log(&format!("token recorded tokens={}", tokens.len())),
             Err(error) => self.wake_debug_log(&format!("state write failed: {error}")),
         }
-        self.restart();
+        self.ensure_watcher(&tokens);
     }
 
     pub(super) fn start(&self, pending: &PendingBridgeStore) {
@@ -117,20 +135,20 @@ impl ClientWatcher {
         if tokens.is_empty() {
             return;
         }
-        self.spawn_watcher(&tokens);
+        self.ensure_watcher(&tokens);
     }
 
-    pub(super) fn restart(&self) {
-        let tokens = self.read_tokens();
-        self.stop();
-        self.spawn_watcher(&tokens);
-    }
-
-    pub(super) fn stop(&self) {
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
+    fn ensure_watcher(&self, tokens: &[String]) {
+        {
+            let mut slot = self.child.lock().unwrap();
+            if let Some(child) = slot.as_mut() {
+                if matches!(child.try_wait(), Ok(None)) {
+                    return;
+                }
+            }
+            *slot = None;
         }
+        self.spawn_watcher(tokens);
     }
 
     fn spawn_watcher(&self, tokens: &[String]) {
@@ -138,7 +156,7 @@ impl ClientWatcher {
             return;
         }
         let mut child = match Command::new(&self.program)
-            .args(["sessions", "watch"])
+            .args(["sessions", "watch", "--owner", &self.owner_key])
             .args(tokens)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -249,12 +267,6 @@ impl ClientWatcher {
     }
 }
 
-impl Drop for ClientWatcher {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +274,26 @@ mod tests {
 
     fn store(root: &tempfile::TempDir) -> PendingBridgeStore {
         PendingBridgeStore::with_dir(root.path().join("pending-bridge"))
+    }
+
+    #[cfg(unix)]
+    fn spawned_watcher_pid(log_path: &std::path::Path) -> u32 {
+        let log = std::fs::read_to_string(log_path).unwrap_or_default();
+        log.lines()
+            .find_map(|line| {
+                let rest = line.split("watch spawn pid=").nth(1)?;
+                rest.split_whitespace().next()?.parse().ok()
+            })
+            .unwrap_or_else(|| panic!("no watch spawn pid in {}", log_path.display()))
+    }
+
+    #[cfg(unix)]
+    fn sleeper_program(root: &tempfile::TempDir) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = root.path().join("watch-child.sh");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
     }
 
     #[test]
@@ -291,28 +323,77 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn record_spawns_the_watcher_and_stop_clears_the_child_slot() {
+    fn record_leaves_the_watcher_running_after_the_client_is_dropped() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
-        let watcher = ClientWatcher::with_dir(root.path().to_path_buf(), "owner-spawn".to_owned());
+        let watcher = ClientWatcher::with_program(
+            root.path().to_path_buf(),
+            "owner-durable".to_owned(),
+            sleeper_program(&root),
+        );
         let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
             .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
-        let log = root.path().join("wake-debug-owner-spawn.log");
         assert!(
-            std::fs::read_to_string(&log)
-                .unwrap_or_default()
-                .contains("watch spawn pid="),
-            "recording a token must spawn the watcher"
+            matches!(
+                watcher
+                    .child
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .map(|child| child.try_wait()),
+                Some(Ok(None))
+            ),
+            "recording a token must leave the watcher running"
         );
-        watcher.stop();
+        let pid = spawned_watcher_pid(&root.path().join("wake-debug-owner-durable.log"));
+        drop(watcher);
         assert!(
-            watcher.child.lock().unwrap().is_none(),
-            "stop must clear the watcher child"
+            !qol_process::is_pid_gone(pid),
+            "dropping the client must not kill its watcher"
         );
+        let _ = qol_process::kill_pid(pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_spawns_a_watcher_for_a_lingering_open_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
+            .unwrap();
+        std::fs::write(
+            owner_state_file(root.path(), "owner-lingering"),
+            serde_json::to_string(&vec![open.token()]).unwrap(),
+        )
+        .unwrap();
+
+        let watcher = ClientWatcher::with_program(
+            root.path().to_path_buf(),
+            "owner-lingering".to_owned(),
+            sleeper_program(&root),
+        );
+        watcher.start(&pending);
+        assert!(
+            matches!(
+                watcher
+                    .child
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .map(|child| child.try_wait()),
+                Some(Ok(None))
+            ),
+            "a fresh client must spawn a watcher for a lingering open round"
+        );
+        let pid = spawned_watcher_pid(&root.path().join("wake-debug-owner-lingering.log"));
+        let _ = qol_process::kill_pid(pid);
     }
 
     #[test]
@@ -326,7 +407,6 @@ mod tests {
             .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
-        watcher.stop();
         let first_log = std::fs::read_to_string(root.path().join("wake-debug-owner-restart.log"))
             .unwrap_or_default();
 
@@ -351,7 +431,6 @@ mod tests {
             .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
             .unwrap();
         watcher.record_token(&open.token(), &pending);
-        watcher.stop();
 
         let foreign = ClientWatcher::with_dir(root.path().to_path_buf(), "owner-b".to_owned());
         assert!(foreign.read_tokens().is_empty());

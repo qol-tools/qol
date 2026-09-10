@@ -755,7 +755,6 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> Result<()> {
     reader
         .join()
         .map_err(|_| anyhow::anyhow!("the sessions MCP reader thread panicked"))??;
-    server.watcher.stop();
     Ok(())
 }
 
