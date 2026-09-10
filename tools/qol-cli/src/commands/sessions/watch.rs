@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use super::bridge::{PendingBridgeStore, PendingRound};
 use super::spawn::{SpawnLedger, SpawnLocks};
 
+mod evidence;
+
 use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
 
 const POLL_BASE: Duration = Duration::from_secs(3);
@@ -378,15 +380,15 @@ fn complete_seen_round(
         } else {
             clean_screen(screen)
         };
-        let report_path =
-            write_lane_report(trace_dir, &round.session, &cleaned, round.label.as_deref())?;
-        write_lane_receipt(
+        publish_silent_evidence(
             trace_dir,
+            locks,
             &round.session,
+            &round.marker,
             round.label.as_deref(),
             markerless,
-            &report_path,
-        )?;
+            &cleaned,
+        );
         WakeDelivery {
             delivered: false,
             error: None,
@@ -604,19 +606,15 @@ fn poll_round(
                         });
                     }
                     let delivery = if round.silent_wake {
-                        let report_path = write_lane_report(
+                        publish_silent_evidence(
                             trace_dir,
+                            locks,
                             &round.session,
-                            &clean_screen(full_screen),
-                            round.label.as_deref(),
-                        )?;
-                        write_lane_receipt(
-                            trace_dir,
-                            &round.session,
+                            &round.marker,
                             round.label.as_deref(),
                             markerless,
-                            &report_path,
-                        )?;
+                            &clean_screen(full_screen),
+                        );
                         WakeDelivery {
                             delivered: false,
                             error: None,
@@ -628,14 +626,15 @@ fn poll_round(
                             &round.session,
                             &round.driver,
                             "completed",
-                            &wake_message(
+                            &completion_message(
                                 trace_dir,
+                                locks,
                                 &round.session,
-                                "completed",
                                 full_screen,
                                 &round.marker,
                                 round.autoclose,
                                 round.label.as_deref(),
+                                markerless,
                             ),
                             sleep,
                         )?
@@ -737,6 +736,7 @@ fn poll_round(
                     ),
                     None => wake_message(
                         trace_dir,
+                        locks,
                         &round.session,
                         "gone",
                         "",
@@ -832,11 +832,12 @@ fn poll_round(
             }
             Some(_) => {
                 let report = cap_report(strip_trailing_marker(report, &round.marker));
-                let wake_msg = if round.silent_wake {
+                let wake_msg = if round.silent_wake || round.group.is_some() {
                     String::new()
                 } else {
                     wake_message(
                         trace_dir,
+                        locks,
                         &round.session,
                         "completed",
                         &report,
@@ -904,11 +905,12 @@ fn poll_round(
                         &round.marker,
                         &screen,
                     );
-                    let wake_msg = if round.silent_wake {
+                    let wake_msg = if round.silent_wake || round.group.is_some() {
                         String::new()
                     } else {
                         wake_message(
                             trace_dir,
+                            locks,
                             &round.session,
                             "completed",
                             &report,
@@ -986,13 +988,15 @@ fn poll_round(
             &round.marker,
             &screen,
         );
-        let idle_msg = if round.silent_wake {
+        let idle_msg = if round.silent_wake || round.group.is_some() {
             String::new()
         } else {
             markerless_wake_message(
                 markerless_reason(finished_turn, fault.as_deref()),
                 trace_dir,
+                locks,
                 &round.session,
+                &round.marker,
                 &clean_screen(screen_tail(&report)),
                 round.label.as_deref(),
             )
@@ -1664,17 +1668,30 @@ pub(super) struct WakeDelivery {
     error: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn wake_message(
     trace_dir: &std::path::Path,
+    locks: &SpawnLocks,
     session: &str,
     event: &str,
     screen: &str,
-    _marker: &str,
+    marker: &str,
     autoclose: bool,
     label: Option<&str>,
 ) -> String {
     match event {
-        "completed" => completion_message(trace_dir, session, screen, autoclose, label),
+        "completed" => {
+            completion_message(
+                trace_dir,
+                locks,
+                session,
+                screen,
+                marker,
+                autoclose,
+                label,
+                false,
+            )
+        }
         "gone" => format!(
             "qol sessions: lane {session} gone. The lane terminal closed and its round was discarded; start a fresh lane if the work still matters."
         ),
@@ -1715,7 +1732,9 @@ enum MarkerlessReason {
 fn markerless_wake_message(
     reason: MarkerlessReason,
     trace_dir: &std::path::Path,
+    locks: &SpawnLocks,
     session: &str,
+    marker: &str,
     cleaned: &str,
     label: Option<&str>,
 ) -> String {
@@ -1733,33 +1752,64 @@ fn markerless_wake_message(
     let sentence = format!(
         "{cause}\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
     );
-    lane_report_wake_message(&sentence, cleaned, trace_dir, session, label)
+    lane_report_wake_message(
+        &sentence, cleaned, trace_dir, locks, session, marker, true, label,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lane_report_wake_message(
     sentence: &str,
     cleaned: &str,
     trace_dir: &std::path::Path,
+    locks: &SpawnLocks,
     session: &str,
+    marker: &str,
+    markerless: bool,
     label: Option<&str>,
 ) -> String {
-    match write_lane_report(trace_dir, session, cleaned, label) {
-        Ok(path) => format!("{sentence}\n\nReport: {}", path.display()),
-        Err(error) => {
-            let report = inline_report(cleaned);
-            format!(
-                "{sentence}\n\n{report}\n\nWarning: could not write the lane report file ({error}); the full screen is not preserved."
-            )
+    match evidence::publish(
+        trace_dir,
+        locks,
+        session,
+        marker,
+        label,
+        markerless,
+        cleaned.as_bytes(),
+    ) {
+        Ok(published) => format!(
+            "{sentence}\n\nReport: {}\nReceipt: {}",
+            published.report.display(),
+            published.receipt.display()
+        ),
+        Err(failure) => {
+            probe_evidence_failure(session, false, &failure);
+            match failure.report {
+                Some(report) => format!(
+                    "{sentence}\n\nReport: {}\n\nWarning: could not write the completion receipt ({}); the report is intact.",
+                    report.display(),
+                    failure.error
+                ),
+                None => format!(
+                    "{sentence}\n\n{}\n\nWarning: could not write the lane report file ({}); the full screen is not preserved.",
+                    inline_report(cleaned),
+                    failure.error
+                ),
+            }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn completion_message(
     trace_dir: &std::path::Path,
+    locks: &SpawnLocks,
     session: &str,
     screen: &str,
+    marker: &str,
     autoclose: bool,
     label: Option<&str>,
+    markerless: bool,
 ) -> String {
     let sentence = if autoclose {
         format!(
@@ -1769,60 +1819,47 @@ fn completion_message(
         format!("qol sessions: {session} completed. Report below.")
     };
     let cleaned = clean_screen(screen);
-    lane_report_wake_message(&sentence, &cleaned, trace_dir, session, label)
+    lane_report_wake_message(
+        &sentence, &cleaned, trace_dir, locks, session, marker, markerless, label,
+    )
 }
 
-fn lane_report_path(
+#[allow(clippy::too_many_arguments)]
+fn publish_silent_evidence(
     trace_dir: &std::path::Path,
+    locks: &SpawnLocks,
     session: &str,
-    label: Option<&str>,
-) -> std::path::PathBuf {
-    let base = format!("{}.md", sanitize_token(session));
-    let slug = label_slug(label);
-    let name = if slug.is_empty() {
-        base
-    } else {
-        format!("{slug}_{base}")
-    };
-    trace_dir.join("lanes").join(name)
-}
-
-fn write_lane_report(
-    trace_dir: &std::path::Path,
-    session: &str,
-    cleaned: &str,
-    label: Option<&str>,
-) -> Result<std::path::PathBuf> {
-    let path = lane_report_path(trace_dir, session, label);
-    let dir = path.parent().expect("lane report path always has a parent");
-    fs::create_dir_all(dir).context("failed to create lane report directory")?;
-    fs::write(&path, cleaned).context("failed to write lane report")?;
-    Ok(path)
-}
-
-fn write_lane_receipt(
-    trace_dir: &std::path::Path,
-    session: &str,
+    marker: &str,
     label: Option<&str>,
     markerless: bool,
-    report_path: &std::path::Path,
-) -> Result<()> {
-    let path = lane_report_path(trace_dir, session, label).with_extension("receipt.json");
-    let receipt = serde_json::json!({
-        "label": label,
-        "session": session,
-        "completed_at": chrono::Utc::now().to_rfc3339(),
-        "markerless": markerless,
-        "report": report_path.display().to_string(),
-    });
-    let dir = path
-        .parent()
-        .expect("lane receipt path always has a parent");
-    fs::create_dir_all(dir).context("failed to create lane report directory")?;
-    let temporary = path.with_extension("tmp");
-    let encoded = serde_json::to_string(&receipt)?;
-    fs::write(&temporary, encoded).context("failed to write lane receipt")?;
-    fs::rename(&temporary, &path).context("failed to publish lane receipt")
+    cleaned: &str,
+) {
+    if let Err(failure) = evidence::publish(
+        trace_dir,
+        locks,
+        session,
+        marker,
+        label,
+        markerless,
+        cleaned.as_bytes(),
+    ) {
+        probe_evidence_failure(session, true, &failure);
+        eprintln!(
+            "qol sessions: silent completion evidence publication failed (session {}, stage {})",
+            session,
+            failure.stage.as_str()
+        );
+    }
+}
+
+fn probe_evidence_failure(session: &str, silent: bool, failure: &evidence::Failure) {
+    qol_runtime::probe!(
+        "CLI_SESSION_WATCH",
+        "event=evidence_publication_failed session={} stage={} silent={}",
+        session,
+        failure.stage.as_str(),
+        silent
+    );
 }
 
 fn clean_screen(text: &str) -> String {
@@ -3080,12 +3117,16 @@ mod tests {
     #[test]
     fn completed_wake_text_never_instructs_the_driver() {
         let dir = tempfile::TempDir::new().unwrap();
+        let session = "v1:kitty:5:100";
+        let marker = "QOL_BRIDGE_DONE_none";
+        let locks = locks(&dir);
         let closable = wake_message(
             dir.path(),
-            "v1:kitty:5:100",
+            &locks,
+            session,
             "completed",
             "done",
-            "QOL_BRIDGE_DONE_none",
+            marker,
             true,
             None,
         );
@@ -3099,10 +3140,11 @@ mod tests {
 
         let plain = wake_message(
             dir.path(),
-            "v1:kitty:5:100",
+            &locks,
+            session,
             "completed",
             "done",
-            "QOL_BRIDGE_DONE_none",
+            marker,
             false,
             None,
         );
@@ -3111,10 +3153,14 @@ mod tests {
             "the plain wake must not instruct the driver: {plain:?}"
         );
         assert!(plain.starts_with("qol sessions: v1:kitty:5:100 completed. Report below."));
-        assert!(plain.contains(&format!(
-            "Report: {}",
-            dir.path().join("lanes").join("v1_kitty_5_100.md").display()
-        )));
+        assert_eq!(
+            wake_pointer(&plain, "Report"),
+            super::evidence::report_path(dir.path(), session, marker)
+        );
+        assert_eq!(
+            wake_pointer(&plain, "Receipt"),
+            super::evidence::receipt_path(dir.path(), session, marker)
+        );
     }
 
     #[test]
@@ -3135,6 +3181,7 @@ mod tests {
         .join("\n");
         let wake = wake_message(
             dir.path(),
+            &locks(&dir),
             session,
             "completed",
             &screen,
@@ -3142,15 +3189,15 @@ mod tests {
             false,
             None,
         );
-        assert!(
-            wake.contains(&format!(
-                "Report: {}",
-                dir.path()
-                    .join("lanes")
-                    .join(sanitize_token(session) + ".md")
-                    .display()
-            )),
-            "the wake must carry a pointer to the lane report: {wake:?}"
+        assert_eq!(
+            wake_pointer(&wake, "Report"),
+            super::evidence::report_path(dir.path(), session, marker),
+            "the wake must carry a pointer to the round report: {wake:?}"
+        );
+        assert_eq!(
+            wake_pointer(&wake, "Receipt"),
+            super::evidence::receipt_path(dir.path(), session, marker),
+            "the wake must carry a pointer to the round receipt: {wake:?}"
         );
         assert!(
             !wake.contains("ACTION_MIDDLE"),
@@ -3160,7 +3207,7 @@ mod tests {
             !wake.contains("thinking about the request") && !wake.contains(marker),
             "the wake must not carry scrollback or the marker: {wake:?}"
         );
-        let written = std::fs::read_to_string(sanitize_lane_path(dir.path(), session)).unwrap();
+        let written = std::fs::read_to_string(wake_pointer(&wake, "Report")).unwrap();
         assert!(
             written.contains("ACTION_MIDDLE") && written.contains("the final answer is here and it matters"),
             "the written report must contain the full cleaned screen including the middle: {written:?}"
@@ -3184,6 +3231,7 @@ mod tests {
         );
         let wake = wake_message(
             dir.path(),
+            &locks(&dir),
             session,
             "completed",
             &screen,
@@ -3197,7 +3245,7 @@ mod tests {
             "the wake must stay short even for a huge report: {} bytes",
             wake.len()
         );
-        let written = std::fs::read_to_string(sanitize_lane_path(dir.path(), session)).unwrap();
+        let written = std::fs::read_to_string(wake_pointer(&wake, "Report")).unwrap();
         assert!(
             written.contains("early-prefix-keep-me") && written.contains(tail_line),
             "the file must keep the full cleaned screen far beyond 2 KiB: {}",
@@ -3226,6 +3274,7 @@ mod tests {
         assert!(screen.len() > WAKE_SNIPPET_MAX_BYTES * 4);
         let wake = wake_message(
             dir.path(),
+            &locks(&dir),
             session,
             "completed",
             &screen,
@@ -3254,6 +3303,7 @@ mod tests {
         let screen = "line one\nline two\nWrote line three.\nQOL_BRIDGE_DONE_round";
         let wake = wake_message(
             trace_dir,
+            &locks(&root),
             session,
             "completed",
             screen,
@@ -3269,26 +3319,43 @@ mod tests {
             wake.contains("line two"),
             "the wake must fall back to inline content: {wake:?}"
         );
+        assert!(
+            !wake.contains("Receipt:"),
+            "a failed report must not advertise a receipt: {wake:?}"
+        );
+        assert!(
+            !super::evidence::receipt_path(root.path(), session, "QOL_BRIDGE_DONE_round").exists(),
+            "a failed report must publish no receipt"
+        );
+    }
+
+    fn wake_pointer(wake: &str, label: &str) -> std::path::PathBuf {
+        let prefix = format!("{label}: ");
+        let line = wake
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("the wake must name a {label} file: {wake:?}"));
+        std::path::PathBuf::from(line.trim())
+    }
+
+    fn wake_receipt(wake: &str) -> serde_json::Value {
+        let path = wake_pointer(wake, "Receipt");
+        let encoded = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("receipt {} unreadable: {error}", path.display()));
+        serde_json::from_str(&encoded).unwrap()
     }
 
     fn wake_report_body(wake: &str) -> String {
-        let path = wake
-            .rsplit_once("\n\nReport: ")
-            .map(|(_, path)| path.trim().to_owned())
-            .unwrap_or_else(|| panic!("the wake must name a report file: {wake:?}"));
+        let path = wake_pointer(wake, "Report");
         std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("report {path} unreadable: {error}"))
-    }
-
-    fn sanitize_lane_path(dir: &std::path::Path, session: &str) -> std::path::PathBuf {
-        dir.join("lanes")
-            .join(format!("{}.md", sanitize_token(session)))
+            .unwrap_or_else(|error| panic!("report {} unreadable: {error}", path.display()))
     }
 
     #[test]
-    fn labeled_rounds_slug_prefix_report_and_fragment_filenames() {
+    fn labeled_rounds_store_the_label_in_the_receipt_and_slug_group_fragments() {
         let dir = tempfile::TempDir::new().unwrap();
         let session = "v1:pi:7:100";
+        let marker = "QOL_BRIDGE_DONE_round";
         let label = Some("csharp-settings-panel");
         assert_eq!(label_slug(label), "csharp-settings-panel");
         assert_eq!(label_slug(None), "");
@@ -3297,22 +3364,32 @@ mod tests {
             "c-settings-panel"
         );
 
-        let report_path = write_lane_report(dir.path(), session, "body", label).unwrap();
+        let wake = wake_message(
+            dir.path(),
+            &locks(&dir),
+            session,
+            "completed",
+            "body",
+            marker,
+            false,
+            label,
+        );
+        let report_path = wake_pointer(&wake, "Report");
         assert_eq!(
             report_path,
-            dir.path()
-                .join("lanes")
-                .join("csharp-settings-panel_v1_pi_7_100.md")
+            super::evidence::report_path(dir.path(), session, marker),
+            "the report filename must come from the round identity, not the label"
         );
         assert_eq!(std::fs::read_to_string(&report_path).unwrap(), "body");
+        let receipt = wake_receipt(&wake);
+        assert_eq!(receipt["label"], "csharp-settings-panel");
+        assert_eq!(receipt["schema_version"], 1);
 
         write_group_fragment(dir.path(), "research", session, "tail", label).unwrap();
         assert!(settling_round_dir(dir.path(), "research")
             .join("csharp-settings-panel_v1_pi_7_100.txt")
             .is_file());
 
-        let plain_report_path = write_lane_report(dir.path(), session, "body", None).unwrap();
-        assert_eq!(plain_report_path, sanitize_lane_path(dir.path(), session));
         write_group_fragment(dir.path(), "research", session, "tail", None).unwrap();
         assert!(settling_round_dir(dir.path(), "research")
             .join("v1_pi_7_100.txt")
@@ -3323,23 +3400,40 @@ mod tests {
     fn finished_turn_wake_writes_a_lane_report_and_does_not_paste_the_body() {
         let dir = tempfile::TempDir::new().unwrap();
         let session = "v1:pi:7:100";
+        let marker = "QOL_BRIDGE_DONE_round";
         let body = "line one\nline two\nline three";
         let wake = markerless_wake_message(
             MarkerlessReason::FinishedTurn,
             dir.path(),
+            &locks(&dir),
             session,
+            marker,
             body,
             None,
         );
-        let report_path = sanitize_lane_path(dir.path(), session);
+        let report_path = wake_pointer(&wake, "Report");
+        let receipt_path = wake_pointer(&wake, "Receipt");
         assert_eq!(
             wake,
             format!(
-                "qol sessions: lane {session} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}",
-                report_path.display()
+                "qol sessions: lane {session} finished its turn without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}\nReceipt: {}",
+                report_path.display(),
+                receipt_path.display()
             )
         );
         assert_eq!(std::fs::read_to_string(&report_path).unwrap(), body);
+        assert_eq!(
+            report_path,
+            super::evidence::report_path(dir.path(), session, marker)
+        );
+        assert_eq!(
+            receipt_path,
+            super::evidence::receipt_path(dir.path(), session, marker)
+        );
+        let receipt = wake_receipt(&wake);
+        assert_eq!(receipt["session"], session);
+        assert_eq!(receipt["completion_marker"], marker);
+        assert_eq!(receipt["markerless"], true);
         assert!(
             !wake.contains("line two"),
             "the wake must stay a pointer to the report file: {wake:?}"
@@ -3350,17 +3444,31 @@ mod tests {
     fn idle_wake_writes_a_lane_report_and_does_not_paste_the_body() {
         let dir = tempfile::TempDir::new().unwrap();
         let session = "v1:pi:7:100";
+        let marker = "QOL_BRIDGE_DONE_round";
         let body = "line one\nline two\nline three";
-        let wake = markerless_wake_message(MarkerlessReason::Idle, dir.path(), session, body, None);
-        let report_path = sanitize_lane_path(dir.path(), session);
+        let wake = markerless_wake_message(
+            MarkerlessReason::Idle,
+            dir.path(),
+            &locks(&dir),
+            session,
+            marker,
+            body,
+            None,
+        );
+        let report_path = wake_pointer(&wake, "Report");
+        let receipt_path = wake_pointer(&wake, "Receipt");
         assert_eq!(
             wake,
             format!(
-                "qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}",
-                report_path.display()
+                "qol sessions: lane {session} went idle for 15 minutes without printing its completion marker.\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete.\n\nReport: {}\nReceipt: {}",
+                report_path.display(),
+                receipt_path.display()
             )
         );
         assert_eq!(std::fs::read_to_string(&report_path).unwrap(), body);
+        let receipt = wake_receipt(&wake);
+        assert_eq!(receipt["completion_marker"], marker);
+        assert_eq!(receipt["markerless"], true);
         assert!(
             !wake.contains("line two"),
             "the wake must stay a pointer to the report file: {wake:?}"
@@ -5146,6 +5254,41 @@ mod tests {
             transcript: Transcript,
             screens: Vec<String>,
         ) -> LaneSim {
+            self.lane_with_silent_wake(
+                false, native, pid, marker, autoclose, group, label, transcript, screens,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn silent_lane(
+            &self,
+            native: &str,
+            pid: i32,
+            marker: &str,
+            autoclose: bool,
+            group: Option<&str>,
+            label: Option<&str>,
+            transcript: Transcript,
+            screens: Vec<String>,
+        ) -> LaneSim {
+            self.lane_with_silent_wake(
+                true, native, pid, marker, autoclose, group, label, transcript, screens,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn lane_with_silent_wake(
+            &self,
+            silent_wake: bool,
+            native: &str,
+            pid: i32,
+            marker: &str,
+            autoclose: bool,
+            group: Option<&str>,
+            label: Option<&str>,
+            transcript: Transcript,
+            screens: Vec<String>,
+        ) -> LaneSim {
             let binding: SessionBinding = format!("v1:fake:{native}:{pid}").parse().unwrap();
             let driver_native = format!("d{native}");
             let driver: SessionBinding = format!("v1:fake:{driver_native}:{}", pid + 1000)
@@ -5159,7 +5302,7 @@ mod tests {
                     autoclose,
                     group,
                     label,
-                    false,
+                    silent_wake,
                 )
                 .unwrap();
             if let Some(group) = group {
@@ -5772,6 +5915,289 @@ mod tests {
             Some("the full markerless report"),
             "the rescued report is the final transcript message"
         );
+    }
+
+    #[test]
+    fn sim_a_completed_lane_publishes_a_round_report_and_receipt() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec![FINAL_SCREEN.to_owned(); 4]);
+
+        lane.run(&sim);
+
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        let wake = &wakes[0];
+        assert!(
+            wake.find("Report: ").unwrap() < wake.find("Receipt: ").unwrap(),
+            "the wake must name the report before the receipt: {wake:?}"
+        );
+        let report = wake_pointer(wake, "Report");
+        let receipt = wake_pointer(wake, "Receipt");
+        assert_eq!(
+            report,
+            super::evidence::report_path(
+                sim.trace_dir(),
+                &lane.binding.token(),
+                "QOL_BRIDGE_DONE_round"
+            )
+        );
+        assert_eq!(
+            receipt,
+            super::evidence::receipt_path(
+                sim.trace_dir(),
+                &lane.binding.token(),
+                "QOL_BRIDGE_DONE_round"
+            )
+        );
+        let stored = wake_receipt(wake);
+        assert_eq!(stored["schema_version"], 1);
+        assert_eq!(stored["session"], lane.binding.token());
+        assert_eq!(stored["completion_marker"], "QOL_BRIDGE_DONE_round");
+        assert_eq!(stored["markerless"], false);
+        assert_eq!(stored["label"], serde_json::Value::Null);
+        assert_eq!(stored["report"], report.display().to_string());
+        let completed_at = stored["completed_at"].as_str().unwrap();
+        assert!(chrono::DateTime::parse_from_rfc3339(completed_at).is_ok());
+        let body = wake_report_body(wake);
+        assert!(
+            body.contains("Wrote the report to disk."),
+            "the round report must carry the completion screen: {body:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), body);
+    }
+
+    #[test]
+    fn sim_a_markerless_completion_publishes_a_markerless_receipt() {
+        let sim = SessionSim::new();
+        let mut lane = sim
+            .simple_lane("7", 100, vec!["idle".to_owned(); 4])
+            .stall_after(Duration::from_millis(0));
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        let wake = &wakes[0];
+        assert!(
+            wake.contains("went idle for 15 minutes without printing its completion marker"),
+            "markerless wording must not imply a marker was actually printed: {wake:?}"
+        );
+        let stored = wake_receipt(wake);
+        assert_eq!(stored["markerless"], true);
+        assert_eq!(stored["completion_marker"], "QOL_BRIDGE_DONE_round");
+        assert!(wake_pointer(wake, "Report").is_file());
+    }
+
+    #[test]
+    fn sim_a_silent_lane_publishes_a_receipt_without_waking() {
+        let sim = SessionSim::new();
+        let mut lane = sim.silent_lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Unsupported,
+            vec![FINAL_SCREEN.to_owned(); 4],
+        );
+
+        lane.run(&sim);
+
+        assert!(
+            lane.wakes().is_empty(),
+            "a silent lane must never type into the initiator: {:?}",
+            lane.wakes()
+        );
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["delivered"], false);
+        let report = super::evidence::report_path(
+            sim.trace_dir(),
+            &lane.binding.token(),
+            "QOL_BRIDGE_DONE_round",
+        );
+        let receipt = super::evidence::receipt_path(
+            sim.trace_dir(),
+            &lane.binding.token(),
+            "QOL_BRIDGE_DONE_round",
+        );
+        let body = std::fs::read_to_string(&report).unwrap();
+        assert!(
+            body.contains("Wrote the report to disk."),
+            "a silent completion must still persist its report"
+        );
+        let receipt_body = std::fs::read_to_string(&receipt).unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&receipt_body).unwrap();
+        assert_eq!(stored["session"], lane.binding.token());
+        assert_eq!(stored["completion_marker"], "QOL_BRIDGE_DONE_round");
+        assert_eq!(stored["markerless"], false);
+        assert_eq!(stored["report"], report.display().to_string());
+    }
+
+    #[test]
+    fn sim_a_rescued_completion_publishes_its_own_receipt() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Silent,
+            vec!["still working".to_owned(); 2],
+        );
+        lane.set_report(Some("the full markerless report".to_owned()), false);
+        lane.transcript(Transcript::Finished);
+        lane.poll(&sim);
+        lane.backend.mark_gone();
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        let stored = wake_receipt(&wakes[0]);
+        assert_eq!(stored["markerless"], true);
+        assert_eq!(stored["session"], lane.binding.token());
+        assert_eq!(stored["completion_marker"], "QOL_BRIDGE_DONE_round");
+        assert_eq!(
+            std::fs::read_to_string(wake_pointer(&wakes[0], "Report")).unwrap(),
+            "the full markerless report"
+        );
+    }
+
+    #[test]
+    fn sim_a_grouped_member_publishes_no_round_receipt() {
+        let sim = SessionSim::new();
+        let group = "evidence-preservation";
+        let mut lane_a = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_a",
+            true,
+            Some(group),
+            Some("lane-a"),
+            Transcript::Finished,
+            vec!["report a\nQOL_BRIDGE_DONE_a".to_owned(); 4],
+        );
+        let mut lane_b = sim.lane(
+            "8",
+            200,
+            "QOL_BRIDGE_DONE_b",
+            true,
+            Some(group),
+            Some("lane-b"),
+            Transcript::Finished,
+            vec!["report b\nQOL_BRIDGE_DONE_b".to_owned(); 4],
+        );
+        lane_a.set_report(Some("report a\nQOL_BRIDGE_DONE_a".to_owned()), true);
+        lane_b.set_report(Some("report b\nQOL_BRIDGE_DONE_b".to_owned()), true);
+
+        lane_a.run(&sim);
+        lane_b.run(&sim);
+
+        let wakes = lane_b.wakes();
+        assert_eq!(
+            wakes.len(),
+            1,
+            "the grouped combined wake must stay unchanged: {wakes:?}"
+        );
+        assert!(
+            wakes[0].contains("all 2 lanes finished"),
+            "the combined wake still names the group: {:?}",
+            wakes[0]
+        );
+        for (session, marker) in [
+            (lane_a.binding.token(), "QOL_BRIDGE_DONE_a"),
+            (lane_b.binding.token(), "QOL_BRIDGE_DONE_b"),
+        ] {
+            assert!(
+                !super::evidence::round_dir(sim.trace_dir(), &session, marker).exists(),
+                "a grouped member must publish no round receipt: {session}"
+            );
+        }
+        let combined = sim.combined(group).expect("combined report written");
+        assert!(combined.contains("report a") && combined.contains("report b"));
+    }
+
+    #[test]
+    fn sim_a_report_publication_failure_still_delivers_an_inline_wake() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec![FINAL_SCREEN.to_owned(); 4]);
+        let report = super::evidence::report_path(
+            sim.trace_dir(),
+            &lane.binding.token(),
+            "QOL_BRIDGE_DONE_round",
+        );
+        let receipt = super::evidence::receipt_path(
+            sim.trace_dir(),
+            &lane.binding.token(),
+            "QOL_BRIDGE_DONE_round",
+        );
+        std::fs::create_dir_all(&report).unwrap();
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["delivered"], true);
+        let wakes = lane.wakes();
+        assert_eq!(
+            wakes.len(),
+            1,
+            "an ordinary wake must still reach the initiator: {wakes:?}"
+        );
+        assert!(
+            wakes[0].contains("could not write the lane report file"),
+            "the wake must name the report failure: {:?}",
+            wakes[0]
+        );
+        assert!(!wakes[0].contains("Receipt:"));
+        assert!(
+            wakes[0].contains("Wrote the report to disk."),
+            "the wake must fall back to the inline report: {:?}",
+            wakes[0]
+        );
+        assert!(!receipt.exists(), "a failed report must publish no receipt");
+        assert!(lane.settled(&sim));
+    }
+
+    #[test]
+    fn sim_a_receipt_publication_failure_keeps_the_report_pointer_and_warns() {
+        let sim = SessionSim::new();
+        let mut lane = sim.simple_lane("7", 100, vec![FINAL_SCREEN.to_owned(); 4]);
+        let receipt = super::evidence::receipt_path(
+            sim.trace_dir(),
+            &lane.binding.token(),
+            "QOL_BRIDGE_DONE_round",
+        );
+        std::fs::create_dir_all(&receipt).unwrap();
+
+        lane.run(&sim);
+
+        let wakes = lane.wakes();
+        assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");
+        assert!(
+            wakes[0].contains("Warning: could not write the completion receipt"),
+            "the wake must warn about the receipt failure: {:?}",
+            wakes[0]
+        );
+        assert!(!wakes[0].contains("Receipt:"));
+        let report = wake_pointer(&wakes[0], "Report");
+        assert!(report.is_file());
+        let body = std::fs::read_to_string(&report).unwrap();
+        assert!(body.contains("Wrote the report to disk."));
+        assert_eq!(lane.events()[0]["delivered"], true);
+        assert!(lane.settled(&sim));
     }
 
     #[test]
