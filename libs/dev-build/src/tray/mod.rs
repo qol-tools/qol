@@ -363,7 +363,11 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Resul
         command.arg("--features").arg(flag);
     }
     command
-        .args(["--message-format", "json", "--manifest-path"])
+        .args([
+            "--message-format",
+            "json-render-diagnostics",
+            "--manifest-path",
+        ])
         .arg(manifest_path)
         .current_dir(root);
     crate::configure_dev_cargo(&mut command);
@@ -774,7 +778,7 @@ path = \"src/main.rs\"
     }
 
     #[test]
-    fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
+    fn build_command_uses_requested_bins_dev_features_json_render_diagnostics_and_manifest_path() {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path();
         let tray_dir = workspace_root.join("apps").join("qol-tray");
@@ -803,7 +807,7 @@ path = \"src/main.rs\"
                 expected.push(OsStr::new(flag));
             }
             expected.push(OsStr::new("--message-format"));
-            expected.push(OsStr::new("json"));
+            expected.push(OsStr::new("json-render-diagnostics"));
             expected.push(OsStr::new("--manifest-path"));
             expected.push(manifest.as_os_str());
             assert_eq!(command.get_args().collect::<Vec<_>>(), expected);

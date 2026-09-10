@@ -90,6 +90,19 @@ pub(super) fn render_bottom_panel(
     render_bottom_panel_with_width(frame, area, title, rows, accent, width);
 }
 
+pub(super) fn render_compact_bottom_panel(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    rows: Vec<Line<'static>>,
+    accent: Color,
+) {
+    let content_width = rows.iter().map(Line::width).max().unwrap_or_default() as u16 + 2;
+    let title_width = Span::raw(title).width() as u16 + 4;
+    let width = content_width.max(title_width).min(area.width);
+    render_bottom_panel_with_width(frame, area, title, rows, accent, width);
+}
+
 fn render_bottom_panel_with_width(
     frame: &mut Frame,
     area: Rect,

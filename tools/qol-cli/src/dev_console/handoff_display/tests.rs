@@ -1,6 +1,7 @@
 use super::*;
 use crate::dev_console::dash::ReloadProgress;
 use crate::dev_console::testkit::render_text;
+use crate::dev_console::WorktreeSelection;
 use std::time::Duration;
 
 fn handoff_dash() -> Dash {
@@ -9,7 +10,10 @@ fn handoff_dash() -> Dash {
     activity.started = Instant::now() - Duration::from_secs(8);
     activity.phase = "handoff".to_string();
     activity.detail = "successor generation".to_string();
-    dash.reload = Reload::Handoff { activity };
+    dash.reload = Reload::Handoff {
+        activity,
+        selection: WorktreeSelection::Follow,
+    };
     dash
 }
 

@@ -41,7 +41,7 @@ pub(super) fn run<T>(
     handoff: impl FnOnce(&HandoffUpdates) -> T,
 ) -> Result<T> {
     let started = match &dash.reload {
-        Reload::Handoff { activity } => activity.started,
+        Reload::Handoff { activity, .. } => activity.started,
         Reload::Idle | Reload::Running { .. } => bail!("reload prebuild is not ready for handoff"),
     };
     let result = std::thread::scope(|scope| {
@@ -89,7 +89,7 @@ fn apply_update(dash: &mut Dash, update: Update) -> bool {
             false
         }
         Update::Phase(phase, detail) => {
-            if let Reload::Handoff { activity } = &mut dash.reload {
+            if let Reload::Handoff { activity, .. } = &mut dash.reload {
                 activity.phase = phase.to_string();
                 activity.detail = detail.to_string();
             }

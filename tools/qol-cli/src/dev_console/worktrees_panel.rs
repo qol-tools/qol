@@ -66,6 +66,7 @@ pub(super) fn arm_selected_worktree(dash: &mut Dash) {
         return;
     };
     dash.worktree_selection = WorktreeSelection::Pin(target.branch);
+    dash.clear_reload_failure();
     dash.armed = true;
     dash.worktree_panel.open = false;
 }

@@ -25,6 +25,8 @@ use crate::dev_shutdown::{
 
 const MONITOR_DAEMON_SOCKET_FILE: &str = "qol-plugin-monitor.sock";
 const MONITOR_HANDOFF_TIMEOUT: Duration = Duration::from_millis(500);
+const RELOAD_TAIL_QUIET: Duration = Duration::from_millis(50);
+const RELOAD_TAIL_BUDGET: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 struct ShadowGenerationReady {
@@ -63,6 +65,8 @@ pub(super) fn start_reload(dash: &mut Dash) {
     if dash.is_reloading() {
         return;
     }
+    dash.clear_reload_failure();
+    let selection = dash.worktree_selection.clone();
     match spawn_reload(dash) {
         Ok((child, rx)) => {
             dash.push_log("[qol dev] reloading: prebuild dev artifacts");
@@ -70,10 +74,16 @@ pub(super) fn start_reload(dash: &mut Dash) {
                 child,
                 rx,
                 activity: ReloadProgress::new(),
+                selection,
             };
         }
-        Err(error) => dash.push_log(format!("[qol dev] reload failed to start: {error:#}")),
+        Err(error) => record_spawn_error(dash, &selection, &error),
     }
+}
+
+fn record_spawn_error(dash: &mut Dash, selection: &WorktreeSelection, error: &anyhow::Error) {
+    dash.push_log(format!("[qol dev] reload failed to start: {error:#}"));
+    dash.record_reload_failure(selection, &format!("{error:#}"));
 }
 
 fn spawn_reload(dash: &Dash) -> Result<(Child, Receiver<String>)> {
@@ -169,14 +179,19 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
             child,
             rx,
             activity,
+            ..
         } => {
             while let Ok(line) = rx.try_recv() {
                 if !activity.observe(&line) {
+                    activity.observe_failure(&line);
                     drained.push(line);
                 }
             }
             match child.try_wait() {
-                Ok(Some(status)) => status,
+                Ok(Some(status)) => {
+                    drain_forwarder_tail(rx, activity, &mut drained);
+                    status
+                }
                 _ => {
                     for line in drained {
                         dash.push_log(line);
@@ -186,20 +201,59 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
             }
         }
     };
-    for line in drained {
-        dash.push_log(line);
+    for line in &drained {
+        dash.push_log(line.clone());
     }
     let completed = std::mem::replace(&mut dash.reload, Reload::Idle);
-    if status.success() {
-        if let Reload::Running { mut activity, .. } = completed {
-            activity.phase = "handoff".to_string();
-            activity.detail = "successor generation".to_string();
-            dash.reload = Reload::Handoff { activity };
+    match completed {
+        Reload::Running {
+            mut activity,
+            selection,
+            ..
+        } => {
+            if status.success() {
+                dash.clear_reload_failure();
+                activity.phase = "handoff".to_string();
+                activity.detail = "successor generation".to_string();
+                dash.reload = Reload::Handoff {
+                    activity,
+                    selection,
+                };
+                return ReloadOutcome::Ready;
+            }
+            dash.push_log(format!("[qol dev] reload aborted: prebuild {status}"));
+            dash.record_reload_failure(&selection, &reload_failure_reason(status, &activity));
+            ReloadOutcome::Pending
         }
-        return ReloadOutcome::Ready;
+        Reload::Idle | Reload::Handoff { .. } => ReloadOutcome::Pending,
     }
-    dash.push_log(format!("[qol dev] reload aborted: prebuild {status}"));
-    ReloadOutcome::Pending
+}
+
+fn drain_forwarder_tail(
+    rx: &Receiver<String>,
+    activity: &mut ReloadProgress,
+    drained: &mut Vec<String>,
+) {
+    let deadline = Instant::now() + RELOAD_TAIL_BUDGET;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(RELOAD_TAIL_QUIET) {
+            Ok(line) => {
+                if !activity.observe(&line) {
+                    activity.observe_failure(&line);
+                    drained.push(line);
+                }
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+fn reload_failure_reason(status: impl std::fmt::Display, activity: &ReloadProgress) -> String {
+    activity
+        .coded_error
+        .clone()
+        .or_else(|| activity.summary_error.clone())
+        .unwrap_or_else(|| status.to_string())
 }
 
 pub(super) fn restart_child_from_prebuilt(
@@ -620,6 +674,7 @@ mod tests {
             child,
             rx,
             activity,
+            selection: WorktreeSelection::Follow,
         };
 
         assert!(matches!(poll_reload(&mut dash), ReloadOutcome::Ready));
@@ -628,6 +683,210 @@ mod tests {
         assert_eq!(activity.phase, "handoff");
         assert!(activity.elapsed >= Duration::from_secs(8));
         assert!(activity.elapsed <= started.elapsed());
+    }
+
+    #[test]
+    fn reload_failure_reason_prefers_the_first_coded_diagnostic() {
+        let mut activity = ReloadProgress::new();
+        for line in [
+            "qol dev: prebuild output",
+            "error[E0425]: cannot find value `CURRENT_TIME` in module `xproto`",
+            "error[E0601]: `main` function not found",
+            "error: could not compile `qol-windowing` (lib) due to 1 previous error",
+            "command failed with exit status: 101",
+        ] {
+            activity.observe_failure(line);
+        }
+        assert_eq!(
+            reload_failure_reason("exit status: 1", &activity),
+            "error[E0425]: cannot find value `CURRENT_TIME` in module `xproto`"
+        );
+    }
+
+    #[test]
+    fn reload_failure_reason_falls_back_to_the_compile_summary() {
+        let mut activity = ReloadProgress::new();
+        activity.observe_failure("qol dev: prebuild output");
+        activity.observe_failure(
+            "error: could not compile `qol-windowing` (lib) due to 1 previous error",
+        );
+        assert_eq!(
+            reload_failure_reason("exit status: 1", &activity),
+            "error: could not compile `qol-windowing` (lib) due to 1 previous error"
+        );
+    }
+
+    #[test]
+    fn reload_failure_reason_falls_back_to_the_exit_status() {
+        assert_eq!(
+            reload_failure_reason("exit status: 1", &ReloadProgress::new()),
+            "exit status: 1"
+        );
+        let mut activity = ReloadProgress::new();
+        activity.observe_failure("ordinary line");
+        assert_eq!(
+            reload_failure_reason("exit status: 1", &activity),
+            "exit status: 1"
+        );
+    }
+
+    #[test]
+    fn observe_failure_keeps_the_first_coded_error_across_polls() {
+        let mut activity = ReloadProgress::new();
+        activity.observe_failure("\x1b[31merror[E0425]: cannot find value `CURRENT_TIME`\x1b[0m");
+        activity.observe_failure("warning: unused import");
+        activity.observe_failure("error[E0601]: `main` function not found");
+        activity.observe_failure("error: could not compile `qol-windowing` (lib)");
+        activity.observe_failure("error: later summary");
+
+        assert_eq!(
+            activity.coded_error.as_deref(),
+            Some("error[E0425]: cannot find value `CURRENT_TIME`"),
+            "the first coded diagnostic drives the reason even when a later poll sees another"
+        );
+        assert_eq!(
+            activity.summary_error.as_deref(),
+            Some("error: later summary"),
+            "the summary tracks the last compile-level error"
+        );
+    }
+
+    #[test]
+    fn spawn_error_records_the_pinned_target_in_the_failure() {
+        let mut dash = Dash::new(Vec::new());
+        let selection = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        let error = anyhow::anyhow!("failed to resolve qol workspace root");
+
+        record_spawn_error(&mut dash, &selection, &error);
+
+        let failure = dash.reload_failure.as_deref().expect("failure recorded");
+        assert!(failure.starts_with("switch to feat/x failed"), "{failure}");
+        assert!(
+            failure.contains("failed to resolve qol workspace root"),
+            "{failure}"
+        );
+        assert!(dash
+            .logs
+            .ring
+            .lines
+            .iter()
+            .any(|line| line.contains("reload failed to start")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failure_records_the_spawn_time_target_after_the_selection_changes() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("echo 'error[E0425]: cannot find value `CURRENT_TIME` in module `xproto`' >&2; exit 1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let rx = spawn_forwarders(&mut child);
+        assert!(!child.wait().unwrap().success());
+        let mut dash = Dash::new(Vec::new());
+        dash.reload = Reload::Running {
+            child,
+            rx,
+            activity: ReloadProgress::new(),
+            selection: WorktreeSelection::Pin(Some("monitor-display".to_string())),
+        };
+        dash.worktree_selection = WorktreeSelection::Pin(Some("somewhere-else".to_string()));
+
+        assert!(matches!(poll_reload(&mut dash), ReloadOutcome::Pending));
+
+        let failure = dash.reload_failure.as_deref().expect("failure recorded");
+        assert!(
+            failure.starts_with("switch to monitor-display failed"),
+            "{failure}"
+        );
+        assert!(!failure.contains("somewhere-else"), "{failure}");
+    }
+
+    #[test]
+    fn successful_reload_clears_a_seeded_failure() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut dash = Dash::new(Vec::new());
+        dash.record_reload_failure(
+            &WorktreeSelection::Pin(Some("feat/x".to_string())),
+            "exit status: 1",
+        );
+        assert!(dash.reload_failure.is_some());
+        dash.reload = Reload::Running {
+            child,
+            rx,
+            activity: ReloadProgress::new(),
+            selection: WorktreeSelection::Follow,
+        };
+
+        assert!(matches!(poll_reload(&mut dash), ReloadOutcome::Ready));
+        assert!(dash.reload_failure.is_none(), "success clears the failure");
+        assert!(
+            dash.notice.is_none(),
+            "the failure notice is removed with the failure"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_prebuild_records_a_visible_reason_and_keeps_the_pending_target() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(concat!(
+                "echo 'error[E0425]: cannot find value `CURRENT_TIME` in module `xproto`' >&2; ",
+                "echo 'error: could not compile `qol-windowing` (lib) due to 1 previous error' >&2; ",
+                "exit 1"
+            ))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let rx = spawn_forwarders(&mut child);
+        assert!(!child.wait().unwrap().success());
+        let mut dash = Dash::new(Vec::new());
+        dash.worktree_selection = WorktreeSelection::Pin(Some("monitor-display".to_string()));
+        dash.reload = Reload::Running {
+            child,
+            rx,
+            activity: ReloadProgress::new(),
+            selection: WorktreeSelection::Pin(Some("monitor-display".to_string())),
+        };
+
+        assert!(matches!(poll_reload(&mut dash), ReloadOutcome::Pending));
+
+        let failure = dash.reload_failure.as_deref().expect("failure recorded");
+        assert!(
+            failure.starts_with("switch to monitor-display failed"),
+            "{failure}"
+        );
+        assert!(failure.contains("error[E0425]"), "{failure}");
+        assert_eq!(
+            dash.notice.as_ref().expect("notice recorded").1,
+            failure,
+            "the visible notice must carry the recorded reason"
+        );
+        assert!(
+            dash.worktree_diverged(),
+            "a failed switch must keep the target for a retry"
+        );
+        assert!(
+            dash.logs
+                .ring
+                .lines
+                .iter()
+                .any(|line| line.contains("reload aborted")),
+            "the abort must stay in the log"
+        );
+
+        dash.clear_reload_failure();
+        assert!(dash.reload_failure.is_none());
     }
 
     #[test]

@@ -27,7 +27,7 @@ use super::filters::{filter_brick_layout, FilterState, FilterStrategy, LogFilter
 use super::log_pane::{DevLogFile, LogPane};
 use super::picker::{default_filter_layout_width, move_picker_selection, PickerMove};
 use super::render_util::now_unix_ms;
-use super::stream_view::EndpointsState;
+use super::stream_view::{strip_ansi_codes, EndpointsState};
 use super::worktrees_panel::{
     arm_selected_worktree, move_worktree_selection, open_worktrees_panel, target_label,
     WorktreePanel,
@@ -286,6 +286,8 @@ pub(super) struct ReloadProgress {
     pub(super) started: Instant,
     pub(super) phase: String,
     pub(super) detail: String,
+    pub(super) coded_error: Option<String>,
+    pub(super) summary_error: Option<String>,
 }
 
 impl ReloadProgress {
@@ -294,6 +296,19 @@ impl ReloadProgress {
             started: Instant::now(),
             phase: "prepare".to_string(),
             detail: "dev artifacts".to_string(),
+            coded_error: None,
+            summary_error: None,
+        }
+    }
+
+    pub(super) fn observe_failure(&mut self, line: &str) {
+        let stripped = strip_ansi_codes(line);
+        let trimmed = stripped.trim();
+        if self.coded_error.is_none() && trimmed.starts_with("error[") {
+            self.coded_error = Some(trimmed.to_string());
+        }
+        if trimmed.starts_with("error:") {
+            self.summary_error = Some(trimmed.to_string());
         }
     }
 
@@ -329,9 +344,11 @@ pub(super) enum Reload {
         child: Child,
         rx: Receiver<String>,
         activity: ReloadProgress,
+        selection: WorktreeSelection,
     },
     Handoff {
         activity: ReloadProgress,
+        selection: WorktreeSelection,
     },
 }
 
@@ -391,6 +408,7 @@ pub(super) struct Dash {
     pub(super) quit_prompt: Option<Instant>,
     pub(super) armed: bool,
     pub(super) reload: Reload,
+    pub(super) reload_failure: Option<String>,
     pub(super) pokes: Pokes,
     pub(super) links: LinksState,
     pub(super) plugin_health: Option<Vec<PluginHealthRow>>,
@@ -469,6 +487,7 @@ impl Dash {
             quit_prompt: None,
             armed: false,
             reload: Reload::Idle,
+            reload_failure: None,
             pokes: Pokes::default(),
             links: LinksState::Unknown,
             plugin_health: None,
@@ -497,7 +516,7 @@ impl Dash {
 
     pub(super) fn activity(&self) -> Option<Activity> {
         match &self.reload {
-            Reload::Running { activity, .. } | Reload::Handoff { activity } => {
+            Reload::Running { activity, .. } | Reload::Handoff { activity, .. } => {
                 Some(activity.activity())
             }
             Reload::Idle => self
@@ -742,9 +761,42 @@ impl Dash {
         target_label(target.as_deref(), &self.base_label)
     }
 
+    pub(super) fn handoff_selection(&self) -> Option<&WorktreeSelection> {
+        match &self.reload {
+            Reload::Handoff { selection, .. } => Some(selection),
+            Reload::Idle | Reload::Running { .. } => None,
+        }
+    }
+
+    pub(super) fn record_reload_failure(&mut self, selection: &WorktreeSelection, reason: &str) {
+        let message = match selection {
+            WorktreeSelection::Pin(target) if *target != self.running_branch => format!(
+                "switch to {} failed · {reason}",
+                target_label(target.as_deref(), &self.base_label)
+            ),
+            WorktreeSelection::Follow | WorktreeSelection::Pin(_) => {
+                format!("reload failed · {reason}")
+            }
+        };
+        self.notice = Some((Instant::now(), message.clone()));
+        self.reload_failure = Some(message);
+    }
+
+    pub(super) fn clear_reload_failure(&mut self) {
+        if self.reload_failure.as_ref().is_some_and(|failure| {
+            self.notice
+                .as_ref()
+                .is_some_and(|(_, notice)| failure == notice)
+        }) {
+            self.notice = None;
+        }
+        self.reload_failure = None;
+    }
+
     pub(super) fn disarm(&mut self) {
         self.armed = false;
         self.worktree_selection = WorktreeSelection::Follow;
+        self.clear_reload_failure();
     }
 }
 
@@ -950,6 +1002,61 @@ mod tests {
         assert!(
             shown.iter().any(|l| l.contains("SHOW_LIST")),
             "distinct launcher action must survive the rate limiter; shown={shown:?}"
+        );
+    }
+
+    #[test]
+    fn failed_switch_names_the_pending_target_in_the_notice_and_failure_state() {
+        let mut dash = Dash::new(Vec::new());
+        dash.worktree_selection = WorktreeSelection::Pin(Some("monitor-display".to_string()));
+
+        dash.record_reload_failure(
+            &WorktreeSelection::Pin(Some("monitor-display".to_string())),
+            "error[E0425]: cannot find value `CURRENT_TIME`",
+        );
+
+        let failure = dash.reload_failure.as_deref().expect("failure recorded");
+        assert!(
+            failure.starts_with("switch to monitor-display failed"),
+            "{failure}"
+        );
+        let notice = dash.notice.as_ref().expect("notice recorded");
+        assert_eq!(notice.1, failure, "notice and failure state must agree");
+
+        dash.disarm();
+        assert!(
+            dash.reload_failure.is_none(),
+            "disarm clears the failure flag"
+        );
+        assert!(
+            dash.notice.is_none(),
+            "the failure notice must not outlive the failure flag"
+        );
+        assert_eq!(dash.worktree_selection, WorktreeSelection::Follow);
+    }
+
+    #[test]
+    fn clearing_a_reload_failure_keeps_an_unrelated_notice() {
+        let mut dash = Dash::new(Vec::new());
+        dash.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+        dash.notice = Some((Instant::now(), "linked alt-tab".to_string()));
+
+        dash.clear_reload_failure();
+
+        assert!(dash.reload_failure.is_none());
+        assert_eq!(
+            dash.notice.as_ref().expect("notice kept").1,
+            "linked alt-tab"
+        );
+    }
+
+    #[test]
+    fn failed_plain_reload_does_not_claim_a_switch() {
+        let mut dash = Dash::new(Vec::new());
+        dash.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+        assert_eq!(
+            dash.reload_failure.as_deref(),
+            Some("reload failed · exit status: 1")
         );
     }
 }

@@ -87,8 +87,10 @@ Moved out of qol-tray, with the tray delegating so behavior is unchanged:
 
 - The poller fetches `/dev/active-worktree` (existing endpoint) alongside health, storing `Dash.running_branch: Option<String>`.
 - Divergent state: `worktree_target != running_branch`.
-- The three states are exclusive in the UI; exactly one flag renders at a time.
+- The three primary states stay exclusive; one flag renders at a time.
   Precedence: red RELOADING > orange `WORKTREE <branch>` (divergent) > yellow ARMED > default.
+  The WORKTREE flag may carry a FAILED annotation after a failed prebuild for the same target, and an ARMED annotation while armed.
+  A failure persists until the next attempt, an Esc dismissal, or a selection change; an unarmed ctrl+r retries a pending failed target.
 - Breadcrumb shows the single active flag (` · WORKTREE <branch>`, or ` · WORKTREE base`).
 - Orange is `Color::Rgb(255, 153, 0)` (ratatui has no named orange).
 - A persistent branch sign straddles the bottom border, centered like the `qol dev` sign on top, showing the running branch and extending to `running → target` in orange while divergent.

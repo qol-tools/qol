@@ -126,9 +126,11 @@ fn char_binding(key: &'static str, desc: &'static str, action: Action, c: char) 
     binding(key, desc, action, strokes)
 }
 
-pub(super) fn global_action_bindings(armed: bool) -> Vec<KeyBinding> {
+pub(super) fn global_action_bindings(armed: bool, retry: bool) -> Vec<KeyBinding> {
     let ctrl_r_desc = if armed {
         "reload qol dev"
+    } else if retry {
+        "retry reload"
     } else {
         "rebuild tray+plugins"
     };
@@ -498,7 +500,7 @@ pub(super) fn stream_view_bindings(
 }
 
 pub(super) fn action_for(dash: &Dash, code: KeyCode, mods: KeyModifiers) -> Action {
-    global_action_bindings(dash.armed)
+    global_action_bindings(dash.armed, dash.reload_failure.is_some())
         .into_iter()
         .chain(context_action_bindings(dash))
         .find(|binding| binding.matches(code, mods))
@@ -536,6 +538,25 @@ pub(super) fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
 mod tests {
     use super::*;
     use crate::dev_console::emu_panel::EmuDetail;
+
+    #[test]
+    fn global_ctrl_r_hint_switches_to_retry_after_a_failure() {
+        let hint = |armed, retry| {
+            unique_hints(global_action_bindings(armed, retry))
+                .into_iter()
+                .find(|hint| hint.key == "ctrl+r")
+                .expect("ctrl+r is always bound")
+                .desc
+        };
+        assert_eq!(hint(false, false), "rebuild tray+plugins");
+        assert_eq!(hint(false, true), "retry reload");
+        assert_eq!(hint(true, false), "reload qol dev");
+        assert_eq!(
+            hint(true, true),
+            "reload qol dev",
+            "an armed ctrl+r outranks the retry label"
+        );
+    }
 
     #[test]
     fn action_for_maps_keys() {

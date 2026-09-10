@@ -20,7 +20,8 @@ use crate::poller::Poller;
 
 use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
-    flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
+    flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View,
+    WorktreeSelection, ROWS,
 };
 use super::disk::{
     apply_disk_outcome, disk_view_lines, load_cached_report, open_disk, probe_cached_report,
@@ -194,6 +195,10 @@ pub(super) fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> 
         dash.disarm();
         return KeyOutcome::Handled;
     }
+    if code == KeyCode::Esc && dash.reload_failure.is_some() {
+        dash.clear_reload_failure();
+        return KeyOutcome::Handled;
+    }
     let modified = dash.armed;
     let action = action_for(dash, code, mods);
     match action {
@@ -205,7 +210,7 @@ pub(super) fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> 
             dash.quit_prompt = Some(Instant::now());
             KeyOutcome::Handled
         }
-        Action::Rebuild if modified => {
+        Action::Rebuild if modified || dash.reload_failure.is_some() => {
             dash.armed = false;
             KeyOutcome::Reload
         }
@@ -322,7 +327,10 @@ pub(super) fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            let selection = dash.worktree_selection.clone();
+            let selection = dash
+                .handoff_selection()
+                .cloned()
+                .unwrap_or(WorktreeSelection::Follow);
             let handoff = super::handoff_display::run(
                 dash,
                 |dash| {
@@ -352,9 +360,7 @@ pub(super) fn tui_session(
                     dash.push_log(line);
                 }
                 PostHandoff::HandoffFailed { error } => {
-                    dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
-                    dash.notice = Some((Instant::now(), "handoff failed".to_string()));
-                    dash.plugin_health = None;
+                    record_handoff_failure(dash, error, &selection);
                 }
             }
         }
@@ -436,6 +442,16 @@ pub(super) fn post_handoff<'a>(
             ),
         },
     }
+}
+
+pub(super) fn record_handoff_failure(
+    dash: &mut Dash,
+    error: &anyhow::Error,
+    selection: &WorktreeSelection,
+) {
+    dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
+    dash.record_reload_failure(selection, &format!("{error:#}"));
+    dash.plugin_health = None;
 }
 
 fn should_self_restart(session_started: SystemTime) -> Result<SelfRestartDecision> {
@@ -1577,6 +1593,67 @@ mod tests {
             WorktreeSelection::Pin(Some("feat/x".to_string())),
             "the reload must still consume the armed target"
         );
+    }
+
+    #[test]
+    fn unarmed_ctrl_r_retries_a_failed_reload_and_esc_dismisses_the_failure() {
+        let pin = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        let mut dash = Dash::new(Vec::new());
+        dash.record_reload_failure(&pin, "exit status: 1");
+
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyOutcome::Reload,
+            "an unarmed ctrl+r retries while a failure is pending"
+        );
+        assert!(
+            dash.reload_failure.is_some(),
+            "handle_key routes the retry; start_reload owns the clear"
+        );
+
+        let mut dismissed = Dash::new(Vec::new());
+        dismissed.worktree_selection = pin.clone();
+        dismissed.record_reload_failure(&pin, "exit status: 1");
+        assert_eq!(
+            handle_key(&mut dismissed, KeyCode::Esc, KeyModifiers::NONE),
+            KeyOutcome::Handled
+        );
+        assert!(
+            dismissed.reload_failure.is_none(),
+            "esc dismisses the failure"
+        );
+        assert_eq!(
+            dismissed.worktree_selection, pin,
+            "dismissal must preserve the pinned target"
+        );
+    }
+
+    #[test]
+    fn handoff_failure_records_the_pinned_target_and_the_error() {
+        let mut dash = Dash::new(Vec::new());
+        let selection = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        let error = anyhow::anyhow!("successor promotion timed out");
+
+        record_handoff_failure(&mut dash, &error, &selection);
+
+        let failure = dash.reload_failure.as_deref().expect("failure recorded");
+        assert!(failure.starts_with("switch to feat/x failed"), "{failure}");
+        assert!(
+            failure.contains("successor promotion timed out"),
+            "{failure}"
+        );
+        assert_eq!(
+            dash.notice.as_ref().expect("notice recorded").1,
+            failure,
+            "the handoff failure is visible as the notice"
+        );
+        assert!(dash
+            .logs
+            .ring
+            .lines
+            .iter()
+            .any(|line| line.contains("handoff failed")));
+        assert!(dash.plugin_health.is_none());
     }
 
     #[test]

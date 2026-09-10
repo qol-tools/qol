@@ -274,7 +274,7 @@ fn pretty_trace_file(file: &Path) -> PathBuf {
     folder.join(format!("{stem}.pretty.log"))
 }
 
-fn strip_ansi_codes(input: &str) -> String {
+pub(super) fn strip_ansi_codes(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {

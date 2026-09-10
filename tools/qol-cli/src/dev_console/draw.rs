@@ -18,8 +18,8 @@ use super::filters::{draw_filter_panel, filter_scope, FilterState};
 use super::key_bindings::{context_action_bindings, global_action_bindings, unique_hints, KeyHint};
 use super::render_util;
 use super::render_util::{
-    accent, caret, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content,
-    NavigationOverflow, Sign, SignBox,
+    accent, caret, cursor_window_start, format_duration, list_capacity, now_unix_ms, panel_width,
+    render_compact_bottom_panel, view_content, wrapped_rows, NavigationOverflow, Sign, SignBox,
 };
 use super::stream_view::{draw_endpoints, draw_logs, draw_trace, trace_value};
 use super::worktrees_panel::{draw_worktrees_panel, target_label};
@@ -45,6 +45,7 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
+    draw_notice(frame, dash, inner, accent);
     draw_quit_prompt(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
@@ -77,12 +78,16 @@ fn draw_view(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverfl
     }
 }
 
+pub(super) fn modal_surface_active(dash: &Dash) -> bool {
+    dash.worktree_panel.is_active()
+        || dash.feature_panel.is_active()
+        || dash.filter_state.is_active()
+        || dash.copying
+        || dash.quit_prompt_active()
+}
+
 fn navigation_cue_unobstructed(dash: &Dash) -> bool {
-    !dash.worktree_panel.is_active()
-        && !dash.feature_panel.is_active()
-        && !dash.filter_state.is_active()
-        && !dash.copying
-        && !dash.quit_prompt_active()
+    !modal_surface_active(dash)
 }
 
 pub(super) fn page_header(frame: &mut Frame, view: View, inner: Rect) -> Rect {
@@ -175,6 +180,14 @@ pub(super) fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
                 .fg(ORANGE)
                 .bold(),
         );
+        if dash.reload_failure.is_some() {
+            spans.push(" · FAILED".fg(Color::Red).bold());
+        }
+        if dash.armed {
+            spans.push(" · ARMED".fg(Color::Yellow).bold());
+        }
+    } else if dash.reload_failure.is_some() {
+        spans.push(" · RELOAD FAILED".fg(Color::Red).bold());
     } else if dash.armed {
         spans.push(" · ARMED".fg(Color::Yellow).bold());
     }
@@ -240,6 +253,34 @@ pub(super) fn draw_quit_prompt(frame: &mut Frame, dash: &Dash, area: Rect, accen
         return;
     }
     render_util::render_bottom_panel(frame, area, "quit", quit_prompt_rows(), accent);
+}
+
+const NOTICE_ROWS: usize = 3;
+
+pub(super) fn draw_notice(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
+    if modal_surface_active(dash) {
+        return;
+    }
+    let Some((at, message)) = &dash.notice else {
+        return;
+    };
+    let is_failure = dash.reload_failure.as_deref() == Some(message.as_str());
+    if !is_failure && at.elapsed() >= ACK_TTL {
+        return;
+    }
+    let tone = if is_failure { Color::Red } else { accent };
+    let width = panel_width(area).saturating_sub(2) as usize;
+    let mut rows: Vec<Line<'static>> = wrapped_rows(message, width)
+        .into_iter()
+        .map(|line| line.fg(Color::White))
+        .collect();
+    if rows.len() > NOTICE_ROWS {
+        rows.truncate(NOTICE_ROWS);
+        if let Some(last) = rows.last_mut() {
+            last.spans.push(Span::raw("…").fg(Color::White));
+        }
+    }
+    render_compact_bottom_panel(frame, area, "status", rows, tone);
 }
 
 pub(super) fn context_keys(dash: &Dash) -> Vec<KeyHint> {
@@ -345,8 +386,8 @@ pub(super) fn context_keys(dash: &Dash) -> Vec<KeyHint> {
     unique_hints(context_action_bindings(dash))
 }
 
-pub(super) fn global_keys(armed: bool) -> Vec<KeyHint> {
-    unique_hints(global_action_bindings(armed))
+pub(super) fn global_keys(armed: bool, retry: bool) -> Vec<KeyHint> {
+    unique_hints(global_action_bindings(armed, retry))
 }
 
 pub(super) fn key_lines(keys: &[KeyHint]) -> Vec<Line<'static>> {
@@ -367,7 +408,8 @@ pub(super) fn section_label(label: &'static str) -> Line<'static> {
 pub(super) fn keys_rows(dash: &Dash) -> Vec<Line<'static>> {
     let mut rows = vec![section_label("global")];
     rows.push(Line::from(""));
-    rows.extend(key_lines(&global_keys(dash.armed)));
+    let globals = global_keys(dash.armed, dash.reload_failure.is_some());
+    rows.extend(key_lines(&globals));
     rows.push(Line::from(""));
     rows.push(Line::from(""));
     rows.push(section_label("context"));
@@ -699,7 +741,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::mpsc::channel;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -1017,6 +1059,21 @@ mod tests {
     }
 
     #[test]
+    fn keys_hud_relabels_ctrl_r_as_retry_after_a_failure() {
+        let mut dash = Dash::new(Vec::new());
+        dash.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+        let text = render_text(&mut dash);
+        assert!(
+            text.contains("retry reload"),
+            "missing retry label after a failure: {text}"
+        );
+        assert!(
+            !text.contains("rebuild tray+plugins"),
+            "stale rebuild label rendered after a failure: {text}"
+        );
+    }
+
+    #[test]
     fn keys_rows_space_sections() {
         let dash = Dash::new(Vec::new());
         let rows: Vec<String> = keys_rows(&dash)
@@ -1190,6 +1247,7 @@ mod tests {
             child,
             rx,
             activity: ReloadProgress::new(),
+            selection: WorktreeSelection::Follow,
         };
         assert!(dash.is_reloading());
         assert_eq!(frame_accent(&dash), Color::Red);
@@ -1212,6 +1270,7 @@ mod tests {
             child,
             rx,
             activity,
+            selection: WorktreeSelection::Follow,
         };
 
         let rows = render_rows_at(&mut dash, 110, 28);
@@ -1451,7 +1510,10 @@ mod tests {
         );
         let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
         assert!(crumb.contains("WORKTREE feat/x"), "crumb: {crumb}");
-        assert!(!crumb.contains("ARMED"), "single flag only: {crumb}");
+        assert!(
+            crumb.contains("ARMED"),
+            "armed coexists with the divergent worktree flag: {crumb}"
+        );
 
         let child = Command::new("true").spawn().unwrap();
         let (_tx, rx) = channel();
@@ -1459,6 +1521,7 @@ mod tests {
             child,
             rx,
             activity: ReloadProgress::new(),
+            selection: WorktreeSelection::Follow,
         };
         assert_eq!(
             frame_accent(&dash),
@@ -1518,5 +1581,192 @@ mod tests {
             Action::ToggleTraceRate,
             "'s' in the trace view toggles the reporting rate"
         );
+    }
+
+    #[test]
+    fn notice_renders_the_latest_operation_status() {
+        let mut dash = Dash::new(Vec::new());
+        dash.notice = Some((Instant::now(), "linked alt-tab".to_string()));
+        let text = render_text(&mut dash);
+        assert!(text.contains("status"), "notice panel missing: {text}");
+        assert!(
+            text.contains("linked alt-tab"),
+            "notice text missing: {text}"
+        );
+    }
+
+    #[test]
+    fn expired_notice_disappears() {
+        let mut dash = Dash::new(Vec::new());
+        dash.notice = Some((
+            Instant::now() - ACK_TTL - Duration::from_secs(1),
+            "linked alt-tab".to_string(),
+        ));
+        let text = render_text(&mut dash);
+        assert!(
+            !text.contains("linked alt-tab"),
+            "expired notice rendered: {text}"
+        );
+    }
+
+    #[test]
+    fn modal_input_suppresses_the_notice() {
+        let mut dash = Dash::new(Vec::new());
+        dash.notice = Some((Instant::now(), "linked alt-tab".to_string()));
+        dash.copying = true;
+        let text = render_text(&mut dash);
+        assert!(
+            !text.contains("linked alt-tab"),
+            "notice must yield to the copy prompt: {text}"
+        );
+    }
+
+    #[test]
+    fn failed_worktree_switch_shows_the_reason_and_marks_the_breadcrumb() {
+        let mut dash = Dash::new(Vec::new());
+        let selection = WorktreeSelection::Pin(Some("monitor-display".to_string()));
+        dash.worktree_selection = selection.clone();
+        dash.record_reload_failure(
+            &selection,
+            "error[E0425]: cannot find value `CURRENT_TIME` in module `xproto`",
+        );
+
+        let text = render_text(&mut dash);
+
+        assert!(
+            text.contains("WORKTREE monitor-display"),
+            "pending target lost from the crumb: {text}"
+        );
+        assert!(
+            text.contains("FAILED"),
+            "failure flag missing from the crumb: {text}"
+        );
+        assert!(
+            text.contains("switch to monitor-display failed"),
+            "failure must name the target: {text}"
+        );
+        assert!(
+            text.contains("error[E0425]"),
+            "failure reason missing from the notice: {text}"
+        );
+    }
+
+    #[test]
+    fn diverged_armed_failure_renders_failed_and_armed_together() {
+        let mut dash = Dash::new(Vec::new());
+        let selection = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        dash.armed = true;
+        dash.worktree_selection = selection.clone();
+        dash.record_reload_failure(&selection, "exit status: 1");
+
+        let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
+
+        assert!(crumb.contains("WORKTREE feat/x"), "{crumb}");
+        assert!(crumb.contains("FAILED"), "{crumb}");
+        assert!(crumb.contains("ARMED"), "{crumb}");
+    }
+
+    #[test]
+    fn failure_notice_outlives_the_ack_ttl_while_unrelated_notices_expire() {
+        let expired = Instant::now() - ACK_TTL - Duration::from_secs(1);
+
+        let mut failure = Dash::new(Vec::new());
+        failure.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+        failure.notice.as_mut().expect("notice").0 = expired;
+        let text = render_text(&mut failure);
+        assert!(
+            text.contains("reload failed · exit status: 1"),
+            "a failure notice must survive the ack ttl: {text}"
+        );
+
+        let mut unrelated = Dash::new(Vec::new());
+        unrelated.notice = Some((expired, "linked alt-tab".to_string()));
+        let text = render_text(&mut unrelated);
+        assert!(
+            !text.contains("linked alt-tab"),
+            "an unrelated notice still expires: {text}"
+        );
+    }
+
+    #[test]
+    fn unrelated_notices_keep_the_accent_and_failure_notices_are_red() {
+        let expired = Instant::now() - ACK_TTL - Duration::from_secs(1);
+
+        let mut unrelated = Dash::new(Vec::new());
+        unrelated.notice = Some((Instant::now(), "linked alt-tab".to_string()));
+        assert_eq!(notice_title_color(&mut unrelated), Color::Green);
+
+        let mut failure = Dash::new(Vec::new());
+        failure.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+        failure.notice.as_mut().expect("notice").0 = expired;
+        assert_eq!(notice_title_color(&mut failure), Color::Red);
+    }
+
+    #[test]
+    fn every_modal_surface_suppresses_the_notice() {
+        type Activate = fn(&mut Dash);
+        let cases: [(&str, Activate); 5] = [
+            ("copy prompt", |dash| dash.copying = true),
+            ("filter panel", |dash| {
+                dash.filter_state = FilterState::Managing
+            }),
+            ("worktree panel", |dash| dash.worktree_panel.open = true),
+            ("feature panel", |dash| dash.feature_panel.open = true),
+            ("quit prompt", |dash| {
+                dash.quit_prompt = Some(Instant::now())
+            }),
+        ];
+        for (label, activate) in cases {
+            let mut dash = Dash::new(Vec::new());
+            dash.record_reload_failure(&WorktreeSelection::Follow, "exit status: 1");
+            activate(&mut dash);
+            let text = render_text(&mut dash);
+            assert!(
+                !text.contains("reload failed"),
+                "{label} must suppress the failure notice: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clipped_notice_row_carries_an_ellipsis() {
+        let mut dash = Dash::new(Vec::new());
+        dash.notice = Some((Instant::now(), "alpha ".repeat(60)));
+
+        let text = render_text(&mut dash);
+        assert!(
+            text.contains('…'),
+            "a notice clipped to three rows must mark the truncation: {text}"
+        );
+        let rows = render_rows(&mut dash);
+        let ellipsis_row = rows
+            .iter()
+            .find(|row| row.contains('…'))
+            .expect("ellipsis row");
+        assert!(
+            ellipsis_row.contains("alpha"),
+            "the ellipsis must sit on notice text: {ellipsis_row}"
+        );
+    }
+
+    fn notice_title_color(dash: &mut Dash) -> Color {
+        use ratatui::backend::TestBackend;
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, dash)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width as usize;
+        for row in buffer.content().chunks(width) {
+            for (column, _) in row.iter().enumerate() {
+                let tail: String = row[column..]
+                    .iter()
+                    .take("status".len())
+                    .map(|cell| cell.symbol())
+                    .collect();
+                if tail == "status" {
+                    return row[column].fg;
+                }
+            }
+        }
+        panic!("status sign not rendered");
     }
 }
