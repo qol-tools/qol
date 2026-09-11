@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use qol_dev_build::target_cache::{
-    format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir, SWEPT_CACHE_CEILING,
+    format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
+    INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Stylize};
@@ -398,8 +399,9 @@ fn usage_rows(
     rows.push(DiskRow {
         label: PRUNABLE_LABEL.to_string(),
         detail: format!(
-            "the doctor auto-prunes debug caches to a {} ceiling",
-            format_bytes(SWEPT_CACHE_CEILING)
+            "the doctor auto-prunes debug artifacts to {} and incremental caches to {}",
+            format_bytes(SWEPT_CACHE_CEILING),
+            format_bytes(INCREMENTAL_CACHE_CEILING)
         ),
         bytes: Some(prunable),
         cleanable: true,

@@ -15,7 +15,9 @@ const REMOVED_DEBUG_DIRS: [&str; 1] = ["examples"];
 const DEBUG_BUILD_LOCK_FILES: [&str; 3] =
     [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
+const INCREMENTAL_DEBUG_DIR: &str = "incremental";
 pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
+pub const INCREMENTAL_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
 
 const PACE_BATCH: usize = 2000;
 
@@ -162,11 +164,11 @@ pub fn is_protected_target_root(name: &str) -> bool {
 }
 
 pub fn prune_cargo_target_dir(target: &Path) -> Result<(), String> {
-    prune_with_ceiling(target, SWEPT_CACHE_CEILING)
+    prune_with_ceilings(target, SWEPT_CACHE_CEILING, INCREMENTAL_CACHE_CEILING)
 }
 
 pub fn prunable_target_bytes(target: &Path) -> u64 {
-    prunable_with_ceiling(target, SWEPT_CACHE_CEILING)
+    prunable_with_ceilings(target, SWEPT_CACHE_CEILING, INCREMENTAL_CACHE_CEILING)
 }
 
 fn hold_debug_build_locks(debug: &Path) -> Result<Vec<fs::File>, String> {
@@ -194,7 +196,11 @@ fn hold_debug_build_locks(debug: &Path) -> Result<Vec<fs::File>, String> {
     Ok(held)
 }
 
-fn prune_with_ceiling(target: &Path, ceiling: u64) -> Result<(), String> {
+fn prune_with_ceilings(
+    target: &Path,
+    swept_ceiling: u64,
+    incremental_ceiling: u64,
+) -> Result<(), String> {
     let _build_locks = hold_debug_build_locks(&target.join("debug"))?;
     let entries = fs::read_dir(target).map_err(|error| {
         format!(
@@ -213,14 +219,19 @@ fn prune_with_ceiling(target: &Path, ceiling: u64) -> Result<(), String> {
     for name in REMOVED_DEBUG_DIRS {
         try_remove_target_path(&debug.join(name), &mut failures);
     }
-    evict_oldest_swept_files(&debug, ceiling, &mut failures);
+    evict_oldest(swept_files(&debug), swept_ceiling, &mut failures);
+    evict_oldest(
+        incremental_caches(&debug),
+        incremental_ceiling,
+        &mut failures,
+    );
     if failures.is_empty() {
         return Ok(());
     }
     Err(format!("could not remove: {}", failures.join(", ")))
 }
 
-fn prunable_with_ceiling(target: &Path, ceiling: u64) -> u64 {
+fn prunable_with_ceilings(target: &Path, swept_ceiling: u64, incremental_ceiling: u64) -> u64 {
     let mut bytes = 0;
     if let Ok(entries) = fs::read_dir(target) {
         for entry in entries.flatten() {
@@ -234,17 +245,26 @@ fn prunable_with_ceiling(target: &Path, ceiling: u64) -> u64 {
     for name in REMOVED_DEBUG_DIRS {
         bytes += path_bytes(&debug.join(name));
     }
-    let swept_total: u64 = swept_files(&debug).iter().map(|file| file.bytes).sum();
-    bytes + swept_total.saturating_sub(ceiling)
+    bytes
+        + excess_over(swept_files(&debug), swept_ceiling)
+        + excess_over(incremental_caches(&debug), incremental_ceiling)
 }
 
-struct SweptFile {
+fn excess_over(entries: Vec<CacheEntry>, ceiling: u64) -> u64 {
+    entries
+        .iter()
+        .map(|entry| entry.bytes)
+        .sum::<u64>()
+        .saturating_sub(ceiling)
+}
+
+struct CacheEntry {
     path: std::path::PathBuf,
     modified: SystemTime,
     bytes: u64,
 }
 
-fn swept_files(debug: &Path) -> Vec<SweptFile> {
+fn swept_files(debug: &Path) -> Vec<CacheEntry> {
     let mut files = Vec::new();
     for name in SWEPT_DEBUG_DIRS {
         collect_files(&debug.join(name), &mut files);
@@ -252,7 +272,40 @@ fn swept_files(debug: &Path) -> Vec<SweptFile> {
     files
 }
 
-fn collect_files(dir: &Path, files: &mut Vec<SweptFile>) {
+fn incremental_caches(debug: &Path) -> Vec<CacheEntry> {
+    let Ok(entries) = fs::read_dir(debug.join(INCREMENTAL_DEBUG_DIR)) else {
+        return Vec::new();
+    };
+    let mut caches = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let mut files = Vec::new();
+        collect_files(&path, &mut files);
+        if files.is_empty() {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            caches.push(CacheEntry {
+                path,
+                modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                bytes: metadata.len(),
+            });
+            continue;
+        }
+        caches.push(CacheEntry {
+            path,
+            modified: files
+                .iter()
+                .map(|file| file.modified)
+                .max()
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            bytes: files.iter().map(|file| file.bytes).sum(),
+        });
+    }
+    caches
+}
+
+fn collect_files(dir: &Path, files: &mut Vec<CacheEntry>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -264,7 +317,7 @@ fn collect_files(dir: &Path, files: &mut Vec<SweptFile>) {
             collect_files(&entry.path(), files);
             continue;
         }
-        files.push(SweptFile {
+        files.push(CacheEntry {
             path: entry.path(),
             modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
             bytes: metadata.len(),
@@ -272,21 +325,20 @@ fn collect_files(dir: &Path, files: &mut Vec<SweptFile>) {
     }
 }
 
-fn evict_oldest_swept_files(debug: &Path, ceiling: u64, failures: &mut Vec<String>) {
-    let mut files = swept_files(debug);
-    let mut remaining: u64 = files.iter().map(|file| file.bytes).sum();
+fn evict_oldest(mut entries: Vec<CacheEntry>, ceiling: u64, failures: &mut Vec<String>) {
+    let mut remaining: u64 = entries.iter().map(|entry| entry.bytes).sum();
     if remaining <= ceiling {
         return;
     }
-    files.sort_by_key(|file| file.modified);
-    for file in files {
+    entries.sort_by_key(|entry| entry.modified);
+    for entry in entries {
         if remaining <= ceiling {
             return;
         }
         let before = failures.len();
-        try_remove_target_path(&file.path, failures);
+        try_remove_target_path(&entry.path, failures);
         if failures.len() == before {
-            remaining -= file.bytes;
+            remaining -= entry.bytes;
         }
     }
 }
@@ -404,17 +456,58 @@ mod tests {
         let removed_roots = 2 * 4;
         let swept_excess = 3 * 4 - ceiling;
         assert_eq!(
-            prunable_with_ceiling(target, ceiling),
+            prunable_with_ceilings(target, ceiling, ceiling),
             removed_roots + swept_excess,
             "prunable must count removed roots plus the LRU excess over the ceiling"
         );
 
-        prune_with_ceiling(target, ceiling).expect("prune target");
+        prune_with_ceilings(target, ceiling, ceiling).expect("prune target");
 
         for (rel, _, kept) in cases {
             assert_eq!(target.join(rel).exists(), kept, "path: {rel}");
         }
-        assert_eq!(prunable_with_ceiling(target, ceiling), 0);
+        assert_eq!(prunable_with_ceilings(target, ceiling, ceiling), 0);
+    }
+
+    #[test]
+    fn incremental_caches_evict_least_recently_compiled_first() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path();
+        let incremental = target.join("debug").join("incremental");
+        let cases = [
+            ("qol_tray-old/s-1/dep-graph.bin", 1),
+            ("qol_tray-new/s-2/dep-graph.bin", 2),
+        ];
+        for (rel, age_rank) in cases {
+            let path = incremental.join(rel);
+            fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            fs::write(&path, b"xxxx").expect("file");
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .expect("open")
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(age_rank))
+                .expect("mtime");
+        }
+        let ceiling = 4;
+
+        assert_eq!(
+            prunable_with_ceilings(target, u64::MAX, ceiling),
+            4,
+            "prunable must count the incremental excess over its own ceiling"
+        );
+
+        prune_with_ceilings(target, u64::MAX, ceiling).expect("prune target");
+
+        assert!(
+            !incremental.join("qol_tray-old").exists(),
+            "the least recently compiled crate cache must be evicted"
+        );
+        assert!(
+            incremental.join("qol_tray-new/s-2/dep-graph.bin").exists(),
+            "the hot crate cache must survive so rebuilds stay incremental"
+        );
+        assert_eq!(prunable_with_ceilings(target, u64::MAX, ceiling), 0);
     }
 
     #[test]
@@ -434,7 +527,8 @@ mod tests {
         fs::create_dir_all(target.join("cargo-timings")).expect("root dir");
         fs::write(target.join("cargo-timings/timing.html"), b"xxxx").expect("file");
 
-        let error = prune_with_ceiling(target, 0).expect_err("held build lock must skip the prune");
+        let error =
+            prune_with_ceilings(target, 0, 0).expect_err("held build lock must skip the prune");
 
         assert!(error.contains("cargo is building"), "error: {error}");
         assert!(

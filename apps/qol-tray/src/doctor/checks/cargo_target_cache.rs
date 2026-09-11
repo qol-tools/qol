@@ -2,12 +2,12 @@ use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck
 use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
-use qol_dev_build::target_cache::{dir_size, format_bytes};
+use qol_dev_build::target_cache::{dir_size, format_bytes, INCREMENTAL_CACHE_CEILING};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const ID: &str = "cargo_target_cache";
-const WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const WARN_BYTES: u64 = INCREMENTAL_CACHE_CEILING;
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub(super) struct CargoTargetCacheCheck {
@@ -106,7 +106,7 @@ fn report_for(size: CacheSize) -> CheckReport {
         )),
         CacheSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo incremental cache is {} over the {} limit; it is kept because deleting it forces cold rebuilds",
+                "cargo incremental cache is {} over the {} ceiling; the cargo_target_total prune evicts the least recently compiled crate caches",
                 format_bytes(bytes),
                 format_bytes(WARN_BYTES)
             ),
@@ -135,17 +135,17 @@ mod tests {
         let report = report_for(CacheSize::Bytes(WARN_BYTES));
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
-        assert!(report.summary.contains("8.0 GiB"));
+        assert!(report.summary.contains("48.0 GiB"));
     }
 
     #[test]
-    fn cache_above_limit_warns_without_fix() {
+    fn cache_above_limit_warns_and_names_the_prune_that_evicts_it() {
         let report = report_for(CacheSize::Bytes(WARN_BYTES + 1));
         assert_eq!(report.issues.len(), 1);
         assert!(report.fixes.is_empty());
-        assert!(report
-            .summary
-            .contains("it is kept because deleting it forces cold rebuilds"));
+        assert!(report.summary.contains(
+            "the cargo_target_total prune evicts the least recently compiled crate caches"
+        ));
     }
 
     #[test]

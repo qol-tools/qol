@@ -4,7 +4,7 @@ use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{
-    dir_size, format_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
+    dir_size, format_bytes, prunable_target_bytes, INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -109,10 +109,11 @@ fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
         )),
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} with {} prunable; removing stale secondary target roots and the oldest debug artifacts over the {} ceiling",
+                "cargo target directory is {} with {} prunable; removing stale secondary target roots, debug artifacts over the {} ceiling and incremental caches over the {} ceiling, oldest first",
                 format_bytes(bytes),
                 format_bytes(prunable),
-                format_bytes(SWEPT_CACHE_CEILING)
+                format_bytes(SWEPT_CACHE_CEILING),
+                format_bytes(INCREMENTAL_CACHE_CEILING)
             ),
             ID,
             vec![FixAction::PruneCargoTargetDir { target: path }],
@@ -162,7 +163,7 @@ mod tests {
         );
         assert!(report
             .summary
-            .contains("oldest debug artifacts over the 48.0 GiB ceiling"));
+            .contains("incremental caches over the 48.0 GiB ceiling, oldest first"));
     }
 
     #[test]
