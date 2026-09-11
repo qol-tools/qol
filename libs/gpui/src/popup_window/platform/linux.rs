@@ -1652,8 +1652,7 @@ fn window_pid_matches(conn: &impl Connection, wid: u32, pid_atom: u32, pid: u32)
 fn move_window(conn: &impl Connection, root: u32, wid: u32, x: i32, y: i32) -> bool {
     let target = top_level_frame(conn, root, wid).unwrap_or(wid);
     let aux = ConfigureWindowAux::new().x(x).y(y);
-    let moved = conn.configure_window(target, &aux).is_ok();
-    let _ = conn.flush();
+    let moved = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
     eprintln!("[popup/x11] move client={wid} target={target} root={root} to=({x},{y}) ok={moved}");
     moved
@@ -1674,14 +1673,20 @@ fn set_window_bounds(
         .y(y)
         .width(width)
         .height(height);
-    let configured = conn.configure_window(target, &aux).is_ok();
-    let _ = conn.flush();
+    let configured = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
     eprintln!(
         "[popup/x11] bounds client={wid} target={target} root={root} to=({x},{y}) size={}x{} ok={configured}",
         width, height
     );
     configured
+}
+
+fn configure_window_synced(conn: &impl Connection, target: u32, aux: &ConfigureWindowAux) -> bool {
+    conn.configure_window(target, aux)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
 }
 
 fn top_level_frame(conn: &impl Connection, root: u32, wid: u32) -> Option<u32> {
