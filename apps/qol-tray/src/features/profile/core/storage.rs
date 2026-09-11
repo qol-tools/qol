@@ -1,7 +1,10 @@
-use super::{PluginsLock, ProfileImportBundle, ProfileManifest, CURRENT_PROFILE_VERSION};
+use super::{
+    PluginLockEntry, PluginsLock, ProfileImportBundle, ProfileManifest, CURRENT_PROFILE_VERSION,
+};
+use crate::plugins::PluginUid;
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub fn ensure_profile_dirs() -> Result<()> {
@@ -93,12 +96,117 @@ pub(super) fn changed_plugin_ids(previous: &PluginsLock, next: &PluginsLock) -> 
         .collect()
 }
 
-pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
+pub(super) struct PluginUidIndex {
+    id_to_uid: HashMap<String, PluginUid>,
+    uid_to_id: HashMap<String, String>,
+    known_uids: HashSet<String>,
+}
+
+impl PluginUidIndex {
+    pub(super) fn from_plugins(
+        plugins_dir: &Path,
+        plugins: &[PluginLockEntry],
+        stored: &PluginsLock,
+    ) -> Self {
+        let bundle_ids = plugins
+            .iter()
+            .map(|plugin| plugin.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut id_to_uid = HashMap::new();
+        let mut uid_to_id = HashMap::new();
+        let mut known_uids = HashSet::new();
+        for entry in plugins.iter().chain(
+            stored
+                .plugins
+                .iter()
+                .filter(|entry| !bundle_ids.contains(entry.id.as_str())),
+        ) {
+            if !crate::paths::is_safe_path_component(&entry.id)
+                || !crate::paths::is_safe_path_component(entry.uid.as_str())
+            {
+                continue;
+            }
+            let uid = resolved_entry_uid(plugins_dir, entry);
+            if !crate::paths::is_safe_path_component(uid.as_str()) {
+                continue;
+            }
+            if id_to_uid.contains_key(&entry.id) || known_uids.contains(uid.as_str()) {
+                continue;
+            }
+            id_to_uid.insert(entry.id.clone(), uid.clone());
+            uid_to_id.insert(uid.as_str().to_string(), entry.id.clone());
+            known_uids.insert(uid.as_str().to_string());
+        }
+        Self {
+            id_to_uid,
+            uid_to_id,
+            known_uids,
+        }
+    }
+
+    pub(super) fn resolve_stem(&self, stem: &str) -> String {
+        if self.known_uids.contains(stem) {
+            return stem.to_string();
+        }
+        match self.id_to_uid.get(stem) {
+            Some(uid) => uid.as_str().to_string(),
+            None => stem.to_string(),
+        }
+    }
+
+    pub(super) fn resolve_plugin_id<'a>(&'a self, key: &'a str) -> &'a str {
+        self.uid_to_id.get(key).map(String::as_str).unwrap_or(key)
+    }
+
+    pub(super) fn uid_for_id<'a>(&'a self, plugin_id: &'a str) -> &'a str {
+        self.id_to_uid
+            .get(plugin_id)
+            .map(PluginUid::as_str)
+            .unwrap_or(plugin_id)
+    }
+}
+
+pub(super) fn resolved_entry_uid(plugins_dir: &Path, entry: &PluginLockEntry) -> PluginUid {
+    if entry.uid.as_str() != entry.id.as_str() {
+        return entry.uid.clone();
+    }
+    crate::plugins::PluginManifest::read_from_dir(plugins_dir.join(&entry.id))
+        .ok()
+        .and_then(|manifest| manifest.plugin.uid)
+        .unwrap_or_else(|| entry.uid.clone())
+}
+
+pub(super) fn canonicalize_plugin_configs(
+    configs: &HashMap<String, Value>,
+    uid_index: &PluginUidIndex,
+) -> HashMap<String, Value> {
+    let mut canonical = HashMap::new();
+    let mut aliases = Vec::new();
+    let mut keys = configs.keys().collect::<Vec<_>>();
+    keys.sort();
+    for key in keys {
+        let resolved = uid_index.resolve_stem(key);
+        if resolved == key.as_str() {
+            canonical.insert(resolved, configs[key].clone());
+        } else {
+            aliases.push((resolved, configs[key].clone()));
+        }
+    }
+    for (key, config) in aliases {
+        canonical.entry(key).or_insert(config);
+    }
+    canonical
+}
+
+pub fn read_plugin_configs(plugins: &[PluginLockEntry]) -> Result<HashMap<String, Value>> {
     ensure_profile_dirs()?;
     let installed_configs_dir = crate::paths::plugins_dir()?;
+    let stored = load_plugins_lock().unwrap_or_else(|_| PluginsLock::empty());
+    let uid_index = PluginUidIndex::from_plugins(&installed_configs_dir, plugins, &stored);
     read_plugin_configs_from_dirs(
         &crate::paths::profile_plugin_configs_dir()?,
         &installed_configs_dir,
+        &uid_index,
     )
 }
 
@@ -182,20 +290,42 @@ fn write_json_config(path: PathBuf, value: &Value) -> Result<()> {
 pub(super) fn read_plugin_configs_from_dirs(
     profile_configs_dir: &Path,
     plugins_dir: &Path,
+    uid_index: &PluginUidIndex,
 ) -> Result<HashMap<String, Value>> {
-    let mut configs = read_installed_plugin_configs_from_dir(plugins_dir)?
-        .into_iter()
-        .collect::<HashMap<_, _>>();
-    for (plugin_id, config) in read_profile_plugin_configs_from_dir(profile_configs_dir)? {
-        configs.insert(plugin_id, config);
+    let mut configs = HashMap::new();
+    let mut id_resolved = Vec::new();
+    for (stem, config) in read_profile_plugin_configs_from_dir(profile_configs_dir)? {
+        let key = uid_index.resolve_stem(&stem);
+        if key == stem {
+            configs.insert(key, config);
+        } else {
+            id_resolved.push((key, config));
+        }
+    }
+    for (key, config) in id_resolved {
+        configs.entry(key).or_insert(config);
+    }
+    for (plugin_id, config) in read_installed_plugin_configs_from_dir(plugins_dir)? {
+        let key = uid_index.uid_for_id(&plugin_id).to_string();
+        configs.entry(key).or_insert(config);
     }
     Ok(configs)
+}
+
+pub(super) fn validate_plugin_config_keys(configs: &HashMap<String, Value>) -> Result<()> {
+    for key in configs.keys() {
+        if !crate::paths::is_safe_path_component(key) {
+            bail!("invalid plugin config key: {}", key);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn replace_plugin_configs_in_dir(
     profile_configs_dir: &Path,
     configs: &HashMap<String, Value>,
 ) -> Result<()> {
+    validate_plugin_config_keys(configs)?;
     clear_plugin_configs_dir(profile_configs_dir)?;
     for (plugin_id, config) in configs {
         write_plugin_config_in_dir(profile_configs_dir, plugin_id, config)?;

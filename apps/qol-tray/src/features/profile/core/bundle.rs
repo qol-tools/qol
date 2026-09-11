@@ -8,13 +8,14 @@ pub fn build_export_bundle(
     exported_at: String,
     plugins: Vec<PluginLockEntry>,
 ) -> Result<ProfileExportBundle> {
+    let plugin_configs = read_plugin_configs(&plugins)?;
     Ok(ProfileExportBundle {
         version: CURRENT_PROFILE_VERSION,
         exported_at,
         hotkeys: read_hotkeys_list(),
         shortcuts: read_shortcuts_list(),
         task_runner: read_task_runner_value(),
-        plugin_configs: read_plugin_configs()?,
+        plugin_configs,
         plugins,
     })
 }

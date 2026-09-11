@@ -1,4 +1,6 @@
-use super::storage::write_core_settings;
+use super::storage::{
+    canonicalize_plugin_configs, validate_plugin_config_keys, write_core_settings, PluginUidIndex,
+};
 use super::{ApplyProfileResult, ImportPluginResult, PluginLockEntry, ProfileImportBundle};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -10,15 +12,32 @@ pub async fn apply_import_bundle(
     bundle: &ProfileImportBundle,
 ) -> Result<ApplyProfileResult> {
     super::ensure_profile_dirs()?;
+    if let Some(plugin_configs) = &bundle.plugin_configs {
+        validate_plugin_config_keys(plugin_configs)?;
+    }
     let plugins = super::import_plugins(bundle);
-    validate_imported_plugin_configs(plugins_dir, bundle.plugin_configs.as_ref(), &plugins).await?;
+    let stored = super::load_plugins_lock().unwrap_or_else(|_| super::PluginsLock::empty());
+    let uid_index = PluginUidIndex::from_plugins(plugins_dir, &plugins, &stored);
+    let plugin_configs = bundle
+        .plugin_configs
+        .as_ref()
+        .map(|configs| canonicalize_plugin_configs(configs, &uid_index));
+    validate_imported_plugin_configs(plugins_dir, plugin_configs.as_ref(), &plugins, &uid_index)
+        .await?;
     let plugin_results = reconcile_plugins(plugins_dir, &plugins).await;
     write_core_settings(bundle)?;
-    if let Some(plugin_configs) = &bundle.plugin_configs {
+    super::plugins_lock::sync_plugins_lock_from_imported_state(plugins_dir, &plugins)?;
+    let synced_lock = super::load_plugins_lock()?;
+    let synced_index =
+        PluginUidIndex::from_plugins(plugins_dir, &synced_lock.plugins, &synced_lock);
+    let plugin_configs = bundle
+        .plugin_configs
+        .as_ref()
+        .map(|configs| canonicalize_plugin_configs(configs, &synced_index));
+    if let Some(plugin_configs) = &plugin_configs {
         super::replace_plugin_configs(plugin_configs)?;
     }
-    super::plugins_lock::sync_plugins_lock_from_imported_state(plugins_dir, &plugins)?;
-    project_plugin_configs_to_dir(plugins_dir, bundle.plugin_configs.as_ref())?;
+    project_plugin_configs_to_dir(plugins_dir, plugin_configs.as_ref(), &synced_index)?;
     let success = plugin_results
         .iter()
         .all(|result| result.status != "failed");
@@ -146,28 +165,35 @@ fn plugin_restore_message(plugin: &PluginLockEntry, action: &str) -> String {
     format!("{verb} {}", plugin.version)
 }
 
-fn project_plugin_configs_to_dir(
+pub(super) fn project_plugin_configs_to_dir(
     plugins_dir: &Path,
     plugin_configs: Option<&HashMap<String, Value>>,
+    uid_index: &PluginUidIndex,
 ) -> Result<()> {
     let Some(plugin_configs) = plugin_configs else {
         return Ok(());
     };
-    remove_live_plugin_configs_missing_from_profile(plugins_dir, plugin_configs)?;
     let manager = crate::plugins::PluginConfigManager::new()?;
-    for (plugin_id, config) in plugin_configs {
-        if !plugins_dir.join(plugin_id).is_dir() {
+    for (key, config) in plugin_configs {
+        let plugin_id = uid_index.resolve_plugin_id(key.as_str());
+        let target_id = if plugins_dir.join(plugin_id).is_dir() {
+            plugin_id
+        } else if plugins_dir.join(key).is_dir() {
+            key.as_str()
+        } else {
             continue;
-        }
-        manager.set_config(plugin_id, config.clone())?;
+        };
+        manager.set_config(target_id, config.clone())?;
     }
+    remove_live_plugin_configs_missing_from_profile(plugins_dir, plugin_configs, uid_index)?;
     Ok(())
 }
 
-async fn validate_imported_plugin_configs(
+pub(super) async fn validate_imported_plugin_configs(
     plugins_dir: &Path,
     plugin_configs: Option<&HashMap<String, Value>>,
     requested_plugins: &[PluginLockEntry],
+    uid_index: &PluginUidIndex,
 ) -> Result<()> {
     let Some(plugin_configs) = plugin_configs else {
         return Ok(());
@@ -178,18 +204,17 @@ async fn validate_imported_plugin_configs(
         .collect::<HashMap<_, _>>();
     let installer =
         crate::features::plugin_store::installer::PluginInstaller::new(plugins_dir.to_path_buf());
-    let mut plugin_ids = plugin_configs.keys().cloned().collect::<Vec<_>>();
-    plugin_ids.sort();
-    for plugin_id in plugin_ids {
-        let requested_plugin = requested_plugins.get(plugin_id.as_str()).copied();
+    let mut config_keys = plugin_configs.keys().cloned().collect::<Vec<_>>();
+    config_keys.sort();
+    for key in config_keys {
+        let plugin_id = uid_index.resolve_plugin_id(key.as_str());
+        let requested_plugin = requested_plugins.get(plugin_id).copied();
         let Some(spec) =
-            load_validation_contract(&installer, plugins_dir, &plugin_id, requested_plugin).await?
+            load_validation_contract(&installer, plugins_dir, plugin_id, requested_plugin).await?
         else {
             continue;
         };
-        let config = plugin_configs
-            .get(&plugin_id)
-            .context("missing plugin config")?;
+        let config = plugin_configs.get(&key).context("missing plugin config")?;
         let errors = match crate::plugins::config::validate_config_value(&spec, config) {
             Ok(()) => continue,
             Err(errors) => errors,
@@ -260,9 +285,10 @@ impl PluginLockEntry {
     }
 }
 
-fn remove_live_plugin_configs_missing_from_profile(
+pub(super) fn remove_live_plugin_configs_missing_from_profile(
     plugins_dir: &Path,
     plugin_configs: &HashMap<String, Value>,
+    uid_index: &PluginUidIndex,
 ) -> Result<()> {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else {
         return Ok(());
@@ -282,7 +308,8 @@ fn remove_live_plugin_configs_missing_from_profile(
         if !crate::paths::is_safe_path_component(&plugin_id) {
             continue;
         }
-        if plugin_configs.contains_key(&plugin_id) {
+        let uid = uid_index.uid_for_id(&plugin_id);
+        if plugin_configs.contains_key(uid) || plugin_configs.contains_key(&plugin_id) {
             continue;
         }
         let config_path = crate::plugins::paths::config_path(&path);

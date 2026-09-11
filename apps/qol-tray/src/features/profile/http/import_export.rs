@@ -43,18 +43,17 @@ async fn import_bundle(
 fn export_plugins(
     state: &super::ProfileHttpState,
 ) -> Vec<crate::features::profile::core::PluginLockEntry> {
+    let stored = crate::features::profile::core::load_plugins_lock()
+        .unwrap_or_else(|_| crate::features::profile::core::PluginsLock::empty());
     let Ok(manager) = state.plugin_manager.lock() else {
-        return crate::features::profile::core::load_plugins_lock()
-            .map(|lock| lock.plugins)
-            .unwrap_or_default();
+        return stored.plugins;
     };
-    crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
-        .map(|lock| lock.plugins)
-        .unwrap_or_else(|_| {
-            crate::features::profile::core::load_plugins_lock()
-                .map(|lock| lock.plugins)
-                .unwrap_or_default()
-        })
+    crate::features::profile::core::PluginsLock::for_export(
+        &state.plugins_dir,
+        manager.plugins(),
+        &stored,
+    )
+    .plugins
 }
 
 fn export_server_error(error: anyhow::Error) -> Response {

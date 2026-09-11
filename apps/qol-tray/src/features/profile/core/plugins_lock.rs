@@ -1,12 +1,23 @@
 use super::{PluginLockEntry, PluginsLock, ProfileImportBundle, CURRENT_PROFILE_VERSION};
 use crate::plugins::PluginUid;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 pub fn import_plugins(bundle: &ProfileImportBundle) -> Vec<PluginLockEntry> {
     if !bundle.plugins.is_empty() {
-        return bundle.plugins.clone();
+        let mut seen_uids = HashSet::new();
+        let mut seen_ids = HashSet::new();
+        let mut plugins = Vec::new();
+        for entry in &bundle.plugins {
+            if seen_uids.contains(entry.uid.as_str()) || seen_ids.contains(&entry.id) {
+                continue;
+            }
+            seen_uids.insert(entry.uid.as_str().to_string());
+            seen_ids.insert(entry.id.clone());
+            plugins.push(entry.clone());
+        }
+        return plugins;
     }
 
     bundle
@@ -146,6 +157,42 @@ fn build_plugins_lock_with_options<'a>(
 fn sort_and_dedup_plugins(plugins: &mut Vec<PluginLockEntry>) {
     plugins.sort_by(|left, right| left.uid.as_str().cmp(right.uid.as_str()));
     plugins.dedup_by(|left, right| left.uid == right.uid);
+}
+
+impl PluginsLock {
+    pub(crate) fn empty() -> PluginsLock {
+        PluginsLock {
+            version: CURRENT_PROFILE_VERSION,
+            plugins: Vec::new(),
+        }
+    }
+
+    pub(crate) fn for_export<'a>(
+        plugins_dir: &Path,
+        live: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
+        stored: &PluginsLock,
+    ) -> PluginsLock {
+        let cached_urls = cached_repo_urls();
+        let mut lock = build_plugins_lock(live, stored, &cached_urls);
+        let live_ids = lock
+            .plugins
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<HashSet<_>>();
+        lock.plugins.extend(
+            stored
+                .plugins
+                .iter()
+                .filter(|entry| !live_ids.contains(&entry.id))
+                .map(|entry| {
+                    let mut entry = entry.clone();
+                    entry.uid = super::storage::resolved_entry_uid(plugins_dir, &entry);
+                    entry
+                }),
+        );
+        sort_and_dedup_plugins(&mut lock.plugins);
+        lock
+    }
 }
 
 fn existing_repo_urls(existing: &PluginsLock) -> HashMap<String, String> {
