@@ -259,6 +259,24 @@ fn import_plugins_falls_back_to_legacy_installed_plugins() {
 }
 
 #[test]
+fn import_plugins_dedups_legacy_installed_plugins() {
+    let bundle = ProfileImportBundle {
+        installed_plugins: vec![
+            "plugin-a".to_string(),
+            "plugin-a".to_string(),
+            "plugin-b".to_string(),
+        ],
+        ..ProfileImportBundle::default()
+    };
+
+    let plugins = import_plugins(&bundle);
+
+    assert_eq!(plugins.len(), 2);
+    assert_eq!(plugins[0].id, "plugin-a");
+    assert_eq!(plugins[1].id, "plugin-b");
+}
+
+#[test]
 fn import_plugins_dedups_bundle_entries_first_entry_wins() {
     let bundle = ProfileImportBundle {
         plugins: vec![
@@ -755,6 +773,38 @@ async fn project_plugin_configs_resolves_uid_keys_to_plugin_ids() {
     );
 }
 
+#[tokio::test]
+async fn project_plugin_configs_skips_orphan_keys() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    ensure_profile_dirs().unwrap();
+    let uid_index = PluginUidIndex::from_plugins(&plugins_dir, &[], &PluginsLock::empty());
+    let configs = HashMap::from([("plugin-orphan".to_string(), json!({"value": 1}))]);
+
+    project_plugin_configs_to_dir(&plugins_dir, Some(&configs), &uid_index).unwrap();
+
+    assert!(!plugins_dir.join("plugin-orphan").exists());
+}
+
+#[tokio::test]
+async fn project_plugin_configs_falls_back_to_the_raw_key_directory() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    ensure_profile_dirs().unwrap();
+    fs::create_dir_all(plugins_dir.join("u-real-0001")).unwrap();
+    let plugins = vec![test_lock_entry("plugin-lights", "u-real-0001")];
+    let uid_index = PluginUidIndex::from_plugins(&plugins_dir, &plugins, &PluginsLock::empty());
+    let configs = HashMap::from([("u-real-0001".to_string(), json!({"value": 7}))]);
+
+    project_plugin_configs_to_dir(&plugins_dir, Some(&configs), &uid_index).unwrap();
+
+    assert_eq!(
+        crate::file_io::read_json::<Value>(&crate::plugins::paths::config_path(
+            &plugins_dir.join("u-real-0001")
+        ))
+        .unwrap(),
+        json!({"value": 7})
+    );
+}
+
 #[test]
 fn remove_live_plugin_configs_keeps_uid_keyed_profile_entries() {
     let tmp = TempDir::new().unwrap();
@@ -1139,6 +1189,157 @@ default = 0
         Some(json!({"value": 100}))
     );
     assert_eq!(read_profile_plugin_config("plugin-lights"), None);
+    let lock = load_plugins_lock().unwrap();
+    assert_eq!(lock.plugins.len(), 1);
+    assert_eq!(lock.plugins[0].uid, PluginUid::new("u-real-0001"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn apply_import_bundle_keeps_uid_value_when_installed_plugin_is_dropped_from_lock() {
+    let (_guard, root, _env, plugins_dir) = setup_profile_env().await;
+    ensure_profile_dirs().unwrap();
+    let external_parent = root.path().join("external");
+    let external_dir = external_parent.join("plugin-lights");
+    write_manifest_with_uid(&external_parent, "plugin-lights", "u-real-0001", "1.0.0");
+    write_plugin_contract(
+        &external_parent,
+        "plugin-lights",
+        r#"
+schema_version = 1
+
+[field.value]
+type = "number"
+default = 0
+"#,
+    );
+    write_installed_plugin_config(&external_parent, "plugin-lights", &json!({"value": 50}));
+    std::os::unix::fs::symlink(&external_dir, plugins_dir.join("plugin-lights")).unwrap();
+    let bundle = ProfileImportBundle {
+        plugins: vec![test_lock_entry("plugin-lights", "plugin-lights")],
+        plugin_configs: Some(HashMap::from([
+            ("u-real-0001".to_string(), json!({"value": 100})),
+            ("plugin-lights".to_string(), json!({"value": 73})),
+        ])),
+        ..ProfileImportBundle::default()
+    };
+
+    let result = apply_import_bundle(&plugins_dir, &bundle).await.unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.plugins[0].status, "kept");
+    assert_eq!(
+        read_profile_plugin_config("u-real-0001"),
+        Some(json!({"value": 100}))
+    );
+    assert_eq!(read_profile_plugin_config("plugin-lights"), None);
+    assert_eq!(
+        read_live_plugin_config(&plugins_dir, "plugin-lights"),
+        json!({"value": 50})
+    );
+}
+
+#[tokio::test]
+async fn apply_import_bundle_rejects_invalid_uid_keyed_fresh_install() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    let source_repo = create_monorepo_style_source_repo(
+        &plugins_dir,
+        "plugin-lights",
+        "1.0.0",
+        Some("u-real-0001"),
+        Some(
+            r#"
+schema_version = 1
+
+[field.value]
+type = "number"
+default = 0
+"#,
+        ),
+    );
+    let _source_guard = crate::features::plugin_store::source::test_seam::install(vec![
+        crate::features::plugin_store::source::PluginSource::new(
+            "fixture",
+            source_repo.repo.as_str(),
+            "main",
+        ),
+    ]);
+    let configs = HashMap::from([
+        ("u-real-0001".to_string(), json!({"value": "three"})),
+        ("plugin-lights".to_string(), json!({"value": 7})),
+    ]);
+    let bundle = ProfileImportBundle {
+        plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-lights"),
+            id: "plugin-lights".to_string(),
+            repo_url: source_repo.repo.clone(),
+            version: "1.0.0".to_string(),
+            platforms: None,
+        }],
+        plugin_configs: Some(configs),
+        ..ProfileImportBundle::default()
+    };
+
+    let error = apply_import_bundle(&plugins_dir, &bundle)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("Invalid config for plugin-lights"),
+        "expected late contract rejection, got: {error}"
+    );
+    assert!(
+        error.contains("value does not match field type number"),
+        "expected type-mismatch detail, got: {error}"
+    );
+    let lock = load_plugins_lock().unwrap();
+    assert_eq!(lock.plugins.len(), 1);
+    assert_eq!(lock.plugins[0].id, "plugin-lights");
+    assert_eq!(lock.plugins[0].uid, PluginUid::new("u-real-0001"));
+    assert_eq!(read_profile_plugin_config("u-real-0001"), None);
+    assert_eq!(read_profile_plugin_config("plugin-lights"), None);
+    assert!(!crate::plugins::paths::config_path(&plugins_dir.join("plugin-lights")).exists());
+}
+
+#[tokio::test]
+async fn apply_import_bundle_dual_keyed_configs_drop_the_invalid_losing_alias() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    write_manifest_with_uid(&plugins_dir, "plugin-lights", "u-real-0001", "1.0.0");
+    write_plugin_contract(
+        &plugins_dir,
+        "plugin-lights",
+        r#"
+schema_version = 1
+
+[field.value]
+type = "number"
+default = 0
+"#,
+    );
+    write_installed_plugin_config(&plugins_dir, "plugin-lights", &json!({"value": 50}));
+    let configs = HashMap::from([
+        ("u-real-0001".to_string(), json!({"value": 100})),
+        ("plugin-lights".to_string(), json!({"value": "three"})),
+    ]);
+    let bundle = ProfileImportBundle {
+        plugins: vec![test_lock_entry("plugin-lights", "u-real-0001")],
+        plugin_configs: Some(configs),
+        ..ProfileImportBundle::default()
+    };
+
+    let result = apply_import_bundle(&plugins_dir, &bundle).await.unwrap();
+
+    assert!(result.success);
+    assert_eq!(
+        read_profile_plugin_config("u-real-0001"),
+        Some(json!({"value": 100}))
+    );
+    assert_eq!(read_profile_plugin_config("plugin-lights"), None);
+    assert_eq!(
+        read_live_plugin_config(&plugins_dir, "plugin-lights"),
+        json!({"value": 100})
+    );
 }
 
 #[tokio::test]
@@ -1161,6 +1362,9 @@ async fn apply_import_bundle_rejects_unsafe_config_keys_before_any_write() {
         ),
     ]);
 
+    let manifest_path = crate::paths::profile_manifest_path().unwrap();
+    fs::write(&manifest_path, r#"{"version":1,"note":"keep"}"#).unwrap();
+    let manifest_before = fs::read(&manifest_path).unwrap();
     let install_configs = HashMap::from([("../evil".to_string(), json!({"value": 2}))]);
     let result = apply_import_bundle(
         &plugins_dir,
@@ -1196,6 +1400,7 @@ async fn apply_import_bundle_rejects_unsafe_config_keys_before_any_write() {
     assert!(!plugins_dir.join("plugin-lights").exists());
     assert!(load_plugins_lock().unwrap().plugins.is_empty());
     assert!(!crate::paths::task_runner_config_path().unwrap().exists());
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
 }
 
 #[tokio::test]
@@ -1269,6 +1474,85 @@ async fn plugins_lock_for_export_agrees_with_exported_plugin_configs() {
         bundle.plugin_configs,
         HashMap::from([("u-real-0001".to_string(), json!({"value": 100}))])
     );
+}
+
+#[tokio::test]
+async fn plugins_lock_for_export_refines_stored_and_preserved_entries() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    ensure_profile_dirs().unwrap();
+    write_manifest_with_uid(&plugins_dir, "plugin-lights", "u-real-0001", "1.0.0");
+    write_manifest_with_uid(&plugins_dir, "plugin-legacy", "u-legacy-0001", "1.0.0");
+    write_profile_plugin_config("u-real-0001", &json!({"value": 100}));
+    write_profile_plugin_config("u-legacy-0001", &json!({"value": 9}));
+    let stored = PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![
+            test_lock_entry("plugin-lights", "plugin-lights"),
+            PluginLockEntry {
+                uid: PluginUid::new("plugin-legacy"),
+                id: "plugin-legacy".to_string(),
+                repo_url: "https://example.com/legacy.git".to_string(),
+                version: "1.0.0".to_string(),
+                platforms: Some(vec![other_platform().to_string()]),
+            },
+        ],
+    };
+    save_plugins_lock(&stored).unwrap();
+
+    let lock = PluginsLock::for_export(&plugins_dir, std::iter::empty::<&Plugin>(), &stored);
+
+    let lights = lock
+        .plugins
+        .iter()
+        .find(|entry| entry.id == "plugin-lights")
+        .expect("stored-only entry must be kept");
+    assert_eq!(lights.uid, PluginUid::new("u-real-0001"));
+    let legacy = lock
+        .plugins
+        .iter()
+        .find(|entry| entry.id == "plugin-legacy")
+        .expect("preserved unsupported entry must be kept");
+    assert_eq!(legacy.uid, PluginUid::new("u-legacy-0001"));
+
+    let bundle = build_export_bundle(String::new(), lock.plugins).unwrap();
+
+    assert_eq!(
+        bundle.plugin_configs,
+        HashMap::from([
+            ("u-real-0001".to_string(), json!({"value": 100})),
+            ("u-legacy-0001".to_string(), json!({"value": 9})),
+        ])
+    );
+    for entry in &bundle.plugins {
+        assert!(
+            bundle.plugin_configs.contains_key(entry.uid.as_str()),
+            "exported uid {} must match a plugin_configs key",
+            entry.uid
+        );
+    }
+}
+
+#[tokio::test]
+async fn plugins_lock_for_export_skips_unsafe_ids_before_manifest_reads() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    ensure_profile_dirs().unwrap();
+    let escaped_parent = plugins_dir.parent().unwrap();
+    write_manifest_with_uid(escaped_parent, "evil", "u-outside-0001", "1.0.0");
+    let stored = PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![
+            test_lock_entry("../evil", "../evil"),
+            test_lock_entry("plugin-safe", "u-safe-0001"),
+        ],
+    };
+
+    let lock = PluginsLock::for_export(&plugins_dir, std::iter::empty::<&Plugin>(), &stored);
+
+    assert!(escaped_parent.join("evil").join("plugin.toml").exists());
+    assert!(lock.plugins.iter().all(|entry| entry.id != "../evil"));
+    assert_eq!(lock.plugins.len(), 1);
+    assert_eq!(lock.plugins[0].id, "plugin-safe");
+    assert_eq!(lock.plugins[0].uid, PluginUid::new("u-safe-0001"));
 }
 
 #[tokio::test]

@@ -20,9 +20,11 @@ pub fn import_plugins(bundle: &ProfileImportBundle) -> Vec<PluginLockEntry> {
         return plugins;
     }
 
+    let mut seen = HashSet::new();
     bundle
         .installed_plugins
         .iter()
+        .filter(|plugin_id| seen.insert(plugin_id.as_str()))
         .map(|plugin_id| PluginLockEntry {
             uid: PluginUid::new(plugin_id.as_str()),
             id: plugin_id.clone(),
@@ -184,15 +186,23 @@ impl PluginsLock {
                 .plugins
                 .iter()
                 .filter(|entry| !live_ids.contains(&entry.id))
-                .map(|entry| {
-                    let mut entry = entry.clone();
-                    entry.uid = super::storage::resolved_entry_uid(plugins_dir, &entry);
-                    entry
-                }),
+                .cloned(),
         );
+        refine_export_entry_uids(plugins_dir, &mut lock.plugins);
         sort_and_dedup_plugins(&mut lock.plugins);
         lock
     }
+}
+
+fn refine_export_entry_uids(plugins_dir: &Path, plugins: &mut Vec<PluginLockEntry>) {
+    plugins.retain(|entry| {
+        crate::paths::is_safe_path_component(&entry.id)
+            && crate::paths::is_safe_path_component(entry.uid.as_str())
+    });
+    for entry in plugins.iter_mut() {
+        entry.uid = super::storage::resolved_entry_uid(plugins_dir, entry);
+    }
+    plugins.retain(|entry| crate::paths::is_safe_path_component(entry.uid.as_str()));
 }
 
 fn existing_repo_urls(existing: &PluginsLock) -> HashMap<String, String> {

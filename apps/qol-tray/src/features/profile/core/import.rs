@@ -11,30 +11,41 @@ pub async fn apply_import_bundle(
     plugins_dir: &Path,
     bundle: &ProfileImportBundle,
 ) -> Result<ApplyProfileResult> {
-    super::ensure_profile_dirs()?;
     if let Some(plugin_configs) = &bundle.plugin_configs {
         validate_plugin_config_keys(plugin_configs)?;
     }
+    super::ensure_profile_dirs()?;
     let plugins = super::import_plugins(bundle);
     let stored = super::load_plugins_lock().unwrap_or_else(|_| super::PluginsLock::empty());
     let uid_index = PluginUidIndex::from_plugins(plugins_dir, &plugins, &stored);
-    let plugin_configs = bundle
+    let phase_one_configs = bundle
         .plugin_configs
         .as_ref()
         .map(|configs| canonicalize_plugin_configs(configs, &uid_index));
-    validate_imported_plugin_configs(plugins_dir, plugin_configs.as_ref(), &plugins, &uid_index)
-        .await?;
+    validate_imported_plugin_configs(
+        plugins_dir,
+        phase_one_configs.as_ref(),
+        &plugins,
+        &uid_index,
+    )
+    .await?;
     let plugin_results = reconcile_plugins(plugins_dir, &plugins).await;
     write_core_settings(bundle)?;
     super::plugins_lock::sync_plugins_lock_from_imported_state(plugins_dir, &plugins)?;
     let synced_lock = super::load_plugins_lock()?;
     let synced_index =
         PluginUidIndex::from_plugins(plugins_dir, &synced_lock.plugins, &synced_lock);
-    let plugin_configs = bundle
-        .plugin_configs
+    let plugin_configs = phase_one_configs
         .as_ref()
         .map(|configs| canonicalize_plugin_configs(configs, &synced_index));
     if let Some(plugin_configs) = &plugin_configs {
+        validate_imported_plugin_configs(
+            plugins_dir,
+            Some(plugin_configs),
+            &synced_lock.plugins,
+            &synced_index,
+        )
+        .await?;
         super::replace_plugin_configs(plugin_configs)?;
     }
     project_plugin_configs_to_dir(plugins_dir, plugin_configs.as_ref(), &synced_index)?;
@@ -57,6 +68,15 @@ async fn reconcile_plugins(
     let mut results = Vec::new();
 
     for plugin in plugins {
+        if !crate::paths::is_safe_path_component(&plugin.id) {
+            results.push(ImportPluginResult {
+                id: plugin.id.clone(),
+                status: "skipped".to_string(),
+                message: "invalid plugin id".to_string(),
+            });
+            continue;
+        }
+
         if !crate::plugins::manifest::supports_current_platform(&plugin.platforms) {
             results.push(ImportPluginResult {
                 id: plugin.id.clone(),
