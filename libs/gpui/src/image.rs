@@ -1,7 +1,15 @@
 use std::sync::Arc;
 
 use ::image::{Frame, ImageBuffer, Rgba};
-use gpui::RenderImage;
+use gpui::{App, ImageSource, RenderImage};
+use std::path::PathBuf;
+
+/// Drops gpui's cached decode of `path`. Call it after rewriting an image file
+/// in place: gpui caches decoded images by path, so without this every later
+/// `img(path)` keeps painting the bytes that are no longer on disk.
+pub fn forget_cached_file(path: impl Into<PathBuf>, cx: &mut App) {
+    ImageSource::from(path.into()).remove_asset(cx);
+}
 
 pub fn render_image(pixels: Vec<u8>, width: u32, height: u32) -> Option<Arc<RenderImage>> {
     let buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)?;

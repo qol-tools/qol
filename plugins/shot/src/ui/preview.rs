@@ -12,7 +12,7 @@ use gpui::*;
 
 use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
-use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
+use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
@@ -29,18 +29,16 @@ use qol_gpui::window_options::PopupWindowOptions;
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
 use crate::config::CopyCommand;
-use crate::ui::shortcuts::is_standard_copy_chord;
+use crate::ui::controls::{
+    control_count, control_for_keystroke, controls, ControlSurface, SurfaceControl,
+};
 
 const MAX_THUMB_W: f32 = 360.0;
 const MAX_THUMB_H: f32 = 240.0;
 const MARGIN: f32 = 18.0;
 const LABEL_H: f32 = 30.0;
-const PIN_OPEN_FAILED_TOAST: &str = "Could not pin screenshot";
-const PIN_ANCHOR_FAILED_MESSAGE: &str = "Cursor position unavailable";
-const PIN_OPEN_FAILED_MESSAGE: &str = "Pin window could not be created";
 const BLUR_GUARD: Duration = Duration::from_millis(400);
 const PARKED_REVEAL_GUARD: Duration = Duration::from_millis(5000);
-const EDITOR_OPEN_FAILED_TOAST: &str = "Could not open screenshot editor";
 pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
 pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
@@ -219,90 +217,12 @@ impl<T: Render + 'static> WarmWindowPool<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreviewControl {
-    Action(ShotAction),
-    Edit,
-    Pin,
-}
-
-impl PreviewControl {
-    fn glyph(self) -> &'static str {
-        match self {
-            Self::Action(action) => action.glyph(),
-            Self::Edit => "✎",
-            Self::Pin => "◉",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Action(action) => action.label(),
-            Self::Edit => "Edit",
-            Self::Pin => "Pin",
-        }
-    }
-
-    fn accel(self) -> char {
-        match self {
-            Self::Action(action) => action.accel(),
-            Self::Edit => 'e',
-            Self::Pin => 'i',
-        }
-    }
-}
-
-fn preview_controls(default_copy_action: CopyCommand) -> [PreviewControl; 5] {
-    let copy_actions = match default_copy_action {
-        CopyCommand::CopyImage => [ShotAction::Copy, ShotAction::CopyPath],
-        CopyCommand::CopyPath => [ShotAction::CopyPath, ShotAction::Copy],
-    };
-    [
-        PreviewControl::Action(copy_actions[0]),
-        PreviewControl::Action(copy_actions[1]),
-        PreviewControl::Action(ShotAction::OpenFolder),
-        PreviewControl::Edit,
-        PreviewControl::Pin,
-    ]
-}
-
-fn preview_control_for_keystroke(
-    keystroke: &Keystroke,
-    selected: PreviewControl,
-    default_copy_action: CopyCommand,
-) -> Option<PreviewControl> {
-    if is_standard_copy_chord(keystroke) {
-        return Some(selected);
-    }
-    if keystroke.modifiers.modified() {
-        return None;
-    }
-
-    let mut keys = keystroke.key.chars();
-    let accel = keys.next()?;
-    if keys.next().is_some() {
-        return None;
-    }
-    preview_controls(default_copy_action)
-        .into_iter()
-        .find(|control| control.accel() == accel)
-}
-
 fn reveal_blur_guard(parked: bool) -> Duration {
     if parked {
         PARKED_REVEAL_GUARD
     } else {
         BLUR_GUARD
     }
-}
-
-fn control_count() -> usize {
-    ShotAction::ALL.len() + 2
-}
-
-pub(crate) fn wrap_index(current: usize, delta: isize, count: usize) -> usize {
-    let count = count as isize;
-    (((current as isize + delta) % count + count) % count) as usize
 }
 
 type Completion = Arc<Mutex<Option<Result<()>>>>;
@@ -369,7 +289,11 @@ fn show_with_completion(
 }
 
 pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) -> usize {
-    let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, control_count());
+    let default = window_dims(
+        MAX_THUMB_W,
+        MAX_THUMB_H,
+        control_count(ControlSurface::Preview),
+    );
     let default_size = size(px(default.0), px(default.1));
     let monitors = tracker.all_monitors_or_snapshot();
     let existing = windows.borrow().keys();
@@ -494,7 +418,7 @@ fn prepare_preview_window(title: &str) -> bool {
     true
 }
 
-fn fresh_cursor_token(
+pub(crate) fn fresh_cursor_token(
     tracker: &MonitorTracker,
     logical_size: Size<Pixels>,
 ) -> Result<CursorWindowPlacement, CursorAnchorError> {
@@ -538,7 +462,11 @@ pub fn show_capture(
     cx: &mut App,
 ) -> Result<()> {
     let content = GhostContent::from_capture(capture)?;
-    let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, control_count());
+    let (win_w, win_h) = window_dims(
+        content.thumb.0,
+        content.thumb.1,
+        control_count(ControlSurface::Preview),
+    );
     let token = match fresh_cursor_token(tracker, size(px(win_w), px(win_h))) {
         Ok(token) => token,
         Err(error) => {
@@ -811,7 +739,7 @@ fn open_quit_window(
     saved_completion: Option<crate::capture::completion::PreviewCompletion>,
     cx: &mut App,
 ) -> bool {
-    let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count());
+    let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count(ControlSurface::Preview));
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
     let tracker = MonitorTracker::start(cx);
@@ -1096,7 +1024,11 @@ impl PreviewView {
     }
 
     fn schedule_reveal_proof(&mut self, window: &mut Window, cx: &mut Context<Self>, seq: u64) {
-        let (width, height) = window_dims(self.thumb.0, self.thumb.1, control_count());
+        let (width, height) = window_dims(
+            self.thumb.0,
+            self.thumb.1,
+            control_count(ControlSurface::Preview),
+        );
         let expected = Rc::new(Cell::new(size(px(width), px(height))));
         let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
         else {
@@ -1174,15 +1106,15 @@ impl PreviewView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.selected = wrap_index(self.selected, delta, control_count());
+        self.selected = wrap_index(self.selected, delta, control_count(ControlSurface::Preview));
         cx.notify();
     }
 
-    fn activate(&mut self, control: PreviewControl, window: &mut Window, cx: &mut Context<Self>) {
+    fn activate(&mut self, control: SurfaceControl, window: &mut Window, cx: &mut Context<Self>) {
         match control {
-            PreviewControl::Action(action) => self.choose(action, window, cx),
-            PreviewControl::Edit => self.edit(window, cx),
-            PreviewControl::Pin => self.pin(window, cx),
+            SurfaceControl::Action(action) => self.choose(action, window, cx),
+            SurfaceControl::Edit => self.edit(window, cx),
+            SurfaceControl::Pin => self.pin(window, cx),
         }
     }
 
@@ -1212,45 +1144,26 @@ impl PreviewView {
             .display(cx)
             .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
         qol_runtime::probe!("SHOT_EDIT", "phase=request seq={seq}");
-        let task = cx.background_spawn(async move {
-            file_ready.wait()?;
-            crate::ui::editor::load(path, quit_on_close)
-        });
         cx.spawn(async move |_view, cx| {
-            let result = task.await;
+            let opened = crate::ui::editor::open_from(
+                path,
+                file_ready,
+                quit_on_close,
+                tracker,
+                fallback_monitor,
+                cx,
+            )
+            .await;
             let _ = handle.update(cx, move |view, window, cx| {
                 if view.seq != seq {
                     return;
                 }
                 view.action_pending = false;
-                let document = match result {
-                    Ok(document) => document,
-                    Err(error) => {
-                        qol_runtime::probe!("SHOT_EDIT", "phase=open result=load-error");
-                        eprintln!("[qol-shot] screenshot editor load failed: {error:#}");
-                        crate::platform::show_notification(
-                            EDITOR_OPEN_FAILED_TOAST,
-                            &view.path.display().to_string(),
-                            1800,
-                        );
-                        cx.notify();
-                        return;
-                    }
-                };
-                if let Err(error) =
-                    crate::ui::editor::open(document, &tracker, fallback_monitor, cx)
-                {
-                    qol_runtime::probe!("SHOT_EDIT", "phase=open result=window-error");
-                    eprintln!("[qol-shot] screenshot editor open failed: {error:#}");
-                    crate::platform::show_notification(
-                        EDITOR_OPEN_FAILED_TOAST,
-                        &view.path.display().to_string(),
-                        1800,
-                    );
+                if opened {
+                    view.handoff_to_editor(window);
+                } else {
                     cx.notify();
-                    return;
                 }
-                view.handoff_to_editor(window);
             });
         })
         .detach();
@@ -1283,65 +1196,6 @@ impl PreviewView {
             DismissMode::Quit => "quit",
             DismissMode::Ghost => "ghost",
         };
-        let tracker = MonitorTracker::start(cx);
-        let pin_size = size(px(content.size.0), px(content.size.1));
-        let token = match fresh_cursor_token(&tracker, pin_size) {
-            Ok(token) => token,
-            Err(error) => {
-                qol_runtime::probe!(
-                    "SHOT_PIN_PLACE",
-                    "seq={} mode={pin_mode} result=anchor-failed reason={error}",
-                    self.seq
-                );
-                eprintln!("[qol-shot] pin cursor anchor failed: {error}");
-                crate::platform::show_notification(
-                    PIN_OPEN_FAILED_TOAST,
-                    PIN_ANCHOR_FAILED_MESSAGE,
-                    1800,
-                );
-                self.action_pending = false;
-                return;
-            }
-        };
-        let placement = match token.resolve(window) {
-            Ok(placement) => placement,
-            Err(error) => {
-                qol_runtime::probe!(
-                    "SHOT_PIN_PLACE",
-                    "seq={} mode={pin_mode} result=resolve-failed reason={error}",
-                    self.seq
-                );
-                eprintln!("[qol-shot] pin placement resolve failed: {error}");
-                crate::platform::show_notification(
-                    PIN_OPEN_FAILED_TOAST,
-                    PIN_ANCHOR_FAILED_MESSAGE,
-                    1800,
-                );
-                self.action_pending = false;
-                return;
-            }
-        };
-        let cursor = placement.native_cursor();
-        let monitor = placement.native_monitor();
-        let native = placement.native_bounds();
-        qol_runtime::probe!(
-            "SHOT_PIN_PLACE",
-            "seq={} mode={pin_mode} origin={:.0},{:.0} size={:.0}x{:.0} cursor={:.0},{:.0} monitor_origin={:.0},{:.0} monitor_size={:.0}x{:.0} logical_size={:.0}x{:.0} native_scale={:.2}",
-            self.seq,
-            native.x,
-            native.y,
-            native.width,
-            native.height,
-            cursor.x,
-            cursor.y,
-            monitor.x,
-            monitor.y,
-            monitor.width,
-            monitor.height,
-            pin_size.width.to_f64(),
-            pin_size.height.to_f64(),
-            placement.native_scale()
-        );
         let dismiss = match self.mode {
             DismissMode::Quit => crate::ui::pinned::PinnedDismiss::Quit,
             DismissMode::Ghost => crate::ui::pinned::PinnedDismiss::Remove,
@@ -1350,12 +1204,9 @@ impl PreviewView {
             DismissMode::Quit => None,
             DismissMode::Ghost => Some(self.title.clone()),
         };
-        if !crate::ui::pinned::open(content, placement, dismiss, source_preview, cx) {
-            crate::platform::show_notification(
-                PIN_OPEN_FAILED_TOAST,
-                PIN_OPEN_FAILED_MESSAGE,
-                1800,
-            );
+        let trace = format!("seq={} mode={pin_mode}", self.seq);
+        if !crate::ui::pinned::open_at_cursor(content, dismiss, source_preview, &trace, window, cx)
+        {
             self.action_pending = false;
             return;
         }
@@ -1455,6 +1306,10 @@ impl PreviewView {
 
     fn hide_to_ghost(&mut self, window: &mut Window) {
         self.set_showing(false);
+        // A parked window is 1x1: drop any reveal still in flight so it cannot
+        // present the parked window once its proof finally resolves.
+        self.pending_reveal = None;
+        self.parked_reveal = false;
         park_ghost(&self.title, window, self.window_origin);
     }
 
@@ -1478,10 +1333,15 @@ impl PreviewView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let controls = preview_controls(self.default_copy_action);
+        let controls = controls(ControlSurface::Preview, self.default_copy_action);
         let selected = controls.get(self.selected).copied();
         if let Some(control) = selected.and_then(|selected| {
-            preview_control_for_keystroke(&event.keystroke, selected, self.default_copy_action)
+            control_for_keystroke(
+                &event.keystroke,
+                ControlSurface::Preview,
+                self.default_copy_action,
+                selected,
+            )
         }) {
             self.activate(control, window, cx);
             return;
@@ -1520,7 +1380,7 @@ impl PreviewView {
             &self.focus_handle,
             window,
             |this: &Self| this.blur_guard_until,
-            |this: &Self| this.is_showing,
+            |this: &Self| dismissable(this.is_showing, this.pending_reveal.is_some()),
             |this: &Self| {
                 combine_focus_truth(
                     qol_gpui::popup_window::window_holds_input_focus(&this.title),
@@ -1536,6 +1396,14 @@ impl PreviewView {
             hide_invisible(&self.title);
         }
     }
+}
+
+/// The focus watchers may only dismiss a preview that the user can actually see.
+/// Between `reset_for_show` and `reveal_presented_seq` the window is mapped at
+/// opacity 0 and cannot hold input focus, so every focus signal reads "not
+/// focused" and a lost-focus dismissal parks a preview that was never revealed.
+fn dismissable(is_showing: bool, reveal_pending: bool) -> bool {
+    is_showing && !reveal_pending
 }
 
 fn combine_focus_truth(window: Option<bool>, process: Option<bool>) -> Option<bool> {
@@ -1593,7 +1461,7 @@ impl Render for PreviewView {
 
         let system = runtime_theme().system;
         let kit = kit();
-        let controls = preview_controls(self.default_copy_action);
+        let controls = controls(ControlSurface::Preview, self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
         let circles_width = action_row_width(controls.len(), ActionCircleSize::Full);
@@ -1644,13 +1512,7 @@ impl Render for PreviewView {
         for (index, control) in controls.into_iter().enumerate() {
             let left = start_x + index as f32 * (ActionCircleSize::Full.px() + ACTION_CIRCLE_GAP);
             let selected = index == self.selected;
-            let state = if selected {
-                ActionCircleState::Armed
-            } else if index == 0 {
-                ActionCircleState::Primary
-            } else {
-                ActionCircleState::Resting
-            };
+            let state = row_circle_state(true, selected);
             root = root.child(
                 kit.action_circle(ActionCircleSize::Full, state)
                     .id(("shot-action", index))
@@ -1673,7 +1535,7 @@ fn window_thumb_default() -> (f32, f32) {
     (MAX_THUMB_W, MAX_THUMB_H)
 }
 
-fn thumbnail_size(w: f32, h: f32) -> (f32, f32) {
+pub(crate) fn thumbnail_size(w: f32, h: f32) -> (f32, f32) {
     if w <= 0.0 || h <= 0.0 {
         return (MAX_THUMB_W, MAX_THUMB_H);
     }
@@ -1689,117 +1551,15 @@ fn window_dims(thumb_w: f32, thumb_h: f32, action_count: usize) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Keystroke, Modifiers};
-
     use qol_gpui::window::target_monitor_key;
     use qol_runtime::MonitorBounds;
 
     use super::{
-        combine_focus_truth, missing_monitors, preview_control_for_keystroke, preview_controls,
-        read_render_image, reveal_blur_guard, thumbnail_size, window_dims, ActiveMonitor,
-        MonitorTopology, PreviewControl, BLUR_GUARD, MAX_THUMB_H, MAX_THUMB_W, PARKED_REVEAL_GUARD,
+        combine_focus_truth, dismissable, missing_monitors, read_render_image, reveal_blur_guard,
+        thumbnail_size, window_dims, ActiveMonitor, MonitorTopology, BLUR_GUARD, MAX_THUMB_H,
+        MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
-    use crate::capture::actions::ShotAction;
-    use crate::config::CopyCommand;
     use qol_gpui::kit::{action_row_width, ActionCircleSize};
-
-    fn keystroke(key: &str, modifiers: Modifiers) -> Keystroke {
-        Keystroke {
-            modifiers,
-            key: key.to_string(),
-            key_char: None,
-        }
-    }
-
-    #[test]
-    fn default_copy_action_only_changes_preview_order() {
-        let cases = [
-            (
-                CopyCommand::CopyImage,
-                [
-                    PreviewControl::Action(ShotAction::Copy),
-                    PreviewControl::Action(ShotAction::CopyPath),
-                    PreviewControl::Action(ShotAction::OpenFolder),
-                    PreviewControl::Edit,
-                    PreviewControl::Pin,
-                ],
-            ),
-            (
-                CopyCommand::CopyPath,
-                [
-                    PreviewControl::Action(ShotAction::CopyPath),
-                    PreviewControl::Action(ShotAction::Copy),
-                    PreviewControl::Action(ShotAction::OpenFolder),
-                    PreviewControl::Edit,
-                    PreviewControl::Pin,
-                ],
-            ),
-        ];
-
-        for (copy_command, expected) in cases {
-            assert_eq!(preview_controls(copy_command), expected);
-        }
-    }
-
-    #[test]
-    fn standard_copy_chord_activates_the_selected_preview_control() {
-        let chord = keystroke("c", Modifiers::secondary_key());
-        let cases = [
-            PreviewControl::Action(ShotAction::Copy),
-            PreviewControl::Action(ShotAction::CopyPath),
-            PreviewControl::Action(ShotAction::OpenFolder),
-            PreviewControl::Edit,
-            PreviewControl::Pin,
-        ];
-
-        for selected in cases {
-            assert_eq!(
-                preview_control_for_keystroke(&chord, selected, CopyCommand::CopyImage),
-                Some(selected)
-            );
-        }
-    }
-
-    #[test]
-    fn plain_preview_accelerators_keep_their_direct_controls() {
-        let cases = [
-            ("c", PreviewControl::Action(ShotAction::Copy)),
-            ("p", PreviewControl::Action(ShotAction::CopyPath)),
-            ("o", PreviewControl::Action(ShotAction::OpenFolder)),
-            ("e", PreviewControl::Edit),
-            ("i", PreviewControl::Pin),
-        ];
-
-        for (key, expected) in cases {
-            assert_eq!(
-                preview_control_for_keystroke(
-                    &keystroke(key, Modifiers::none()),
-                    PreviewControl::Pin,
-                    CopyCommand::CopyPath,
-                ),
-                Some(expected)
-            );
-        }
-    }
-
-    #[test]
-    fn named_control_keys_never_trigger_preview_accelerators() {
-        let keys = [
-            "escape", "esc", "enter", "return", "space", "left", "right", "up", "down", "tab",
-        ];
-
-        for key in keys {
-            assert_eq!(
-                preview_control_for_keystroke(
-                    &keystroke(key, Modifiers::none()),
-                    PreviewControl::Edit,
-                    CopyCommand::CopyPath,
-                ),
-                None,
-                "key: {key}"
-            );
-        }
-    }
 
     #[test]
     fn focus_truth_recovers_when_any_owned_window_holds_focus() {
@@ -1819,6 +1579,29 @@ mod tests {
                 expected,
                 "window: {window:?} process: {process:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_preview_awaiting_its_reveal_is_never_dismissable() {
+        // 2026-09-12 host trace, first capture after a daemon start: the reveal was
+        // still pending 429 ms after the show, the 400 ms blur guard had expired, and
+        // the window could not hold X11 focus because it was mapped at opacity 0, so
+        // the focus poll dismissed it. Parking resized it to 1x1, the reveal proof
+        // then failed its 388x329 viewport check for all 40 attempts, and the preview
+        // finally "presented" as a 1x1 window the user never saw.
+        let cases = [
+            ((true, true), false, "reveal pending: not dismissable"),
+            ((true, false), true, "revealed: dismissable"),
+            (
+                (false, true),
+                false,
+                "parked with a pending reveal: not dismissable",
+            ),
+            ((false, false), false, "parked: not dismissable"),
+        ];
+        for ((is_showing, reveal_pending), expected, note) in cases {
+            assert_eq!(dismissable(is_showing, reveal_pending), expected, "{note}");
         }
     }
 

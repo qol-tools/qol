@@ -1,25 +1,31 @@
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use gpui::*;
 use qol_gpui::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use qol_gpui::history::UndoHistory;
+use qol_gpui::kit::next_selectable;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
 
 use crate::capture::actions::ShotAction;
 use crate::capture::annotation::{save_strokes, NormalizedPoint, PenStroke};
+use crate::capture::screenshot::CaptureFileReady;
 use crate::config::CopyCommand;
-use crate::ui::preview::{current_palette, wrap_index};
+use crate::ui::controls::{copy_actions, SurfaceControl};
+use crate::ui::pinned::{PinnedContent, PinnedDismiss};
+use crate::ui::preview::{current_palette, thumbnail_size};
 use crate::ui::shortcuts::shot_action_for_keystroke;
 
 mod render;
 
 const MAX_IMAGE_WIDTH: f32 = 1000.0;
 const MAX_IMAGE_HEIGHT: f32 = 680.0;
-const CONTROL_COUNT: usize = 6;
+const CONTROL_COUNT: usize = 7;
 const PRIMARY_CONTROL: usize = 3;
 
 pub(crate) struct EditorDocument {
@@ -77,6 +83,7 @@ enum EditorControl {
     Redo,
     Action(ShotAction),
     Save,
+    Pin,
 }
 
 impl EditorControl {
@@ -87,6 +94,7 @@ impl EditorControl {
             Self::Redo => "Redo",
             Self::Action(action) => action.label(),
             Self::Save => "Save",
+            Self::Pin => SurfaceControl::Pin.label(),
         }
     }
 
@@ -97,6 +105,7 @@ impl EditorControl {
             Self::Redo => "↷",
             Self::Action(action) => action.glyph(),
             Self::Save => "✓",
+            Self::Pin => SurfaceControl::Pin.glyph(),
         }
     }
 }
@@ -119,6 +128,7 @@ impl HistoryAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorOutput {
     Save,
+    Pin,
     Action(ShotAction),
 }
 
@@ -126,6 +136,7 @@ impl EditorOutput {
     fn trace_label(self) -> &'static str {
         match self {
             Self::Save => "save",
+            Self::Pin => "pin",
             Self::Action(ShotAction::Copy) => "copy",
             Self::Action(ShotAction::CopyPath) => "copy-path",
             Self::Action(ShotAction::OpenFolder) => "open-folder",
@@ -135,6 +146,7 @@ impl EditorOutput {
     fn pending_message(self) -> &'static str {
         match self {
             Self::Save => "Saving",
+            Self::Pin => "Pinning",
             Self::Action(ShotAction::Copy) => "Copying edited screenshot",
             Self::Action(ShotAction::CopyPath) => "Copying screenshot path",
             Self::Action(ShotAction::OpenFolder) => "Opening screenshot folder",
@@ -144,6 +156,7 @@ impl EditorOutput {
     fn error_message(self) -> &'static str {
         match self {
             Self::Save => "Could not save screenshot",
+            Self::Pin => "Could not pin screenshot",
             Self::Action(ShotAction::Copy) => "Could not copy edited screenshot",
             Self::Action(ShotAction::CopyPath) => "Could not copy screenshot path",
             Self::Action(ShotAction::OpenFolder) => "Could not open screenshot folder",
@@ -152,7 +165,7 @@ impl EditorOutput {
 
     fn perform(self, path: &std::path::Path, strokes: &[PenStroke]) -> Result<()> {
         match self {
-            Self::Save => {
+            Self::Save | Self::Pin => {
                 if !strokes.is_empty() {
                     save_strokes(path, strokes)?;
                 }
@@ -201,13 +214,6 @@ struct ActiveWheel {
     popup: WindowHandle<ColorWheelPopup>,
 }
 
-fn copy_actions(default_copy_action: CopyCommand) -> [ShotAction; 2] {
-    match default_copy_action {
-        CopyCommand::CopyImage => [ShotAction::Copy, ShotAction::CopyPath],
-        CopyCommand::CopyPath => [ShotAction::CopyPath, ShotAction::Copy],
-    }
-}
-
 fn editor_controls(default_copy_action: CopyCommand) -> [EditorControl; CONTROL_COUNT] {
     let actions = copy_actions(default_copy_action);
     [
@@ -217,6 +223,7 @@ fn editor_controls(default_copy_action: CopyCommand) -> [EditorControl; CONTROL_
         EditorControl::Action(actions[0]),
         EditorControl::Action(actions[1]),
         EditorControl::Save,
+        EditorControl::Pin,
     ]
 }
 
@@ -229,6 +236,7 @@ enum EditorCommand {
     Undo,
     Redo,
     Save,
+    Pin,
     Hue,
     Width,
 }
@@ -313,6 +321,15 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
+            key: "I",
+            label: "pin",
+            priority: 1,
+            pinned: false,
+        }),
+        bindings: &[("i", EditorCommand::Pin)],
+    },
+    EditorKeyRow {
+        hint: Some(EditorHint {
             key: "drag",
             label: "draw",
             priority: 0,
@@ -367,6 +384,45 @@ pub(crate) fn load(path: PathBuf, quit_on_close: bool) -> Result<EditorDocument>
         height,
         quit_on_close,
     })
+}
+
+const OPEN_FAILED_TOAST: &str = "Could not open screenshot editor";
+
+/// Waits for the capture file, loads it off the main thread and opens the
+/// editor on it, reporting failures to the user. Every surface that hands
+/// editing over calls this and then only decides what happens to its own
+/// window; `true` means the editor took over.
+pub(crate) async fn open_from(
+    path: PathBuf,
+    file_ready: CaptureFileReady,
+    quit_on_close: bool,
+    tracker: MonitorTracker,
+    fallback_monitor: Option<ActiveMonitor>,
+    cx: &mut AsyncApp,
+) -> bool {
+    let document_path = path.clone();
+    let loaded = cx
+        .background_spawn(async move {
+            file_ready.wait()?;
+            load(document_path, quit_on_close)
+        })
+        .await;
+    let document = match loaded {
+        Ok(document) => document,
+        Err(error) => return report_open_failure("load-error", &path, error),
+    };
+    match cx.update(|cx| open(document, &tracker, fallback_monitor, cx)) {
+        Ok(Ok(())) => true,
+        Ok(Err(error)) => report_open_failure("window-error", &path, error),
+        Err(error) => report_open_failure("app-gone", &path, error),
+    }
+}
+
+fn report_open_failure(result: &str, path: &Path, error: anyhow::Error) -> bool {
+    qol_runtime::probe!("SHOT_EDIT", "phase=open result={result}");
+    eprintln!("[qol-shot] screenshot editor open failed: {error:#}");
+    crate::platform::show_notification(OPEN_FAILED_TOAST, &path.display().to_string(), 1800);
+    false
 }
 
 pub(crate) fn open(
@@ -449,6 +505,7 @@ impl EditorView {
             width,
             points: vec![point],
         });
+        self.resettle_selection();
         cx.stop_propagation();
         cx.notify();
     }
@@ -502,6 +559,7 @@ impl EditorView {
             }
         }
         self.history.record(stroke);
+        self.resettle_selection();
     }
 
     fn pointer_stroke(
@@ -528,8 +586,22 @@ impl EditorView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.selected = wrap_index(self.selected, delta, CONTROL_COUNT);
+        self.selected = next_selectable(self.selected, delta, CONTROL_COUNT, |index| {
+            self.control_enabled(self.controls[index])
+        });
         cx.notify();
+    }
+
+    /// Keeps the selection off a control that has just been disabled, so an
+    /// undo that empties the history cannot leave the selection stranded.
+    fn resettle_selection(&mut self) {
+        if self.control_enabled(self.controls[self.selected]) {
+            return;
+        }
+        let next = next_selectable(self.selected, 1, CONTROL_COUNT, |index| {
+            self.control_enabled(self.controls[index])
+        });
+        self.selected = next;
     }
 
     fn activate_control(
@@ -538,21 +610,21 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.control_enabled(control) {
+            return;
+        }
         self.selected = self
             .controls
             .iter()
             .position(|candidate| *candidate == control)
             .unwrap_or(0);
-        if !self.control_enabled(control) {
-            cx.notify();
-            return;
-        }
         match control {
             EditorControl::Color => self.open_color_wheel(window, cx),
             EditorControl::Undo => self.change_history(HistoryAction::Undo, cx),
             EditorControl::Redo => self.change_history(HistoryAction::Redo, cx),
-            EditorControl::Action(action) => self.finish(EditorOutput::Action(action), cx),
-            EditorControl::Save => self.finish(EditorOutput::Save, cx),
+            EditorControl::Action(action) => self.finish(EditorOutput::Action(action), window, cx),
+            EditorControl::Save => self.finish(EditorOutput::Save, window, cx),
+            EditorControl::Pin => self.finish(EditorOutput::Pin, window, cx),
         }
     }
 
@@ -561,7 +633,10 @@ impl EditorView {
             return false;
         }
         match control {
-            EditorControl::Color | EditorControl::Action(_) | EditorControl::Save => true,
+            EditorControl::Color
+            | EditorControl::Action(_)
+            | EditorControl::Save
+            | EditorControl::Pin => true,
             EditorControl::Undo => self.active_stroke.is_some() || self.history.can_undo(),
             EditorControl::Redo => self.active_stroke.is_none() && self.history.can_redo(),
         }
@@ -593,6 +668,7 @@ impl EditorView {
             self.history.can_undo(),
             self.history.can_redo()
         );
+        self.resettle_selection();
         cx.notify();
     }
 
@@ -671,7 +747,7 @@ impl EditorView {
             .update(cx, |_, window, _| window.remove_window());
     }
 
-    fn finish(&mut self, output: EditorOutput, cx: &mut Context<Self>) {
+    fn finish(&mut self, output: EditorOutput, window: &mut Window, cx: &mut Context<Self>) {
         if self.output_pending.is_some() {
             return;
         }
@@ -680,7 +756,8 @@ impl EditorView {
             self.close(cx);
             return;
         }
-        let handle = cx.weak_entity();
+        let entity = cx.weak_entity();
+        let window_handle = window.window_handle();
         self.output_pending = Some(output);
         self.output_error = None;
         let path = self.document.path.clone();
@@ -691,41 +768,100 @@ impl EditorView {
             "SHOT_EDIT",
             "phase=output-request action={action} strokes={stroke_count}"
         );
-        let task = cx.background_spawn(async move { output.perform(&path, &strokes) });
+        // A pin has to show the saved pixels, so it takes the image the worker
+        // decodes rather than the path, which gpui may still hold cached.
+        let task = cx.background_spawn(async move {
+            output.perform(&path, &strokes)?;
+            match output {
+                EditorOutput::Pin => crate::ui::preview::read_render_image(&path).map(Some),
+                EditorOutput::Save | EditorOutput::Action(_) => Ok(None),
+            }
+        });
         cx.spawn(async move |_view, cx| {
             let result = task.await;
-            let _ = handle.update(cx, move |view, cx| {
-                view.output_pending = None;
-                match result {
-                    Ok(()) => {
-                        qol_runtime::probe!(
-                            "SHOT_EDIT",
-                            "phase=output action={action} result=ok strokes={stroke_count}"
-                        );
-                        let title = match output {
-                            EditorOutput::Save => "Screenshot updated",
-                            EditorOutput::Action(action) => action.done_message(),
-                        };
-                        crate::platform::show_notification(
-                            title,
-                            &view.document.path.display().to_string(),
-                            1400,
-                        );
-                        view.close(cx);
+            let _ = cx.update_window(window_handle, move |_, window, cx| {
+                let _ = entity.update(cx, move |view, cx| {
+                    view.output_pending = None;
+                    match result {
+                        Ok(pinned_image) => {
+                            qol_runtime::probe!(
+                                "SHOT_EDIT",
+                                "phase=output action={action} result=ok strokes={stroke_count}"
+                            );
+                            if stroke_count > 0 {
+                                // The file the surfaces paint from just changed
+                                // underneath gpui's decode of it.
+                                qol_gpui::image::forget_cached_file(view.document.path.clone(), cx);
+                            }
+                            match (output, pinned_image) {
+                                (EditorOutput::Pin, Some((image, width, height))) => {
+                                    view.pin_edited(image, width, height, window, cx);
+                                }
+                                (output, _) => {
+                                    let title = match output {
+                                        EditorOutput::Save | EditorOutput::Pin => {
+                                            "Screenshot updated"
+                                        }
+                                        EditorOutput::Action(action) => action.done_message(),
+                                    };
+                                    crate::platform::show_notification(
+                                        title,
+                                        &view.document.path.display().to_string(),
+                                        1400,
+                                    );
+                                    view.close(cx);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            qol_runtime::probe!(
+                                "SHOT_EDIT",
+                                "phase=output action={action} result=error"
+                            );
+                            eprintln!("[qol-shot] screenshot editor output failed: {error:#}");
+                            view.output_error = Some(output.error_message().to_string());
+                            cx.notify();
+                        }
                     }
-                    Err(error) => {
-                        qol_runtime::probe!(
-                            "SHOT_EDIT",
-                            "phase=output action={action} result=error"
-                        );
-                        eprintln!("[qol-shot] screenshot editor output failed: {error:#}");
-                        view.output_error = Some(output.error_message().to_string());
-                        cx.notify();
-                    }
-                }
+                });
             });
         })
         .detach();
+    }
+
+    /// Pins the image just saved by the editor and stands down: the pin owns
+    /// the screenshot from here, as it does when pinned from the preview.
+    fn pin_edited(
+        &mut self,
+        image: Arc<RenderImage>,
+        width: u32,
+        height: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let content = PinnedContent {
+            path: self.document.path.clone(),
+            image: Some(image),
+            size: thumbnail_size(width as f32, height as f32),
+            file_ready: CaptureFileReady::ready(),
+            started_at: Instant::now(),
+        };
+        let dismiss = if self.document.quit_on_close {
+            PinnedDismiss::Quit
+        } else {
+            PinnedDismiss::Remove
+        };
+        if !crate::ui::pinned::open_at_cursor(content, dismiss, None, "surface=editor", window, cx)
+        {
+            cx.notify();
+            return;
+        }
+        if self.document.quit_on_close {
+            // The pin owns the process now; quitting would take it down too.
+            window.remove_window();
+            return;
+        }
+        self.close(cx);
     }
 
     fn close(&mut self, cx: &mut Context<Self>) {
@@ -746,7 +882,7 @@ impl EditorView {
         {
             match shortcut {
                 EditorShortcut::History(action) => self.change_history(action, cx),
-                EditorShortcut::Output(output) => self.finish(output, cx),
+                EditorShortcut::Output(output) => self.finish(output, window, cx),
             }
             return;
         }
@@ -754,7 +890,7 @@ impl EditorView {
             shot_action_for_keystroke(&event.keystroke, copy_actions(self.default_copy_action)[0])
         {
             if matches!(action, ShotAction::Copy | ShotAction::CopyPath) {
-                self.finish(EditorOutput::Action(action), cx);
+                self.finish(EditorOutput::Action(action), window, cx);
                 return;
             }
         }
@@ -773,7 +909,8 @@ impl EditorView {
             }
             EditorCommand::Undo => self.change_history(HistoryAction::Undo, cx),
             EditorCommand::Redo => self.change_history(HistoryAction::Redo, cx),
-            EditorCommand::Save => self.finish(EditorOutput::Save, cx),
+            EditorCommand::Save => self.finish(EditorOutput::Save, window, cx),
+            EditorCommand::Pin => self.finish(EditorOutput::Pin, window, cx),
             EditorCommand::Hue => self.open_color_wheel(window, cx),
             EditorCommand::Width => self.cycle_pen_width(cx),
         }
@@ -896,6 +1033,7 @@ mod tests {
                     EditorControl::Action(ShotAction::Copy),
                     EditorControl::Action(ShotAction::CopyPath),
                     EditorControl::Save,
+                    EditorControl::Pin,
                 ],
             ),
             (
@@ -907,6 +1045,7 @@ mod tests {
                     EditorControl::Action(ShotAction::CopyPath),
                     EditorControl::Action(ShotAction::Copy),
                     EditorControl::Save,
+                    EditorControl::Pin,
                 ],
             ),
         ];
@@ -929,8 +1068,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn failed_edit_action_restores_the_original_screenshot() {
+    fn temp_screenshot() -> (std::path::PathBuf, image::RgbaImage) {
         let path = std::env::temp_dir().join(format!(
             "qol-shot-editor-{}-{}.png",
             std::process::id(),
@@ -939,15 +1077,60 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let original = image::RgbaImage::from_pixel(20, 20, image::Rgba([1, 2, 3, 255]));
-        image::DynamicImage::ImageRgba8(original.clone())
+        let image = image::RgbaImage::from_pixel(20, 20, image::Rgba([1, 2, 3, 255]));
+        image::DynamicImage::ImageRgba8(image.clone())
             .save(&path)
             .unwrap();
-        let strokes = [PenStroke {
-            color: 0xff0000,
+        (path, image)
+    }
+
+    fn dot(color: u32, x: f32, y: f32) -> PenStroke {
+        PenStroke {
+            color,
             width: 0.1,
-            points: vec![NormalizedPoint { x: 0.5, y: 0.5 }],
-        }];
+            points: vec![NormalizedPoint { x, y }],
+        }
+    }
+
+    /// The editor rewrites the screenshot in place, so a pinned image handed back
+    /// to the editor has to be redrawn from the file, not from the pixels a
+    /// surface decoded before the first edit.
+    #[test]
+    fn a_second_edit_paints_onto_the_first_one() {
+        let (path, _) = temp_screenshot();
+
+        EditorOutput::Save
+            .perform(&path, &[dot(0xff0000, 0.25, 0.5)])
+            .unwrap();
+        EditorOutput::Pin
+            .perform(&path, &[dot(0x0000ff, 0.75, 0.5)])
+            .unwrap();
+
+        let painted = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(*painted.get_pixel(5, 10), image::Rgba([255, 0, 0, 255]));
+        assert_eq!(*painted.get_pixel(15, 10), image::Rgba([0, 0, 255, 255]));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// Nothing drawn means nothing written, which is what lets the surfaces keep
+    /// the decode they already hold.
+    #[test]
+    fn an_output_without_strokes_leaves_the_file_untouched() {
+        let (path, _) = temp_screenshot();
+        let before = std::fs::read(&path).unwrap();
+
+        EditorOutput::Save.perform(&path, &[]).unwrap();
+        EditorOutput::Pin.perform(&path, &[]).unwrap();
+        perform_edit_action(&path, &[], |_| Ok(())).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_edit_action_restores_the_original_screenshot() {
+        let (path, original) = temp_screenshot();
+        let strokes = [dot(0xff0000, 0.5, 0.5)];
 
         let result = perform_edit_action(&path, &strokes, |edited| {
             let painted = image::open(edited).unwrap().to_rgba8();

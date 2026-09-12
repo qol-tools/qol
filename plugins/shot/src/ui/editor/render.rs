@@ -1,6 +1,6 @@
 use super::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
-use qol_gpui::kit::{action_row_width, ActionCircleSize, ActionCircleState};
+use qol_gpui::kit::{action_row_width, row_circle_state, ActionCircleSize};
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::theme::{
     ACTION_CIRCLE_SIZE, HEIGHT_HINT_BAR, HEIGHT_INLINE, SPACE_GUTTER, SPACE_PAD, TEXT_CAPTION,
@@ -71,15 +71,7 @@ impl EditorView {
     ) -> Stateful<Div> {
         let kit = qol_gpui::kit::kit();
         let enabled = self.control_enabled(control);
-        let state = if !enabled {
-            ActionCircleState::Disabled
-        } else if index == self.selected {
-            ActionCircleState::Armed
-        } else if index == PRIMARY_CONTROL {
-            ActionCircleState::Primary
-        } else {
-            ActionCircleState::Resting
-        };
+        let state = row_circle_state(enabled, index == self.selected);
         let color_bounds = self.color_bounds.clone();
         let mut circle = kit
             .action_circle(ActionCircleSize::Full, state)

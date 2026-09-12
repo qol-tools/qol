@@ -10,13 +10,17 @@ use gpui::*;
 
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
+use crate::config::CopyCommand;
 use crate::platform;
+use crate::ui::controls::{
+    control_count, control_for_keystroke, controls, copy_actions, ControlSurface, SurfaceControl,
+};
 use crate::ui::preview::{
     current_palette, live_topology, surface_shadow, MonitorTopology, WarmWindowKey, WarmWindowPool,
     PREVIEW_APP_ID,
 };
-use crate::ui::shortcuts::shot_action_for_keystroke;
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
 use qol_gpui::window_options::PopupWindowOptions;
 
@@ -59,6 +63,7 @@ struct PinnedWindowSpec {
     bounds: Bounds<Pixels>,
     dismiss: PinnedDismiss,
     border: bool,
+    default_copy_action: CopyCommand,
     reveal: Option<PinReveal>,
     active: bool,
     focus: bool,
@@ -118,6 +123,7 @@ fn create_parked(
         bounds,
         dismiss: PinnedDismiss::Remove,
         border: false,
+        default_copy_action: crate::config::load().shortcuts.copy_command,
         reveal: None,
         active: false,
         focus: false,
@@ -148,6 +154,74 @@ pub fn pre_create(cx: &mut App) {
     }
     let windows = PIN_POOL.with(|pool| pool.len());
     qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={windows}");
+}
+
+const OPEN_FAILED_TOAST: &str = "Could not pin screenshot";
+const ANCHOR_FAILED_MESSAGE: &str = "Cursor position unavailable";
+const OPEN_FAILED_MESSAGE: &str = "Pin window could not be created";
+
+/// Opens a pin for `content` under the cursor, reporting a failed anchor or a
+/// failed window to the user. `trace` names the calling surface in the
+/// placement probe. Every surface that pins an image comes through here.
+pub(crate) fn open_at_cursor<V: 'static>(
+    content: PinnedContent,
+    dismiss: PinnedDismiss,
+    source_preview: Option<String>,
+    trace: &str,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> bool {
+    let tracker = MonitorTracker::start(cx);
+    let pin_size = size(px(content.size.0), px(content.size.1));
+    let token = match crate::ui::preview::fresh_cursor_token(&tracker, pin_size) {
+        Ok(token) => token,
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_PIN_PLACE",
+                "{trace} result=anchor-failed reason={error}"
+            );
+            eprintln!("[qol-shot] pin cursor anchor failed: {error}");
+            platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
+            return false;
+        }
+    };
+    let placement = match token.resolve(window) {
+        Ok(placement) => placement,
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_PIN_PLACE",
+                "{trace} result=resolve-failed reason={error}"
+            );
+            eprintln!("[qol-shot] pin placement resolve failed: {error}");
+            platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
+            return false;
+        }
+    };
+    let cursor = placement.native_cursor();
+    let monitor = placement.native_monitor();
+    let native = placement.native_bounds();
+    qol_runtime::probe!(
+        "SHOT_PIN_PLACE",
+        "{trace} origin={:.0},{:.0} size={:.0}x{:.0} cursor={:.0},{:.0} monitor_origin={:.0},{:.0} monitor_size={:.0}x{:.0} logical_size={:.0}x{:.0} native_scale={:.2}",
+        native.x,
+        native.y,
+        native.width,
+        native.height,
+        cursor.x,
+        cursor.y,
+        monitor.x,
+        monitor.y,
+        monitor.width,
+        monitor.height,
+        pin_size.width.to_f64(),
+        pin_size.height.to_f64(),
+        placement.native_scale()
+    );
+    if !open(content, placement, dismiss, source_preview, cx) {
+        platform::show_notification(OPEN_FAILED_TOAST, OPEN_FAILED_MESSAGE, 1800);
+        return false;
+    }
+    true
 }
 
 pub fn open(
@@ -196,6 +270,7 @@ pub fn open(
         bounds: placement.logical_bounds(),
         dismiss,
         border,
+        default_copy_action: config.shortcuts.copy_command,
         reveal: Some(reveal),
         active: false,
         focus: false,
@@ -291,7 +366,15 @@ mod cache {
                     window.remove_window();
                     return None;
                 }
-                reset(view, content, dismiss, border, reveal, cx);
+                reset(
+                    view,
+                    content,
+                    dismiss,
+                    border,
+                    config.shortcuts.copy_command,
+                    reveal,
+                    cx,
+                );
                 view.placed = true;
                 view.start_full_resolution_upgrade(cx);
                 window.focus(&view.focus_handle(cx));
@@ -313,11 +396,13 @@ mod cache {
         true
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn reset(
         view: &mut PinnedView,
         content: PinnedContent,
         dismiss: PinnedDismiss,
         border: bool,
+        default_copy_action: CopyCommand,
         reveal: PinReveal,
         cx: &mut Context<PinnedView>,
     ) {
@@ -326,6 +411,7 @@ mod cache {
         view.file_ready = content.file_ready;
         view.dismiss = dismiss;
         view.border = border;
+        view.default_copy_action = default_copy_action;
         view.hovered = false;
         view.ratio = if content.size.1 > 0.0 {
             content.size.0 / content.size.1
@@ -373,6 +459,7 @@ pub struct PinnedView {
     title: String,
     dismiss: PinnedDismiss,
     border: bool,
+    default_copy_action: CopyCommand,
     hovered: bool,
     ratio: f32,
     resize_drag: Option<ResizeDrag>,
@@ -409,6 +496,7 @@ impl PinnedView {
             title: spec.title,
             dismiss: spec.dismiss,
             border: spec.border,
+            default_copy_action: spec.default_copy_action,
             hovered: false,
             ratio,
             resize_drag: None,
@@ -876,6 +964,65 @@ impl PinnedView {
         cx.notify();
     }
 
+    fn activate(&mut self, control: SurfaceControl, window: &mut Window, cx: &mut Context<Self>) {
+        match control {
+            SurfaceControl::Action(action) => self.perform(action, window, cx),
+            SurfaceControl::Edit => self.edit(window, cx),
+            // A pinned image is already pinned; the surface never offers it.
+            SurfaceControl::Pin => {}
+        }
+    }
+
+    fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        let Some(handle) = window.window_handle().downcast::<PinnedView>() else {
+            return;
+        };
+        self.action_pending = true;
+        let path = self.path.clone();
+        let file_ready = self.file_ready.clone();
+        let quit_on_close = self.dismiss == PinnedDismiss::Quit;
+        let tracker = MonitorTracker::start(cx);
+        let fallback_monitor = window
+            .display(cx)
+            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+        let reveal_generation = self.reveal_generation;
+        qol_runtime::probe!("SHOT_EDIT", "phase=request surface=pinned");
+        cx.spawn(async move |_view, cx| {
+            let opened = crate::ui::editor::open_from(
+                path,
+                file_ready,
+                quit_on_close,
+                tracker,
+                fallback_monitor,
+                cx,
+            )
+            .await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if !view.active || view.reveal_generation != reveal_generation {
+                    return;
+                }
+                view.action_pending = false;
+                if opened {
+                    view.handoff_to_editor(window, cx);
+                } else {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn handoff_to_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.dismiss {
+            // The editor owns the process from here; quitting would take it down.
+            PinnedDismiss::Quit => window.remove_window(),
+            PinnedDismiss::Remove => self.close(window, cx),
+        }
+    }
+
     fn perform(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
         if self.action_pending {
             return;
@@ -921,8 +1068,13 @@ impl PinnedView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(action) = shot_action_for_keystroke(&event.keystroke, ShotAction::Copy) {
-            self.perform(action, window, cx);
+        if let Some(control) = control_for_keystroke(
+            &event.keystroke,
+            ControlSurface::Pinned,
+            self.default_copy_action,
+            SurfaceControl::Action(copy_actions(self.default_copy_action)[0]),
+        ) {
+            self.activate(control, window, cx);
             return;
         }
 
@@ -1037,17 +1189,16 @@ impl PinnedView {
             .right_0()
             .justify_center()
             .children(
-                ShotAction::PINNED
-                    .iter()
-                    .copied()
+                controls(ControlSurface::Pinned, self.default_copy_action)
+                    .into_iter()
                     .enumerate()
-                    .map(|(index, action)| {
+                    .map(|(index, control)| {
                         kit.action_circle(ActionCircleSize::Control, ActionCircleState::Resting)
                             .id(("pin-action", index))
-                            .child(action.glyph())
+                            .child(control.glyph())
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.perform(action, window, cx)
+                                this.activate(control, window, cx)
                             }))
                     }),
             )
@@ -1366,8 +1517,10 @@ fn resize_rect(start: PinRect, edge: ResizeEdge, dx: f32, dy: f32, ratio: f32) -
 }
 
 fn action_row_fits(width: f32, height: f32) -> bool {
-    let needed_width =
-        action_row_width(ShotAction::PINNED.len(), ActionCircleSize::Control) + 2.0 * EDGE;
+    let needed_width = action_row_width(
+        control_count(ControlSurface::Pinned),
+        ActionCircleSize::Control,
+    ) + 2.0 * EDGE;
     let needed_height = ActionCircleSize::Control.px() + ActionCircleSize::Inline.px() + 3.0 * EDGE;
     width >= needed_width && height >= needed_height
 }
@@ -1598,9 +1751,9 @@ mod tests {
     fn action_row_fits_requires_room_for_circles() {
         let cases = [
             (400.0, 300.0, true),
-            (102.0, 88.0, true),
-            (101.0, 88.0, false),
-            (102.0, 87.0, false),
+            (202.0, 88.0, true),
+            (201.0, 88.0, false),
+            (202.0, 87.0, false),
             (48.0, 48.0, false),
         ];
         for (width, height, expected) in cases {

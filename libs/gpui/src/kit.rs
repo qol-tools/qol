@@ -635,6 +635,47 @@ impl Kit {
     }
 }
 
+/// The index `delta` steps from `current` in a row of `count` entries,
+/// wrapping at both ends.
+pub fn wrap_index(current: usize, delta: isize, count: usize) -> usize {
+    if count == 0 {
+        return current;
+    }
+    let count = count as isize;
+    (((current as isize + delta) % count + count) % count) as usize
+}
+
+/// The next index a keyboard selection may land on, `delta` steps from
+/// `current`, stepping over every entry the row has disabled. Stays put when
+/// the row has nothing selectable, so a disabled control never holds the
+/// selection.
+pub fn next_selectable(
+    current: usize,
+    delta: isize,
+    count: usize,
+    enabled: impl Fn(usize) -> bool,
+) -> usize {
+    let mut candidate = current;
+    for _ in 0..count {
+        candidate = wrap_index(candidate, delta, count);
+        if enabled(candidate) {
+            return candidate;
+        }
+    }
+    current
+}
+
+/// The state a circle takes inside a keyboard-navigable action row. The
+/// selected circle is the row's only accent, so no other circle can read as
+/// selected while the selection sits elsewhere.
+pub fn row_circle_state(enabled: bool, selected: bool) -> ActionCircleState {
+    match (enabled, selected) {
+        (false, _) => ActionCircleState::Disabled,
+        (true, true) => ActionCircleState::Armed,
+        (true, false) => ActionCircleState::Resting,
+    }
+}
+
 pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
     if count == 0 {
         return 0.0;
@@ -756,10 +797,53 @@ pub fn kit() -> Kit {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_row_width, focus_ring_for, path_label, rail_scrim, ActionCircleSize,
-        FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA, RAIL_SCRIM_END, RAIL_SCRIM_START,
+        action_row_width, focus_ring_for, next_selectable, path_label, rail_scrim,
+        row_circle_state, ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO,
+        RAIL_SCRIM_ALPHA, RAIL_SCRIM_END, RAIL_SCRIM_START,
     };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
+
+    #[test]
+    fn the_selection_steps_over_disabled_entries() {
+        // Undo and Redo sit at 1 and 2 and are disabled with an empty history.
+        let enabled = |index: usize| !matches!(index, 1 | 2);
+        let cases = [
+            (0, 1, 3, "forward over both"),
+            (3, -1, 0, "back over both"),
+            (0, -1, 5, "back wraps to the last enabled"),
+            (5, 1, 0, "forward wraps to the first enabled"),
+        ];
+        for (current, delta, expected, note) in cases {
+            assert_eq!(
+                next_selectable(current, delta, 6, enabled),
+                expected,
+                "{note}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_with_nothing_selectable_keeps_its_selection() {
+        assert_eq!(next_selectable(2, 1, 6, |_| false), 2);
+        assert_eq!(next_selectable(2, 1, 0, |_| true), 2);
+    }
+
+    #[test]
+    fn only_the_selected_circle_in_a_row_carries_an_accent() {
+        let cases = [
+            (true, true, ActionCircleState::Armed),
+            (true, false, ActionCircleState::Resting),
+            (false, false, ActionCircleState::Disabled),
+            (false, true, ActionCircleState::Disabled),
+        ];
+        for (enabled, selected, expected) in cases {
+            assert_eq!(
+                row_circle_state(enabled, selected),
+                expected,
+                "enabled: {enabled} selected: {selected}"
+            );
+        }
+    }
 
     #[test]
     fn the_focus_ring_keeps_a_solid_inner_edge_inside_a_soft_halo() {

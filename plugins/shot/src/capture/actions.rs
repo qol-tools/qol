@@ -18,7 +18,6 @@ impl ShotAction {
         ShotAction::CopyPath,
         ShotAction::OpenFolder,
     ];
-    pub const PINNED: &'static [ShotAction] = &[ShotAction::Copy, ShotAction::CopyPath];
 
     pub fn perform(self, path: &Path) -> Result<()> {
         match self {
